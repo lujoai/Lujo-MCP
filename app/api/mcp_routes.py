@@ -73,7 +73,7 @@ async def mcp_post(request: Request):
 
     # ── 分发 ──
     try:
-        result = dispatch_raw(raw)
+        result = await dispatch_raw(raw)
     except Exception:
         logger.exception("MCP dispatch 异常")
         return JSONResponse(make_error(req_id, INVALID_REQUEST, "请求处理失败，详情见服务端日志"), status_code=400)

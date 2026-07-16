@@ -7,6 +7,7 @@
 import sys
 import json
 import logging
+import asyncio
 
 from app.mcp.tools import register_all_tools
 from app.mcp.protocol.server import dispatch
@@ -27,12 +28,19 @@ def _configure_stdio_logging():
     root.setLevel(logging.INFO)
 
 
-def run_stdio():
+async def run_stdio():
     _configure_stdio_logging()
     register_all_tools()
     logger.info("MCP stdio server 启动，等待 stdin 输入")
 
-    for line in sys.stdin:
+    loop = asyncio.get_event_loop()
+    while True:
+        try:
+            line = await loop.run_in_executor(None, sys.stdin.readline)
+        except EOFError:
+            break
+        if not line:
+            break
         line = line.strip()
         if not line:
             continue
@@ -45,7 +53,7 @@ def run_stdio():
             sys.stdout.flush()
             continue
 
-        result = dispatch(req)
+        result = await dispatch(req)
 
         # 通知类消息（无 id）不写回响应
         if req.id is None:
@@ -58,4 +66,4 @@ def run_stdio():
 
 
 if __name__ == "__main__":
-    run_stdio()
+    asyncio.run(run_stdio())

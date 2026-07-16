@@ -287,7 +287,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 extra=arguments.get("extra"),
             )
         elif name == "auto_test":
-            result = auto_test_handler(arguments)
+            result = await auto_test_handler(arguments)
         elif name == "get_related_specs":
             result = tool_get_related_specs(arguments["file"])
         else:

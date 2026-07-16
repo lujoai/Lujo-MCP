@@ -1,5 +1,5 @@
 """auto_test 演示 —— 直接调用，不走 MCP 协议"""
-import json, threading, os, sys, time
+import json, threading, os, sys, time, asyncio
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(HERE, "app", "web")
@@ -26,7 +26,7 @@ url = f"http://127.0.0.1:{TEST_PORT}/auto_test_demo.html"
 print(f"  目标: {url}")
 print()
 
-result = auto_test_handler({"url": url, "max_actions": 10})
+result = asyncio.run(auto_test_handler({"url": url, "max_actions": 10}))
 
 print(f"  ⏺ 发现 {result.get('found_elements', 0)} 个可交互元素")
 print(f"  ▶️ 执行 {result.get('executed_count', 0)} 个")

@@ -67,7 +67,7 @@ def _handle_tools_list(req: JSONRPCRequest) -> dict:
     return make_response(req.id, {"tools": tools})
 
 
-def _handle_tools_call(req: JSONRPCRequest) -> dict:
+async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     """处理 tools/call"""
     params = req.params or {}
     tool_name = params.get("name", "")
@@ -79,7 +79,8 @@ def _handle_tools_call(req: JSONRPCRequest) -> dict:
 
     try:
         result = tool["handler"](arguments)
-        # MCP 要求返回 content 数组
+        if __import__("asyncio").iscoroutine(result):
+            result = await result
         return make_response(req.id, {
             "content": [
                 {
@@ -116,7 +117,7 @@ _METHOD_MAP = {
 }
 
 
-def dispatch(jsonrpc_request: JSONRPCRequest) -> dict:
+async def dispatch(jsonrpc_request: JSONRPCRequest) -> dict:
     """
     路由 JSON-RPC 请求到对应处理方法
 
@@ -134,7 +135,10 @@ def dispatch(jsonrpc_request: JSONRPCRequest) -> dict:
         )
 
     try:
-        return handler(jsonrpc_request)
+        result = handler(jsonrpc_request)
+        if __import__("asyncio").iscoroutine(result):
+            result = await result
+        return result
     except Exception:
         logger.exception(f"处理 {method} 时出错")
         return make_error(
@@ -144,7 +148,7 @@ def dispatch(jsonrpc_request: JSONRPCRequest) -> dict:
         )
 
 
-def dispatch_raw(raw: str | bytes) -> dict:
+async def dispatch_raw(raw: str | bytes) -> dict:
     """解析原始请求文本并分发"""
     from app.mcp.protocol.jsonrpc import parse_request
 
@@ -153,4 +157,4 @@ def dispatch_raw(raw: str | bytes) -> dict:
     except (ValueError, TypeError) as e:
         return make_error(None, INVALID_PARAMS, str(e))
 
-    return dispatch(req)
+    return await dispatch(req)

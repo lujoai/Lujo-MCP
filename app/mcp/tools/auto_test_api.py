@@ -107,21 +107,16 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
     }
 
 
-def auto_test_handler(arguments: dict) -> dict:
-    """同步入口 —— 新开事件循环跑 _run，不依赖调用方的事件循环"""
+async def auto_test_handler(arguments: dict) -> dict:
+    """异步入口 —— 直接在当前事件循环中运行，避免嵌套循环冲突"""
     try:
         from playwright.async_api import async_playwright as _  # noqa: F401
     except ImportError:
         return {"error": "playwright 未安装。安装: pip install playwright && playwright install chromium"}
 
-    import asyncio
     url = arguments["url"]
     max_actions = min(arguments.get("max_actions", 20), 50)
     cc = arguments.get("capture_console", True)
     cn = arguments.get("capture_network", True)
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_run(url, max_actions, cc, cn))
-    finally:
-        loop.close()
+    return await _run(url, max_actions, cc, cn)

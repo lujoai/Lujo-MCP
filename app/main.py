@@ -211,11 +211,12 @@ def debug(req: dict):
 
 if __name__ == "__main__":
     import sys
+    import asyncio
 
     # python -m app.main --stdio  → 以 stdio 传输运行（供 Claude Desktop 等本地客户端）
     if "--stdio" in sys.argv:
         from app.mcp.transports.stdio import run_stdio
-        run_stdio()
+        asyncio.run(run_stdio())
     else:
         uvicorn.run(
             "app.main:app",
