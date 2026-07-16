@@ -1,7 +1,11 @@
 """统一配置管理 —— 全局单例，替代散落的 os.getenv()"""
 
+from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings
+
+# 项目根目录（app/ 的上一级）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -90,7 +94,9 @@ class Settings(BaseSettings):
     service_name: str = "ai-debug-mcp"
 
     class Config:
-        env_file = ".env"
+        # 必须锚定绝对路径：stdio 模式常被 MCP 客户端从其他项目的工作目录拉起，
+        # 相对路径会加载到目标项目的 .env（陌生键触发 extra_forbidden，启动即崩）
+        env_file = str(_PROJECT_ROOT / ".env")
         env_file_encoding = "utf-8"
 
 
