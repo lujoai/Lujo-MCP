@@ -53,7 +53,7 @@
                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 调试引擎 (Engine)                                             │
-│ logs(trace) │ context builder │ stacktrace │ code_locator⚠️  │
+│ logs(trace) │ context builder │ stacktrace │ code_locator ✅  │
 │ runtime snapshot │ llm analyzer │ exception_hook            │
 └───────────────────────────────┬─────────────────────────────┘
                                 ▼
@@ -136,11 +136,11 @@ flowchart TB
 
 #### 3.1.2 stdio（`app/mcp_server.py` + `app/mcp/transports/stdio.py`）✅
 
-- `mcp_server.py`：标准 MCP Server，用 `mcp` SDK 的 `stdio_server` 通信，`list_tools()` 注册 **14 个工具**（与 HTTP 传输共用同一套工具注册表），`call_tool()` 分发。
+- `mcp_server.py`：标准 MCP Server，用 `mcp` SDK 的 `stdio_server` 通信，`list_tools()` 维护 **14 个工具**清单（handler 层复用工具模块的业务函数），`call_tool()` 分发。
 - 注册方式：客户端配置 `{"command":"python","args":["-m","app.mcp_server"],"cwd":"<abs>"}`。
 - `--stdio` 入口：`python -m app.main --stdio`（`main.py` `__main__`）。
 
-**14 个 MCP 工具（HTTP 与 stdio 共用）**：
+**MCP 工具总览（HTTP 15 个 / stdio 14 个，业务实现共用）**：
 
 | 工具 | 说明 | 实现 |
 | --- | --- | --- |
@@ -162,7 +162,7 @@ flowchart TB
 
 #### 3.1.3 双传输一致性
 
-两套传输（HTTP Streamable / stdio）**共用**同一套工具注册表 `_tool_registry`（`app/mcp/tools/__init__.py` `register_all_tools()`），14 个工具的业务逻辑零重复，差异仅在协议外壳。
+HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **15 个工具**；stdio 传输（`mcp_server.py`）当前维护**独立的 14 工具清单**，工具名与 HTTP 侧存在差异（如 `context` vs `get_debug_context`、`stacktrace` vs `get_stacktrace`），但 handler 层复用同一批工具模块业务函数，业务逻辑不重复。两侧注册表完全统一列为待办。
 
 ### 3.2 中间件层（`app/middleware.py`）✅
 
@@ -284,7 +284,7 @@ flowchart TB
 
 ### 3.7 配置（`app/config.py`，pydantic-settings）✅
 
-单例 `settings`，读 `.env`。**已知缺口**：缺 `code_context_lines` 键（§6.1）。
+单例 `settings`，读项目根 `.env`（基于 `__file__` 锚定绝对路径，任意 CWD 启动行为一致；修复 ENV-001）。`code_context_lines` 等 FR11 配置键已补全。
 
 ---
 
@@ -378,7 +378,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 完整上下文 | [app/mcp/builders/context.py](./app/mcp/builders/context.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
 | 规范驱动采集 | `app/mcp/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
 | 指纹去重聚合 | [app/mcp/core/errors.py](./app/mcp/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
-| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP/stdio 共用 14 个工具 |
+| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP 15 / stdio 14，handler 层复用业务函数 |
 | 代码定位 | [app/mcp/collectors/code_locator.py](./app/mcp/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
 | 静默失败检测 | [app/mcp/verifier/assert_engine.py](./app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
@@ -598,7 +598,7 @@ sequenceDiagram
 | Trace | `app/mcp/core/logs.py` |
 | Context | `app/mcp/builders/context.py` |
 | Stacktrace | `app/mcp/collectors/stacktrace.py` |
-| Code Locator | `app/mcp/collectors/code_locator.py` ⚠️ |
+| Code Locator | `app/mcp/collectors/code_locator.py` ✅ |
 | Runtime | `app/mcp/collectors/runtime.py` |
 | LLM | `app/llm/analyzer.py` |
 | 异常钩子 | `app/mcp/hooks/exception_hook.py` ✅ |

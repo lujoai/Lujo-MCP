@@ -148,7 +148,7 @@
 | FR4 | 运行时快照 | P0 | ✅ | `psutil` 采集，降级 |
 | FR5 | LLM 智能分析 | P0 | ✅ | 重试/超时/fallback/截断/流式 |
 | FR6 | MCP 工具集（HTTP/REST 侧） | P0 | ✅ | `debug`/`context`/`trace`/`stacktrace` |
-| FR6b | MCP 工具集（stdio 侧） | P0 | ✅ | `mcp_server.py` 暴露 6 工具：`get_stacktrace`/`get_runtime_snapshot`/`search_logs`/`get_debug_context`/`list_recent_traces`/`analyze_with_llm` |
+| FR6b | MCP 工具集（stdio 侧） | P0 | ✅ | `mcp_server.py` 暴露 14 工具，完整清单见 §10.2 |
 | FR7 | 双传输 | P0 | ✅ | Streamable HTTP + stdio |
 | FR8 | REST 调试 API | P1 | ✅ | `/api/debug/run` `/analyze` `/analyze/stream` `/runtime` `/session` |
 | FR9 | 可观测性 | P1 | ✅ | `/metrics` `/health` |
@@ -164,7 +164,7 @@
   2. `code_locator.py` 生成 `vscode://file/<abs>:<lineno>` 可点击链接，支持路径映射与白名单防穿越。
   3. `stacktrace` / `context` 工具及 `/api/debug/run` 在异常含帧时自动附加 `code_snippets`。
   4. 新建 `app/mcp/core/errors.py` 近期异常存储；`exception_hook` 真正持久化捕获的异常，供 `get_debug_context`/`list_recent_traces`/`search_logs` 检索。
-  5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，6 个 stdio 工具现全部可用。
+  5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，当时的 6 个 stdio 工具全部可用（现已扩至 14 个，见 §10.2）。
 - **验收**：`get_debug_context` / `stacktrace` 返回每帧源码片段与 IDE 链接；点击可在 IDE 打开到对应行。
 
 #### FR12 调试提示词（规范）自动生成（P0）✅ 设计已解决（宿主 AI 推理模式）
@@ -240,14 +240,14 @@ flowchart TB
 
     subgraph Transport["传输层"]
         HTTP["Streamable HTTP"]
-        STDIO["stdio 子进程 (6 工具)"]
+        STDIO["stdio 子进程 (14 工具)"]
     end
 
     subgraph Core["核心服务 (FastAPI)"]
         Hook["全局异常钩子 ✅<br/>exception_hook"]
         MW["中间件（安全基线）"]
         Router["路由 /api/debug · /mcp · /health · /metrics"]
-        Tools["MCP 工具<br/>debug/context/trace/stacktrace<br/>+ get_* 6 工具"]
+        Tools["MCP 工具<br/>HTTP 15 个 (register_all_tools)<br/>stdio 14 个 (mcp_server.py)"]
     end
 
     subgraph Engine["调试引擎"]
@@ -331,9 +331,11 @@ sequenceDiagram
 | GET/POST | `/api/spec` | 规范 CRUD | ✅ |
 | GET/POST | `/api/debug/prompt`（可选增强） | 生成提示词文本 | 🔲 FR12 增强 |
 
-### 10.2 stdio MCP 工具（**13 个**，已注册）✅
+### 10.2 stdio MCP 工具（**14 个**，已注册）✅
 
-`get_stacktrace` / `get_runtime_snapshot` / `search_logs` / `get_debug_context` / `list_recent_traces` / `analyze_with_llm` / `get_code_snippets` / `ingest_error` / `ingest_network` / `get_git_blame` / `silent_failure` / `verify` / `verify_ui`。
+`get_stacktrace` / `get_runtime_snapshot` / `search_logs` / `get_debug_context` / `list_recent_traces` / `analyze_with_llm` / `ingest_network` / `get_network_trace` / `get_blame_for_frame` / `get_recent_diff` / `ingest_silent_failure` / `ingest_error` / `get_related_specs` / `auto_test`。
+
+> HTTP 传输侧（`register_all_tools()` 注册表）为 15 个工具（含 `verify` / `verify_ui` / `ingest_console`），与 stdio 清单有差异，注册表统一为待办。
 
 ### 10.3 已实现接口（FR13/FR14/FR15）✅
 
@@ -404,7 +406,7 @@ sequenceDiagram
 
 | 编号 | 验收项 |
 | --- | --- |
-| AC1 | 6 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
+| AC1 | 14 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
 | AC2 | `exception_hook` 安装后，未捕获异常自动进入 trace，`list_recent_traces` 可见 |
 | AC3 | LLM 分析返回 `root_cause/impact/fix/confidence` |
 | AC4 | 上下文超长被截断且不报错 |

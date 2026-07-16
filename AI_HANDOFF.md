@@ -13,7 +13,7 @@
 | 指标 | 状态 |
 |------|------|
 | 项目版本 | v0.3.0 |
-| MCP 工具数 | 15 |
+| MCP 工具数 | HTTP 15 / stdio 14 |
 | 测试覆盖 | 当前测试状态以 [README.md](./README.md) 项目状态表为准 |
 | 存储后端 | PostgreSQL（生产）/ memory（默认）|
 | LLM Provider | openai / zhipu / custom |
@@ -26,12 +26,13 @@
 - ✅ Phase 1：PostgreSQL 集成（PGStore 连接池 + 自动建表 + Dashboard 读取）
 - ✅ Phase 1 规范驱动验证（V1 断言引擎 / V2 spec_store / V3 verify 工具 / V4 verify API / V5 spec_diffs 注入）
 - ✅ P1 Browser SDK 自动采集：V1 Console Capture（console.error/warn 自动捕获 + MCP tool + trace_id 关联 + 脱敏）
+- ✅ 修复 ENV-001：stdio 模式从外部工作目录启动时误加载目标项目 `.env` 导致启动崩溃（`config.py` env_file 锚定项目根绝对路径，详见 [DEV_PLAN.md](./DEV_PLAN.md) §四）
 
 > 完整已完成能力清单请查看 [PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md) §4。
 
 ### 当前阻塞问题
 
-> 当前无阻塞问题。
+- ⚠️ WIP-001：dispatch 链路异步化改动未提交（7 个文件），`tests/unit/test_jsonrpc.py` 3 个用例失败，待决策完成或回滚（详见 [DEV_PLAN.md](./DEV_PLAN.md) §四）。
 
 ---
 

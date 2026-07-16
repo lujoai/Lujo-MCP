@@ -2,7 +2,7 @@
 
 > 定位：当前开发执行计划，记录当前 Sprint 目标、近期任务、Bug 列表和开发顺序。
 > 长期路线请见 [CODE_REVIEW.md](./CODE_REVIEW.md)。
-> 最近更新：2026-07-13
+> 最近更新：2026-07-16
 > 当前进度：Phase 1.x 工程化增强阶段，V1-V5 verify ✅，下一阶段 P1 Browser SDK 自动采集
 
 ---
@@ -83,11 +83,10 @@
 
 ## 四、Bug 列表
 
-> 当前无已知 Bug。
-
 | Bug | 描述 | 状态 | 处置 |
 |-----|------|------|------|
-| - | - | - | - |
+| ENV-001 | stdio 模式被 MCP 客户端从其他项目的工作目录拉起时，`config.py` 相对路径 `env_file=".env"` 按 CWD 解析，加载到目标项目的 `.env`；陌生键触发 pydantic `extra_forbidden`，`Settings()` 初始化即崩，服务无法启动 | ✅ 已修复（2026-07-16） | `config.py` 将 `env_file` 锚定为基于 `__file__` 的项目根绝对路径；已验证项目根目录与外部目录双场景加载正常 |
+| WIP-001 | dispatch 链路异步化改动未提交（`protocol/server.py`、`mcp_routes.py`、`auto_test_api.py`、`transports/stdio.py` 等 7 文件），`tests/unit/test_jsonrpc.py` 3 个用例失败（`dispatch` 已改 async，测试仍同步调用） | ⚠️ 半成品 | 待决策：完成异步化并同步更新测试，或回滚改动 |
 
 ---
 

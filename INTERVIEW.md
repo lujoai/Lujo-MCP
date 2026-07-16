@@ -7,7 +7,7 @@
 > 项目：基于 MCP 协议的 AI 智能调试服务（规范驱动 + 静默失败检测 + 多 Agent 协同 + UI 自动验收）
 > 技术栈：Python / FastAPI / MCP / Playwright / pytest / PostgreSQL / Redis / Trae / Qoder
 > 测试覆盖：当前测试状态以 [README.md](./README.md) 项目状态表为准
-> 版本：v0.3.0 已交付 | 14 个 MCP 工具
+> 版本：v0.3.0 已交付 | MCP 工具 HTTP 15 / stdio 14
 > 路线图：Phase 0 标准化 ✅ → Phase 1.x 工程化增强（进行中）→ Phase 2 分布式链路追踪 → Phase 4 RAG 知识库
 
 ---
@@ -113,6 +113,22 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 
 **修复**：`_parse_data` 安全解析 + 类型检查，`save_entry` 用 `json.dumps` 统一序列化。
 
+#### 问题 4：stdio 模式在真实用户场景下启动即崩（ENV-001，配置加载的 CWD 陷阱）
+
+**现象**：本项目根目录下一切正常；但 MCP 客户端从其他项目的工作区拉起 `python -m app.mcp_server` 时，`Settings()` 初始化抛 pydantic `ValidationError`，8 个 `extra_forbidden` 字段全是陌生的 Django/MySQL 配置键，服务无法启动。
+
+**定位过程**：
+1. 报错字段（`secret_key=django-insecure-...`、`database_port=3306`）明显不属于本项目 → 排查配置来源
+2. 本项目 `.env` 干净、系统环境变量干净 → 锁定"pydantic-settings 读到了别的 `.env` 文件"
+3. `config.py` 里 `env_file=".env"` 是相对路径，按**进程 CWD** 解析；MCP 客户端拉起 stdio 子进程时 CWD 是它打开的工作区
+4. 在目标项目目录下用本项目 venv 复现 → 逐字节还原同一份报错，根因坐实
+
+**根因**：`env_file` 相对路径 + pydantic-settings 2.x 对 dotenv 未知键默认 `extra='forbid'`。而"从别人项目的目录被拉起"正是本产品 stdio 模式的标准使用姿势——目标项目根目录几乎必然有自己的 `.env`，等于核心场景必现崩溃。
+
+**修复**：`env_file` 锚定为基于 `__file__` 的项目根绝对路径，任意 CWD 启动行为一致。约 3 行改动。
+
+**价值**：(1) "自己目录能跑 ≠ 用户场景能跑"——所有自测都在项目根目录做，第一次以真实用户姿势启动就崩，和问题 1 的"TestClient 过 ≠ 实跑过"是同一类教训的升级版；(2) 面向"被第三方进程拉起"的服务，一切路径解析都不能依赖 CWD。
+
 ---
 
 ## 一、项目数据流骨架（背这个就懂项目）
@@ -172,11 +188,11 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 
 1. **断言引擎：纯函数 vs LLM 判断** — 评估了 LLM 语义判断方案，发现延迟高（>500ms）且结果不确定，最终选择纯函数 `assert_behavior(actual, spec)` → `{matched, diffs, silent_failure}`，确定性强、延迟 <1ms、可解释性好。单元测试覆盖 API/UI/Rule 三种 spec kind。
 
-2. **双传输：HTTP + stdio 共存** — 不是"多此一举"，而是产品必须覆盖两个渠道：HTTP 供运维远程调试（需要中间件安全栈），stdio 供 IDE Agent 本地集成（Claude Desktop 原生支持）。核心技术约束：两套传输共用同一套工具注册表 `_tool_registry`，14 个工具的业务逻辑零重复。
+2. **双传输：HTTP + stdio 共存** — 不是"多此一举"，而是产品必须覆盖两个渠道：HTTP 供运维远程调试（需要中间件安全栈），stdio 供 IDE Agent 本地集成（Claude Desktop 原生支持）。核心技术约束：两套传输在 handler 层复用同一批工具业务函数（HTTP 注册表 15 个工具，stdio 清单 14 个），业务逻辑不重复。
 
 3. **规范存储：dict+Lock vs PostgreSQL** — 规范量级小（<100 条）、读写比极高（低频写入、高频读取），`dict + threading.Lock` 主存方案延迟 0ms，`add_log` 做持久化备份。预留了工厂模式（一行切换到 PG），但不在不需要时过早优化。
 
-**多 Agent 协同实现：** 基于 MCP JSON-RPC 2.0 协议，全局 `_tool_registry` 注册 14 个工具。每个 Agent 有独立 `Mcp-Session-Id`（TTL 30 分钟），Agent A 采集的数据（异常堆栈、源码片段、运行时快照）通过 `build_debug_context` 统一打包，Agent B 可直接消费。
+**多 Agent 协同实现：** 基于 MCP JSON-RPC 2.0 协议，全局 `_tool_registry` 注册 15 个工具。每个 Agent 有独立 `Mcp-Session-Id`（TTL 30 分钟），Agent A 采集的数据（异常堆栈、源码片段、运行时快照）通过 `build_debug_context` 统一打包，Agent B 可直接消费。
 
 **UI 自动验收闭环：** 在已有的 `verify_ui`（按选择器精确测试）基础上扩展 `auto_test` 工具，自动扫描页面所有可交互元素（按钮/链接/输入框），依次执行交互并实时监听浏览器控制台错误 + 网络 4xx/5xx，无需手动指定选择器，形成 AI 生成代码后的"部署→自动遍历→缺陷捕获→反馈修复"闭环。
 
@@ -187,7 +203,7 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 **R — Result 成果**
 
 - 从零到交付完整产品，**171 个单元测试**全部通过（覆盖断言引擎、规范存储、verify 工具、API 端点、Spec CRUD、Dashboard、多 LLM provider、UI runner、工具注册等模块）
-- 支持 **15 个 REST 端点 + 14 个 MCP 工具**（含 auto_test 页面自动遍历），同时服务 HTTP 远程调用和 stdio 本地 Agent 集成，**已在 Trae 和 Qoder 中实际集成验证**
+- 支持 **15 个 REST 端点 + 15 个 MCP 工具**（HTTP 侧注册表；stdio 侧 14 个，含 auto_test 页面自动遍历），同时服务 HTTP 远程调用和 stdio 本地 Agent 集成，**已在 Trae 和 Qoder 中实际集成验证**
 - 断言引擎 **< 1ms 判定静默失败**，前端自动遍历 **< 30s/页**
 - **auto_test** 工具自动扫描页面所有可交互元素，依次执行交互并监听控制台错误 + 网络 4xx/5xx，形成 AI 生成代码后的自助验收闭环
 - 规范驱动闭环（写规范 → 自动比对 → 偏离告警）完整可用，**Web 控制台 Dashboard** 可视化 trace 与 spec_diffs
@@ -226,10 +242,10 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 register_all_tools()
   → _tool_registry["verify"] = {name, description, inputSchema, handler}
   → _tool_registry["verify_ui"] = ...
-  → 共 14 个工具
+  → 共 15 个工具
 
 # HTTP 传输：mcp_routes.py → POST /mcp (tools/list + tools/call)
-# stdio 传输：mcp_server.py → stdin/stdout (同一套 _tool_registry)
+# stdio 传输：mcp_server.py → stdin/stdout (独立 14 工具清单，handler 复用业务函数)
 ```
 
 **三、会话隔离 — 每个 Agent 独立，互不污染**
@@ -285,7 +301,7 @@ Playwright 未安装 → 跳过 UI 遍历（不影响 API verify）
 
 5. Agent 发现     protocol/server.py         POST /mcp → tools/list
                                               _handle_tools_list() → 遍历 _tool_registry
-                                              → 返回全部 14 个工具定义
+                                              → 返回全部 15 个工具定义
 
 6. Agent 调用     protocol/server.py         POST /mcp → tools/call
                                               _handle_tools_call():

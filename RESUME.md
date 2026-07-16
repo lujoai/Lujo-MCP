@@ -10,10 +10,10 @@
 
 **项目亮点**：
 
-- 独立设计五层分层架构（传输→中间件→路由→引擎→存储），15 REST 端点 + 14 MCP 工具
+- 独立设计五层分层架构（传输→中间件→路由→引擎→存储），15 REST 端点 + 15 MCP 工具
 - 断言引擎纯函数实现 **<1ms 静默失败判定**（对比 LLM 方案 500ms+），确定性可解释
 - MCP JSON-RPC 2.0 协议双传输（HTTP+stdio），已在 Trae 和 Qoder 中实际集成验证
-  - 统一工具注册表，14 个工具零重复代码，Agent 间会话隔离互不污染
+  - 统一工具注册表（HTTP 15 个工具），stdio 侧 handler 复用业务函数，Agent 间会话隔离互不污染
 - Playwright 前端自动遍历（auto_test）+ 浏览器 SDK 上报，可选依赖不影响核心功能
 - 存储工厂模式（memory/PG 一键切换）+ 状态工厂（memory/Redis）+ 多 LLM provider
 - Docker Compose 一键启动（PostgreSQL + Redis + App），scripts/ + migrations/ 标准化

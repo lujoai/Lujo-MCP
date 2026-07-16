@@ -133,7 +133,7 @@ curl http://localhost:8000/
 - ✅ 异常堆栈捕获（Stacktrace）
 - ✅ 运行时快照（Runtime）
 - ✅ LLM 智能分析（Analyzer）
-- ✅ MCP 工具集（14 个工具）
+- ✅ MCP 工具集（HTTP 15 个 / stdio 14 个）
 - ✅ 规范驱动 + verify 自动断言
 - ✅ UI 自动验收（auto_test）
 
@@ -153,7 +153,7 @@ curl http://localhost:8000/
 
 | 指标 | 状态 |
 |------|------|
-| MCP 工具数 | 14 |
+| MCP 工具数 | HTTP 15 / stdio 14 |
 | 测试覆盖 | 以当前实际 pytest 运行结果为准 |
 | 存储后端 | PostgreSQL（生产）/ memory（默认）|
 | LLM Provider | openai / zhipu / custom |
@@ -170,7 +170,7 @@ ai-debug-mcp/
 │   ├── api/                   # REST API 路由
 │   ├── llm/                   # LLM 分析模块
 │   ├── mcp/                   # MCP 核心模块
-│   │   ├── tools/             # 14 个 MCP 工具
+│   │   ├── tools/             # MCP 工具（HTTP 15 / stdio 14）
 │   │   ├── protocol/          # JSON-RPC 协议实现
 │   │   ├── core/              # 核心引擎 + 存储抽象
 │   │   ├── builders/          # 数据构建器

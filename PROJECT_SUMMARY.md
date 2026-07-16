@@ -80,7 +80,7 @@
 - ✅ Streamable HTTP 传输（/mcp 端点）
 - ✅ stdio 传输（Claude Desktop 子进程）
 - ✅ SSE 广播中心
-- ✅ 14 个 MCP 工具统一注册（HTTP/stdio 共用）
+- ✅ MCP 工具双传输注册（HTTP 15 个：`register_all_tools`；stdio 14 个：`mcp_server.py` 独立清单，handler 复用同一批业务函数）
 
 ### 安全能力 ✅
 
@@ -172,7 +172,7 @@
 
 1. **工厂模式**：存储层（memory/PG）、状态层（memory/Redis）、LLM provider（openai/zhipu/custom）都用工厂模式，一行配置切换
 2. **规范驱动**：用期望规范作为 ground truth，`assert_behavior()` 纯函数自动比对，偏离即告警，支持 api/ui/rule 三种 kind
-3. **双传输**：HTTP 和 stdio 共用同一套工具注册表 `register_all_tools()`，14 个工具零重复代码
+3. **双传输**：HTTP 侧 `register_all_tools()` 注册 15 个工具；stdio 侧 `mcp_server.py` 维护独立工具清单（14 个，名称有差异如 `context` vs `get_debug_context`），handler 层复用同一批业务函数；注册表完全统一列为待办
 4. **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Trae/Codex/Claude
 5. **安全优先**：fail-closed 鉴权、Content-Length 硬检查、IP 限流、安全响应头、入库前脱敏
 6. **幂等性**：异常钩子 `install_global_hook()` 幂等安装，PG 建表 `CREATE TABLE IF NOT EXISTS`

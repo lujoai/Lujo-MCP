@@ -112,7 +112,7 @@ services:
 
 | 指标 | 状态 |
 |------|------|
-| MCP 工具数 | 14 |
+| MCP 工具数 | HTTP 15 / stdio 14 |
 | 测试覆盖 | 当前测试状态以 [README.md](./README.md) 项目状态表为准 |
 | 存储后端 | memory / PostgreSQL（工厂模式）|
 | LLM Provider | openai / zhipu / custom |
