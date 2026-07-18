@@ -74,7 +74,7 @@ cp .env.example .env
 # OPENAI_API_KEY=your-zhipu-api-key
 
 # 启动所有服务
-docker-compose up -d
+docker compose up -d
 ```
 
 服务启动在 `http://localhost:8000`，包含：
@@ -120,7 +120,7 @@ curl http://localhost:8000/
 
 ## Demo 演示流程
 
-1. **启动服务**：`docker-compose up -d` 或 `uvicorn app.main:app --reload`
+1. **启动服务**：`docker compose up -d` 或 `uvicorn app.main:app --reload`
 2. **访问网络捕获 Demo**：打开 `http://localhost:8000/demo`
 3. **点击测试按钮**：测试 XHR/fetch 请求捕获、FormData/Blob 请求、采样率控制等
 4. **查看 AI 调试**：打开 `http://localhost:8000/dashboard` 查看追踪记录和 AI 分析结果
