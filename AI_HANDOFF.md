@@ -32,7 +32,7 @@
 
 ### 当前阻塞问题
 
-- ⚠️ WIP-001：dispatch 链路异步化改动未提交（7 个文件），`tests/unit/test_jsonrpc.py` 3 个用例失败，待决策完成或回滚（详见 [DEV_PLAN.md](./DEV_PLAN.md) §四）。
+- ✅ WIP-001：dispatch 链路异步化已完成（commit 5a69610），测试全部通过（187 passed, 0 failed）。
 
 ---
 

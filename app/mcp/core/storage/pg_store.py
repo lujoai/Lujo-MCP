@@ -295,7 +295,7 @@ class PGSessionStore(SessionStorage):
             row = cur.fetchone()
             if row is None:
                 return None
-            conn.execute(
+            cur.execute(
                 "UPDATE sessions SET last_active = %s WHERE session_id = %s",
                 (time.time(), session_id),
             )

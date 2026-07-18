@@ -5,6 +5,8 @@ import traceback
 import linecache
 from typing import Optional
 
+from app.mcp.core.redaction import redact
+
 
 def capture_exception(exc: Optional[BaseException] = None) -> dict:
     """捕获异常信息，返回结构化的错误描述"""
@@ -29,7 +31,7 @@ def capture_exception(exc: Optional[BaseException] = None) -> dict:
         local_vars = {}
         for key, val in frame.f_locals.items():
             try:
-                local_vars[key] = repr(val)
+                local_vars[key] = redact(repr(val))
             except Exception:
                 local_vars[key] = "<unable to render>"
 

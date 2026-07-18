@@ -22,12 +22,11 @@ PROTOCOL_VERSION = "2024-11-05"
 # 服务端能力声明
 CAPABILITIES = {
     "tools": {},  # 支持工具调用
-    "resources": {},  # 保留扩展
 }
 
 SERVER_INFO = {
     "name": settings.service_name,
-    "version": "0.2.0",
+    "version": "0.3.0",
 }
 
 # 工具注册表

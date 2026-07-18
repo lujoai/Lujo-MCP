@@ -52,6 +52,17 @@ def make_ide_link(file_path: str, line_no: int) -> Optional[str]:
 def get_code_snippet(file_path: str, line_no: int, context_lines: int | None = None) -> CodeSnippet:
     context_lines = context_lines or settings.code_context_lines
 
+    # 路径白名单校验，禁止任意路径读取
+    abs_path = os.path.abspath(_remap_path(file_path))
+    if not _is_allowed(abs_path):
+        return CodeSnippet(
+            file=file_path,
+            error_line=line_no,
+            snippet="",
+            found=False,
+            link=None,
+        )
+
     # linecache 对不存在的文件/行会返回空字符串，不会抛异常
     linecache.checkcache(file_path)
     first_line = linecache.getline(file_path, 1)
