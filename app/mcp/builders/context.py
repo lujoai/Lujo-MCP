@@ -56,7 +56,49 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
 
     trace = trace_repo.get_trace(trace_id)
     if trace is None:
-        return None
+        # fallback: 数据可能通过 add_log 直接写入存储（非 errors 缓冲），
+        # 从 TraceStorage 构造最小 trace 对象
+        from app.mcp.core.logs import get_logs
+        entries = get_logs(trace_id) if trace_id else []
+        if not entries:
+            return None
+        # 从 entries 提取最早时间戳和摘要
+        first_ts = min(e.get("timestamp", 0) for e in entries)
+        last_ts = max(e.get("timestamp", 0) for e in entries)
+        message = ""
+        exc_type = "unknown"
+        trace_kind = "debug"
+        extra = {}
+        for e in entries:
+            data = e.get("data")
+            if not isinstance(data, dict):
+                continue
+            step = e.get("step", "")
+            if step == "error":
+                exc_type = data.get("error_type", data.get("type", "unknown"))
+                message = data.get("message", "")
+                break
+            elif step == "trace_meta":
+                trace_kind = data.get("trace_kind", "exception")
+                extra = data.get("extra", {})
+                # 从 trace_meta 提取 exc_type/message（如果 extra 中有）
+                if not message and extra.get("message"):
+                    message = extra["message"]
+        trace = {
+            "trace_id": trace_id,
+            "timestamp": last_ts,
+            "exc_type": exc_type,
+            "message": message,
+            "frames": [],
+            "frame_count": 0,
+            "source": "storage",
+            "fingerprint": None,
+            "occurrence_count": 1,
+            "first_seen": first_ts,
+            "last_seen": last_ts,
+            "trace_kind": trace_kind,
+            "extra": extra,
+        }
 
     tid = trace["trace_id"]
     frames = trace.get("frames", []) or []

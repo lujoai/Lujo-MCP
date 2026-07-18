@@ -12,7 +12,7 @@ import asyncio
 from app.mcp.tools import register_all_tools
 from app.mcp.protocol.server import dispatch
 from app.mcp.protocol.jsonrpc import parse_request
-from app.mcp.protocol.jsonrpc import make_error, INVALID_REQUEST
+from app.mcp.protocol.jsonrpc import make_error, INVALID_REQUEST, INTERNAL_ERROR
 
 logger = logging.getLogger("ai-debug-mcp.mcp.stdio")
 
@@ -28,12 +28,22 @@ def _configure_stdio_logging():
     root.setLevel(logging.INFO)
 
 
+def _write_response(response: dict):
+    """安全写入 JSON-RPC 响应到 stdout"""
+    try:
+        payload = json.dumps(response, ensure_ascii=False, default=str)
+        sys.stdout.write(payload + "\n")
+        sys.stdout.flush()
+    except Exception as e:
+        logger.error("写入 stdout 失败: %s", e)
+
+
 async def run_stdio():
     _configure_stdio_logging()
     register_all_tools()
     logger.info("MCP stdio server 启动，等待 stdin 输入")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         try:
             line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -47,20 +57,25 @@ async def run_stdio():
         try:
             req = parse_request(line)
         except Exception as e:
-            sys.stdout.write(
-                json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": INVALID_REQUEST, "message": str(e)}}) + "\n"
+            _write_response(
+                make_error(None, INVALID_REQUEST, str(e))
             )
-            sys.stdout.flush()
             continue
 
-        result = await dispatch(req)
+        try:
+            result = await dispatch(req)
+        except Exception as e:
+            logger.exception("dispatch 执行异常")
+            _write_response(
+                make_error(req.id, INTERNAL_ERROR, f"内部错误: {e}")
+            )
+            continue
 
         # 通知类消息（无 id）不写回响应
         if req.id is None:
             continue
 
-        sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        _write_response(result)
 
     logger.info("MCP stdio server 关闭（stdin 关闭）")
 

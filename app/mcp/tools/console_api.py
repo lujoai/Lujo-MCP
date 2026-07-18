@@ -45,7 +45,7 @@ def tool_ingest_console(
         trace_id=trace_id,
         request_id=request_id,
     )
-    return {"record_id": record_id, "saved": True}
+    return {"record_id": record_id, "trace_id": trace_id, "saved": True}
 
 
 def ingest_console_handler(arguments: dict) -> dict:

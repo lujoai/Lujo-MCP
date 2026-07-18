@@ -37,10 +37,10 @@ NETWORK_TRACE_DEF = {
 
 
 def tool_ingest_network(record: dict, trace_id: str | None = None, request_id: str | None = None) -> dict:
-    """解析并保存一条网络记录，返回 record_id。"""
+    """解析并保存一条网络记录，返回 record_id 和关联的 trace_id。"""
     parsed = parse_network_record(record)
     record_id = save_network_record(parsed, trace_id=trace_id, request_id=request_id)
-    return {"record_id": record_id, "saved": True}
+    return {"record_id": record_id, "trace_id": trace_id, "saved": True}
 
 
 def tool_get_network_trace(trace_id: str) -> dict:

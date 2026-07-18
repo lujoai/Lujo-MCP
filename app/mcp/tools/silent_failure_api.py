@@ -68,6 +68,7 @@ def tool_ingest_silent_failure(
     expectation: dict | None = None,
     source: str = "browser_sdk",
     extra: dict | None = None,
+    trace_id: str | None = None,
 ) -> dict:
     """保存一条前端静默失败 trace，同时关联 UI 事件与网络请求。"""
     frames = _parse_frames(frames)
@@ -79,29 +80,30 @@ def tool_ingest_silent_failure(
     extra["ui_event_count"] = len(ui_events)
     extra["network_record_count"] = len(network_records)
 
-    trace_id = save_trace(
+    result_trace_id = save_trace(
         exc_type="SilentFailure",
         message=message,
         frames=frames,
         source=source,
         extra=extra,
         trace_kind="silent_failure",
+        trace_id=trace_id,
     )
 
     # 关联入库（单条失败不阻断整体）
     for event in ui_events:
         try:
-            save_ui_event(event, trace_id=trace_id)
+            save_ui_event(event, trace_id=result_trace_id)
         except Exception:
-            logger.warning("保存 ui_event 失败 (trace_id=%s)", trace_id)
+            logger.warning("保存 ui_event 失败 (trace_id=%s)", result_trace_id)
     for record in network_records:
         try:
-            save_network_record(record, trace_id=trace_id)
+            save_network_record(record, trace_id=result_trace_id)
         except Exception:
-            logger.warning("保存 network_record 失败 (trace_id=%s)", trace_id)
+            logger.warning("保存 network_record 失败 (trace_id=%s)", result_trace_id)
 
     return {
-        "trace_id": trace_id,
+        "trace_id": result_trace_id,
         "saved": True,
         "ui_events": len(ui_events),
         "network_records": len(network_records),
@@ -117,4 +119,5 @@ def silent_failure_handler(arguments: dict) -> dict:
         expectation=arguments.get("expectation"),
         source=arguments.get("source", "browser_sdk"),
         extra=arguments.get("extra"),
+        trace_id=arguments.get("trace_id"),
     )

@@ -13,8 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 拷贝源码
 COPY app ./app
+COPY browser-sdk ./browser-sdk
 COPY examples ./examples
-COPY .env .
+COPY migrations ./migrations
+COPY scripts ./scripts
 
 # 暴露端口
 EXPOSE 8000

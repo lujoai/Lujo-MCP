@@ -49,6 +49,7 @@ def ingest_silent_failure(req: dict):
             expectation=req.get("expectation"),
             source=req.get("source", "browser_sdk"),
             extra=req.get("extra"),
+            trace_id=req.get("trace_id"),
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"上报失败: {e}")
@@ -64,6 +65,7 @@ def ingest_error(req: dict):
             frames=req.get("frames", []),
             source=req.get("source", "http_ingest"),
             extra=req.get("extra"),
+            trace_id=req.get("trace_id"),
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"上报失败: {e}")
@@ -89,11 +91,12 @@ def ingest_console(req: dict):
 def ingest_ui_event(req: dict):
     """浏览器 SDK 上报 UI 事件，复用 save_ui_event 落库。"""
     try:
+        trace_id = req.get("trace_id")
         event_id = save_ui_event(
             event=req.get("event", {}) or {},
-            trace_id=req.get("trace_id"),
+            trace_id=trace_id,
             extra=req.get("extra"),
         )
-        return {"event_id": event_id, "saved": True}
+        return {"event_id": event_id, "trace_id": trace_id, "saved": True}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"上报失败: {e}")

@@ -63,18 +63,20 @@ def tool_ingest_error(
     frames: list | None = None,
     source: str = "ingest",
     extra: dict | None = None,
+    trace_id: str | None = None,
 ) -> dict:
     """接收外部上报的错误，落库后返回 trace_id。"""
     frames = _parse_frames(frames)
-    trace_id = save_trace(
+    result_trace_id = save_trace(
         exc_type=exc_type,
         message=message,
         frames=frames,
         source=source,
         extra=extra or {},
         trace_kind="exception",
+        trace_id=trace_id,
     )
-    return {"trace_id": trace_id, "saved": True, "frame_count": len(frames)}
+    return {"trace_id": result_trace_id, "saved": True, "frame_count": len(frames)}
 
 
 def ingest_error_handler(arguments: dict) -> dict:
@@ -84,4 +86,5 @@ def ingest_error_handler(arguments: dict) -> dict:
         frames=arguments.get("frames", []),
         source=arguments.get("source", "ingest"),
         extra=arguments.get("extra"),
+        trace_id=arguments.get("trace_id"),
     )

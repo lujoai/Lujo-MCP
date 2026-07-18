@@ -33,6 +33,7 @@
 
   var _inited = false;
   var _sessionId = "sdk-" + Math.random().toString(36).slice(2, 10);
+  var _traceId = "sdk-trace-" + Math.random().toString(36).slice(2, 10);
 
   // ── 工具函数 ──
   function _shouldSample() {
@@ -94,6 +95,7 @@
         exc_type: error ? error.name : "Error",
         message: String(msg),
         frames: frames,
+        trace_id: _traceId,
         source: "browser-sdk",
         extra: {
           session_id: _sessionId,
@@ -111,6 +113,7 @@
         exc_type: reason ? reason.name || "UnhandledRejection" : "UnhandledRejection",
         message: reason ? reason.message || String(reason) : "Promise rejected",
         frames: reason && reason.stack ? _parseStack(reason.stack) : [],
+        trace_id: _traceId,
         source: "browser-sdk",
         extra: {
           session_id: _sessionId,
@@ -225,6 +228,7 @@
       _notifyNetworkCapture(record);
       _send("/ingest/network", {
         record: record,
+        trace_id: _traceId,
         source: "browser-sdk",
         extra: { session_id: _sessionId },
       });
@@ -434,6 +438,7 @@
             timestamp: now / 1000,
             route_path: global.location ? global.location.pathname : "",
           },
+          trace_id: _traceId,
           source: "browser-sdk",
           extra: { session_id: _sessionId },
         });
@@ -491,6 +496,7 @@
     _send("/ingest/console", {
       level: level,
       message: messages.join(" "),
+      trace_id: _traceId,
       source: "browser-sdk",
       extra: {
         session_id: _sessionId,
@@ -536,6 +542,7 @@
       message: payload.description,
       expectation: payload.expected,
       observed: payload.observed,
+      trace_id: _traceId,
       source: "browser-sdk",
       extra: {
         session_id: _sessionId,
@@ -554,6 +561,7 @@
       exc_type: error ? error.name || "Error" : "Error",
       message: error ? error.message || String(error) : "",
       frames: error && error.stack ? _parseStack(error.stack) : [],
+      trace_id: _traceId,
       source: "browser-sdk",
       extra: Object.assign({
         session_id: _sessionId,
@@ -575,6 +583,7 @@
         timestamp: Date.now() / 1000,
         route_path: event.route_path || (global.location ? global.location.pathname : ""),
       },
+      trace_id: _traceId,
       source: "browser-sdk",
       extra: { session_id: _sessionId },
     });
@@ -587,6 +596,21 @@
     return _sessionId;
   }
 
+  /**
+   * 获取当前追踪 ID
+   */
+  function getTraceId() {
+    return _traceId;
+  }
+
+  /**
+   * 设置追踪 ID（用于关联不同上报到同一业务操作）
+   * @param {string} id - 新的追踪 ID
+   */
+  function setTraceId(id) {
+    if (id) _traceId = id;
+  }
+
   // ── 导出 ──
   var api = {
     init: init,
@@ -594,6 +618,8 @@
     reportError: reportError,
     reportUIEvent: reportUIEvent,
     getSessionId: getSessionId,
+    getTraceId: getTraceId,
+    setTraceId: setTraceId,
     _cfg: cfg,
     onNetworkCapture: function (callback) {
       _onNetworkCapture = callback;

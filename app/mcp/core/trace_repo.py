@@ -41,10 +41,13 @@ def save_trace(
     source: str = "ingest",
     extra: Optional[dict] = None,
     trace_kind: str = "exception",
+    trace_id: Optional[str] = None,
 ) -> str:
     """保存一条 trace（复用 errors 近期缓冲），返回 trace_id。
 
     trace_id 同时作为 network / ui_event 的关联键。
+    当 caller 提供 trace_id（如浏览器 SDK 的 _traceId）时，优先使用它作为关联键，
+    保证生成、保存、返回同一个 record_id。
     """
     extra = extra or {}
     frames = frames or []
@@ -55,34 +58,77 @@ def save_trace(
         "traceback": "",
         "frame_count": len(frames),
     }
-    trace_id = _record_error(exc_data, source=source)
+    error_id = _record_error(exc_data, source=source)
 
-    # 非 exception 或携带 extra 时，把元信息落到 TraceStorage 便于 get_trace 合并
-    if trace_kind != "exception" or extra:
+    # 使用 caller 提供的 trace_id 作为关联键（SDK 场景）
+    # 或使用 errors 模块生成的 error_id（内部/非 SDK 场景）
+    key = trace_id or error_id
+
+    # 始终写入 trace_meta 到 trace 存储，保证重启后可查
+    try:
+        add_log(key, _STEP_META, {
+            "trace_kind": trace_kind,
+            "extra": extra,
+            "error_id": error_id,
+            "ts": time.time(),
+        })
+    except Exception:
+        logger.exception("写入 trace_meta 失败 (trace_id=%s)", key)
+
+    # 如果 caller 提供了 trace_id 且与 error_id 不同，写入关联条目
+    if trace_id and trace_id != error_id:
         try:
-            add_log(trace_id, _STEP_META, {
-                "trace_kind": trace_kind,
-                "extra": extra,
+            add_log(trace_id, "trace_link", {
+                "error_id": error_id,
                 "ts": time.time(),
             })
         except Exception:
-            logger.exception("写入 trace_meta 失败 (trace_id=%s)", trace_id)
+            logger.exception("写入 trace_link 失败 (trace_id=%s)", trace_id)
 
-    return trace_id
+    return key
 
 
 def get_trace(trace_id: Optional[str] = None) -> Optional[dict]:
-    """取指定 trace_id，不传则取最新一条。"""
-    err = _get_error(trace_id) if trace_id else _get_latest()
+    """取指定 trace_id，不传则取最新一条。
+
+    支持两种查找路径：
+    1. 直接通过 error_id 在 errors 缓冲中查找（内部/非 SDK 场景）
+    2. 通过 trace_link 条目反向查找（SDK 场景：trace_id 是 SDK 生成的）
+    """
+    if not trace_id:
+        err = _get_latest()
+    else:
+        err = _get_error(trace_id)
+
+    # 如果直接查找失败，尝试通过 trace_link 反向查找
+    if err is None and trace_id:
+        try:
+            for entry in get_logs(trace_id):
+                if entry.get("step") == "trace_link":
+                    linked_error_id = (entry.get("data") or {}).get("error_id")
+                    if linked_error_id:
+                        err = _get_error(linked_error_id)
+                        if err:
+                            break
+        except Exception:
+            pass
+
     if not err:
         return None
 
     meta = {}
     try:
+        # 先尝试从 error_id 下查找 meta
         for entry in get_logs(err["error_id"]):
             if entry.get("step") == _STEP_META:
                 meta = entry.get("data") or {}
                 break
+        # 如果没找到，从 caller trace_id 下查找
+        if not meta and trace_id and trace_id != err["error_id"]:
+            for entry in get_logs(trace_id):
+                if entry.get("step") == _STEP_META:
+                    meta = entry.get("data") or {}
+                    break
     except Exception:
         pass
 
