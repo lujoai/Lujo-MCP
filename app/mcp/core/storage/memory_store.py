@@ -36,6 +36,16 @@ class MemoryTraceStore(TraceStorage):
                 del self._store[rid]
         return len(stale)
 
+    def list_request_ids(self, limit: int = 50) -> list[str]:
+        with self._lock:
+            ranked = [
+                (request_id, entries[-1].get("timestamp", 0))
+                for request_id, entries in self._store.items()
+                if entries
+            ]
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return [request_id for request_id, _ in ranked[:limit]]
+
 
 class MemorySessionStore(SessionStorage):
     def __init__(self):

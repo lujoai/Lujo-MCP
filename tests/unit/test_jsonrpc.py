@@ -1,5 +1,6 @@
 """单元测试：JSON-RPC 协议"""
 import asyncio
+import threading
 import pytest
 from app.mcp.protocol.jsonrpc import (
     parse_request,
@@ -91,3 +92,53 @@ class TestMCPServerDispatch:
         resp = asyncio.run(dispatch(req))
         assert resp["id"] == 0
         assert "error" not in resp
+
+    def test_dispatch_tools_call_hides_internal_exception(self):
+        from app.mcp.protocol.server import dispatch, register_tool, _tool_registry
+
+        def _boom(arguments):
+            raise RuntimeError("token=secret-value")
+
+        original_registry = dict(_tool_registry)
+        try:
+            register_tool("boom", "boom", _boom, inputSchema={})
+            req = JSONRPCRequest(
+                jsonrpc="2.0",
+                id=2,
+                method="tools/call",
+                params={"name": "boom", "arguments": {}},
+            )
+            resp = asyncio.run(dispatch(req))
+            assert resp["result"]["isError"] is True
+            assert resp["result"]["content"][0]["text"] == "工具执行失败，详情见服务端日志"
+            assert "secret-value" not in resp["result"]["content"][0]["text"]
+        finally:
+            _tool_registry.clear()
+            _tool_registry.update(original_registry)
+
+    def test_dispatch_tools_call_runs_sync_handler_in_worker_thread(self):
+        from app.mcp.protocol.server import dispatch, register_tool, _tool_registry
+
+        main_thread_id = threading.get_ident()
+        called_thread_ids = []
+
+        def _sync_tool(arguments):
+            called_thread_ids.append(threading.get_ident())
+            return {"ok": True, "value": arguments["value"]}
+
+        original_registry = dict(_tool_registry)
+        try:
+            register_tool("sync-tool", "sync", _sync_tool, inputSchema={})
+            req = JSONRPCRequest(
+                jsonrpc="2.0",
+                id=3,
+                method="tools/call",
+                params={"name": "sync-tool", "arguments": {"value": 7}},
+            )
+            resp = asyncio.run(dispatch(req))
+            assert resp["result"]["isError"] is False
+            assert called_thread_ids
+            assert called_thread_ids[0] != main_thread_id
+        finally:
+            _tool_registry.clear()
+            _tool_registry.update(original_registry)

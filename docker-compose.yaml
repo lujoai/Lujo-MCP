@@ -4,9 +4,7 @@ services:
     environment:
       POSTGRES_DB: ai_debug_mcp
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须设置}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,8 +15,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -40,11 +36,11 @@ services:
       PG_PORT: 5432
       PG_DATABASE: ai_debug_mcp
       PG_USER: postgres
-      PG_PASSWORD: postgres
+      PG_PASSWORD: ${PG_PASSWORD:?必须设置}
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}
-      API_KEY: ${API_KEY:-}
+      API_KEY: ${API_KEY:?必须设置}
     ports:
       - "8000:8000"
     healthcheck:

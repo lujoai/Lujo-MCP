@@ -1,9 +1,13 @@
 """MCP 调试工具 —— 一键运行调试流程 / 运行时快照 / 调试上下文 / LLM 分析"""
 
+import logging
+
 from app.mcp.core.logs import create_request_id, add_log, get_logs
 from app.mcp.builders.context import build_context, build_debug_context
 from app.mcp.collectors.runtime import collect_runtime_snapshot
 from app.llm.analyzer import analyze
+
+logger = logging.getLogger("ai-debug-mcp.debug-tool")
 
 TOOL_DEF = {
     "name": "debug",
@@ -68,4 +72,5 @@ def analyze_with_llm(trace_id: str | None = None) -> dict:
     try:
         return analyze(ctx)
     except RuntimeError as e:
-        return {"error": f"LLM 分析失败: {e}"}
+        logger.error(str(e), exc_info=True)
+        return {"error": "Tool execution failed"}

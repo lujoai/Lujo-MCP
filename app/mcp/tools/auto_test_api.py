@@ -4,6 +4,7 @@ MCP 工具：auto_test —— 自动遍历页面所有可交互元素并捕获�
 仅暴露同步入口，内部新开事件循环跑 Playwright 异步 API，
 避免与调用方的事件循环冲突。
 """
+import logging
 
 AUTO_TEST_DEF = {
     "name": "auto_test",
@@ -25,12 +26,12 @@ AUTO_TEST_DEF = {
     },
 }
 
+logger = logging.getLogger("ai-debug-mcp.auto_test")
+
 
 async def _run(url: str, max_actions: int, capture_console: bool, capture_network: bool) -> dict:
     """内部 async 函数：用 Playwright 异步 API 执行遍历"""
     from playwright.async_api import async_playwright
-    import logging
-    logger = logging.getLogger("ai-debug-mcp.auto_test")
 
     console_errors = []
     network_errors = []
@@ -56,8 +57,9 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
         try:
             await page.goto(url, wait_until="networkidle", timeout=30000)
         except Exception as e:
+            logger.error(str(e), exc_info=True)
             await browser.close()
-            return {"error": f"导航失败: {e}", "url": url}
+            return {"error": "Tool execution failed", "url": url}
 
         els = await page.query_selector_all(
             "button, a[href], input:not([type=hidden]), select, textarea, "
@@ -89,8 +91,8 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
                     "changed_url": before != after,
                 })
             except Exception as e:
-                em = str(e)[:100]
-                executed.append({"index": idx, "error": em, "silent_failure": "timeout" in em.lower()})
+                logger.error(str(e), exc_info=True)
+                executed.append({"index": idx, "error": "Tool execution failed", "silent_failure": False})
 
         await browser.close()
 

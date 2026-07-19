@@ -1,5 +1,6 @@
 """MCP 协议服务器 —— 遵循 MCP 2024-11-05 规范"""
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -77,9 +78,11 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         return make_error(req.id, METHOD_NOT_FOUND, f"未知工具: {tool_name}")
 
     try:
-        result = tool["handler"](arguments)
-        if __import__("asyncio").iscoroutine(result):
-            result = await result
+        handler = tool["handler"]
+        if asyncio.iscoroutinefunction(handler):
+            result = await handler(arguments)
+        else:
+            result = await asyncio.to_thread(handler, arguments)
         return make_response(req.id, {
             "content": [
                 {
@@ -89,7 +92,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
             ],
             "isError": False,
         })
-    except Exception as e:
+    except Exception:
         logger.exception(f"工具 {tool_name} 执行失败")
         return make_response(req.id, {
             "content": [
