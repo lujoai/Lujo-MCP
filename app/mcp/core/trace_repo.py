@@ -10,20 +10,40 @@ get_network_records / save_ui_event / get_ui_events 等接口。
 - network / ui_event 作为带特殊 step（"network" / "ui_event"）的 trace 条目，
   复用 logs.add_log / get_logs —— Memory 与 PG 后端零改动即可用。
 - 脱敏在存储边界统一执行（url/body/payload/message），落实 redaction "写入存储前统一处理"。
+
+C3/C4 修复（v0.3.0 Release Audit）：
+- save_trace 始终以 errors 缓冲的 error_id 作为 add_log 写入 key 与返回值，
+  保证"返回 ID == add_log key == errors error_id"三者统一。
+- save_trace 同时通过 add_log 把完整异常数据（type/message/frames/traceback）
+  持久化到 trace_store（step=trace_data），不依赖 errors 内存缓冲。
+- get_trace 在 errors 内存未命中时从 trace_store 回读重建 trace 对象，
+  解决"重启即丢"。
 """
 import time
 import uuid
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from app.mcp.core.logs import add_log, get_logs
 from app.mcp.core.errors import record as _record_error, get_by_id as _get_error, get_latest as _get_latest
 from app.mcp.core.redaction import redact
 
 logger = logging.getLogger("ai-debug-mcp.trace_repo")
+_SENSITIVE_KEYS = {
+    "api_key",
+    "token",
+    "password",
+    "secret",
+    "authorization",
+    "cookie",
+    "passwd",
+    "pwd",
+}
 
 # trace 条目 step 命名
+_STEP_DATA = "trace_data"       # 完整异常数据（C4：落库到 trace_store）
 _STEP_META = "trace_meta"      # trace_kind / extra 元信息
+_STEP_LINK = "trace_link"      # caller_trace_id ↔ error_id 关联（C3）
 _STEP_NETWORK = "network"
 _STEP_UI = "ui_event"
 _STEP_CONSOLE = "console"
@@ -31,6 +51,25 @@ _STEP_CONSOLE = "console"
 
 def _new_id(prefix: str = "rec") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def _redact_nested(value: Any) -> Any:
+    """递归脱敏 frames / extra 等嵌套结构中的字符串值。"""
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            if str(key).lower() in _SENSITIVE_KEYS:
+                sanitized[key] = "***REDACTED***"
+            else:
+                sanitized[key] = _redact_nested(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_redact_nested(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_nested(item) for item in value]
+    if isinstance(value, str):
+        return redact(value) or value
+    return value
 
 
 # ── trace（异常/静默失败）──
@@ -43,14 +82,16 @@ def save_trace(
     trace_kind: str = "exception",
     trace_id: Optional[str] = None,
 ) -> str:
-    """保存一条 trace（复用 errors 近期缓冲），返回 trace_id。
+    """保存一条 trace（复用 errors 近期缓冲 + trace_store 持久化），返回 error_id。
 
-    trace_id 同时作为 network / ui_event 的关联键。
-    当 caller 提供 trace_id（如浏览器 SDK 的 _traceId）时，优先使用它作为关联键，
-    保证生成、保存、返回同一个 record_id。
+    C3：返回值与 add_log 写入 key 统一为 errors 缓冲的 error_id。
+    C4：完整异常数据通过 add_log(step="trace_data") 落 trace_store，重启不丢。
+
+    caller 提供的 trace_id（如浏览器 SDK 的 _trace_id）会以 trace_link 形式
+    记录在 error_id 下，用于审计与反向查询，但不再作为返回值或存储 key。
     """
     extra = extra or {}
-    frames = frames or []
+    frames = _redact_nested(frames or [])
     exc_data = {
         "type": exc_type,
         "message": redact(message) or "",
@@ -60,75 +101,123 @@ def save_trace(
     }
     error_id = _record_error(exc_data, source=source)
 
-    # 使用 caller 提供的 trace_id 作为关联键（SDK 场景）
-    # 或使用 errors 模块生成的 error_id（内部/非 SDK 场景）
-    key = trace_id or error_id
-
-    # 始终写入 trace_meta 到 trace 存储，保证重启后可查
+    # C4：把完整异常数据落 trace_store，重启后仍可回读
     try:
-        add_log(key, _STEP_META, {
+        add_log(error_id, _STEP_DATA, {
+            **exc_data,
+            "source": source,
+            "ts": time.time(),
+        })
+    except Exception:
+        logger.exception("写入 trace_data 失败 (error_id=%s)", error_id)
+
+    # trace_meta 始终以 error_id 为 key 写入 trace_store，保证与 errors 缓冲对齐
+    try:
+        add_log(error_id, _STEP_META, {
             "trace_kind": trace_kind,
-            "extra": extra,
+            "extra": _redact_nested(extra),
             "error_id": error_id,
             "ts": time.time(),
         })
     except Exception:
-        logger.exception("写入 trace_meta 失败 (trace_id=%s)", key)
+        logger.exception("写入 trace_meta 失败 (error_id=%s)", error_id)
 
-    # 如果 caller 提供了 trace_id 且与 error_id 不同，写入关联条目
+    # C3：caller 提供 trace_id 时，以 error_id 为 key 写入 trace_link 记录关联
+    # （写入方向：error_id 下记录 caller_trace_id，便于从 error_id 反查 SDK 关联）
     if trace_id and trace_id != error_id:
         try:
-            add_log(trace_id, "trace_link", {
-                "error_id": error_id,
+            add_log(error_id, _STEP_LINK, {
+                "caller_trace_id": trace_id,
                 "ts": time.time(),
             })
         except Exception:
-            logger.exception("写入 trace_link 失败 (trace_id=%s)", trace_id)
+            logger.exception("写入 trace_link 失败 (error_id=%s, caller_trace_id=%s)", error_id, trace_id)
 
-    return key
+    return error_id
+
+
+def _rebuild_trace_from_store(error_id: str) -> Optional[dict]:
+    """从 trace_store 回读重建 trace 对象（C4：errors 缓冲未命中时使用）。
+
+    必须能找到 step=trace_data 的条目；trace_meta / trace_link 可选。
+    """
+    trace_data = None
+    meta = {}
+    caller_trace_id = None
+    try:
+        for entry in get_logs(error_id):
+            step = entry.get("step")
+            data = entry.get("data")
+            if step == _STEP_DATA and isinstance(data, dict):
+                trace_data = data
+            elif step == _STEP_META and isinstance(data, dict):
+                meta = data
+            elif step == _STEP_LINK and isinstance(data, dict):
+                caller_trace_id = data.get("caller_trace_id")
+    except Exception:
+        logger.exception("从 trace_store 回读 trace 失败 (error_id=%s)", error_id)
+        return None
+
+    if trace_data is None:
+        return None
+
+    frames = trace_data.get("frames") or []
+    timestamp = trace_data.get("ts") or 0
+    return {
+        "trace_id": error_id,
+        "timestamp": timestamp,
+        "exc_type": trace_data.get("type"),
+        "message": trace_data.get("message", ""),
+        "frames": frames,
+        "frame_count": trace_data.get("frame_count", len(frames)),
+        "source": trace_data.get("source", "storage"),
+        "fingerprint": None,
+        "occurrence_count": 1,
+        "first_seen": timestamp,
+        "last_seen": timestamp,
+        "trace_kind": meta.get("trace_kind", "exception"),
+        "extra": meta.get("extra", {}),
+        "caller_trace_id": caller_trace_id,
+        "from_store": True,  # 标记来自回读，便于诊断
+    }
 
 
 def get_trace(trace_id: Optional[str] = None) -> Optional[dict]:
     """取指定 trace_id，不传则取最新一条。
 
-    支持两种查找路径：
-    1. 直接通过 error_id 在 errors 缓冲中查找（内部/非 SDK 场景）
-    2. 通过 trace_link 条目反向查找（SDK 场景：trace_id 是 SDK 生成的）
+    C4：errors 内存未命中时从 trace_store 回读重建 trace 对象。
+    查找顺序：
+      1. errors 缓冲直接命中（trace_id == error_id）
+      2. trace_store 回读 step=trace_data 重建（重启/超出缓冲容量场景）
     """
     if not trace_id:
         err = _get_latest()
+        if err is None:
+            # 兜底：从 trace_store 找最近一条 trace_data
+            return None
+        error_id = err["error_id"]
     else:
-        err = _get_error(trace_id)
+        error_id = trace_id
+        err = _get_error(error_id)
 
-    # 如果直接查找失败，尝试通过 trace_link 反向查找
-    if err is None and trace_id:
-        try:
-            for entry in get_logs(trace_id):
-                if entry.get("step") == "trace_link":
-                    linked_error_id = (entry.get("data") or {}).get("error_id")
-                    if linked_error_id:
-                        err = _get_error(linked_error_id)
-                        if err:
-                            break
-        except Exception:
-            pass
-
-    if not err:
+    # errors 内存未命中时回读 trace_store（C4 下半段）
+    if err is None:
+        rebuilt = _rebuild_trace_from_store(error_id)
+        if rebuilt is not None:
+            return rebuilt
         return None
 
+    # errors 缓冲命中，附加 trace_meta / trace_link
     meta = {}
+    caller_trace_id = None
     try:
-        # 先尝试从 error_id 下查找 meta
         for entry in get_logs(err["error_id"]):
-            if entry.get("step") == _STEP_META:
-                meta = entry.get("data") or {}
-                break
-        # 如果没找到，从 caller trace_id 下查找
-        if not meta and trace_id and trace_id != err["error_id"]:
-            for entry in get_logs(trace_id):
-                if entry.get("step") == _STEP_META:
-                    meta = entry.get("data") or {}
-                    break
+            step = entry.get("step")
+            data = entry.get("data")
+            if step == _STEP_META and isinstance(data, dict):
+                meta = data
+            elif step == _STEP_LINK and isinstance(data, dict):
+                caller_trace_id = data.get("caller_trace_id")
     except Exception:
         pass
 
@@ -146,6 +235,7 @@ def get_trace(trace_id: Optional[str] = None) -> Optional[dict]:
         "last_seen": err.get("last_seen", err["timestamp"]),
         "trace_kind": meta.get("trace_kind", "exception"),
         "extra": meta.get("extra", {}),
+        "caller_trace_id": caller_trace_id,
     }
 
 
