@@ -24,7 +24,7 @@
 | v2.0 | 2026-07-07 | 团队 | 以真实痛点重构，新增 FR11–FR15 |
 | v3.0 | 2026-07-07 | 高级架构师 | **代码核实后修正实现状态**：标注自动捕获/宿主AI推理已落地；代码定位标记为"模块已实现但未接线+配置缺失"；静默失败/前端自动化确认为待开发；补充架构师痛点覆盖度矩阵与落地缺口 |
 | v4.0 | 2026-07-08 | 高级后端架构师 | **参考项目迁移完成（M1–M8）**：redaction/trace_repo/network/ui_event/git/silent_failure/ingest_error/build_debug_context 全部落地；6 个新工具双传输注册；FR13 采集链就绪（自动检测仍待建）；FR14/FR15 未纳入本次优先级 |
-| v4.2 | 2026-07-08 | 高级后端架构师 | **全量交付**：FR13 assert_engine+verify ✅、FR14 Playwright UI 遍历+verify_ui ✅、FR15 spec_store+闭环 ✅、浏览器 SDK TS ✅、多 LLM provider ✅、Web 控制台 Dashboard ✅。全量交付（测试状态以 [README.md](./README.md) 项目状态表为准）。 |
+| v4.2 | 2026-07-08 | 高级后端架构师 | **全量交付**：FR13 assert_engine+verify ✅、FR14 Playwright UI 遍历+verify_ui ✅、FR15 spec_store+闭环 ✅、浏览器 SDK TS ✅、多 LLM provider ✅、Web 控制台 Dashboard ✅。全量交付（测试状态以 [README.md](../../README.md) 项目状态表为准）。 |
 
 ---
 
@@ -247,7 +247,7 @@ flowchart TB
         Hook["全局异常钩子 ✅<br/>exception_hook"]
         MW["中间件（安全基线）"]
         Router["路由 /api/debug · /mcp · /health · /metrics"]
-        Tools["MCP 工具<br/>HTTP 15 个 (register_all_tools)<br/>stdio 14 个 (mcp_server.py)"]
+        Tools["MCP 工具<br/>HTTP 15 个 (register_all_tools)<br/>stdio 15 个 (mcp_server.py)"]
     end
 
     subgraph Engine["调试引擎"]

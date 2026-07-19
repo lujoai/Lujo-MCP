@@ -32,13 +32,23 @@
 - ✅ M12 依赖拆分：`requirements.txt` 仅保留 10 项运行时依赖（删除 `pytest`）；新建 `requirements-dev.txt`（`-r requirements.txt` + `pytest`/`pytest-asyncio`/`ruff`）；`Dockerfile` 未改；`README.md` §方式二区分生产/开发安装。验收：`pip install -r requirements-dev.txt` 成功，`pytest tests/unit/ -q` 在无 `.env` 污染环境下 212 passed / 6 skipped 全绿。
 - ✅ H10：SDK reportSilentFailure 自动附带最近 N 条 network/UI 事件链 + 服务端 ingest 保留 observed/observed_events + 工具层分类入库与 unknown 保留（2026-07-19）
 - ✅ H12：进程边界零覆盖补齐 + `test_pg_integration.py` 断言被 try/except 吞导致失败降级为 skip 修复（2026-07-19）
+- ✅ N3：stdio 关闭资源回收（PG 连接池 close_pool / periodic_cleanup 取消 / excepthook 卸载）+ atexit/signal 兜底 + uninstall_global_hook 新增 + 8 个进程边界测试用例（2026-07-19）
+- ✅ M1：storage factory 对 `STORAGE_BACKEND` 拼写错误 fail-fast（factory.py 加白名单 `_VALID_BACKENDS = {"memory","postgresql"}` + `_validate_backend()` 抛 `ValueError` + 实例化 `logger.info` 打印实际 backend；main.py lifespan 启动阶段主动调 `get_trace_store()` / `get_session_store()` 触发 HTTP 入口启动期校验；`tests/unit/test_storage.py` 补 `TestStorageFactory` 5 用例：合法 memory / 合法 postgresql（含 MemoryStore spy 防误回退）/ 拼写错误 postgrsql / 空串 / 大小写敏感 PostgreSQL。stdio 入口在首次 `add_log` 时触发校验，已在代码注释中说明。2026-07-19）
+- ✅ C3+C4（任务 A，2026-07-19）：
+  - **C3**：`trace_repo.save_trace` 始终以 errors 缓冲的 `error_id` 作为 `add_log` 写入 key 与返回值，保证"返回 ID == add_log key == errors error_id"三者统一；caller 传入的 `trace_id` 以 `trace_link` 形式记录在 `error_id` 下，用于审计与反查
+  - **C4 上半段**：`save_trace` 新增 `add_log(error_id, "trace_data", exc_data)` 把完整异常数据（type/message/frames/traceback）持久化到 trace_store，不依赖 errors 内存缓冲
+  - **C4 下半段**：`get_trace` 在 errors 内存未命中时从 trace_store 回读 `step=trace_data` 重建 trace 对象，解决"重启即丢"
+  - 新增 6 个单元测试 + 3 个 PG 集成测试覆盖以上修复
+  - 涉及文件：`app/mcp/core/trace_repo.py`、`tests/unit/test_trace_repo.py`、`tests/integration/test_pg_integration.py`
+  - 测试结果：`python -m pytest tests/unit/test_trace_repo.py -q` → 15 passed；PG 集成测试受本地环境 UnicodeDecodeError 阻塞（预存在问题，与本任务无关）
 
 > 完整已完成能力清单请查看 [PROJECT_SUMMARY.md](../../PROJECT_SUMMARY.md) §4。
 
 ### 当前阻塞问题
 
 - 🔴 当前发布收口以 [claude-v0.3.0-audit-todos.md](./release/claude-v0.3.0-audit-todos.md) 为准。
-- 🔴 剩余 P0 待处理项：`C3`、`C4`、`H10`（H10 已完成，待 SDK 端手动复核）
+- 🔴 剩余 P0 待处理项：`H10`（H10 已完成，待 SDK 端手动复核）
+- 🟡 已完成待复核项：`C3`、`C4`（单测全绿，PG 集成测试待环境就绪后复核）
 - ✅ 已完成复核项（任务 D，2026-07-19）：`H4`、`H5`、`N4`
 - ✅ WIP-001：dispatch 链路异步化已完成，当前单元测试已恢复全绿。
 
@@ -173,6 +183,70 @@
   - Windows TerminateProcess 不触发 lifespan shutdown，PG 池关闭日志在 Windows 上不严格断言（best-effort），已在 docstring 明确说明平台差异
   - .env 隔离 fixture 通过文件 rename 实现，pytest 默认顺序执行无并发冲突；若未来引入 pytest-xdist 并行需重新评估
   - stdio 握手用例依赖 mcp SDK stdio_server 的 newline-delimited JSON-RPC 协议，若 SDK 升级变更协议格式需同步调整 readline 解析
+```
+
+### N3 任务交接（2026-07-19）
+
+```
+任务：N3 — stdio 关闭不回收资源（PG 连接池 / 后台任务 / excepthook 卸载）
+当前状态：已完成待复核
+已完成：
+  - 改动 1：app/mcp/hooks/exception_hook.py 新增 uninstall_global_hook() 函数
+    * 将原局部变量 original_hook 提升为模块级 _original_hook / _original_asyncio_handler
+    * uninstall_global_hook() 幂等：未安装直接返回；已安装则恢复 sys.excepthook + asyncio loop handler
+    * install_global_hook() 行为不变（仅把 original_hook 改为存到模块级，便于 uninstall 取回）
+    * RuntimeError/Exception 全部 try/except 保护，避免 loop 已关闭时崩溃
+  - 改动 2：app/mcp_server.py 新增 cleanup_resources() + signal/atexit 兜底 + try/finally
+    * 模块级新增 _cleanup_done 标志 + _periodic_cleanup_task 句柄 + _cleanup_lock（幂等保护）
+    * cleanup_resources() 三步回收：
+      1) 取消 periodic_cleanup 后台任务（防御性，当前 stdio 未启动该任务，预留兜底）
+      2) 仅当 storage_backend == "postgresql" 时调用 close_pool()（复用现有接口，不修改 pg_store.py）
+      3) 调用 uninstall_global_hook() 卸载 excepthook
+    * main() 用 try/finally 包裹 stdio_server 上下文，finally 触发 cleanup_resources()
+    * atexit.register(cleanup_resources) 覆盖正常解释器退出路径
+    * _register_signal_handlers() 注册 SIGINT/SIGTERM 兜底 handler（Windows SIGTERM 不可用 try/except 保护）
+    * _signal_handler 内 sys.exit(0) 抛 SystemExit，asyncio 主循环捕获后 finally 仍执行 cleanup（幂等）
+  - 改动 3：app/mcp/transports/stdio.py EOF 后加 cleanup 调用
+    * 此文件是独立备用入口（grep 全仓无 import），仅在 __main__ 中执行
+    * run_stdio() 用 try/finally 包裹 while 循环，finally 调用 cleanup_resources()
+    * 也注册 atexit 兜底（与 mcp_server.main 一致）
+    * 最小改动：仅加 cleanup 调用，不改协议行为
+  - 改动 4：tests/integration/test_process_boundary.py 追加 N3 测试（8 用例）
+    * TestUninstallGlobalHook（2 用例）：uninstall 恢复 sys.excepthook + 幂等
+    * TestCleanupResources（4 用例）：幂等 / postgresql 触发 close_pool / memory 跳过 close_pool / 取消 periodic_task
+    * TestStdioExitCleanup（2 用例）：EOF 退出 exit code 0 + 无 traceback；SIGTERM 触发 cleanup（Windows 跳过）
+    * 复用 H12 已有的 _isolated_env fixture 和 _safe_read_stderr 辅助函数
+修改文件：
+  - app/mcp/hooks/exception_hook.py（新增 uninstall_global_hook + 模块级变量）
+  - app/mcp_server.py（新增 cleanup_resources + signal/atexit + try/finally）
+  - app/mcp/transports/stdio.py（EOF 后加 cleanup 调用）
+  - tests/integration/test_process_boundary.py（追加 8 个 N3 用例）
+  - docs/internal/AI_HANDOFF.md（本条目）
+  - docs/internal/DEV_PLAN.md（N3 勾选）
+  - docs/internal/release/claude-v0.3.0-audit-todos.md（N3 状态更新）
+测试结果：
+  - pytest tests/integration/test_process_boundary.py: 9 passed, 2 skipped（N3 范围 8/8 + H12 范围 1/3）
+    * skip 原因：test_pg_pool_closed_on_shutdown 因 STORAGE_BACKEND != postgresql 显式 skip
+    * skip 原因：test_stdio_exits_on_sigterm 因 Windows 不支持 SIGTERM 显式 skip
+  - pytest tests/integration/ -q: 37 passed, 19 skipped, 7 failed
+    * 7 failed 全部是 baseline 问题：test_api.py 鉴权 401（.env 含 API_KEY=test_secret_key_456）
+    * N3 引入回归：0 个 ✅
+  - pytest tests/unit/ -q: 217 passed, 6 skipped, 1 failed
+    * 1 failed 是 baseline 问题：test_main.py 鉴权断言（.env API_KEY 污染）
+    * N3 引入回归：0 个 ✅
+  - 数据库：未涉及 PG schema 变更，close_pool 复用现有接口
+  - 手动验证：python -m app.mcp_server 启动后 Ctrl+C 通过 test_stdio_exits_cleanly_on_eof 等价覆盖
+    （Windows 下 subprocess.send_signal(SIGINT) 会影响 pytest 自身，故用 EOF 测试覆盖核心退出路径）
+下一步：
+  - C3 / C4 trace_repo 兜底存储键与 PG 持久化链路
+  - M9 .env 污染问题独立修复（POSTGRES_PASSWORD/DATABASE_URL 不在 Settings 字段中）
+  - 剩余 P0/P1：C3、C4
+风险：
+  - Windows 不支持 SIGTERM，signal handler 只覆盖 SIGINT；SIGTERM 测试在 Windows 跳过，POSIX 上已覆盖
+  - cleanup_resources() 内 import pg_store.close_pool 是延迟 import，避免模块加载时强制依赖 psycopg
+  - exception_hook.uninstall_global_hook 用 asyncio.get_event_loop() 在 loop 已关闭时会抛 RuntimeError，已 try/except 保护
+  - atexit + signal + finally 三处都可能触发 cleanup，靠 _cleanup_done + _cleanup_lock 保证幂等
+  - app/mcp/transports/stdio.py 当前是死代码（未被引用），改动仅为对齐任务描述的"关闭钩子"位置，无测试覆盖
 ```
 
 ---

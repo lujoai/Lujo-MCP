@@ -36,7 +36,7 @@
 |------|----------|------|
 | 入口 | [app/main.py](./app/main.py) | FastAPI 实例、路由注册、lifespan |
 | 配置 | [app/config.py](./app/config.py) | pydantic-settings 全局单例 |
-| 中间件 | [app/middleware.py](./app/middleware.py) | 6 个中间件（fail-closed 鉴权） |
+| 中间件 | [app/middleware.py](./app/middleware.py) | 7 个中间件（CORS、Auth、MaxBodySize、RateLimit、SecurityHeaders、Trace + NetworkCapture，fail-closed 鉴权） |
 | 调试 API | [app/api/debug.py](./app/api/debug.py) | /api/debug/* 路由 |
 | Dashboard API | [app/api/dashboard.py](./app/api/dashboard.py) | 从 PostgreSQL 读取 |
 | MCP HTTP | [app/api/mcp_routes.py](./app/api/mcp_routes.py) | Streamable HTTP 传输 |
@@ -80,7 +80,7 @@
 - ✅ Streamable HTTP 传输（/mcp 端点）
 - ✅ stdio 传输（Claude Desktop 子进程）
 - ✅ SSE 广播中心
-- ✅ MCP 工具双传输注册（HTTP 15 个：`register_all_tools`；stdio 14 个：`mcp_server.py` 独立清单，handler 复用同一批业务函数）
+- ✅ MCP 工具双传输注册（HTTP / stdio 均由统一注册表动态导出，当前各 15 个）
 
 ### 安全能力 ✅
 
@@ -159,12 +159,12 @@
 | 序号 | 文件 | 作用 |
 |------|------|------|
 | 1 | PROJECT_SUMMARY.md | 快速理解项目（本文件）|
-| 2 | AI_RULES.md | 了解开发规则 |
-| 3 | AI_HANDOFF.md | 了解当前状态，避免重复开发 |
-| 4 | DESIGN.md | 理解技术设计 |
-| 5 | DEV_PLAN.md | 了解当前任务 |
-| 6 | CODE_REVIEW.md | 理解长期方向 |
-| 7 | PRD.md | 理解产品需求（最后阅读）|
+| 2 | docs/internal/AI_RULES.md | 了解开发规则 |
+| 3 | docs/internal/AI_HANDOFF.md | 了解当前状态，避免重复开发 |
+| 4 | docs/internal/DESIGN.md | 理解技术设计 |
+| 5 | docs/internal/DEV_PLAN.md | 了解当前任务 |
+| 6 | docs/internal/CODE_REVIEW.md | 理解长期方向 |
+| 7 | docs/internal/PRD.md | 理解产品需求（最后阅读）|
 
 ---
 
@@ -172,7 +172,7 @@
 
 1. **工厂模式**：存储层（memory/PG）、状态层（memory/Redis）、LLM provider（openai/zhipu/custom）都用工厂模式，一行配置切换
 2. **规范驱动**：用期望规范作为 ground truth，`assert_behavior()` 纯函数自动比对，偏离即告警，支持 api/ui/rule 三种 kind
-3. **双传输**：HTTP 侧 `register_all_tools()` 注册 15 个工具；stdio 侧 `mcp_server.py` 维护独立工具清单（14 个，名称有差异如 `context` vs `get_debug_context`），handler 层复用同一批业务函数；注册表完全统一列为待办
+3. **双传输**：HTTP 与 stdio 均复用 `register_all_tools()` + `_tool_registry`，避免工具面漂移和漏注册
 4. **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Trae/Codex/Claude
 5. **安全优先**：fail-closed 鉴权、Content-Length 硬检查、IP 限流、安全响应头、入库前脱敏
 6. **幂等性**：异常钩子 `install_global_hook()` 幂等安装，PG 建表 `CREATE TABLE IF NOT EXISTS`

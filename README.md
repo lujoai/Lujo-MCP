@@ -53,7 +53,7 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> 详细架构设计（含架构图、模块关系、数据流）请查看 [DESIGN.md](./DESIGN.md)。
+> 详细架构设计（含架构图、模块关系、数据流）请查看 [DESIGN.md](./docs/internal/DESIGN.md)。
 
 ## 快速启动方式
 
@@ -78,17 +78,22 @@ docker compose up -d
 ```
 
 服务启动在 `http://localhost:8000`，包含：
-- PostgreSQL 16（端口 5432）
-- Redis 7（端口 6379）
-- AI Debug MCP Server（端口 8000）
+- PostgreSQL 16（仅 Docker 内部网络可达）
+- Redis 7（仅 Docker 内部网络可达）
+- AI Debug MCP Server（端口 8000，映射到宿主机）
 
 ### 方式二：本地开发
 
 ```bash
+# 生产部署：仅安装运行时依赖
 pip install -r requirements.txt
+
+# 本地开发：安装运行时 + 测试/lint 工具（pytest / ruff / pytest-asyncio）
+pip install -r requirements-dev.txt
+
 cp .env.example .env
 # 编辑 .env 配置
-python -m uvicorn app.main:app --reload
+python -m app.main
 ```
 
 ### 环境变量配置
@@ -120,7 +125,7 @@ curl http://localhost:8000/
 
 ## Demo 演示流程
 
-1. **启动服务**：`docker compose up -d` 或 `uvicorn app.main:app --reload`
+1. **启动服务**：`docker compose up -d` 或 `python -m app.main`
 2. **访问网络捕获 Demo**：打开 `http://localhost:8000/demo`
 3. **点击测试按钮**：测试 XHR/fetch 请求捕获、FormData/Blob 请求、采样率控制等
 4. **查看 AI 调试**：打开 `http://localhost:8000/dashboard` 查看追踪记录和 AI 分析结果
@@ -133,7 +138,7 @@ curl http://localhost:8000/
 - ✅ 异常堆栈捕获（Stacktrace）
 - ✅ 运行时快照（Runtime）
 - ✅ LLM 智能分析（Analyzer）
-- ✅ MCP 工具集（HTTP 15 个 / stdio 14 个）
+- ✅ MCP 工具集（HTTP 15 个 / stdio 15 个）
 - ✅ 规范驱动 + verify 自动断言
 - ✅ UI 自动验收（auto_test）
 
@@ -153,7 +158,7 @@ curl http://localhost:8000/
 
 | 指标 | 状态 |
 |------|------|
-| MCP 工具数 | HTTP 15 / stdio 14 |
+| MCP 工具数 | HTTP 15 / stdio 15 |
 | 测试覆盖 | 以当前实际 pytest 运行结果为准 |
 | 存储后端 | PostgreSQL（生产）/ memory（默认）|
 | LLM Provider | openai / zhipu / custom |
@@ -170,7 +175,7 @@ ai-debug-mcp/
 │   ├── api/                   # REST API 路由
 │   ├── llm/                   # LLM 分析模块
 │   ├── mcp/                   # MCP 核心模块
-│   │   ├── tools/             # MCP 工具（HTTP 15 / stdio 14）
+│   │   ├── tools/             # MCP 工具（HTTP 15 / stdio 15）
 │   │   ├── protocol/          # JSON-RPC 协议实现
 │   │   ├── core/              # 核心引擎 + 存储抽象
 │   │   ├── builders/          # 数据构建器
@@ -197,12 +202,12 @@ ai-debug-mcp/
 |------|------|
 | [DEMO_GUIDE.md](./DEMO_GUIDE.md) | Demo 演示指南 |
 | [PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md) | AI 上下文入口（AI 第一阅读文件） |
-| [AI_RULES.md](./AI_RULES.md) | AI 开发规则 |
-| [AI_HANDOFF.md](./AI_HANDOFF.md) | AI 交接状态 |
-| [PRD.md](./PRD.md) | 产品需求 |
-| [DESIGN.md](./DESIGN.md) | 技术架构设计 |
-| [DEV_PLAN.md](./DEV_PLAN.md) | 当前开发计划 |
-| [CODE_REVIEW.md](./CODE_REVIEW.md) | 长期技术路线 |
+| [AI_RULES.md](./docs/internal/AI_RULES.md) | AI 开发规则 |
+| [AI_HANDOFF.md](./docs/internal/AI_HANDOFF.md) | AI 交接状态 |
+| [PRD.md](./docs/internal/PRD.md) | 产品需求 |
+| [DESIGN.md](./docs/internal/DESIGN.md) | 技术架构设计 |
+| [DEV_PLAN.md](./docs/internal/DEV_PLAN.md) | 当前开发计划 |
+| [CODE_REVIEW.md](./docs/internal/CODE_REVIEW.md) | 长期技术路线 |
 
 ## 测试
 
@@ -215,6 +220,12 @@ python -m pytest tests/unit/ --tb=short -q
 
 # 仅运行集成测试
 python -m pytest tests/integration/ --tb=short -q
+```
+
+MCP stdio 唯一启动命令：
+
+```bash
+python -m app.mcp_server
 ```
 
 测试覆盖：

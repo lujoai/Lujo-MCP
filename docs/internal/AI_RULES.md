@@ -170,7 +170,7 @@ API测试: POST /debug 成功
 
 ## 六、当前已完成能力
 
-> 完整已完成能力清单和核心模块位置请查看 [PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md) §3、§4。
+> 完整已完成能力清单和核心模块位置请查看 [PROJECT_SUMMARY.md](../../PROJECT_SUMMARY.md) §3、§4。
 >
 > **禁止重复开发已存在的能力。** 修改前必须检查是否已有实现，优先复用。
 

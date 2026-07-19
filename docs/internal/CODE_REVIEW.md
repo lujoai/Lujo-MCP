@@ -82,10 +82,10 @@ ai-debug-mcp/
 
 > **战略决策**：README 的"快速开始"部分，第一步是 `git clone`，第二步就是 `docker-compose up -d`。确保这个命令能一键拉起 PostgreSQL、Redis 和 App。
 
-当前 docker-compose.yaml 已有 postgres + app，但**缺 Redis 服务**，需补全：
+当前 docker-compose.yaml 已完整定义 PostgreSQL、Redis 和 App 三个服务。Redis 服务配置如下（redis:7-alpine + healthcheck + maxmemory 256mb allkeys-lru）：
 
 ```yaml
-# docker-compose.yaml 补充 Redis 服务
+# docker-compose.yaml 中的 Redis 服务（已实现）
 services:
   redis:
     image: redis:7-alpine
@@ -112,8 +112,8 @@ services:
 
 | 指标 | 状态 |
 |------|------|
-| MCP 工具数 | HTTP 15 / stdio 14 |
-| 测试覆盖 | 当前测试状态以 [README.md](./README.md) 项目状态表为准 |
+| MCP 工具数 | HTTP 15 / stdio 15 |
+| 测试覆盖 | 当前测试状态以 [README.md](../../README.md) 项目状态表为准 |
 | 存储后端 | memory / PostgreSQL（工厂模式）|
 | LLM Provider | openai / zhipu / custom |
 
@@ -188,10 +188,10 @@ app/storage/
 |------|------|------|
 | `20260710_create_traces_table.sql` | traces 表 DDL | ✅ 从 pg_store.py 导出 |
 | `20260710_create_sessions_table.sql` | sessions 表 DDL | ✅ 从 pg_store.py 导出 |
-| `20260711_create_errors_table.sql` | errors 表 DDL | 🔲 待创建 |
-| `20260711_create_specs_table.sql` | specs 表 DDL | 🔲 待创建 |
-| `20260712_create_network_records_table.sql` | network_records 表 DDL | 🔲 待创建 |
-| `20260712_create_ui_events_table.sql` | ui_events 表 DDL | 🔲 待创建 |
+| `20260711_create_errors_table.sql` | errors 表 DDL | ✅ 迁移文件已创建（代码 CRUD 待实现） |
+| `20260711_create_specs_table.sql` | specs 表 DDL | ✅ 迁移文件已创建（代码 CRUD 待实现） |
+| `20260712_create_network_records_table.sql` | network_records 表 DDL | ✅ 迁移文件已创建（代码 CRUD 待实现） |
+| `20260712_create_ui_events_table.sql` | ui_events 表 DDL | ✅ 迁移文件已创建（代码 CRUD 待实现） |
 
 **migrations/ 工作流程**：
 

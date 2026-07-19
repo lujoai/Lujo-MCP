@@ -136,11 +136,11 @@ flowchart TB
 
 #### 3.1.2 stdio（`app/mcp_server.py` + `app/mcp/transports/stdio.py`）✅
 
-- `mcp_server.py`：标准 MCP Server，用 `mcp` SDK 的 `stdio_server` 通信，`list_tools()` 维护 **14 个工具**清单（handler 层复用工具模块的业务函数），`call_tool()` 分发。
+- `mcp_server.py`：标准 MCP Server，用 `mcp` SDK 的 `stdio_server` 通信，工具清单从统一 `_tool_registry` 动态导出，避免漏注册和工具面漂移。
 - 注册方式：客户端配置 `{"command":"python","args":["-m","app.mcp_server"],"cwd":"<abs>"}`。
-- `--stdio` 入口：`python -m app.main --stdio`（`main.py` `__main__`）。
+- stdio 唯一启动命令：`python -m app.mcp_server`。
 
-**MCP 工具总览（HTTP 15 个 / stdio 14 个，业务实现共用）**：
+**MCP 工具总览（HTTP 15 个 / stdio 15 个，业务实现共用）**：
 
 | 工具 | 说明 | 实现 |
 | --- | --- | --- |
@@ -378,7 +378,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 完整上下文 | [app/mcp/builders/context.py](./app/mcp/builders/context.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
 | 规范驱动采集 | `app/mcp/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
 | 指纹去重聚合 | [app/mcp/core/errors.py](./app/mcp/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
-| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP 15 / stdio 14，handler 层复用业务函数 |
+| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP / stdio 均为 15 个，统一注册表动态导出 |
 | 代码定位 | [app/mcp/collectors/code_locator.py](./app/mcp/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
 | 静默失败检测 | [app/mcp/verifier/assert_engine.py](./app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
@@ -401,7 +401,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 ## 8. 部署与配置
 
-- 启动：`uvicorn app.main:app --host 0.0.0.0 --port 8000`（或 `python -m app.main --stdio`）。
+- 启动：HTTP 使用 `python -m app.main`；stdio 使用 `python -m app.mcp_server`。
 - 依赖：`requirements.txt`（fastapi、uvicorn、openai、psutil、psycopg2、redis、mcp、pydantic-settings）。
 - 关键配置：见 `PRD.md` §11.3；**务必生产设 `API_KEY` 与 `CORS_ORIGINS`**；`code_context_lines` 待补（§6.1）。
 - 容器化：`Dockerfile` + `docker-compose.yaml` 已提供。

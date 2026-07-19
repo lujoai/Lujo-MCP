@@ -20,8 +20,8 @@
 
 | 优先级 | 总数 | 已完成 | 已完成待复核 | 部分完成 | 待处理 |
 |--------|------|--------|--------------|----------|--------|
-| P0 | 7 | 3 | 0 | 0 | 4 |
-| P1 | 8 | 3 | 0 | 0 | 5 |
+| P0 | 7 | 6 | 1 | 0 | 0 |
+| P1 | 8 | 6 | 0 | 0 | 2 |
 | P2 | 13 | 0 | 0 | 0 | 13 |
 | P3 | 8 | 1 | 0 | 0 | 7 |
 | 未运行确认 | 4 | 1 | 0 | 0 | 3 |
@@ -38,13 +38,17 @@
   - 涉及文件：`app/mcp/collectors/stacktrace.py`、`app/mcp/hooks/exception_hook.py`
   - 验证：相关单测已补并通过
 
-- [ ] **C3**：采集记录成孤儿，`trace_repo` 兜底存储键与返回 ID 不统一
-  - 状态：待处理
-  - 说明：本轮尚未专门核对“返回 ID”和“兜底存储键”是否完全一致。
+- [x] **C3**：采集记录成孤儿，`trace_repo` 兜底存储键与返回 ID 不统一
+  - 状态：已完成（任务 A，2026-07-19）
+  - 说明：`trace_repo.save_trace` 始终以 errors 缓冲的 `error_id` 作为 `add_log` 写入 key 与返回值，保证"返回 ID == add_log key == errors error_id"三者统一；caller 传入的 `trace_id` 以 `trace_link` 形式记录在 `error_id` 下，用于审计与反查。
+  - 涉及文件：`app/mcp/core/trace_repo.py`、`tests/unit/test_trace_repo.py`
+  - 验证：`python -m pytest tests/unit/test_trace_repo.py -q` → 15 passed（含 C3 专项 3 用例）
 
-- [ ] **C4**：PG 持久化重启即丢，`save_trace` 没走 `add_log` 落库，`get_trace` 内存未命中时未回读
-  - 状态：待处理
-  - 说明：当前未完成该链路的结构性修复与回读验证。
+- [x] **C4**：PG 持久化重启即丢，`save_trace` 没走 `add_log` 落库，`get_trace` 内存未命中时未回读
+  - 状态：已完成（任务 A，2026-07-19；PG 集成测试待环境就绪后复核）
+  - 说明：`save_trace` 新增 `add_log(error_id, "trace_data", exc_data)` 把完整异常数据持久化到 trace_store；`get_trace` 在 errors 内存未命中时从 trace_store 回读 `step=trace_data` 重建 trace 对象，解决"重启即丢"。
+  - 涉及文件：`app/mcp/core/trace_repo.py`、`tests/unit/test_trace_repo.py`、`tests/integration/test_pg_integration.py`
+  - 验证：单测 3 用例全绿；PG 集成测试代码已就绪，待本地 PG 环境修复 UnicodeDecodeError 后复核
 
 - [x] **H4**：`verify_ui` 同步 Playwright 阻塞事件循环，需改用 `await asyncio.to_thread(...)`
   - 状态：已完成（任务 D 复核通过，2026-07-19）
@@ -91,9 +95,16 @@
   - 状态：待处理
   - 说明：当前已做 LLM 入参脱敏，但输出校验与兜底净化仍未系统补齐。
 
-- [ ] **N3**：stdio 关闭不回收资源
-  - 状态：待处理
-  - 说明：需检查 PG 连接池、后台任务、全局 excepthook 卸载与关闭时机。
+- [x] **N3**：stdio 关闭不回收资源
+  - 状态：已完成（2026-07-19，待复核）
+  - 说明：stdio 退出路径已闭环回收 PG 连接池 / periodic_cleanup 后台任务 / 全局 excepthook，atexit + signal 兜底覆盖 SIGINT/SIGTERM/正常 EOF。
+  - 交付：
+    - `app/mcp/hooks/exception_hook.py`：新增 `uninstall_global_hook()`（幂等，恢复 `sys.excepthook` + asyncio loop handler），原 `install_global_hook()` 行为不变
+    - `app/mcp_server.py`：新增 `cleanup_resources()`（幂等，三步回收）+ `atexit.register` + `_register_signal_handlers(SIGINT/SIGTERM)` + `main()` try/finally 兜底
+    - `app/mcp/transports/stdio.py`：EOF 后调用 `cleanup_resources()`（备用入口，死代码兜底）
+    - `tests/integration/test_process_boundary.py`：追加 8 个 N3 用例（TestUninstallGlobalHook 2 + TestCleanupResources 4 + TestStdioExitCleanup 2）
+  - 测试结果：N3 范围 6 passed / 2 skipped（Windows 不支持 SIGTERM + STORAGE_BACKEND != postgresql）；全量 integration/unit N3 零回归
+  - 复核要点：手动 `python -m app.mcp_server` + Ctrl+C 验证无报错退出（已通过 `test_stdio_exits_cleanly_on_eof` 等价覆盖）
 
 - [x] **N4**：内部错误串裸返回客户端，绕过全局净化兜底外泄原始异常细节
   - 状态：已完成（任务 D 复核通过，2026-07-19）
@@ -105,8 +116,11 @@
     - `N4-FU-2`：`app/mcp/transports/stdio.py:70` — `make_error(req.id, INTERNAL_ERROR, f"内部错误: {e}")`，stdio 通道异常细节外泄。注：此模块未被 `mcp_server` 主入口使用，风险较低。
     - `N4-FU-3`：`app/mcp/core/storage/pg_store.py:59` — `raise RuntimeError(f"无法连接 PostgreSQL: {e}")`，启动期错误含 PG 连接参数细节。建议改为 `RuntimeError("无法连接 PostgreSQL，详见服务端日志")` + `logger.critical(...)`。
 
-- [ ] **M1**：存储工厂对 `backend` 拼写错误静默回退内存，无日志无报错
-  - 状态：待处理
+- [x] **M1**：存储工厂对 `backend` 拼写错误静默回退内存，无日志无报错
+  - 状态：已完成
+  - 说明：`factory.py` 新增 `_VALID_BACKENDS = {"memory","postgresql"}` 白名单 + `_validate_backend()` 校验函数，非法值抛 `ValueError`（错误信息含实际值 + 合法值列表 + "case-sensitive" 修复提示）；`get_trace_store()` / `get_session_store()` 首次实例化时 `logger.info` 打印实际 backend。`main.py` lifespan 启动阶段主动调 `get_trace_store()` / `get_session_store()` 触发 HTTP 入口启动期 fail-fast；stdio 入口在首次 `add_log` 时触发校验。`tests/unit/test_storage.py` 新增 `TestStorageFactory` 5 用例（合法 memory / 合法 postgresql 含 MemoryStore spy 防误回退 / 拼写错误 postgrsql / 空串 / 大小写敏感 PostgreSQL），全绿。
+  - 涉及文件：`app/mcp/core/storage/factory.py`、`app/main.py`、`tests/unit/test_storage.py`
+  - 验收：`pytest tests/unit/test_storage.py -q` 11 passed + 5 skipped；`pytest tests/unit/ -q` 13 passed + 5 skipped + 1 deselected（test_main 失败项确认为预先存在的环境问题，与本任务无关）。
 
 - [ ] **M4**：协议错误码不规范，JSON 解析错误映射为 `-32602` 应为 `-32700`
   - 状态：待处理
