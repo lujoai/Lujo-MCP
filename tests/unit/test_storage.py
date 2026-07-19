@@ -3,6 +3,7 @@ import pytest
 import time
 
 from app.mcp.core.storage.memory_store import MemoryTraceStore, MemorySessionStore
+from app.mcp.core.storage import factory as factory_mod
 
 
 # ════════════════════════════════════════════
@@ -36,6 +37,13 @@ class TestMemoryTraceStore:
         assert count == 1
         assert self.store.get_entries("rid-old") == []
         assert len(self.store.get_entries("rid-new")) == 1
+
+    def test_list_request_ids_sorted_by_last_entry_timestamp(self):
+        self.store.save_entry("rid-old", {"timestamp": 10.0, "step": "start", "data": None})
+        self.store.save_entry("rid-new", {"timestamp": 20.0, "step": "start", "data": None})
+        self.store.save_entry("rid-old", {"timestamp": 30.0, "step": "end", "data": None})
+
+        assert self.store.list_request_ids(limit=10) == ["rid-old", "rid-new"]
 
 
 class TestMemorySessionStore:
@@ -207,3 +215,118 @@ class TestPGSessionStore:
         ids = [s["session_id"] for s in active]
         assert "s-pg-active" in ids
         assert "s-pg-stale" not in ids
+
+
+# ════════════════════════════════════════════
+#  存储工厂测试（M1：拼写错误 fail-fast）
+# ════════════════════════════════════════════
+
+class TestStorageFactory:
+    """校验 factory 对 storage_backend 的白名单约束与 fail-fast 行为。
+
+    覆盖 P1 M1：防止 STORAGE_BACKEND 拼写错误（如 "postgrsql"）静默
+    回退到 memory，导致生产环境数据丢失。
+    """
+
+    def setup_method(self):
+        # 每个用例前清空 factory 单例缓存，避免跨用例污染
+        factory_mod._trace_store = None
+        factory_mod._session_store = None
+
+    def teardown_method(self):
+        # 用例结束后也清空，避免影响后续 PG 测试或其它单测
+        factory_mod._trace_store = None
+        factory_mod._session_store = None
+
+    def test_valid_memory_returns_memory_store(self, monkeypatch):
+        """合法值 'memory' → 返回 MemoryTraceStore / MemorySessionStore 实例"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "memory")
+
+        ts = factory_mod.get_trace_store()
+        ss = factory_mod.get_session_store()
+
+        assert isinstance(ts, MemoryTraceStore)
+        assert isinstance(ss, MemorySessionStore)
+
+    def test_valid_postgresql_routes_to_pg_store(self, monkeypatch):
+        """合法值 'postgresql' → 走 PG 分支，不误回退 memory。
+
+        用 stub 替换 PGTraceStore / PGSessionStore 避免真实连 PG；
+        同时在 MemoryTraceStore / MemorySessionStore 上加 spy，
+        断言调用次数为 0，防止"配 PG 但误回退 memory"的回归。
+        """
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "postgresql")
+
+        # stub PG store 类（避免真实连 PG 触发 _ensure_init）
+        class _StubPGTraceStore:
+            def __init__(self): pass
+        class _StubPGSessionStore:
+            def __init__(self): pass
+
+        # 在 memory_store 上加 spy，监控是否被误实例化
+        mem_trace_calls = []
+        mem_session_calls = []
+
+        class _SpyMemoryTraceStore(MemoryTraceStore):
+            def __init__(self):
+                mem_trace_calls.append(True)
+                super().__init__()
+
+        class _SpyMemorySessionStore(MemorySessionStore):
+            def __init__(self):
+                mem_session_calls.append(True)
+                super().__init__()
+
+        # factory 内部用延迟 import，需 patch 模块属性
+        import app.mcp.core.storage.pg_store as pg_mod
+        import app.mcp.core.storage.memory_store as mem_mod
+        monkeypatch.setattr(pg_mod, "PGTraceStore", _StubPGTraceStore)
+        monkeypatch.setattr(pg_mod, "PGSessionStore", _StubPGSessionStore)
+        monkeypatch.setattr(mem_mod, "MemoryTraceStore", _SpyMemoryTraceStore)
+        monkeypatch.setattr(mem_mod, "MemorySessionStore", _SpyMemorySessionStore)
+
+        ts = factory_mod.get_trace_store()
+        ss = factory_mod.get_session_store()
+
+        assert isinstance(ts, _StubPGTraceStore)
+        assert isinstance(ss, _StubPGSessionStore)
+        assert mem_trace_calls == [], "配置 postgresql 但误回退 MemoryTraceStore"
+        assert mem_session_calls == [], "配置 postgresql 但误回退 MemorySessionStore"
+
+    def test_invalid_backend_raises_valueerror(self, monkeypatch):
+        """拼写错误 'postgrsql'（少一个 s）→ 抛 ValueError"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "postgrsql")
+
+        with pytest.raises(ValueError) as exc_info:
+            factory_mod.get_trace_store()
+
+        msg = str(exc_info.value)
+        assert "postgrsql" in msg
+        assert "memory" in msg and "postgresql" in msg
+        assert "case-sensitive" in msg or "spelling" in msg
+
+    def test_empty_backend_raises_valueerror(self, monkeypatch):
+        """空串 '' → 抛 ValueError（!r 在错误信息中显示为 ''）"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "")
+
+        with pytest.raises(ValueError):
+            factory_mod.get_trace_store()
+
+    def test_case_sensitive_raises_valueerror(self, monkeypatch):
+        """大小写错误 'PostgreSQL' → 抛 ValueError。
+
+        白名单严格大小写敏感，避免 'PostgreSQL' / 'POSTGRESQL' 等变体
+        造成歧义。错误信息中明确提示 case-sensitive。
+        """
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "PostgreSQL")
+
+        with pytest.raises(ValueError) as exc_info:
+            factory_mod.get_trace_store()
+
+        assert "case-sensitive" in str(exc_info.value)
+

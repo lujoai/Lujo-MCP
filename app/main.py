@@ -30,6 +30,17 @@ register_all_tools()
 logger = logging.getLogger("ai-debug-mcp")
 
 
+def validate_startup_configuration(host: str | None = None, api_key: str | None = None) -> None:
+    """拒绝外网监听 + 无鉴权的危险启动方式。"""
+    bind_host = host if host is not None else settings.host
+    bind_api_key = api_key if api_key is not None else settings.api_key
+    if "0.0.0.0" in str(bind_host) and not bind_api_key:
+        raise RuntimeError(
+            "Refusing to start: host contains 0.0.0.0 but API_KEY is empty. "
+            "Set API_KEY before exposing the service."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -51,6 +62,12 @@ async def lifespan(app: FastAPI):
     # 启动定时清理任务
     import asyncio
     from app.mcp.core.storage.factory import get_trace_store, get_session_store
+
+    # 启动期 fail-fast：主动触发 factory 校验，非法 STORAGE_BACKEND 立即崩，
+    # 避免拼写错误（如 "postgrsql"）静默回退到 memory 导致生产环境数据丢失。
+    # 仅 HTTP 入口覆盖；stdio 入口在首次 add_log 时触发校验。
+    get_trace_store()
+    get_session_store()
 
     async def periodic_cleanup():
         while True:
@@ -181,24 +198,24 @@ def debug(req: dict):
         result = {"echo": req}
         add_log(request_id, "response_ready", result)
     except Exception as e:
-        logger.exception(f"/debug 日志记录失败")
+        logger.error(str(e), exc_info=True)
         return {
             "request_id": request_id,
-            "result": {"status": "error", "message": str(e)},
+            "result": {"status": "error", "message": "Internal server error"},
             "trace": [],
-            "context": {"request_id": request_id, "flow": [], "input": None, "output": None, "errors": [str(e)]},
+            "context": {"request_id": request_id, "flow": [], "input": None, "output": None, "errors": ["Internal server error"]},
         }
 
     try:
         trace = get_logs(request_id)
         context = build_context(request_id, trace)
     except Exception as e:
-        logger.exception(f"/debug 构建上下文失败")
+        logger.error(str(e), exc_info=True)
         return {
             "request_id": request_id,
             "result": result,
             "trace": [],
-            "context": {"request_id": request_id, "flow": [], "input": None, "output": None, "errors": [str(e)]},
+            "context": {"request_id": request_id, "flow": [], "input": None, "output": None, "errors": ["Internal server error"]},
         }
 
     return {
@@ -210,17 +227,10 @@ def debug(req: dict):
 
 
 if __name__ == "__main__":
-    import sys
-    import asyncio
-
-    # python -m app.main --stdio  → 以 stdio 传输运行（供 Claude Desktop 等本地客户端）
-    if "--stdio" in sys.argv:
-        from app.mcp.transports.stdio import run_stdio
-        asyncio.run(run_stdio())
-    else:
-        uvicorn.run(
-            "app.main:app",
-            host=settings.host,
-            port=settings.port,
-            reload=settings.debug,
-        )
+    validate_startup_configuration()
+    uvicorn.run(
+        "app.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.debug,
+    )
