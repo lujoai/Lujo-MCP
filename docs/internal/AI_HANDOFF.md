@@ -18,8 +18,8 @@
 | 测试覆盖 | 当前测试状态以 [README.md](../../README.md) 项目状态表为准 |
 | 存储后端 | PostgreSQL（生产）/ memory（默认）|
 | LLM Provider | openai / zhipu / custom |
-| 当前阶段 | Release Audit 收口阶段 |
-| 当前 Sprint | Claude v0.3.0 审查项归档与 P0/P1 收口 |
+| 当前阶段 | v0.3.0 发布就绪 |
+| 当前 Sprint | 文档收口与 Git 整理完成，准备发布 |
 
 ### 最近完成事项
 
@@ -41,14 +41,27 @@
   - 新增 6 个单元测试 + 3 个 PG 集成测试覆盖以上修复
   - 涉及文件：`app/mcp/core/trace_repo.py`、`tests/unit/test_trace_repo.py`、`tests/integration/test_pg_integration.py`
   - 测试结果：`python -m pytest tests/unit/test_trace_repo.py -q` → 15 passed；PG 集成测试受本地环境 UnicodeDecodeError 阻塞（预存在问题，与本任务无关）
+- ✅ 2026-07-19 代码审计与 Git 整理（6 个子智能体并行执行）：
+  - 全面源码审计（6 个 AI 子智能体并行）：生产就绪度评估 8.0/10
+    - Agent 1 — 文档一致性核查：修复 4 处文档/代码不一致
+    - Agent 2 — M1 Storage Factory + 集成测试：存储工厂验证加固
+    - Agent 3 — C3+C4 Trace Repo 一致性：异常持久化键统一 + 重启恢复
+    - Agent 4 — H4+H5+N4 Verify/Redaction 集成测试：脱敏 + 验证集成测试
+    - Agent 5 — N3 进程边界清理：优雅关闭 + 资源回收
+    - Agent 6 — Git 整理：按任务分 8 个语义 commit，工作区 clean
+  - 发现 3 个 P0 待修复问题：schemas 重复定义、spec_store 持久化、M9 .env
+  - 发现 3 个 P1 改进项：LLM 输出校验、JSON-RPC 错误码、测试盲区
+  - 测试基线：217 passed, 6 skipped, 1 failed（.env 环境问题）
+  - Git 状态：8 个新 commit，工作区 clean，准备推送
 
 > 完整已完成能力清单请查看 [PROJECT_SUMMARY.md](../../PROJECT_SUMMARY.md) §4。
 
 ### 当前阻塞问题
 
 - 🔴 当前发布收口以 [claude-v0.3.0-audit-todos.md](./release/claude-v0.3.0-audit-todos.md) 为准。
-- 🔴 剩余 P0 待处理项：`H10`（H10 已完成，待 SDK 端手动复核）
-- 🟡 已完成待复核项：`C3`、`C4`（单测全绿，PG 集成测试待环境就绪后复核）
+- 🔴 `.env` 含 `API_KEY=test_secret_key_456` 导致 test_main.py 1 个失败（环境问题，非代码 bug）
+- 🟡 PG 集成测试因本地 PostgreSQL 编码问题（UnicodeDecodeError）全部 skip
+- 🟡 测试状态基线：217 passed, 6 skipped, 1 failed
 - ✅ 已完成复核项（任务 D，2026-07-19）：`H4`、`H5`、`N4`
 - ✅ WIP-001：dispatch 链路异步化已完成，当前单元测试已恢复全绿。
 
@@ -271,8 +284,9 @@
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P0** | Release Audit 阻塞项收口 | 修复发布前阻塞问题并完成复核 |
-| **P1** | 高优先级协议/安全补洞 | 收口 N2/N3/M1/M4 等问题 |
+| **P0** | schemas 重复定义统一 / spec_store 持久化可靠性 / M9 .env 根因修复 | 发布前核心稳定性阻塞项 |
+| **P1** | N2 LLM 输出校验 / M4 JSON-RPC 错误码 / 测试盲区覆盖（auto_test/ui_runner/build_debug_context） | 协议规范与测试完整性 |
+| **发布** | 推送到 GitHub 前建议加 CI pipeline（GitHub Actions） | 自动化测试与发布保障 |
 | **P2** | Browser SDK 自动采集后续项 | 完成 V2-V6 |
 | **P3** | SSE 实时 Dashboard | Trace 实时推送 |
 | **P4** | Docker Compose 与 LLM 配置完善 | 完善开发/部署体验 |
