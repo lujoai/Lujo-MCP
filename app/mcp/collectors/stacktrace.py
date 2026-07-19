@@ -1,14 +1,29 @@
 """堆栈追踪收集器 —— 捕获异常的调用栈信息"""
 
+import linecache
 import sys
 import traceback
-import linecache
 from typing import Optional
 
 from app.mcp.core.redaction import redact
 
+SENSITIVE_KEYS = {
+    "api_key",
+    "token",
+    "password",
+    "secret",
+    "authorization",
+    "cookie",
+    "passwd",
+    "pwd",
+}
 
-def capture_exception(exc: Optional[BaseException] = None) -> dict:
+
+def capture_exception(
+    exc: Optional[BaseException] = None,
+    source: str = "manual",
+    extra: Optional[dict] = None,
+) -> dict:
     """捕获异常信息，返回结构化的错误描述"""
     if exc is None:
         exc = sys.exc_info()[1]
@@ -31,7 +46,10 @@ def capture_exception(exc: Optional[BaseException] = None) -> dict:
         local_vars = {}
         for key, val in frame.f_locals.items():
             try:
-                local_vars[key] = redact(repr(val))
+                if key.lower() in SENSITIVE_KEYS:
+                    local_vars[key] = "***REDACTED***"
+                else:
+                    local_vars[key] = redact(repr(val))
             except Exception:
                 local_vars[key] = "<unable to render>"
 
@@ -47,7 +65,9 @@ def capture_exception(exc: Optional[BaseException] = None) -> dict:
     return {
         "type": type(exc).__name__,
         "message": str(exc),
-        "traceback": traceback.format_exc(),
+        "source": source,
+        "extra": extra or {},
+        "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         "frames": frames,
         "frame_count": len(frames),
     }

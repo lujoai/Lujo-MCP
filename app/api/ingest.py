@@ -5,6 +5,8 @@
 鉴权由 AuthMiddleware 统一兜底（fail-closed + 恒定时间比较），不在此重复实现，
 保持 proj1 安全中间件体系不变。
 """
+import logging
+
 from fastapi import APIRouter, HTTPException
 
 from app.mcp.tools.network_api import tool_ingest_network, tool_get_network_trace
@@ -14,6 +16,7 @@ from app.mcp.tools.console_api import tool_ingest_console
 from app.mcp.core.trace_repo import save_ui_event
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
+logger = logging.getLogger("ai-debug-mcp.ingest")
 
 
 @router.post("/network")
@@ -26,9 +29,11 @@ def ingest_network(req: dict):
             request_id=req.get("request_id"),
         )
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=422, detail="Invalid request payload")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"上报失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=400, detail="Internal server error")
 
 
 @router.get("/network/{trace_id}")
@@ -47,12 +52,15 @@ def ingest_silent_failure(req: dict):
             ui_events=req.get("ui_events"),
             network_records=req.get("network_records"),
             expectation=req.get("expectation"),
+            observed=req.get("observed"),
+            observed_events=req.get("observed_events"),
             source=req.get("source", "browser_sdk"),
             extra=req.get("extra"),
             trace_id=req.get("trace_id"),
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"上报失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=400, detail="Internal server error")
 
 
 @router.post("/error")
@@ -68,7 +76,8 @@ def ingest_error(req: dict):
             trace_id=req.get("trace_id"),
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"上报失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=400, detail="Internal server error")
 
 
 @router.post("/console")
@@ -84,7 +93,8 @@ def ingest_console(req: dict):
             request_id=req.get("request_id"),
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"上报失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=400, detail="Internal server error")
 
 
 @router.post("/ui-event")
@@ -99,4 +109,5 @@ def ingest_ui_event(req: dict):
         )
         return {"event_id": event_id, "trace_id": trace_id, "saved": True}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"上报失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=400, detail="Internal server error")

@@ -79,6 +79,49 @@ class TestAnalyzer:
         assert result["usage"]["total_tokens"] == 150
         assert result["attempts"] == 1
 
+    @patch("app.llm.analyzer._get_client")
+    def test_analyze_redacts_sensitive_values_before_llm(self, mock_get_client):
+        from app.llm.analyzer import analyze
+        import json
+
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = json.dumps({"root_cause": "ok"})
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "gpt-4o-mock"
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        ctx = {
+            "request_id": "005",
+            "input": {"api_key": "sk-live-secret", "nested": {"token": "abc123"}},
+            "exception": {
+                "frames": [
+                    {
+                        "file": "x.py",
+                        "line": 1,
+                        "function": "boom",
+                        "code": "raise",
+                        "locals": {"password": "pw-123", "normal": 'api_key = "inline-secret"'},
+                    }
+                ]
+            },
+        }
+
+        analyze(ctx, model="gpt-4o-mock")
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        sent = kwargs["messages"][1]["content"]
+        assert "sk-live-secret" not in sent
+        assert "abc123" not in sent
+        assert "pw-123" not in sent
+        assert "inline-secret" not in sent
+        assert "***REDACTED***" in sent
+        assert '"api_key": "***REDACTED***"' in sent
+
 
 class TestLLMProvider:
 

@@ -97,6 +97,25 @@ def test_ingest_error_route_missing_fields_defaults():
     assert resp.json()["saved"] is True
 
 
+def test_ingest_error_route_hides_internal_exception(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import app.api.ingest as ingest_module
+
+    app = FastAPI()
+    app.include_router(ingest_module.router)
+    client = TestClient(app)
+
+    def _boom(**kwargs):
+        raise RuntimeError("postgres://user:secret@localhost/db")
+
+    monkeypatch.setattr(ingest_module, "tool_ingest_error", _boom)
+    resp = client.post("/ingest/error", json={"message": "x"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Internal server error"
+
+
 def test_ingest_console_persists_record():
     from app.mcp.tools import console_api
     import uuid

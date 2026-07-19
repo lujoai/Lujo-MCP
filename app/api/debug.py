@@ -11,7 +11,7 @@ from app.mcp.core.session import session_manager
 import time
 from app.mcp.builders.context import build_context
 from app.mcp.collectors.runtime import collect_runtime_snapshot
-from app.mcp.collectors.stacktrace import capture_exception, format_trace_for_ai
+from app.mcp.collectors.stacktrace import capture_exception
 from app.llm.analyzer import analyze, analyze_stream
 from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse, DebugContext
 
@@ -28,8 +28,8 @@ def debug_run(req: DebugRequest) -> DebugResponse:
     try:
         add_log(request_id, "request_start", req.payload)
     except Exception as e:
-        logger.exception("add_log 失败")
-        raise HTTPException(status_code=500, detail=f"日志记录失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     error_info = None
     try:
@@ -41,16 +41,17 @@ def debug_run(req: DebugRequest) -> DebugResponse:
         try:
             # 把完整异常（含堆栈帧）写入 trace，使 context/analyze 可检索
             add_log(request_id, "error", error_info)
-        except Exception:
-            pass
-        result = {"status": "error", "message": str(e)}
+        except Exception as log_error:
+            logger.error(str(log_error), exc_info=True)
+        logger.error(str(e), exc_info=True)
+        result = {"status": "error", "message": "Internal server error"}
 
     try:
         trace = get_logs(request_id)
         context = build_context(request_id, trace)
     except Exception as e:
-        logger.exception("构建上下文失败")
-        raise HTTPException(status_code=500, detail=f"构建上下文失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     if error_info:
         try:
@@ -79,8 +80,8 @@ def debug_analyze(req: AnalyzeRequest):
     try:
         trace = get_logs(req.request_id)
     except Exception as e:
-        logger.exception("获取追踪日志失败")
-        raise HTTPException(status_code=500, detail=f"获取日志失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     if not trace:
         raise HTTPException(status_code=404, detail=f"找不到请求 {req.request_id}")
@@ -88,8 +89,8 @@ def debug_analyze(req: AnalyzeRequest):
     try:
         context = build_context(req.request_id, trace)
     except Exception as e:
-        logger.exception("构建上下文失败")
-        raise HTTPException(status_code=500, detail=f"构建上下文失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     # 若 errors 中含堆栈帧，提升到 exception（供 LLM 分析）
     for err in context.get("errors", []):
@@ -100,8 +101,8 @@ def debug_analyze(req: AnalyzeRequest):
     try:
         context["runtime"] = collect_runtime_snapshot()
     except Exception as e:
-        logger.warning(f"采集运行时快照失败: {e}")
-        context["runtime"] = {"error": f"采集失败: {e}"}
+        logger.error(str(e), exc_info=True)
+        context["runtime"] = {"error": "Tool execution failed"}
 
     try:
         analysis = analyze(context)
@@ -111,11 +112,11 @@ def debug_analyze(req: AnalyzeRequest):
             "analysis": analysis,
         }
     except RuntimeError as e:
-        logger.error(f"LLM 分析失败: {e}")
-        raise HTTPException(status_code=502, detail=f"LLM 分析失败（已重试）: {str(e)}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=502, detail="Internal server error")
     except Exception as e:
-        logger.exception("LLM 分析异常")
-        raise HTTPException(status_code=500, detail=f"LLM 分析失败: {str(e)}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/analyze/stream")
@@ -124,7 +125,8 @@ async def debug_analyze_stream(req: AnalyzeRequest):
     try:
         trace = get_logs(req.request_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取日志失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     if not trace:
         raise HTTPException(status_code=404, detail=f"找不到请求 {req.request_id}")
@@ -142,8 +144,8 @@ async def debug_analyze_stream(req: AnalyzeRequest):
                 yield f"data: {data}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
-            logger.exception("流式分析异常")
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+            logger.error(str(e), exc_info=True)
+            yield f"data: {json.dumps({'error': 'Tool execution failed'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -154,8 +156,8 @@ def get_runtime():
     try:
         return collect_runtime_snapshot()
     except Exception as e:
-        logger.exception("采集运行时快照失败")
-        raise HTTPException(status_code=500, detail=f"采集失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/session")
@@ -164,8 +166,8 @@ def list_sessions():
     try:
         sessions = session_manager.list_active()
     except Exception as e:
-        logger.exception("列出会话失败")
-        raise HTTPException(status_code=500, detail=f"获取会话失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     return {
         "count": len(sessions),
@@ -197,8 +199,8 @@ def debug_verify(body: dict):
     try:
         return verify_handler(body)
     except Exception as e:
-        logger.exception("verify 执行失败")
-        raise HTTPException(status_code=500, detail=f"verify 失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/verify/ui")
@@ -215,8 +217,8 @@ def debug_verify_ui(body: dict):
     try:
         return verify_ui_handler(body)
     except Exception as e:
-        logger.exception("verify_ui 执行失败")
-        raise HTTPException(status_code=500, detail=f"verify_ui 失败: {e}")
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/health")

@@ -56,3 +56,22 @@ class TestStacktraceCollector:
     def test_no_exception(self):
         exc_data = capture_exception(None)
         assert "error" in exc_data
+
+    def test_capture_exception_masks_sensitive_locals_and_keeps_metadata(self):
+        def boom():
+            api_key = "sk-secret-123"
+            password = "pw-123"
+            normal = "hello"
+            raise RuntimeError("boom")
+
+        try:
+            boom()
+        except RuntimeError as e:
+            exc_data = capture_exception(e, source="global_hook", extra={"origin": "test"})
+
+        assert exc_data["source"] == "global_hook"
+        assert exc_data["extra"] == {"origin": "test"}
+        frame = next(frame for frame in exc_data["frames"] if frame["function"] == "boom")
+        assert frame["locals"]["api_key"] == "***REDACTED***"
+        assert frame["locals"]["password"] == "***REDACTED***"
+        assert "hello" in frame["locals"]["normal"]

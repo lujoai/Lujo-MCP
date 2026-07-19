@@ -1,17 +1,29 @@
 """LLM 错误分析器（加强版）—— 重试、超时、上下文截断、流式输出"""
 
+import copy
 import json
-import time
 import logging
+import time
 from typing import Optional, Generator
 
 from openai import OpenAI, APIError, APITimeoutError, RateLimitError
 
 from app.config import settings
+from app.mcp.core.redaction import redact
 
 logger = logging.getLogger("ai-debug-mcp.llm")
 
 _client: Optional[OpenAI] = None
+SENSITIVE_KEYS = {
+    "api_key",
+    "token",
+    "password",
+    "secret",
+    "authorization",
+    "cookie",
+    "passwd",
+    "pwd",
+}
 
 
 _PROVIDER_BASE_URLS = {
@@ -58,8 +70,34 @@ SYSTEM_PROMPT = """你是一位资深的后端排障专家。用户会提供程�
 只输出 JSON，不要包含其他文字。"""
 
 
+def _redact_value_for_llm(value):
+    """递归脱敏发送给外部 LLM 的上下文。"""
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            if str(key).lower() in SENSITIVE_KEYS:
+                sanitized[key] = "***REDACTED***"
+            else:
+                sanitized[key] = _redact_value_for_llm(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_redact_value_for_llm(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_value_for_llm(item) for item in value]
+    if isinstance(value, str):
+        return redact(value) or value
+    return value
+
+
+def _prepare_context_for_llm(context: dict) -> dict:
+    """发送给外部模型前，先截断再递归脱敏。"""
+    truncated = truncate_context(copy.deepcopy(context))
+    return _redact_value_for_llm(truncated)
+
+
 def build_analysis_prompt(context: dict) -> str:
     """将调试上下文构建为 LLM 提示文本（用于调试和展示）"""
+    context = _prepare_context_for_llm(context)
     parts = []
     parts.append(f"请求 ID: {context.get('request_id', 'N/A')}")
     flow = context.get("flow", [])
@@ -218,8 +256,7 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
     client = _get_client()
     model_name = model or settings.llm_model
 
-    # 截断上下文
-    context = truncate_context(context)
+    context = _prepare_context_for_llm(context)
 
     prompt_str = json.dumps(context, ensure_ascii=False, default=str)
 
@@ -256,7 +293,7 @@ def analyze_stream(context: dict, model: Optional[str] = None) -> Generator[str,
     client = _get_client()
     model_name = model or settings.llm_model
 
-    context = truncate_context(context)
+    context = _prepare_context_for_llm(context)
     prompt_str = json.dumps(context, ensure_ascii=False, default=str)
 
     stream = client.chat.completions.create(

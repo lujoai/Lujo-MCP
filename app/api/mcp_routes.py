@@ -55,16 +55,21 @@ async def mcp_post(request: Request):
         sess = registry.create() if not session_id or not registry.get(session_id) else registry.get(session_id)
         session_id = sess.session_id
     else:
-        if not session_id or not registry.get(session_id):
+        if not session_id:
             return JSONResponse(
-                make_error(req_id, INVALID_REQUEST, "缺少或无效的 Mcp-Session-Id"),
+                make_error(req_id, INVALID_REQUEST, "缺少 Mcp-Session-Id"),
                 status_code=400,
+            )
+        sess = registry.get(session_id)
+        if not sess:
+            return JSONResponse(
+                make_error(req_id, INVALID_REQUEST, "MCP session not found, please re-initialize"),
+                status_code=404,
             )
         if method == "notifications/initialized":
             registry.mark_initialized(session_id)
             return Response(status_code=202)
         # 其它请求（tools/list、tools/call 等）需要已初始化
-        sess = registry.get(session_id)
         if not sess.initialized and method not in ("ping",):
             return JSONResponse(
                 make_error(req_id, INVALID_REQUEST, "会话尚未完成初始化"),
@@ -107,8 +112,10 @@ async def mcp_get(request: Request):
 
     # SSE 流：服务端 → 客户端 推送通道
     session_id = request.headers.get("Mcp-Session-Id")
-    if not session_id or not registry.get(session_id):
-        return JSONResponse({"detail": "无效会话"}, status_code=400)
+    if not session_id:
+        return JSONResponse({"detail": "缺少 Mcp-Session-Id"}, status_code=400)
+    if not registry.get(session_id):
+        return JSONResponse({"detail": "MCP session not found, please re-initialize"}, status_code=404)
 
     q = hub.subscribe(session_id)
 
@@ -130,5 +137,7 @@ async def mcp_get(request: Request):
 async def mcp_delete(request: Request):
     session_id = request.headers.get("Mcp-Session-Id")
     if session_id:
+        if not registry.get(session_id):
+            return JSONResponse({"detail": "MCP session not found, please re-initialize"}, status_code=404)
         registry.delete(session_id)
     return Response(status_code=204)

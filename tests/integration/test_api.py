@@ -151,4 +151,4 @@ class TestMCPProtocol:
             headers={"Mcp-Session-Id": sid},
             json={"jsonrpc": "2.0", "id": 9, "method": "ping"},
         )
-        assert resp2.status_code == 400
+        assert resp2.status_code == 404
