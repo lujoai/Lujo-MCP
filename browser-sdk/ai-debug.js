@@ -29,11 +29,45 @@
     sampleRate: 1.0,
     networkSampleRate: 1.0,
     networkThrottleMs: 0,
+    // reportSilentFailure 自动附加最近 N 条 network/UI 事件链
+    silentFailureContextSize: 20,
   };
 
   var _inited = false;
   var _sessionId = "sdk-" + Math.random().toString(36).slice(2, 10);
   var _traceId = "sdk-trace-" + Math.random().toString(36).slice(2, 10);
+
+  // ── 静默失败上下文环形缓冲 ──
+  // 仅存摘要（method/url/status/duration/timestamp/body 前 512 字符），完整 record 走实时上报
+  var _recentNetwork = [];
+  var _recentUI = [];
+  // body 预览长度上限（约束 3 选项 A）
+  var _NETWORK_BODY_PREVIEW = 512;
+
+  function _pushRecent(arr, item, maxSize) {
+    arr.push(item);
+    while (arr.length > maxSize) {
+      arr.shift();
+    }
+  }
+
+  function _summarizeNetworkRecord(record) {
+    var body = record && record.request_body;
+    if (body === null || body === undefined) {
+      body = "";
+    } else if (typeof body !== "string") {
+      try { body = JSON.stringify(body); } catch (e) { body = String(body); }
+    }
+    return {
+      method: record ? record.method : "",
+      url: record ? record.url : "",
+      status_code: record ? record.status_code : null,
+      duration_ms: record ? record.duration_ms : null,
+      timestamp: Date.now() / 1000,
+      request_body_preview: body.slice(0, _NETWORK_BODY_PREVIEW),
+      error: record && record.error ? record.error : null,
+    };
+  }
 
   // ── 工具函数 ──
   function _shouldSample() {
@@ -225,6 +259,8 @@
 
   function _reportNetworkRecord(record) {
     try {
+      // 摘要入环形缓冲，供 reportSilentFailure 拼装 observed_events
+      _pushRecent(_recentNetwork, _summarizeNetworkRecord(record), cfg.silentFailureContextSize);
       _notifyNetworkCapture(record);
       _send("/ingest/network", {
         record: record,
@@ -430,14 +466,18 @@
         if (_debounce[key] && now - _debounce[key] < 1000) return;
         _debounce[key] = now;
 
+        var uiEvent = {
+          event_type: e.type,
+          target_selector: _getSelector(target),
+          target_text: (target.textContent || "").slice(0, 100),
+          timestamp: now / 1000,
+          route_path: global.location ? global.location.pathname : "",
+        };
+        // 入环形缓冲，供 reportSilentFailure 拼装 observed_events
+        _pushRecent(_recentUI, uiEvent, cfg.silentFailureContextSize);
+
         _send("/ingest/ui-event", {
-          event: {
-            event_type: e.type,
-            target_selector: _getSelector(target),
-            target_text: (target.textContent || "").slice(0, 100),
-            timestamp: now / 1000,
-            route_path: global.location ? global.location.pathname : "",
-          },
+          event: uiEvent,
           trace_id: _traceId,
           source: "browser-sdk",
           extra: { session_id: _sessionId },
@@ -508,7 +548,7 @@
   // ── 公开 API ──
   /**
    * 初始化 SDK
-   * @param {object} opts - { endpoint, apiKey, captureErrors, captureNetwork, captureUI, sampleRate, networkSampleRate, networkThrottleMs }
+   * @param {object} opts - { endpoint, apiKey, captureErrors, captureNetwork, captureUI, sampleRate, networkSampleRate, networkThrottleMs, silentFailureContextSize }
    */
   function init(opts) {
     if (_inited) return;
@@ -534,14 +574,41 @@
 
   /**
    * 手动上报静默失败
-   * @param {object} payload - { description, element?, expected?, observed?, route? }
+   *
+   * 自动从环形缓冲取出最近 N 条 network/UI 事件（N = cfg.silentFailureContextSize，默认 20）
+   * 拼装为 observed_events 数组与 trace_id 一起上报，服务端会按 kind 分类入库，
+   * 保证 AI 调试时通过 get_debug_context 能拿到完整事件链。
+   *
+   * @param {object} payload
+   * @param {string} payload.description - 静默失败描述（必填）
+   * @param {string} [payload.observed] - 用户对现象的文字描述，如"点击后无反应"
+   * @param {object} [payload.expected] - 期望行为，如 {type:"route_change", to:"/done"}
+   * @param {string} [payload.route] - 当前路由（可选，默认取 location.pathname）
+   *
+   * observed_events 元素结构（SDK 自动附加，非用户传入）：
+   *   {
+   *     kind: "network" | "ui",   // 事件类型
+   *     data: { ... }              // network 摘要或 UI 事件原始结构
+   *   }
+   * - kind="network" 时 data 形如：
+   *     { method, url, status_code, duration_ms, timestamp, request_body_preview, error }
+   * - kind="ui" 时 data 形如：
+   *     { event_type, target_selector, target_text, timestamp, route_path }
    */
   function reportSilentFailure(payload) {
     payload = payload || {};
+    var observedEvents = [];
+    for (var i = 0; i < _recentNetwork.length; i++) {
+      observedEvents.push({ kind: "network", data: _recentNetwork[i] });
+    }
+    for (var j = 0; j < _recentUI.length; j++) {
+      observedEvents.push({ kind: "ui", data: _recentUI[j] });
+    }
     _send("/ingest/silent-failure", {
       message: payload.description,
       expectation: payload.expected,
       observed: payload.observed,
+      observed_events: observedEvents,
       trace_id: _traceId,
       source: "browser-sdk",
       extra: {
