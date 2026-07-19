@@ -198,6 +198,19 @@ class TestLLMIntegration:
     """LLM 分析端到端（仅在配置了 LLM 时执行）"""
 
     def test_analyze_with_llm_returns_structure(self, unique_request_id):
+        """LLM 端到端分析。三状态显式处理：
+        1) 未配置（OPENAI_API_KEY 为空）→ 显式 skip
+        2) 配置但调用失败（网络/超时/API 错误）→ 真实抛出 fail
+        3) 配置且成功 → 断言返回结构
+
+        不再用 try/except 吞断言，避免失败被静默降级为 skip。
+        """
+        if not settings.openai_api_key:
+            pytest.skip(
+                "LLM 未配置（OPENAI_API_KEY 为空），跳过端到端 LLM 测试。"
+                "如需启用，请在 .env 配置 API Key"
+            )
+
         from app.mcp.tools.debug_api import analyze_with_llm
 
         add_log(unique_request_id, "request_start", {"method": "GET", "url": "/llm-test"})
@@ -206,8 +219,112 @@ class TestLLMIntegration:
             "message": "Connection refused",
         })
 
+        # 不再 try/except 吞断言：调用失败和断言失败都应真实抛出
+        result = analyze_with_llm(unique_request_id)
+        assert "analysis" in result or "error" in result
+
+
+class TestTraceRepoPersistence:
+    """C3/C4：trace_repo 写入 → 重启内存清空 → get_trace 从 PG 读回"""
+
+    def test_save_trace_persists_to_pg(self, unique_request_id):
+        """C4 上半段：save_trace 后 PG 中能查到 trace_data / trace_meta 条目"""
+        from app.mcp.core import trace_repo
+
+        error_id = trace_repo.save_trace(
+            "ValueError", "bad value",
+            [{"file": "a.py", "line": 10, "function": "f"}],
+            source="ingest", extra={"context": "pg-test"},
+            trace_kind="exception",
+        )
         try:
-            result = analyze_with_llm(unique_request_id)
-            assert "analysis" in result or "error" in result
-        except Exception as e:
-            pytest.skip(f"LLM 未配置或不可用: {e}")
+            # PG 中应能查到 step=trace_data / step=trace_meta
+            entries = get_logs(error_id)
+            steps = [e.get("step") for e in entries]
+            assert "trace_data" in steps
+            assert "trace_meta" in steps
+
+            data_entries = [e for e in entries if e.get("step") == "trace_data"]
+            assert len(data_entries) == 1
+            data = data_entries[0].get("data") or {}
+            assert data["type"] == "ValueError"
+            assert data["message"] == "bad value"
+            assert data["source"] == "ingest"
+
+            meta_entries = [e for e in entries if e.get("step") == "trace_meta"]
+            assert len(meta_entries) == 1
+            meta = meta_entries[0].get("data") or {}
+            assert meta["trace_kind"] == "exception"
+            assert meta["extra"] == {"context": "pg-test"}
+
+            # error_id 必须在 list_request_ids 中
+            assert error_id in list_request_ids(limit=200)
+        finally:
+            # 清理 trace_repo 写入的 trace_store 数据
+            delete_logs(error_id)
+
+    def test_get_trace_reads_back_from_pg_after_errors_clear(self, unique_request_id):
+        """C4 下半段：写入 → 清空 errors 内存 → get_trace 仍能从 PG 读回"""
+        from app.mcp.core import trace_repo, errors
+
+        error_id = trace_repo.save_trace(
+            "SilentFailure", "click no response",
+            [{"file": "btn.tsx", "line": 42, "function": "onClick"}],
+            source="browser_sdk",
+            extra={"expectation": "route_change"},
+            trace_kind="silent_failure",
+        )
+        try:
+            # 1. 正常场景：errors 内存命中
+            got = trace_repo.get_trace(error_id)
+            assert got is not None
+            assert got["trace_id"] == error_id
+            assert got["exc_type"] == "SilentFailure"
+            assert got["trace_kind"] == "silent_failure"
+
+            # 2. 模拟重启：清空 errors 内存缓冲，PG 保留
+            errors._recent.clear()
+
+            # 3. get_trace 应能从 PG 回读重建
+            got2 = trace_repo.get_trace(error_id)
+            assert got2 is not None, "重启 errors 内存清空后 get_trace 应从 PG 回读"
+            assert got2["trace_id"] == error_id
+            assert got2["exc_type"] == "SilentFailure"
+            assert got2["message"] == "click no response"
+            assert got2["frames"] == [{"file": "btn.tsx", "line": 42, "function": "onClick"}]
+            assert got2["frame_count"] == 1
+            assert got2["trace_kind"] == "silent_failure"
+            assert got2["extra"] == {"expectation": "route_change"}
+            assert got2.get("from_store") is True
+        finally:
+            delete_logs(error_id)
+
+    def test_save_trace_with_caller_trace_id_keys_unified_in_pg(self, unique_request_id):
+        """C3 SDK 场景：传入 trace_id，PG 中 add_log key 必须统一为 error_id"""
+        from app.mcp.core import trace_repo
+
+        caller_tid = f"sdk-{uuid.uuid4().hex[:8]}"
+        error_id = trace_repo.save_trace(
+            "Error", "msg", [],
+            source="browser_sdk", trace_id=caller_tid,
+        )
+        try:
+            # error_id 在 PG list_request_ids 中
+            assert error_id in list_request_ids(limit=200)
+            # caller_trace_id 不应作为 add_log key 出现在 PG 中
+            assert caller_tid not in list_request_ids(limit=200)
+
+            # error_id 下应有 trace_data / trace_meta / trace_link 三条
+            entries = get_logs(error_id)
+            steps = [e.get("step") for e in entries]
+            assert "trace_data" in steps
+            assert "trace_meta" in steps
+            assert "trace_link" in steps
+
+            # trace_link 记录 caller_trace_id
+            link_entries = [e for e in entries if e.get("step") == "trace_link"]
+            assert len(link_entries) == 1
+            link_data = link_entries[0].get("data") or {}
+            assert link_data.get("caller_trace_id") == caller_tid
+        finally:
+            delete_logs(error_id)
