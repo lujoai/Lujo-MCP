@@ -43,41 +43,48 @@ async def run_stdio():
     register_all_tools()
     logger.info("MCP stdio server 启动，等待 stdin 输入")
 
+    # 注册资源清理兜底（与 app.mcp_server.main 一致：atexit + finally）
+    from app.mcp_server import cleanup_resources
+    import atexit
+    atexit.register(cleanup_resources)
+
     loop = asyncio.get_running_loop()
-    while True:
-        try:
-            line = await loop.run_in_executor(None, sys.stdin.readline)
-        except EOFError:
-            break
-        if not line:
-            break
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = parse_request(line)
-        except Exception as e:
-            _write_response(
-                make_error(None, INVALID_REQUEST, str(e))
-            )
-            continue
+    try:
+        while True:
+            try:
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+            except EOFError:
+                break
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                req = parse_request(line)
+            except Exception as e:
+                _write_response(
+                    make_error(None, INVALID_REQUEST, str(e))
+                )
+                continue
 
-        try:
-            result = await dispatch(req)
-        except Exception as e:
-            logger.exception("dispatch 执行异常")
-            _write_response(
-                make_error(req.id, INTERNAL_ERROR, f"内部错误: {e}")
-            )
-            continue
+            try:
+                result = await dispatch(req)
+            except Exception as e:
+                logger.exception("dispatch 执行异常")
+                _write_response(
+                    make_error(req.id, INTERNAL_ERROR, f"内部错误: {e}")
+                )
+                continue
 
-        # 通知类消息（无 id）不写回响应
-        if req.id is None:
-            continue
+            # 通知类消息（无 id）不写回响应
+            if req.id is None:
+                continue
 
-        _write_response(result)
-
-    logger.info("MCP stdio server 关闭（stdin 关闭）")
+            _write_response(result)
+    finally:
+        logger.info("MCP stdio server 关闭（stdin 关闭）")
+        cleanup_resources()
 
 
 if __name__ == "__main__":
