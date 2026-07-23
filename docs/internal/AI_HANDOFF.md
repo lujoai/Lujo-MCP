@@ -23,6 +23,19 @@
 
 ### 最近完成事项
 
+- ✅ Git 整理 + v0.3.0 tag 修正（2026-07-23）：
+  - **问题**：工作区有 60+ 未提交改动（含全部 Release Audit 修复代码），`v0.3.0` tag 指向旧 commit `169a4e4`（不含修复），名不副实——`git checkout v0.3.0` 会得到不含任何收口修复的版本。
+  - **清理**：删除 13 个根目录临时 xml 报告（`cr_*/final*/verify*/phase35_results/report_only`）；`.gitignore` 补 `.reasonix/`、`.trae/documents/`、临时 xml 模式（保留 `.trae/specs/` 跟踪）。
+  - **分批提交**（5 个语义 commit，共 108 文件）：
+    1. `a5d0c98` fix(security): SEC-01~15 安全加固（auth/redaction/限流/metrics/SSRF/LFI/SDK 脱敏）
+    2. `f151d1e` fix: SEC-13 原子写入 + M7 api_key 归一化 + 协议/存储/资源（M1-5/M8/SEC-14/N3）
+    3. `42f8137` chore: 入口/可观测性/工程化（M9/M10/M11/M12/M13, L4/L6, SEC-03, schemas, migrations 清理）
+    4. `68e8954` chore: gitignore IDE 产物 + GitHub Actions CI
+    5. `27dcb6b` docs: 同步 v0.3.0 收口文档（README/RESUME/internal docs/ROADMAP/specs）
+  - **tag 修正**：删除指向 `169a4e4` 的旧 tag，重打 annotated tag `v0.3.0` → `27dcb6b`（HEAD，含全部修复）。`git checkout v0.3.0` 现可得到完整收口状态。
+  - RESUME.md 改动经用户确认保留（内容为 v0.3.0 成果的合理更新，覆盖原"不修改"规则）。
+  - 风险：tag 与 5 个 commit **仍未推送到远端**（外向操作，待用户确认）；commit 仅记录工作区内容、代码未变，测试基线 310 passed 不受影响。
+
 - ✅ Release Audit 最终收口（2026-07-23，M3/M10/M11/L6 + C5/C4/H7）：
   - **M3 同步阻塞**：经核实已修复——MCP 路径 `server.py:114-117` 对同步 handler 走 `asyncio.to_thread`，HTTP 路径 `/api/debug/verify/ui` 为 sync `def`（FastAPI threadpool），`test_mcp_verify_ui.py::TestVerifyUiDoesNotBlockEventLoop` 证明不阻塞。仅文档更新。
   - **M10 版本口径**：`app/__init__.py:4` `__version__="0.3.0"` 单一来源；创建正式 annotated tag `v0.3.0`（`git tag -a v0.3.0`，本地未推送）；release 流程标准化写入 `DEV_PLAN.md` §八。
