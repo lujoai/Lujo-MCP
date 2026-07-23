@@ -1,13 +1,18 @@
 """可观测性模块 —— Prometheus 指标 + 请求计数器"""
 
+import re
 import time
 import threading
 import logging
+import hmac
 from collections import defaultdict
 from typing import Dict, Tuple
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.config import settings
 
 logger = logging.getLogger("ai-debug-mcp.metrics")
 
@@ -21,13 +26,21 @@ _latency_count: Dict[str, int] = defaultdict(int)
 router = APIRouter(tags=["observability"])
 
 
+def _sanitize_label(value: str) -> str:
+    """移除 label 值中的特殊字符（换行、制表符等），防止指标格式破坏"""
+    return re.sub(r'[\n\r\t\x00-\x1f]', '', value)
+
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     """记录每个请求的指标（计数 + 延迟）"""
 
     async def dispatch(self, request: Request, call_next):
         start = time.time()
         method = request.method
-        path = request.url.path
+        # 使用路由模板作为 path label，避免基数爆炸
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path) if route else request.url.path
+        path = _sanitize_label(path)
 
         try:
             response = await call_next(request)
@@ -84,9 +97,29 @@ def _render_prometheus() -> str:
 
 
 @router.get("/metrics")
-def metrics():
-    """Prometheus 指标端点"""
-    from fastapi.responses import PlainTextResponse
+def metrics(request: Request):
+    """Prometheus 指标端点
+
+    SEC-08 独立鉴权 toggle：
+    - METRICS_AUTH_ENABLED=False（默认）：不额外鉴权，依赖全局 AuthMiddleware
+    - METRICS_AUTH_ENABLED=True：端点层独立校验 API Key（Bearer/X-API-Key），
+      与全局中间件解耦，防止 AuthMiddleware 配置疏漏导致指标泄露
+    """
+    if settings.metrics_auth_enabled:
+        auth_header = request.headers.get("Authorization", "")
+        api_key_header = request.headers.get("X-API-Key", "")
+        if auth_header.startswith("Bearer "):
+            provided_key = auth_header[7:]
+        elif api_key_header:
+            provided_key = api_key_header
+        else:
+            provided_key = ""
+        # 恆定时间比较，避免时序攻击
+        if not hmac.compare_digest(provided_key, settings.api_key or ""):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid API key"},
+            )
     return PlainTextResponse(_render_prometheus())
 
 

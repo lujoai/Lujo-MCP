@@ -14,6 +14,17 @@ M9 环境阻断 workaround
 
 此文件不修改任何业务代码（`app/**/*.py`），仅是测试基础设施。
 """
+import os
+
+# M13：阻断宿主环境 API_KEY 泄漏进测试进程，确保测试运行在已知
+# （无鉴权）状态。单测若需鉴权场景，应通过 monkeypatch 显式设置。
+# 必须在任何 `from app...` / pydantic-settings 实例化前执行。
+# env var 优先级高于 .env 文件：显式置空 → config.py M7 归一化为 None → 鉴权关闭。
+# （原 os.environ.pop 无效：pop 后 pydantic 仍从 .env 读到 API_KEY=test_secret_key_456）
+os.environ["API_KEY"] = ""
+# SEC-03：默认 host=0.0.0.0 + 空 api_key 会拒绝启动；测试用本地回环避开。
+os.environ.setdefault("HOST", "127.0.0.1")
+
 import pydantic_settings
 
 # 必须在任何 `from app...` 之前执行：pytest 加载 conftest.py 的顺序是

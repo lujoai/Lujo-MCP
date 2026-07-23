@@ -1,4 +1,5 @@
 """git 归因模块单测"""
+import os
 import shutil
 import subprocess
 
@@ -18,8 +19,11 @@ def _reset_git_config():
     settings.git_path_whitelist, settings.git_timeout = saved
 
 
-def test_is_allowed_empty_whitelist_allows_all():
-    assert git_core._is_allowed("/anywhere/file.py") is True
+def test_is_allowed_empty_whitelist_defaults_to_cwd():
+    """空名单时默认收敛到 cwd：cwd 内路径放行、cwd 外路径拒绝（SEC-01）。"""
+    cwd = os.getcwd()
+    assert git_core._is_allowed(os.path.join(cwd, "app", "main.py")) is True
+    assert git_core._is_allowed("/anywhere/file.py") is False
 
 
 def test_is_allowed_whitelist_denies_outside():

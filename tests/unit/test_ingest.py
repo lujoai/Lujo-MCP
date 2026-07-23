@@ -144,7 +144,7 @@ def test_ingest_console_redacts_message():
     import uuid
 
     trace_id = "test-console-redact-" + str(uuid.uuid4())[:8]
-    res = console_api.tool_ingest_console(
+    console_api.tool_ingest_console(
         level="warn",
         message='api_key = "secret-token-123"',
         trace_id=trace_id,

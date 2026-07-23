@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.schemas.trace import TraceEntry
 
 
-class RuntimeSnapshot(BaseModel):
+class RuntimeInfo(BaseModel):
     pid: int
     cpu_percent: float
     memory_mb: float
@@ -26,10 +26,10 @@ class CodeSnippet(BaseModel):
     link: Optional[str] = None
 
 
-class DebugContext(BaseModel):
+class DebugContextPayload(BaseModel):
     """一次性打包给宿主 AI 的完整调试上下文"""
     trace: TraceEntry
-    runtime: Optional[RuntimeSnapshot] = None
+    runtime: Optional[RuntimeInfo] = None
     code_snippets: list[CodeSnippet] = Field(default_factory=list)
     note: str = (
         "以上为原始堆栈、运行时状态与相关代码片段，未做 AI 分析。"

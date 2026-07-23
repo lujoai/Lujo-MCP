@@ -7,6 +7,7 @@ import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
+from app import __version__
 from app.config import settings
 from app.utils.logging import setup_logging
 from app.middleware import setup_middleware
@@ -46,7 +47,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     setup_logging()
     logger.info(
-        f"服务启动 | {settings.service_name} v0.3.0 | "
+        f"服务启动 | {settings.service_name} v{__version__} | "
         f"storage={settings.storage_backend} | "
         f"llm={settings.llm_model} | "
         f"auth={'on' if settings.api_key else 'off'} | "
@@ -59,26 +60,105 @@ async def lifespan(app: FastAPI):
             "生产环境请通过环境变量 API_KEY 设置访问令牌，避免未授权访问。"
         )
 
+    # SEC-03：启动期强制安全校验，覆盖所有启动方式
+    # （python -m app.main / uvicorn app.main:app / gunicorn）。
+    # 修复前该校验仅在 __main__ 分支调用，uvicorn 直启会绕过防护。
+    validate_startup_configuration()
+
     # 启动定时清理任务
     import asyncio
+    import uuid
     from app.mcp.core.storage.factory import get_trace_store, get_session_store
-
+    from app.state.store import get_state_store, RedisStateStore
+    
     # 启动期 fail-fast：主动触发 factory 校验，非法 STORAGE_BACKEND 立即崩，
-    # 避免拼写错误（如 "postgrsql"）静默回退到 memory 导致生产环境数据丢失。
+    # 避免拼解错误（如 "postgrsql"）静默回退到 memory 导致生产环境数据丢失。
     # 仅 HTTP 入口覆盖；stdio 入口在首次 add_log 时触发校验。
     get_trace_store()
     get_session_store()
+    
+    # ── 分布式锁常量 ──
+    _CLEANUP_INTERVAL = 300          # 清理周期（秒）
+    _LOCK_KEY = "ai-debug:cleanup:lock"
+    _LOCK_TTL = 310                  # 略大于清理周期，worker 崩溃后下个周期锁已过期
+    
+    # ── Lua 脚本：原子性“比较并删除”锁 ──
+    # 防止误删其他 worker 持有的锁：先 GET 比较值，匹配才 DEL。
+    # 场景：worker A 清理耗时超过 TTL → 锁过期 → worker B 获取新锁 →
+    # worker A 完成后若直接 DELETE 会删掉 B 的锁。Lua 脚本在 Redis 中原子执行，
+    # 确保只删除自己设置的锁。
+    _UNLOCK_SCRIPT = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 
     async def periodic_cleanup():
+        """定时清理过期 trace / session / MCP 会话。
+
+        多 worker 部署时通过 Redis ``SET NX EX`` 分布式锁确保仅一个 worker
+        执行清理，避免重复清理与惊群效应。单机模式（无 Redis）用
+        ``asyncio.Lock`` 防同进程重复。
+        """
+        _local_lock = asyncio.Lock()
+
         while True:
-            await asyncio.sleep(300)
+            await asyncio.sleep(_CLEANUP_INTERVAL)
+
+            # ── 抢占分布式/本地锁 ──
+            store = get_state_store()
+            use_redis = isinstance(store, RedisStateStore)
+            acquired = False
+
+            if use_redis:
+                # 每次清理周期生成唯一 worker_id，用于锁归属判定。
+                # 防止场景：锁 TTL 过期 → 另一个 worker 获取锁 → 当前 worker
+                # 完成后误删他人锁。用 UUID 确保每次尝试的锁值唯一。
+                _worker_id = str(uuid.uuid4())
+                try:
+                    acquired = bool(
+                        store._r.set(_LOCK_KEY, _worker_id, nx=True, ex=_LOCK_TTL)
+                    )
+                except Exception:
+                    logger.warning(
+                        "获取清理分布式锁异常，跳过本次清理", exc_info=True
+                    )
+                    acquired = False
+            else:
+                # 单机模式：asyncio.Lock 防同进程重复
+                try:
+                    _local_lock.acquire_nowait()
+                    acquired = True
+                except RuntimeError:
+                    acquired = False  # 上次清理尚未完成
+
+            if not acquired:
+                continue
+
             try:
-                get_trace_store().cleanup_expired(settings.trace_ttl_seconds)
-                get_session_store().cleanup_expired(settings.session_ttl_seconds)
+                # Phase 2 过渡桥：同步 PG cleanup 用 to_thread 包装，
+                # 避免阻塞事件循环。Phase 3 全异步化后移除。
+                # 仅包装 PG 调用本身，不涉及锁逻辑。
+                await asyncio.to_thread(
+                    get_trace_store().cleanup_expired,
+                    settings.trace_ttl_seconds,
+                )
+                await asyncio.to_thread(
+                    get_session_store().cleanup_expired,
+                    settings.session_ttl_seconds,
+                )
                 from app.mcp.transports.session import registry as mcp_registry
                 mcp_registry.cleanup(ttl_seconds=1800)
             except Exception:
                 logger.exception("定时清理失败")
+            finally:
+                # 释放锁：仅删除自己持有的锁，防止误删其他 worker 的锁。
+                # 使用 Lua 脚本原子执行 GET+COMPARE+DEL，避免 GET 和 DEL 之间
+                # 的竞态窗口（GET 返回自己的值 → 锁过期 → 他人获取 → DEL 删他人锁）。
+                if use_redis:
+                    try:
+                        store._r.eval(_UNLOCK_SCRIPT, 1, _LOCK_KEY, _worker_id)
+                    except Exception:
+                        pass
+                else:
+                    if _local_lock.locked():
+                        _local_lock.release()
 
     task = asyncio.create_task(periodic_cleanup())
     yield
@@ -98,7 +178,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.service_name,
     description="基于 MCP 协议的 AI 智能调试服务",
-    version="0.3.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -135,10 +215,13 @@ def health():
             from app.mcp.core.storage.pg_store import _get_pool
             pool = _get_pool()
             conn = pool.getconn()
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            pool.putconn(conn)
-            storage_detail = "postgresql (connected)"
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                conn.commit()
+                storage_detail = "postgresql (connected)"
+            finally:
+                pool.putconn(conn)
         except Exception:
             storage_ok = False
             storage_detail = "postgresql (disconnected)"
@@ -153,7 +236,7 @@ def health():
     return {
         "status": status,
         "service": settings.service_name,
-        "version": "0.3.0",
+        "version": __version__,
         "storage": storage_detail,
         "llm_configured": llm_ok,
     }

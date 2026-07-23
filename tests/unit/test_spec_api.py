@@ -10,6 +10,8 @@ from app.mcp.verifier import spec_store
 def _clean():
     """每个测试前清空 spec_store"""
     spec_store.clear()
+    # clear() 已重置 _specs + _restored=False，设置 True 防止 list_specs 恢复历史数据
+    spec_store._restored = True
     yield
 
 
@@ -90,3 +92,29 @@ class TestSpecAPI:
     def test_delete_spec_not_found(self, client):
         resp = client.delete("/api/spec/no-such-id")
         assert resp.status_code == 404
+
+
+class TestSpecAPIErrorSanitization:
+    """N4-FU-1: HTTPException detail 不得包含原始异常文本"""
+
+    def test_create_spec_error_detail_excludes_exception(self, client, monkeypatch):
+        sensitive = "DB_PASSWORD=hunter2"
+        def _boom(_):
+            raise RuntimeError(sensitive)
+        monkeypatch.setattr(spec_store, "create", _boom)
+
+        resp = client.post("/api/spec", json={"kind": "api", "target": "GET /x", "expect": {}})
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "创建规范失败"
+        assert sensitive not in resp.text
+
+    def test_list_specs_error_detail_excludes_exception(self, client, monkeypatch):
+        sensitive = "postgresql://user:pwd@host:5432/db"
+        def _boom(*, kind=None, target=None):
+            raise RuntimeError(sensitive)
+        monkeypatch.setattr(spec_store, "list_specs", _boom)
+
+        resp = client.get("/api/spec")
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "列出规范失败"
+        assert sensitive not in resp.text

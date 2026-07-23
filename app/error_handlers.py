@@ -1,7 +1,6 @@
 """全局异常处理器 —— 兜底所有未捕获异常，防止服务崩溃"""
 
 import logging
-import traceback
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse

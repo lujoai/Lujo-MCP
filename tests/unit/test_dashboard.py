@@ -3,9 +3,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api import dashboard as dashboard_module
 from app.api.dashboard import router
 from app.mcp.core import trace_repo
 from app.mcp.tools.verify_api import verify_handler
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    """每个测试前清空 dashboard 缓存，避免跨用例污染"""
+    dashboard_module._cache.clear()
 
 
 @pytest.fixture
@@ -111,3 +118,51 @@ class TestDashboardTraceDetail:
         assert body["spec_diffs"] is not None
         assert len(body["spec_diffs"]) == 1
         assert body["spec_diffs"][0]["silent_failure"] is True
+
+
+class TestDashboardLimitCap:
+    """limit 参数上限测试"""
+
+    def test_limit_default(self, client):
+        """默认 limit=100"""
+        resp = client.get("/api/dashboard/traces")
+        assert resp.status_code == 200
+
+    def test_limit_capped_at_1000(self, client):
+        """超过 1000 时截断到 1000"""
+        resp = client.get("/api/dashboard/traces?limit=9999")
+        assert resp.status_code == 200
+
+    def test_limit_minimum_one(self, client):
+        """limit 最小为 1"""
+        resp = client.get("/api/dashboard/traces?limit=0")
+        assert resp.status_code == 200
+
+
+class TestDashboardCache:
+    """_collect_all_traces 缓存测试"""
+
+    def test_cache_populated(self):
+        """首次调用后缓存被填充"""
+        dashboard_module._collect_all_traces(limit=10)
+        assert "all_traces" in dashboard_module._cache
+
+    def test_cache_returns_same_data(self):
+        """TTL 内返回缓存数据"""
+        result1 = dashboard_module._collect_all_traces(limit=10)
+        result2 = dashboard_module._collect_all_traces(limit=10)
+        assert result1 == result2
+
+    def test_cache_expires_after_ttl(self):
+        """TTL 过期后重新采集"""
+        from unittest.mock import patch
+
+        with patch("app.api.dashboard.time") as mock_time:
+            mock_time.monotonic.return_value = 100.0
+            dashboard_module._collect_all_traces(limit=10)
+            assert dashboard_module._cache["all_traces"][0] == 100.0
+
+            # 模拟时间过了 TTL+1 秒
+            mock_time.monotonic.return_value = 100.0 + dashboard_module._CACHE_TTL + 1
+            dashboard_module._collect_all_traces(limit=10)
+            assert dashboard_module._cache["all_traces"][0] == 100.0 + dashboard_module._CACHE_TTL + 1

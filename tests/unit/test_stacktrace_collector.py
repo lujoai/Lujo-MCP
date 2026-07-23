@@ -1,5 +1,4 @@
 """单元测试：stacktrace collector"""
-import pytest
 from app.mcp.collectors.stacktrace import capture_exception, format_trace_for_ai
 
 
@@ -59,9 +58,9 @@ class TestStacktraceCollector:
 
     def test_capture_exception_masks_sensitive_locals_and_keeps_metadata(self):
         def boom():
-            api_key = "sk-secret-123"
-            password = "pw-123"
-            normal = "hello"
+            api_key = "sk-secret-123"  # noqa: F841  # 故意留在局部变量，供 capture_exception 捕获帧局部并脱敏
+            password = "pw-123"  # noqa: F841
+            normal = "hello"  # noqa: F841
             raise RuntimeError("boom")
 
         try:

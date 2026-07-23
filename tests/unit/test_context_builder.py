@@ -1,5 +1,4 @@
 """单元测试：context builder"""
-import pytest
 from app.mcp.builders.context import build_context
 
 
