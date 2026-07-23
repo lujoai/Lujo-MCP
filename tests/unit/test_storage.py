@@ -1,4 +1,6 @@
 """单元测试：存储层"""
+import json
+
 import pytest
 import time
 
@@ -330,3 +332,244 @@ class TestStorageFactory:
 
         assert "case-sensitive" in str(exc_info.value)
 
+
+# ════════════════════════════════════════════
+#  asyncpg 异步存储测试（Phase 3.1）
+#  需要 asyncpg 已安装（否则本节整体跳过）；用 fake pool/conn mock 测试关键方法
+# ════════════════════════════════════════════
+
+asyncpg = pytest.importorskip("asyncpg", reason="asyncpg 未安装，跳过异步 PG 测试")
+
+
+class _FakeRecord:
+    """模拟 asyncpg.Record，支持 ['col'] 访问。"""
+
+    def __init__(self, **kwargs):
+        self._d = kwargs
+
+    def __getitem__(self, key):
+        return self._d[key]
+
+
+class _FakeConn:
+    """模拟 asyncpg 连接，记录 SQL 调用并返回预设结果。"""
+
+    def __init__(self):
+        self.calls = []  # [(method, sql, args)]
+        self._fetch_queue = []      # list[list[_FakeRecord]]
+        self._fetchrow_queue = []   # list[_FakeRecord | None]
+        self._execute_status = "INSERT 0 1"
+
+    async def execute(self, sql, *args):
+        self.calls.append(("execute", sql, args))
+        return self._execute_status
+
+    async def fetch(self, sql, *args):
+        self.calls.append(("fetch", sql, args))
+        return self._fetch_queue.pop(0) if self._fetch_queue else []
+
+    async def fetchrow(self, sql, *args):
+        self.calls.append(("fetchrow", sql, args))
+        return self._fetchrow_queue.pop(0) if self._fetchrow_queue else None
+
+
+class _FakeAcquireCtx:
+    """模拟 asyncpg pool.acquire() 的 async context manager。"""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakePool:
+    """模拟 asyncpg.Pool。"""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _FakeAcquireCtx(self._conn)
+
+    async def close(self):
+        pass
+
+
+class TestAsyncPGStore:
+    """用 mock asyncpg pool/conn 测试异步存储关键方法。
+
+    不连接真实 PG：通过 fake pool/conn 拦截 execute/fetch/fetchrow 调用，
+    断言生成的 SQL 与参数正确性，覆盖 save_entry/get_entries/upsert_error/
+    save_spec/get_spec 及若干边界场景。
+    """
+
+    def setup_method(self):
+        import app.mcp.core.storage.async_pg_store as mod
+        self._mod = mod
+        self._conn = _FakeConn()
+        self._pool = _FakePool(self._conn)
+        # 备份并替换模块级 _get_pool / _initialized，跳过 DDL 与真实建池
+        self._orig_get_pool = mod._get_pool
+        self._orig_initialized = mod._initialized
+        mod._initialized = True
+
+        async def _fake_get_pool():
+            return self._pool
+
+        mod._get_pool = _fake_get_pool
+
+    def teardown_method(self):
+        mod = self._mod
+        mod._get_pool = self._orig_get_pool
+        mod._initialized = self._orig_initialized
+
+    def _execute_calls(self):
+        """收集所有 execute 调用。"""
+        return [c for c in self._conn.calls if c[0] == "execute"]
+
+    @pytest.mark.asyncio
+    async def test_save_entry(self):
+        store = self._mod.AsyncPGTraceStore()
+        await store.save_entry(
+            "rid-1", {"timestamp": 1.0, "step": "start", "data": {"a": 1}}
+        )
+        execs = self._execute_calls()
+        assert any("INSERT INTO traces" in c[1] for c in execs)
+        insert = [c for c in execs if "INSERT INTO traces" in c[1]][0]
+        args = insert[2]
+        assert args[0] == "rid-1"
+        assert args[2] == "start"
+        assert json.loads(args[3]) == {"a": 1}  # data 序列化为 JSON 串
+
+    @pytest.mark.asyncio
+    async def test_save_entry_none_data(self):
+        store = self._mod.AsyncPGTraceStore()
+        await store.save_entry("rid-x", {"timestamp": 2.0, "step": "end", "data": None})
+        execs = self._execute_calls()
+        insert = [c for c in execs if "INSERT INTO traces" in c[1]][0]
+        assert insert[2][3] is None  # data=None 传 NULL
+
+    @pytest.mark.asyncio
+    async def test_get_entries(self):
+        self._conn._fetch_queue = [
+            [
+                _FakeRecord(timestamp=1.0, step="start", data='{"a": 1}'),
+                _FakeRecord(timestamp=2.0, step="end", data=None),
+            ]
+        ]
+        store = self._mod.AsyncPGTraceStore()
+        entries = await store.get_entries("rid-1")
+        assert len(entries) == 2
+        assert entries[0]["step"] == "start"
+        assert entries[0]["data"] == {"a": 1}
+        assert entries[1]["data"] is None
+
+    @pytest.mark.asyncio
+    async def test_upsert_error(self):
+        record = {
+            "error_id": "e1", "fingerprint": "fp1", "type": "ValueError",
+            "message": "boom", "frames": [{"file": "a.py"}], "frame_count": 1,
+            "traceback": "tb", "source": "src", "session_id": "s1",
+            "first_seen": 1.0, "last_seen": 2.0,
+        }
+        await self._mod.upsert_error(record)
+        execs = self._execute_calls()
+        assert any("INSERT INTO errors" in c[1] for c in execs)
+        insert = [c for c in execs if "INSERT INTO errors" in c[1]][0]
+        args = insert[2]
+        assert args[0] == "e1"        # error_id
+        assert args[1] == "fp1"       # fingerprint
+        assert args[2] == "ValueError"
+        assert args[8] == "s1"        # session_id
+        assert json.loads(args[4]) == [{"file": "a.py"}]  # frames JSON
+
+    @pytest.mark.asyncio
+    async def test_upsert_error_default_session(self):
+        """session_id 为 None 时写入 '_global'。"""
+        await self._mod.upsert_error({
+            "error_id": "e2", "fingerprint": "fp2", "type": "KeyError",
+            "message": "miss", "session_id": None,
+            "first_seen": 1.0, "last_seen": 2.0,
+        })
+        execs = self._execute_calls()
+        insert = [c for c in execs if "INSERT INTO errors" in c[1]][0]
+        assert insert[2][8] == "_global"
+
+    @pytest.mark.asyncio
+    async def test_save_spec(self):
+        spec = {
+            "id": "sp1", "kind": "api", "target": "/users",
+            "expect": {"status": 200}, "created_at": 1.0, "updated_at": 2.0,
+        }
+        await self._mod.save_spec(spec)
+        execs = self._execute_calls()
+        assert any("INSERT INTO specs" in c[1] for c in execs)
+        insert = [c for c in execs if "INSERT INTO specs" in c[1]][0]
+        args = insert[2]
+        assert args[0] == "sp1"
+        assert args[1] == "api"
+        assert args[2] == "/users"
+        assert json.loads(args[3]) == {"status": 200}  # expect JSON
+
+    @pytest.mark.asyncio
+    async def test_get_spec(self):
+        self._conn._fetchrow_queue = [
+            _FakeRecord(
+                id="sp1", kind="api", target="/users",
+                expect='{"status": 200}', created_at=1.0, updated_at=2.0,
+            )
+        ]
+        spec = await self._mod.get_spec("sp1")
+        assert spec is not None
+        assert spec["id"] == "sp1"
+        assert spec["kind"] == "api"
+        assert spec["target"] == "/users"
+        assert spec["expect"] == {"status": 200}
+        assert spec["created_at"] == 1.0
+        assert spec["updated_at"] == 2.0
+
+    @pytest.mark.asyncio
+    async def test_get_spec_not_found(self):
+        # fetchrow 队列为空 → 默认返回 None
+        spec = await self._mod.get_spec("missing")
+        assert spec is None
+
+    @pytest.mark.asyncio
+    async def test_delete_spec(self):
+        self._conn._execute_status = "DELETE 1"
+        ok = await self._mod.delete_spec("sp1")
+        assert ok is True
+        execs = self._execute_calls()
+        assert any("DELETE FROM specs" in c[1] for c in execs)
+
+    @pytest.mark.asyncio
+    async def test_delete_spec_not_found(self):
+        self._conn._execute_status = "DELETE 0"
+        ok = await self._mod.delete_spec("missing")
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_session_save_and_get(self):
+        self._conn._fetchrow_queue = [
+            _FakeRecord(
+                session_id="s-1", created_at=1.0, last_active=2.0,
+                metadata='{"role": "test"}',
+            )
+        ]
+        store = self._mod.AsyncPGSessionStore()
+        await store.save("s-1", {"session_id": "s-1", "created_at": 1.0, "metadata": {"role": "test"}})
+        s = await store.get("s-1")
+        assert s is not None
+        assert s["session_id"] == "s-1"
+        assert s["metadata"] == {"role": "test"}
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_returns_affected_rows(self):
+        self._conn._execute_status = "DELETE 3"
+        store = self._mod.AsyncPGTraceStore()
+        count = await store.cleanup_expired(ttl_seconds=3600)
+        assert count == 3

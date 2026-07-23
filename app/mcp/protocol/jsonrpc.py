@@ -19,6 +19,14 @@ class JSONRPCResponse(BaseModel):
     error: Optional[dict] = None
 
 
+class JSONParseError(ValueError):
+    """JSON 语法解析失败 → 对应 -32700"""
+
+
+class InvalidRequestError(ValueError):
+    """JSON 合法但不是合法 Request 对象 → 对应 -32600"""
+
+
 # 标准 JSON-RPC 错误码
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -57,13 +65,13 @@ def parse_request(raw: str | bytes) -> JSONRPCRequest:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        raise ValueError("Invalid JSON")
+        raise JSONParseError("Invalid JSON")
 
     if not isinstance(data, dict):
-        raise ValueError("请求必须是 JSON 对象")
+        raise InvalidRequestError("请求必须是 JSON 对象")
 
     if "method" not in data:
-        raise ValueError("缺少 method 字段")
+        raise InvalidRequestError("缺少 method 字段")
 
     return JSONRPCRequest.model_construct(
         jsonrpc=data.get("jsonrpc", "2.0"),

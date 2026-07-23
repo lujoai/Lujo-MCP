@@ -1,5 +1,6 @@
 """trace_repo 统一存取层单测"""
 import pytest
+from unittest.mock import patch
 
 from app.config import settings
 from app.mcp.core import trace_repo, errors
@@ -213,3 +214,39 @@ def test_get_trace_returns_none_when_neither_errors_nor_store_has_it():
     """errors 与 trace_store 都没有时返回 None"""
     errors._recent.clear()
     assert trace_repo.get_trace("does-not-exist-anywhere") is None
+
+
+# ── SEC-13：save_trace 写入顺序原子性（commit-marker 模式）──
+
+class TestSaveTraceAtomicity:
+    """验证 save_trace 采用 META → LINK → DATA 写入顺序，DATA 作为提交标记。"""
+
+    def test_save_trace_writes_data_last_as_commit_marker(self):
+        """带 trace_id 调用 save_trace 时，add_log 调用顺序中 _STEP_DATA 必须是最后一步。
+
+        期望顺序：META → LINK → DATA。
+        """
+        caller_tid = "sdk-sec13-001"
+        with patch("app.mcp.core.trace_repo.add_log") as mock_add_log:
+            trace_repo.save_trace(
+                "SilentFailure", "click no response", [],
+                source="browser_sdk", trace_kind="silent_failure",
+                trace_id=caller_tid,
+            )
+        # 收集每次 add_log 调用的 step 参数（add_log(request_id, step, data)）
+        steps = [call.args[1] for call in mock_add_log.call_args_list]
+        assert steps, "add_log 应至少被调用一次"
+        # DATA 必须在末尾
+        assert steps[-1] == "trace_data", f"DATA 应为最后写入步骤，实际顺序: {steps}"
+        # META 在 LINK 之前，LINK 在 DATA 之前
+        assert steps == ["trace_meta", "trace_link", "trace_data"], f"期望顺序 META→LINK→DATA，实际: {steps}"
+
+    def test_save_trace_data_present_implies_meta_present(self):
+        """正常调用 save_trace 后，trace_data 与 trace_meta 条目应同时存在。"""
+        error_id = trace_repo.save_trace(
+            "ValueError", "boom", [{"file": "a.py", "line": 1, "function": "f"}],
+            source="ingest", extra={"k": "v"},
+        )
+        steps = [e["step"] for e in get_logs(error_id)]
+        assert "trace_data" in steps, "trace_data 条目应存在"
+        assert "trace_meta" in steps, "trace_meta 条目应存在"

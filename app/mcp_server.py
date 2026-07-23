@@ -123,9 +123,10 @@ def _register_signal_handlers() -> None:
 
 
 async def _run_registered_tool(handler: Callable, arguments: dict):
+    timeout = settings.tool_timeout_seconds
     if asyncio.iscoroutinefunction(handler):
-        return await handler(arguments)
-    return await asyncio.to_thread(handler, arguments)
+        return await asyncio.wait_for(handler(arguments), timeout=timeout)
+    return await asyncio.wait_for(asyncio.to_thread(handler, arguments), timeout=timeout)
 
 
 @server.list_tools()
@@ -148,6 +149,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = {"error": f"未知工具: {name}"}
         else:
             result = await _run_registered_tool(tool["handler"], arguments)
+    except asyncio.TimeoutError:
+        logger.warning("工具 %s 执行超时（>%ss），已中止", name, settings.tool_timeout_seconds)
+        result = {"error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。", "_timed_out": True}
     except Exception as e:
         logger.error(str(e), exc_info=True)
         result = {"error": "Tool execution failed"}

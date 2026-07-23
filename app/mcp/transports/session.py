@@ -3,6 +3,7 @@
 import uuid
 import time
 import threading
+import copy
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -34,7 +35,8 @@ class SessionRegistry:
             s = self._sessions.get(sid)
             if s:
                 s.last_active = time.time()
-            return s
+                return copy.copy(s)  # 返回副本，避免外部并发修改
+            return None
 
     def mark_initialized(self, sid: str) -> None:
         with self._lock:

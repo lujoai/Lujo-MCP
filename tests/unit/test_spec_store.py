@@ -7,8 +7,12 @@ from app.mcp.verifier import spec_store
 def _isolate_spec_store():
     """每个用例前后清空 spec_store，避免跨用例污染。"""
     spec_store.clear()
+    # clear() 已重置 _specs + _restored=False，但 trace_store 中残留历史 spec 记录
+    # 设置 _restored=True 防止 list_specs() 恢复时读到历史数据
+    spec_store._restored = True
     yield
     spec_store.clear()
+    spec_store._restored = True
 
 
 class TestCreateAndGet:
@@ -133,3 +137,126 @@ class TestAssertEngineIntegration:
         actual = {"status_code": 200, "body": {"name": "Alice"}}
         result = assert_behavior(actual, spec)
         assert result["matched"] is True
+
+
+class TestRestoreFromStorage:
+    """C4 对标：验证重启后 spec 能从 trace_store 恢复。"""
+
+    def test_restore_after_memory_clear(self):
+        """写入 spec → 模拟重启（清空内存）→ list_specs 应能从存储层恢复。"""
+        spec_id = spec_store.create({
+            "kind": "api",
+            "target": "GET /api/user",
+            "expect": {"status": 200},
+        })
+        # 确保 list_specs 已触发过恢复标志
+        spec_store.list_specs()
+        # 模拟重启：清空内存 + 重置恢复标志
+        with spec_store._lock:
+            spec_store._specs.clear()
+            spec_store._restored = False
+        # list_specs 应自动从 trace_store 恢复
+        specs = spec_store.list_specs()
+        assert len(specs) >= 1
+        found = any(s["id"] == spec_id for s in specs)
+        assert found, f"期望在恢复结果中找到 {spec_id}"
+
+    def test_restore_does_not_duplicate(self):
+        """多次调用 list_specs() 不应重复插入 spec。"""
+        spec_store.create({"kind": "api", "target": "x", "expect": {}})
+        spec_store.list_specs()
+        count_after_first = len(spec_store._specs)
+        spec_store.list_specs()
+        count_after_second = len(spec_store._specs)
+        assert count_after_first == count_after_second
+
+    def test_list_after_memory_only_no_crash(self):
+        """仅内存中有 spec（未持久化）时 list_specs 不崩溃。"""
+        # 手动往 _specs 塞数据，跳过 create() 的 add_log
+        with spec_store._lock:
+            spec_store._specs["manual-spec"] = {
+                "id": "manual-spec",
+                "kind": "ui",
+                "target": "click #btn",
+                "expect": {},
+                "created_at": 0,
+                "updated_at": 0,
+            }
+        # 不调用 list_specs 触发恢复（或恢复了也找不到）
+        specs = spec_store.list_specs()
+        assert any(s["id"] == "manual-spec" for s in specs)
+
+
+class TestAtomicWrites:
+    """SEC-13：验证 update 的 crash-safe append 语义与多版本读取。"""
+
+    def test_update_appends_new_version_without_delete(self):
+        """update 不再调用 delete_logs，仅追加新版本到存储层。"""
+        from unittest.mock import patch
+        from app.mcp.core.logs import get_logs as _get_logs
+
+        spec_id = spec_store.create({
+            "kind": "api",
+            "target": "GET /api/user",
+            "expect": {"status": 200},
+        })
+        with patch("app.mcp.verifier.spec_store.delete_logs") as mock_delete:
+            updated = spec_store.update(spec_id, {"expect": {"status": 201}})
+            assert mock_delete.call_count == 0
+        assert updated is not None
+        # 存储层应存在该 spec 的条目，且 step=="spec"
+        entries = [e for e in _get_logs(spec_id) if e.get("step") == "spec"]
+        assert len(entries) >= 1
+
+    def test_read_returns_newest_when_multiple_versions(self):
+        """多版本共存时 get() 应返回 updated_at 最大者。"""
+        from app.mcp.core.logs import add_log as _add_log
+        from app.mcp.verifier.spec_store import _STEP_SPEC
+
+        spec_id = "multi-version-spec"
+        # 注入旧版本
+        _add_log(spec_id, _STEP_SPEC, {
+            "id": spec_id, "kind": "api", "target": "old",
+            "expect": {}, "created_at": 100.0, "updated_at": 100.0,
+        })
+        # 注入新版本
+        _add_log(spec_id, _STEP_SPEC, {
+            "id": spec_id, "kind": "api", "target": "new",
+            "expect": {}, "created_at": 100.0, "updated_at": 200.0,
+        })
+        # 清空内存 + 重置恢复标志，强制走存储回读
+        with spec_store._lock:
+            spec_store._specs.clear()
+            spec_store._restored = False
+        spec = spec_store.get(spec_id)
+        assert spec is not None
+        assert spec["target"] == "new"
+        assert spec["updated_at"] == 200.0
+
+    def test_restore_picks_newest_version(self):
+        """_restore_if_needed 应将最新版本写入 _specs。"""
+        from app.mcp.core.logs import add_log as _add_log
+        from app.mcp.verifier.spec_store import _STEP_SPEC
+
+        spec_id = "restore-newest-spec"
+        # 注入旧版本
+        _add_log(spec_id, _STEP_SPEC, {
+            "id": spec_id, "kind": "api", "target": "old",
+            "expect": {}, "created_at": 100.0, "updated_at": 100.0,
+        })
+        # 注入新版本
+        _add_log(spec_id, _STEP_SPEC, {
+            "id": spec_id, "kind": "api", "target": "new",
+            "expect": {}, "created_at": 100.0, "updated_at": 200.0,
+        })
+        # 清空内存 + 重置恢复标志
+        with spec_store._lock:
+            spec_store._specs.clear()
+            spec_store._restored = False
+        # list_specs 触发 _restore_if_needed
+        spec_store.list_specs()
+        with spec_store._lock:
+            restored = spec_store._specs.get(spec_id)
+        assert restored is not None
+        assert restored["target"] == "new"
+        assert restored["updated_at"] == 200.0

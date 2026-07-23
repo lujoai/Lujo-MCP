@@ -3,8 +3,8 @@
 import asyncio
 import json
 import logging
-from typing import Any
 
+from app import __version__
 from app.config import settings
 from app.mcp.protocol.jsonrpc import (
     JSONRPCRequest,
@@ -12,13 +12,20 @@ from app.mcp.protocol.jsonrpc import (
     make_error,
     METHOD_NOT_FOUND,
     INTERNAL_ERROR,
-    INVALID_PARAMS,
+    PARSE_ERROR,
+    INVALID_REQUEST,
+    JSONParseError,
+    InvalidRequestError,
+    parse_request,
 )
 
 logger = logging.getLogger("ai-debug-mcp.protocol")
 
 # MCP 协议版本
 PROTOCOL_VERSION = "2024-11-05"
+
+# 服务端支持的协议版本列表（用于版本协商，按推荐度降序）
+SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05", "2024-08-27"]
 
 # 服务端能力声明
 CAPABILITIES = {
@@ -27,7 +34,7 @@ CAPABILITIES = {
 
 SERVER_INFO = {
     "name": settings.service_name,
-    "version": "0.3.0",
+    "version": __version__,
 }
 
 # 工具注册表
@@ -50,9 +57,31 @@ def register_tool(
 
 
 def _handle_initialize(req: JSONRPCRequest) -> dict:
-    """处理 initialize 握手"""
+    """处理 initialize 握手 —— 协商协议版本
+
+    读取客户端 params.protocolVersion：
+    - 若在 SUPPORTED_PROTOCOL_VERSIONS 中则回显该版本
+    - 未知/缺失版本回退到 PROTOCOL_VERSION 并记录 warning
+    """
+    params = req.params or {}
+    client_version = params.get("protocolVersion")
+
+    if client_version and client_version in SUPPORTED_PROTOCOL_VERSIONS:
+        # 客户端请求的版本在支持列表内，回显该版本
+        negotiated = client_version
+    else:
+        # 未知/缺失版本，回退到服务端最新版本并记录 warning
+        if client_version:
+            logger.warning(
+                "客户端请求的协议版本 %s 不在支持列表 %s 中，回退到 %s",
+                client_version, SUPPORTED_PROTOCOL_VERSIONS, PROTOCOL_VERSION,
+            )
+        else:
+            logger.warning("客户端未提供 protocolVersion，回退到 %s", PROTOCOL_VERSION)
+        negotiated = PROTOCOL_VERSION
+
     return make_response(req.id, {
-        "protocolVersion": PROTOCOL_VERSION,
+        "protocolVersion": negotiated,
         "capabilities": CAPABILITIES,
         "serverInfo": SERVER_INFO,
     })
@@ -77,12 +106,13 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     if not tool:
         return make_error(req.id, METHOD_NOT_FOUND, f"未知工具: {tool_name}")
 
+    timeout = settings.tool_timeout_seconds
     try:
         handler = tool["handler"]
         if asyncio.iscoroutinefunction(handler):
-            result = await handler(arguments)
+            result = await asyncio.wait_for(handler(arguments), timeout=timeout)
         else:
-            result = await asyncio.to_thread(handler, arguments)
+            result = await asyncio.wait_for(asyncio.to_thread(handler, arguments), timeout=timeout)
         return make_response(req.id, {
             "content": [
                 {
@@ -91,6 +121,19 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 }
             ],
             "isError": False,
+        })
+    except asyncio.TimeoutError:
+        logger.warning("工具 %s 执行超时（>%ss），已中止", tool_name, timeout)
+        return make_response(req.id, {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"工具执行超时（>{timeout}s），已中止。",
+                }
+            ],
+            "isError": True,
+            "error_code": "TOOL_TIMEOUT",
+            "_timed_out": True,
         })
     except Exception:
         logger.exception(f"工具 {tool_name} 执行失败")
@@ -102,6 +145,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 }
             ],
             "isError": True,
+            "error_code": "TOOL_INTERNAL",
         })
 
 
@@ -152,11 +196,11 @@ async def dispatch(jsonrpc_request: JSONRPCRequest) -> dict:
 
 async def dispatch_raw(raw: str | bytes) -> dict:
     """解析原始请求文本并分发"""
-    from app.mcp.protocol.jsonrpc import parse_request
-
     try:
         req = parse_request(raw)
-    except (ValueError, TypeError) as e:
-        return make_error(None, INVALID_PARAMS, str(e))
+    except JSONParseError as e:
+        return make_error(None, PARSE_ERROR, str(e))
+    except InvalidRequestError as e:
+        return make_error(None, INVALID_REQUEST, str(e))
 
     return await dispatch(req)

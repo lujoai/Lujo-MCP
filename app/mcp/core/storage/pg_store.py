@@ -4,7 +4,7 @@ import json
 import time
 import threading
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 import psycopg2
 import psycopg2.pool
@@ -41,11 +41,11 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
     if _pool is None:
         with _pool_lock:
-            if _pool is None:  # double-check
+            if _pool is None:
                 try:
                     _pool = psycopg2.pool.ThreadedConnectionPool(
-                        minconn=2,
-                        maxconn=10,
+                        minconn=settings.pg_min_connections,
+                        maxconn=settings.pg_max_connections,
                         host=settings.pg_host,
                         port=settings.pg_port,
                         dbname=settings.pg_database,
@@ -53,7 +53,11 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
                         password=settings.pg_password,
                         connect_timeout=5,
                     )
-                    logger.info("PostgreSQL 连接池已创建")
+                    logger.info(
+                        "PostgreSQL 连接池已创建 (min=%d, max=%d)",
+                        settings.pg_min_connections,
+                        settings.pg_max_connections,
+                    )
                 except psycopg2.OperationalError as e:
                     logger.critical(f"PostgreSQL 连接失败: {e}")
                     raise RuntimeError(f"无法连接 PostgreSQL: {e}")
@@ -96,6 +100,43 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_la ON sessions(last_active);
 """
 
+# Phase 2.3：errors 表持久化聚合（按 fingerprint+session_id upsert，冲突时 occurrence_count+=1）
+DDL_ERRORS = """
+CREATE TABLE IF NOT EXISTS errors (
+    id                  BIGSERIAL PRIMARY KEY,
+    error_id            TEXT,
+    fingerprint         TEXT,
+    exception_type      TEXT,
+    message             TEXT,
+    frames              JSONB,
+    frame_count         INTEGER DEFAULT 0,
+    traceback           TEXT,
+    source              TEXT,
+    session_id          TEXT,
+    occurrence_count    INTEGER DEFAULT 1,
+    first_seen          DOUBLE PRECISION,
+    last_seen           DOUBLE PRECISION,
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_errors_fp_session ON errors(fingerprint, session_id);
+CREATE INDEX IF NOT EXISTS idx_errors_error_id ON errors(error_id);
+"""
+
+# Phase 2.4：specs 表独立查询（消除 N+1 扫描）
+DDL_SPECS = """
+CREATE TABLE IF NOT EXISTS specs (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT,
+    target      TEXT,
+    expect      JSONB,
+    created_at  DOUBLE PRECISION,
+    updated_at  DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_specs_kind ON specs(kind);
+CREATE INDEX IF NOT EXISTS idx_specs_target ON specs(target);
+"""
+
 
 def _ensure_init():
     """确保表已就绪（仅初始化一次）"""
@@ -111,6 +152,8 @@ def _ensure_init():
             cur = conn.cursor()
             cur.execute(DDL_TRACES)
             cur.execute(DDL_SESSIONS)
+            cur.execute(DDL_ERRORS)
+            cur.execute(DDL_SPECS)
             conn.commit()
             _initialized = True
             logger.info("PostgreSQL 表初始化完成")
@@ -126,15 +169,26 @@ def _execute_with_retry(
     max_retries: int = 2,
     commit: bool = True,
 ):
-    """执行 SQL，遇到连接断开时自动重连重试"""
+    """执行 SQL，遇到连接断开时自动重连重试。
+
+    SEC-14 修复：OperationalError 时获取新连接并重试，而不是在旧连接上重试。
+    坏连接使用 putconn(close=True) 关闭，避免污染连接池。
+
+    返回 (conn, rowcount)：
+    - conn: 最新的连接对象（可能是重连后的新连接）
+    - rowcount: cursor.rowcount（用于 DELETE/INSERT/UPDATE 的行数统计）
+    """
     last_error = None
+    pool = _get_pool()
+    rowcount = 0
     for attempt in range(max_retries + 1):
         try:
             cur = conn.cursor()
             cur.execute(sql, params)
+            rowcount = cur.rowcount
             if commit:
                 conn.commit()
-            return
+            return conn, rowcount
         except psycopg2.OperationalError as e:
             last_error = e
             if attempt < max_retries:
@@ -142,9 +196,18 @@ def _execute_with_retry(
                     conn.rollback()
                 except Exception:
                     pass
+                try:
+                    pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+                conn = pool.getconn()
                 logger.warning(f"PG 操作重试 ({attempt + 1}/{max_retries}): {e}")
                 time.sleep(0.1)
             else:
+                try:
+                    pool.putconn(conn, close=True)
+                except Exception:
+                    pass
                 raise last_error
 
 
@@ -172,7 +235,7 @@ class PGTraceStore(TraceStorage):
             else:
                 data_str = json.dumps(str(data), ensure_ascii=False)
 
-            _execute_with_retry(
+            conn, _ = _execute_with_retry(
                 conn,
                 "INSERT INTO traces (request_id, timestamp, step, data) VALUES (%s, %s, %s, %s)",
                 (
@@ -208,7 +271,7 @@ class PGTraceStore(TraceStorage):
     def delete(self, request_id: str) -> None:
         conn = self._conn()
         try:
-            _execute_with_retry(
+            conn, _ = _execute_with_retry(
                 conn,
                 "DELETE FROM traces WHERE request_id = %s",
                 (request_id,),
@@ -220,17 +283,15 @@ class PGTraceStore(TraceStorage):
         conn = self._conn()
         try:
             cutoff = time.time() - ttl_seconds
-            cur = conn.cursor()
-            cur.execute(
+            conn, rowcount = _execute_with_retry(
+                conn,
                 "DELETE FROM traces WHERE request_id IN ("
                 "  SELECT request_id FROM traces "
                 "  GROUP BY request_id HAVING MAX(timestamp) < %s"
                 ")",
                 (cutoff,),
             )
-            count = cur.rowcount
-            conn.commit()
-            return count
+            return rowcount
         finally:
             self._put(conn)
 
@@ -267,7 +328,7 @@ class PGSessionStore(SessionStorage):
         conn = self._conn()
         try:
             data["last_active"] = time.time()
-            _execute_with_retry(
+            conn, _ = _execute_with_retry(
                 conn,
                 "INSERT INTO sessions (session_id, created_at, last_active, metadata) "
                 "VALUES (%s, %s, %s, %s) "
@@ -312,7 +373,7 @@ class PGSessionStore(SessionStorage):
     def delete(self, session_id: str) -> None:
         conn = self._conn()
         try:
-            _execute_with_retry(
+            conn, _ = _execute_with_retry(
                 conn,
                 "DELETE FROM sessions WHERE session_id = %s",
                 (session_id,),
@@ -353,3 +414,185 @@ class PGSessionStore(SessionStorage):
             return count
         finally:
             self._put(conn)
+
+
+# ════════════════════════════════════════════════════
+#  Phase 2.3：errors 表 CRUD（持久化聚合）
+#  按 (fingerprint, session_id) upsert，冲突时 occurrence_count += 1
+# ════════════════════════════════════════════════════
+def upsert_error(record_data: dict) -> None:
+    """upsert 一条错误记录到 errors 表。
+
+    按 (fingerprint, session_id) 去重：
+    - 不存在 → INSERT（occurrence_count=1）
+    - 已存在 → occurrence_count += 1，刷新 last_seen/message/frames 等
+
+    session_id 为 None 时写入 "_global"，与 errors 内存分桶逻辑一致。
+    """
+    _ensure_init()
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        frames = record_data.get("frames")
+        frames_json = (
+            json.dumps(frames, ensure_ascii=False, default=str)
+            if frames is not None
+            else None
+        )
+        session_id = record_data.get("session_id") or "_global"
+        now = record_data.get("last_seen") or time.time()
+        conn, _ = _execute_with_retry(
+            conn,
+            """
+            INSERT INTO errors
+                (error_id, fingerprint, exception_type, message, frames,
+                 frame_count, traceback, source, session_id,
+                 occurrence_count, first_seen, last_seen)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (fingerprint, session_id) DO UPDATE SET
+                occurrence_count = errors.occurrence_count + 1,
+                last_seen       = EXCLUDED.last_seen,
+                updated_at      = CURRENT_TIMESTAMP,
+                message         = EXCLUDED.message,
+                frames          = EXCLUDED.frames,
+                frame_count     = EXCLUDED.frame_count,
+                traceback       = EXCLUDED.traceback,
+                source          = EXCLUDED.source
+            """,
+            (
+                record_data.get("error_id"),
+                record_data.get("fingerprint"),
+                record_data.get("type"),
+                record_data.get("message"),
+                frames_json,
+                record_data.get("frame_count", 0),
+                record_data.get("traceback"),
+                record_data.get("source"),
+                session_id,
+                1,
+                record_data.get("first_seen", now),
+                now,
+            ),
+        )
+    finally:
+        pool.putconn(conn)
+
+
+# ════════════════════════════════════════════════════
+#  Phase 2.4：specs 表 CRUD（独立查询，消除 N+1）
+# ════════════════════════════════════════════════════
+def save_spec(spec: dict) -> None:
+    """upsert 一条 spec 到 specs 表（按 id 去重）。"""
+    _ensure_init()
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        expect = spec.get("expect") or {}
+        expect_json = json.dumps(expect, ensure_ascii=False, default=str)
+        now = spec.get("updated_at") or time.time()
+        conn, _ = _execute_with_retry(
+            conn,
+            """
+            INSERT INTO specs (id, kind, target, expect, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                kind       = EXCLUDED.kind,
+                target     = EXCLUDED.target,
+                expect     = EXCLUDED.expect,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                spec.get("id"),
+                spec.get("kind", "api"),
+                spec.get("target", ""),
+                expect_json,
+                spec.get("created_at", now),
+                now,
+            ),
+        )
+    finally:
+        pool.putconn(conn)
+
+
+def get_spec(spec_id: str) -> Optional[dict]:
+    """从 specs 表读取一条 spec。"""
+    _ensure_init()
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, kind, target, expect, created_at, updated_at "
+            "FROM specs WHERE id = %s",
+            (spec_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "kind": row[1],
+            "target": row[2],
+            "expect": _parse_data(row[3]),
+            "created_at": row[4],
+            "updated_at": row[5],
+        }
+    finally:
+        pool.putconn(conn)
+
+
+def list_specs_pg(
+    kind: Optional[str] = None,
+    target: Optional[str] = None,
+) -> list[dict]:
+    """从 specs 表读取所有 spec（可按 kind/target 过滤），按 updated_at 倒序。"""
+    _ensure_init()
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        sql = (
+            "SELECT id, kind, target, expect, created_at, updated_at FROM specs"
+        )
+        params: list = []
+        conditions: list[str] = []
+        if kind:
+            conditions.append("kind = %s")
+            params.append(kind)
+        if target:
+            conditions.append("target LIKE %s")
+            params.append(f"%{target}%")
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY updated_at DESC"
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "kind": r[1],
+                "target": r[2],
+                "expect": _parse_data(r[3]),
+                "created_at": r[4],
+                "updated_at": r[5],
+            }
+            for r in rows
+        ]
+    finally:
+        pool.putconn(conn)
+
+
+def delete_spec(spec_id: str) -> bool:
+    """从 specs 表删除一条 spec，返回是否删除成功。"""
+    _ensure_init()
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        conn, rowcount = _execute_with_retry(
+            conn,
+            "DELETE FROM specs WHERE id = %s",
+            (spec_id,),
+        )
+        return rowcount > 0
+    finally:
+        pool.putconn(conn)

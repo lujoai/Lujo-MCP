@@ -1,5 +1,4 @@
 """集成测试：PostgreSQL 存储、Dashboard、MCP Tools、LLM 端到端验证"""
-import json
 import time
 import uuid
 
@@ -27,6 +26,8 @@ def unique_request_id():
     delete_logs(rid)
 
 
+@pytest.mark.integration
+@pytest.mark.pg
 class TestPGStoreConnection:
     """PostgreSQL 连接与基础操作"""
 
@@ -104,6 +105,8 @@ class TestPGStoreConnection:
         assert _parse_data(42) == 42
 
 
+@pytest.mark.integration
+@pytest.mark.pg
 class TestDashboardIntegration:
     """Dashboard API 从 PostgreSQL 读取"""
 
@@ -160,6 +163,8 @@ class TestDashboardIntegration:
         assert body["trace_id"] == unique_request_id
 
 
+@pytest.mark.integration
+@pytest.mark.pg
 class TestMCPToolIntegration:
     """MCP Tools 从 PostgreSQL 读取"""
 
@@ -194,6 +199,8 @@ class TestMCPToolIntegration:
         assert "step2" in steps
 
 
+@pytest.mark.integration
+@pytest.mark.llm
 class TestLLMIntegration:
     """LLM 分析端到端（仅在配置了 LLM 时执行）"""
 
@@ -224,6 +231,8 @@ class TestLLMIntegration:
         assert "analysis" in result or "error" in result
 
 
+@pytest.mark.integration
+@pytest.mark.pg
 class TestTraceRepoPersistence:
     """C3/C4：trace_repo 写入 → 重启内存清空 → get_trace 从 PG 读回"""
 

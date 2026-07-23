@@ -2,19 +2,26 @@
 
 import time
 import threading
-from collections import defaultdict
-from typing import Any, Optional
+from collections import OrderedDict
+from typing import Optional
 
 from app.mcp.core.storage.base import TraceStorage, SessionStorage
 
 
 class MemoryTraceStore(TraceStorage):
-    def __init__(self):
-        self._store: dict[str, list[dict]] = defaultdict(list)
+    def __init__(self, max_entries: int = 10000):
+        # OrderedDict 保留插入顺序，用于容量超限时按最旧条目 FIFO 淘汰
+        self._store: "OrderedDict[str, list[dict]]" = OrderedDict()
         self._lock = threading.Lock()
+        self._max_entries = max_entries
 
     def save_entry(self, request_id: str, entry: dict) -> None:
         with self._lock:
+            # 新 request_id 入库前，若已达容量上限，淘汰最早插入的条目（FIFO）
+            if request_id not in self._store:
+                if len(self._store) >= self._max_entries and self._store:
+                    self._store.popitem(last=False)  # 弹出最早插入的 request_id
+                self._store[request_id] = []
             self._store[request_id].append(entry)
 
     def get_entries(self, request_id: str) -> list[dict]:

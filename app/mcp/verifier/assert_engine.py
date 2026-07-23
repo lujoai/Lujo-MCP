@@ -12,7 +12,7 @@
 静默失败判定：无异常、无 4xx/5xx，但比对不匹配 → silent_failure=true
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 def assert_behavior(actual: dict, spec: dict) -> dict:

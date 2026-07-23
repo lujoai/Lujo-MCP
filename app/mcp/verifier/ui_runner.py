@@ -19,10 +19,53 @@ UI 自动遍历引擎（FR14）—— 基于 Playwright 的前端自动化验证
 输出：{matched, diffs, silent_failure} —— 复用 assert_engine 契约。
 """
 
+import ipaddress
 import logging
-from typing import Optional
+import socket
+from urllib.parse import urlparse
+
+from app.config import settings
 
 logger = logging.getLogger("ai-debug-mcp.ui_runner")
+
+
+def is_safe_url(url: str) -> tuple[bool, str]:
+    """SEC-02：校验 Playwright 目标 URL，防 SSRF。
+
+    仅允许 http/https；默认拒绝回环/私网/链路本地（云元数据 169.254.x）/保留地址。
+    可经 settings.ui_url_allow_private 放开，或 settings.ui_url_allowlist 精确放行主机。
+    返回 (是否安全, 拒绝原因)。
+    """
+    try:
+        parsed = urlparse(url or "")
+    except Exception:
+        return False, "URL 解析失败"
+    if parsed.scheme not in ("http", "https"):
+        return False, f"仅允许 http/https，拒绝 scheme={parsed.scheme!r}"
+    host = parsed.hostname or ""
+    if not host:
+        return False, "URL 缺少主机名"
+    allowlist = {h.strip().lower() for h in (settings.ui_url_allowlist or "").split(",") if h.strip()}
+    if host.lower() in allowlist:
+        return True, ""
+    if settings.ui_url_allow_private:
+        return True, ""
+    # 解析主机为 IP 并分类；解析失败则拒绝（无法核实安全性）
+    try:
+        ips = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except Exception:
+        return False, f"主机无法解析，默认拒绝：{host}"
+    for ip in ips:
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False, f"非法 IP：{ip}"
+        if (addr.is_loopback or addr.is_private or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False, (f"拒绝内网/回环/元数据地址：{host}→{ip}"
+                           "（本地联调请设 UI_URL_ALLOW_PRIVATE=true 或加入 UI_URL_ALLOWLIST）")
+    return True, ""
+
 
 _PLAYWRIGHT_AVAILABLE = False
 try:
@@ -61,6 +104,14 @@ def run_ui_verification(spec: dict, timeout_ms: int = 30000) -> dict:
         return {
             "matched": False,
             "diffs": [{"field": "target", "expected": "valid URL", "actual": target_url}],
+            "silent_failure": False,
+        }
+
+    ok, reason = is_safe_url(target_url)
+    if not ok:
+        return {
+            "matched": False,
+            "diffs": [{"field": "target", "expected": "安全的 http(s) URL", "actual": reason}],
             "silent_failure": False,
         }
 
@@ -176,6 +227,12 @@ def _execute_interaction(page, action: str, selector: str, value: str,
         elif action == "type":
             el.fill(value)
         elif action == "navigate":
+            ok, reason = is_safe_url(value)
+            if not ok:
+                return {"action": action, "matched": False,
+                        "diffs": [{"field": f"navigate({value})",
+                                    "expected": "安全的 http(s) URL", "actual": reason}],
+                        "silent_failure": False}
             page.goto(value, wait_until="domcontentloaded")
         elif action == "hover":
             el.hover()

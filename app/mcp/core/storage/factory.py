@@ -33,12 +33,25 @@ def get_trace_store() -> TraceStorage:
     if _trace_store is None:
         _validate_backend()
         if settings.storage_backend == "postgresql":
-            from app.mcp.core.storage.pg_store import PGTraceStore
-            _trace_store = PGTraceStore()
+            # Phase 3.1：feature flag 开启时走 asyncpg 异步实现（与 psycopg2 同步并存）
+            if settings.pg_async_enabled:
+                from app.mcp.core.storage.async_pg_store import AsyncPGTraceStore
+                _trace_store = AsyncPGTraceStore()
+                logger.info(
+                    "trace_store initialized: backend=%s, async=enabled (asyncpg)",
+                    settings.storage_backend,
+                )
+            else:
+                from app.mcp.core.storage.pg_store import PGTraceStore
+                _trace_store = PGTraceStore()
+                logger.info(
+                    "trace_store initialized: backend=%s, async=disabled (psycopg2 sync)",
+                    settings.storage_backend,
+                )
         else:
             from app.mcp.core.storage.memory_store import MemoryTraceStore
-            _trace_store = MemoryTraceStore()
-        logger.info("trace_store initialized: backend=%s", settings.storage_backend)
+            _trace_store = MemoryTraceStore(max_entries=settings.memory_store_max_entries)
+            logger.info("trace_store initialized: backend=%s", settings.storage_backend)
     return _trace_store
 
 
@@ -47,10 +60,23 @@ def get_session_store() -> SessionStorage:
     if _session_store is None:
         _validate_backend()
         if settings.storage_backend == "postgresql":
-            from app.mcp.core.storage.pg_store import PGSessionStore
-            _session_store = PGSessionStore()
+            # Phase 3.1：feature flag 开启时走 asyncpg 异步实现（与 psycopg2 同步并存）
+            if settings.pg_async_enabled:
+                from app.mcp.core.storage.async_pg_store import AsyncPGSessionStore
+                _session_store = AsyncPGSessionStore()
+                logger.info(
+                    "session_store initialized: backend=%s, async=enabled (asyncpg)",
+                    settings.storage_backend,
+                )
+            else:
+                from app.mcp.core.storage.pg_store import PGSessionStore
+                _session_store = PGSessionStore()
+                logger.info(
+                    "session_store initialized: backend=%s, async=disabled (psycopg2 sync)",
+                    settings.storage_backend,
+                )
         else:
             from app.mcp.core.storage.memory_store import MemorySessionStore
             _session_store = MemorySessionStore()
-        logger.info("session_store initialized: backend=%s", settings.storage_backend)
+            logger.info("session_store initialized: backend=%s", settings.storage_backend)
     return _session_store

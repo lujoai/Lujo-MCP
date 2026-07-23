@@ -22,23 +22,75 @@ C3/C4 修复（v0.3.0 Release Audit）：
 import time
 import uuid
 import logging
+import threading
 from typing import Any, Optional
 
+from app.config import settings
 from app.mcp.core.logs import add_log, get_logs
 from app.mcp.core.errors import record as _record_error, get_by_id as _get_error, get_latest as _get_latest
 from app.mcp.core.redaction import redact
 
 logger = logging.getLogger("ai-debug-mcp.trace_repo")
-_SENSITIVE_KEYS = {
-    "api_key",
-    "token",
+_MAX_RETRY_ATTEMPTS = 3
+_RETRY_DELAY_SECONDS = 0.1
+
+# Phase 2：复合键名脱敏扩展
+# 敏感子串集合：键名（小写）包含任一子串即视为敏感键，
+# 覆盖 db_password / user_token / auth_header / secret_config 等复合键名。
+_SENSITIVE_SUBSTRINGS = {
     "password",
-    "secret",
-    "authorization",
-    "cookie",
     "passwd",
     "pwd",
+    "token",
+    "secret",
+    "key",
+    "auth",
+    "cookie",
 }
+
+# 内置白名单：含敏感子串但属于正常字段（不应脱敏）。
+# password_hash=哈希后密码（非明文）、public_key=公钥（非私钥）、
+# key_count/key_id/key_type=键数量/标识/类型（非密钥本身）。
+_DEFAULT_ALLOWLIST = {
+    "password_hash",
+    "public_key",
+    "key_count",
+    "key_id",
+    "key_type",
+}
+
+# 白名单缓存（按配置签名，配置变化时重建）
+_allowlist_cache: Optional[set[str]] = None
+_allowlist_signature: Optional[str] = None
+_allowlist_lock = threading.Lock()
+
+
+def _get_allowlist() -> set[str]:
+    """获取生效的白名单（内置默认 + 用户配置 redaction_key_allowlist）。配置变化时重建。"""
+    global _allowlist_cache, _allowlist_signature
+    raw = settings.redaction_key_allowlist or ""
+    if _allowlist_cache is not None and _allowlist_signature == raw:
+        return _allowlist_cache
+    with _allowlist_lock:
+        if _allowlist_cache is not None and _allowlist_signature == raw:
+            return _allowlist_cache
+        base = set(_DEFAULT_ALLOWLIST)
+        for name in raw.split(","):
+            name = name.strip().lower()
+            if name:
+                base.add(name)
+        _allowlist_cache = base
+        _allowlist_signature = raw
+        return base
+
+
+def _is_sensitive_key(key) -> bool:
+    """判断键名是否敏感：白名单优先（命中不脱敏），其次子串包含匹配。"""
+    key_lower = str(key).lower()
+    if key_lower in _get_allowlist():
+        return False
+    return any(s in key_lower for s in _SENSITIVE_SUBSTRINGS)
+
 
 # trace 条目 step 命名
 _STEP_DATA = "trace_data"       # 完整异常数据（C4：落库到 trace_store）
@@ -58,7 +110,7 @@ def _redact_nested(value: Any) -> Any:
     if isinstance(value, dict):
         sanitized = {}
         for key, item in value.items():
-            if str(key).lower() in _SENSITIVE_KEYS:
+            if _is_sensitive_key(key):
                 sanitized[key] = "***REDACTED***"
             else:
                 sanitized[key] = _redact_nested(item)
@@ -81,6 +133,7 @@ def save_trace(
     extra: Optional[dict] = None,
     trace_kind: str = "exception",
     trace_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """保存一条 trace（复用 errors 近期缓冲 + trace_store 持久化），返回 error_id。
 
@@ -99,19 +152,13 @@ def save_trace(
         "traceback": "",
         "frame_count": len(frames),
     }
-    error_id = _record_error(exc_data, source=source)
+    error_id = _record_error(exc_data, source=source, session_id=session_id)
 
-    # C4：把完整异常数据落 trace_store，重启后仍可回读
-    try:
-        add_log(error_id, _STEP_DATA, {
-            **exc_data,
-            "source": source,
-            "ts": time.time(),
-        })
-    except Exception:
-        logger.exception("写入 trace_data 失败 (error_id=%s)", error_id)
+    # SEC-13：commit-marker 模式 —— 写入顺序调整为 META → LINK → DATA，
+    # DATA 作为提交标记最后写入。这样 trace_data 存在即保证 META（及 LINK）已落库；
+    # 若崩溃发生在 DATA 写入之前，则无 trace_data，_rebuild_trace_from_store 返回 None（干净失败）。
 
-    # trace_meta 始终以 error_id 为 key 写入 trace_store，保证与 errors 缓冲对齐
+    # 1) trace_meta 始终以 error_id 为 key 写入 trace_store，保证与 errors 缓冲对齐
     try:
         add_log(error_id, _STEP_META, {
             "trace_kind": trace_kind,
@@ -122,7 +169,7 @@ def save_trace(
     except Exception:
         logger.exception("写入 trace_meta 失败 (error_id=%s)", error_id)
 
-    # C3：caller 提供 trace_id 时，以 error_id 为 key 写入 trace_link 记录关联
+    # 2) C3：caller 提供 trace_id 时，以 error_id 为 key 写入 trace_link 记录关联
     # （写入方向：error_id 下记录 caller_trace_id，便于从 error_id 反查 SDK 关联）
     if trace_id and trace_id != error_id:
         try:
@@ -132,6 +179,16 @@ def save_trace(
             })
         except Exception:
             logger.exception("写入 trace_link 失败 (error_id=%s, caller_trace_id=%s)", error_id, trace_id)
+
+    # 3) C4：把完整异常数据落 trace_store（提交标记，最后写入），重启后仍可回读
+    try:
+        add_log(error_id, _STEP_DATA, {
+            **exc_data,
+            "source": source,
+            "ts": time.time(),
+        })
+    except Exception:
+        logger.exception("写入 trace_data 失败 (error_id=%s)", error_id)
 
     return error_id
 
@@ -182,7 +239,7 @@ def _rebuild_trace_from_store(error_id: str) -> Optional[dict]:
     }
 
 
-def get_trace(trace_id: Optional[str] = None) -> Optional[dict]:
+def get_trace(trace_id: Optional[str] = None, session_id: Optional[str] = None) -> Optional[dict]:
     """取指定 trace_id，不传则取最新一条。
 
     C4：errors 内存未命中时从 trace_store 回读重建 trace 对象。
@@ -191,14 +248,14 @@ def get_trace(trace_id: Optional[str] = None) -> Optional[dict]:
       2. trace_store 回读 step=trace_data 重建（重启/超出缓冲容量场景）
     """
     if not trace_id:
-        err = _get_latest()
+        err = _get_latest(session_id=session_id)
         if err is None:
             # 兜底：从 trace_store 找最近一条 trace_data
             return None
         error_id = err["error_id"]
     else:
         error_id = trace_id
-        err = _get_error(error_id)
+        err = _get_error(error_id, session_id=session_id)
 
     # errors 内存未命中时回读 trace_store（C4 下半段）
     if err is None:

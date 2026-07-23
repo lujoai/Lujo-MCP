@@ -8,6 +8,10 @@ from app.mcp.protocol.jsonrpc import (
     make_error,
     JSONRPCRequest,
     METHOD_NOT_FOUND,
+    PARSE_ERROR,
+    INVALID_REQUEST,
+    JSONParseError,
+    InvalidRequestError,
 )
 
 
@@ -64,6 +68,21 @@ class TestJSONRPC:
         assert resp["jsonrpc"] == "2.0"
         assert resp["error"]["code"] == METHOD_NOT_FOUND
         assert "Method not found" in resp["error"]["message"]
+
+    def test_parse_invalid_json_raises_json_parse_error(self):
+        """非法 JSON → JSONParseError → -32700"""
+        with pytest.raises(JSONParseError):
+            parse_request("{invalid json}")
+
+    def test_parse_non_object_raises_invalid_request_error(self):
+        """非对象 JSON → InvalidRequestError → -32600"""
+        with pytest.raises(InvalidRequestError, match="必须是 JSON 对象"):
+            parse_request('[1, 2, 3]')
+
+    def test_parse_missing_method_raises_invalid_request_error(self):
+        """缺 method 字段 → InvalidRequestError → -32600"""
+        with pytest.raises(InvalidRequestError, match="method"):
+            parse_request('{"jsonrpc":"2.0","id":1}')
 
 
 class TestMCPServerDispatch:
@@ -142,3 +161,77 @@ class TestMCPServerDispatch:
         finally:
             _tool_registry.clear()
             _tool_registry.update(original_registry)
+
+
+class TestDispatchRawErrorCodes:
+    """验证 dispatch_raw 返回正确的 JSON-RPC 标准错误码"""
+
+    def test_dispatch_raw_parse_error_returns_32700(self):
+        """非法 JSON → -32700 Parse Error"""
+        from app.mcp.protocol.server import dispatch_raw
+        resp = asyncio.run(dispatch_raw("{invalid"))
+        assert "error" in resp
+        assert resp["error"]["code"] == PARSE_ERROR
+
+    def test_dispatch_raw_invalid_request_returns_32600(self):
+        """非对象 JSON → -32600 Invalid Request"""
+        from app.mcp.protocol.server import dispatch_raw
+        resp = asyncio.run(dispatch_raw("[1, 2]"))
+        assert "error" in resp
+        assert resp["error"]["code"] == INVALID_REQUEST
+
+    def test_dispatch_raw_method_not_found_returns_32601(self):
+        """未知方法 → -32601 Method Not Found"""
+        from app.mcp.protocol.server import dispatch_raw
+        resp = asyncio.run(dispatch_raw('{"jsonrpc":"2.0","id":1,"method":"unknown"}'))
+        assert "error" in resp
+        assert resp["error"]["code"] == METHOD_NOT_FOUND
+
+
+class TestProtocolVersionNegotiation:
+    """M5 版本协商：initialize 握手协议版本协商逻辑"""
+
+    def test_known_version_is_echoed(self):
+        """客户端请求已知版本 → 回显该版本"""
+        from app.mcp.protocol.server import dispatch
+        req = JSONRPCRequest(
+            jsonrpc="2.0", id=1, method="initialize",
+            params={"protocolVersion": "2024-08-27"},
+        )
+        resp = asyncio.run(dispatch(req))
+        assert resp["result"]["protocolVersion"] == "2024-08-27"
+
+    def test_latest_known_version_is_echoed(self):
+        """客户端请求最新版本 → 回显该版本"""
+        from app.mcp.protocol.server import dispatch
+        req = JSONRPCRequest(
+            jsonrpc="2.0", id=1, method="initialize",
+            params={"protocolVersion": "2024-11-05"},
+        )
+        resp = asyncio.run(dispatch(req))
+        assert resp["result"]["protocolVersion"] == "2024-11-05"
+
+    def test_unknown_version_falls_back_with_warning(self, caplog):
+        """客户端请求未知版本 → 回退到 PROTOCOL_VERSION + 记录 warning"""
+        import logging
+        from app.mcp.protocol.server import dispatch, PROTOCOL_VERSION
+        req = JSONRPCRequest(
+            jsonrpc="2.0", id=1, method="initialize",
+            params={"protocolVersion": "2099-01-01"},
+        )
+        with caplog.at_level(logging.WARNING, logger="ai-debug-mcp.protocol"):
+            resp = asyncio.run(dispatch(req))
+        assert resp["result"]["protocolVersion"] == PROTOCOL_VERSION
+        assert "2099-01-01" in caplog.text
+
+    def test_missing_version_falls_back_with_warning(self, caplog):
+        """客户端未提供 protocolVersion → 回退 + 记录 warning"""
+        import logging
+        from app.mcp.protocol.server import dispatch, PROTOCOL_VERSION
+        req = JSONRPCRequest(
+            jsonrpc="2.0", id=1, method="initialize", params={},
+        )
+        with caplog.at_level(logging.WARNING, logger="ai-debug-mcp.protocol"):
+            resp = asyncio.run(dispatch(req))
+        assert resp["result"]["protocolVersion"] == PROTOCOL_VERSION
+        assert "protocolVersion" in caplog.text

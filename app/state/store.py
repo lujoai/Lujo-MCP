@@ -4,12 +4,16 @@
 限流形同虚设、指标只反映单实例。
 """
 
+import logging
 import time
 import threading
+import uuid
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from app.config import settings
+
+logger = logging.getLogger("ai-debug-mcp.state")
 
 
 class StateStore(ABC):
@@ -17,7 +21,7 @@ class StateStore(ABC):
 
     @abstractmethod
     def allow(self, key: str, limit: int, window: int) -> bool:
-        """固定窗口限流：window 秒内最多 limit 次，返回是否放行"""
+        """滑动窗口限流：window 秒内最多 limit 次，返回是否放行"""
 
     @abstractmethod
     def incr(self, key: str, by: int = 1) -> int:
@@ -80,19 +84,50 @@ class MemoryStateStore(StateStore):
 class RedisStateStore(StateStore):
     """Redis 实现（多实例共享）"""
 
+    # Lua script for atomic sliding-window rate limiting using ZSET.
+    # 与 MemoryStateStore.allow 语义一致：滑动窗口内记录每个请求时间戳，
+    # 超过 limit 则拒绝（不记录本次时间戳），未超则记录并放行。
+    _SLIDING_WINDOW_LUA = """
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+
+-- 清除窗口外的过期时间戳
+redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, now - window)
+
+-- 统计窗口内当前请求数
+local count = redis.call('ZCARD', KEYS[1])
+
+if count >= limit then
+    return 0
+end
+
+-- 记录本次请求时间戳；ARGV[4] 为唯一 member，避免同时间戳 ZADD 合并
+redis.call('ZADD', KEYS[1], now, ARGV[4])
+
+-- 设置 key 过期时间，防止空闲后残留
+redis.call('EXPIRE', KEYS[1], window)
+
+return 1
+"""
+
     def __init__(self, url: str):
         import redis
         self._r = redis.Redis.from_url(url, socket_timeout=2, decode_responses=True)
+        self._sliding_window_script = self._r.register_script(self._SLIDING_WINDOW_LUA)
 
     def allow(self, key: str, limit: int, window: int) -> bool:
         try:
-            count = self._r.incr(key)
-            if count == 1:
-                self._r.expire(key, window)
-            return count <= limit
+            now = time.time()
+            # 唯一 member 防止同一时间戳的请求被 ZADD 合并
+            member = f"{now}:{uuid.uuid4().hex}"
+            result = int(self._sliding_window_script(
+                keys=[key], args=[now, window, limit, member]
+            ))
+            return result == 1
         except Exception:
-            # Redis 不可用时降级放行，避免阻塞正常请求
-            return True
+            logger.error("Redis state store error", exc_info=True)
+            return False
 
     def incr(self, key: str, by: int = 1) -> int:
         return int(self._r.incr(key, by))
