@@ -23,6 +23,11 @@
 
 ### 最近完成事项
 
+- ✅ 技术债清理（2026-07-23）：
+  - **test_full_flow.py 硬编码密码**：移除 5 行硬编码 PG 配置（含明文密码），改为 `os.environ.setdefault('STORAGE_BACKEND','postgresql')`，PG 连接参数由 `.env` 经 `settings` 读取（`pg_store._get_pool` 用 `settings.pg_*`，不读 os.environ）。commit `ad6f8dd`。
+  - **pg_store.py 拆分评估**（只读分析，未改代码）：598 行，结论"有条件值得"——真正问题是 errors/specs 无 ABC 的设计债（非文件大小）。推荐方案 C（完整拆分 + 补 `ErrorStorage`/`SpecStorage` ABC + pg_store/async_pg_store 同步，2-2.5 人日，需审批）；方案 A（仅提 DDL 到 `pg_schema.py`）为零风险试水第一步。发现隐藏缺陷：`_execute_with_retry` 读取路径覆盖不一致（无重连重试）。详见 [ROADMAP.md](./ROADMAP.md) 技术债务。
+  - 风险：硬编码密码仍残留在 git 历史 commit 中（未推送远端，影响仅本地），建议修改本地 PG 密码或接受风险。
+
 - ✅ Git 整理 + v0.3.0 tag 修正（2026-07-23）：
   - **问题**：工作区有 60+ 未提交改动（含全部 Release Audit 修复代码），`v0.3.0` tag 指向旧 commit `169a4e4`（不含修复），名不副实——`git checkout v0.3.0` 会得到不含任何收口修复的版本。
   - **清理**：删除 13 个根目录临时 xml 报告（`cr_*/final*/verify*/phase35_results/report_only`）；`.gitignore` 补 `.reasonix/`、`.trae/documents/`、临时 xml 模式（保留 `.trae/specs/` 跟踪）。

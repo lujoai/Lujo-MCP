@@ -95,6 +95,11 @@
 
 > 2026-07-23 清理：ruff 39 条 lint 违规已清零（F401/F841/E401 auto-fix + E402 noqa + 手动，CI 可转硬门禁）；`.env` UTF-8 BOM 已剥离；`test_api.py` 8 个鉴权 401 基线失败已修复（conftest env var 优先于 .env + `HOST=127.0.0.1` 避开 SEC-03）。`analyzer.py:108 冗余 import time` 经核实为过时条目（line 7 唯一 `import time` 且被使用，不存在冗余）。
 
+> 2026-07-23 技术债清理（续）：`test_full_flow.py` 硬编码 PG 密码已修复（commit `ad6f8dd`，改为 `os.environ.setdefault('STORAGE_BACKEND','postgresql')` + PG 配置由 `.env` 经 `settings` 读取，不再硬编码凭据）；`pg_store.py` Repository 层拆分已完成只读评估，结论见下。
+
 剩余技术债务：
-- Repository 层拆分（`pg_store.py` 职责混合，长期拆分）
-- `test_full_flow.py:27` 硬编码 PG 密码（本地开发密码泄露，建议改用环境变量/`.env`）
+- **`pg_store.py` 拆分**（评估完成，2026-07-23，未改代码）：598 行不算"上帝文件"，单纯减行数不值得拆。真正问题是**设计债**——`errors`/`specs` 表 CRUD 无 ABC 抽象（`upsert_error`/`save_spec`/`get_spec`/`list_specs_pg`/`delete_spec` 为 PG 专属模块级函数），导致 memory/pg/async_pg 三后端契约不对齐、`spec_store.py` 靠 try/except 降级。推荐"有条件值得"：拆分必须与补齐 `ErrorStorage`/`SpecStorage` ABC + 三后端同步对齐 + 统一 `_execute_with_retry` 覆盖**打包做**（方案 C，约 2-2.5 人日，需 `pg_store.py` + `async_pg_store.py` 同步拆，否则结构分叉）。纯文件搬运不批。
+  - **隐藏缺陷**：`_execute_with_retry` 覆盖不一致——读取路径（`get_entries`/`list_request_ids`/`SessionStorage.get`/`list_active`/`get_spec`/`list_specs_pg`）走裸 `cursor.execute` + 手动 commit，无重连重试保护。拆分时应一并统一。
+  - **零风险试水第一步**：方案 A，仅提取 4 个 DDL 常量到 `pg_schema.py`（58 行纯字符串、零逻辑耦合、不触碰连接池单例/测试 patch 站点），0.5-1 人时。
+  - 流程：按 AI_RULES，启动完整拆分前需先提交"问题分析 + 影响范围 + 测试方案"等待审批，本次评估可作为审批材料。
+- （已修复）`test_full_flow.py` 硬编码 PG 密码 → `ad6f8dd`（密码仍残留在 git 历史 commit 中，未推送远端，建议修改本地 PG 密码）
