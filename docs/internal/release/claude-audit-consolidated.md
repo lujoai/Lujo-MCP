@@ -192,6 +192,7 @@
 
 - **测试基线**：单元 `310 passed / 6 skipped / 0 failed`；集成 `49 passed / 19 skipped / 0 failed`（test_api.py 8 个鉴权 401 基线已修复：conftest `os.environ["API_KEY"]=""` env var 优先于 .env → M7 归一化关鉴权 + `HOST=127.0.0.1` 避开 SEC-03）；ruff 0 违规（39 条已清零）
 - **健康度评分**：8.0/10（工程质量 8.5，安全性 8.0，架构可维护性 7.5，文档可信度 8.0）
+- **技术债清理**（2026-07-23）：`test_full_flow.py` 硬编码 PG 密码已修复（`ad6f8dd`，改由 `.env` 经 `settings` 读取）；`pg_store.py` 拆分评估完成（有条件值得，方案 C，详见 [ROADMAP.md](../ROADMAP.md) 技术债务）
 - **下一目标**：Release Audit 全部收口完成；后续推进 Phase 5-7 架构级优化与 Browser SDK V3-V6
 - **代码审查**：code-review skill 已执行，发现 3 个 Bug + 4 个 Issue，全部已修复或已补充测试
 

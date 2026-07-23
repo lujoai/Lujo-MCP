@@ -271,6 +271,8 @@ ui_events (id BIGSERIAL, trace_id TEXT, action TEXT, selector TEXT,
 ### Module 2：Repository 层
 
 > **战略决策**：当前 [pg_store.py](./app/mcp/core/storage/pg_store.py) 同时承担连接池管理（`_get_pool`）和数据操作（`PGTraceStore`/`PGSessionStore`），职责混合。拆分为 `database.py`（连接池）+ `trace_repository.py` + `session_repository.py`，业务逻辑与 SQL 解耦。
+>
+> 📌 **评估更新（2026-07-23，只读分析）**：598 行非"上帝文件"，单纯减行数不值得拆；核心是 `errors`/`specs` 无 ABC 的设计债（三后端契约不对齐、`spec_store` 靠 try/except 降级）。推荐方案调整为 `pg_pool.py`/`pg_schema.py`/`pg_store.py`/`pg_errors.py`/`pg_specs.py` 五模块 + 补 `ErrorStorage`/`SpecStorage` ABC + `async_pg_store.py` 同步拆（方案 C，2-2.5 人日，需 AI_RULES 审批）。发现隐藏缺陷：`_execute_with_retry` 读取路径覆盖不一致（无重连重试）。详见 [ROADMAP.md](./ROADMAP.md) 技术债务。
 
 **架构演进**：
 
@@ -670,7 +672,7 @@ Security Agent  → 安全审查
 | 技术债 | 当前状态 | 处置计划 |
 |--------|----------|----------|
 | ✅ spec_store 已迁移到 TraceStorage 工厂模式 | dict+Lock 主存 + add_log 持久化 + `_restore_from_storage()` 恢复 | ✅ 已完成（2026-07-19）|
-| pg_store.py 职责混合 | 连接池管理 + SQL 操作混合 | Phase 1 P5 拆分为 database.py + repository |
+| pg_store.py 职责混合 | 连接池管理 + SQL 操作混合 | 🟡 评估完成（2026-07-23）：有条件值得，推荐方案 C（补 ErrorStorage/SpecStorage ABC + pg_store/async_pg_store 同步拆 + 统一 _execute_with_retry 覆盖，2-2.5 人日，需 AI_RULES 审批）；方案 A（提 DDL 到 pg_schema.py）零风险试水。发现隐藏缺陷：读取路径无重连重试。详见 [ROADMAP.md](./ROADMAP.md) 技术债务 |
 | SQLAlchemy + Alembic 未引入 | 裸 SQL 管理 | Phase 1 P5 评估引入 |
 | errors/specs/network_records/ui_events 表未建 | 仅 traces/sessions 已建 | 按需创建迁移 SQL |
 | asyncpg 异步写入 | 同步 psycopg2 | Phase 2 评估 |
