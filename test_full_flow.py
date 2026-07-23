@@ -19,14 +19,11 @@ print(f'✅ /api/dashboard/trace 响应: {trace_result["trace_kind"]}')
 
 print('\n3. 验证 PostgreSQL 数据')
 import os  # noqa: E402  # 需先打印进度再设环境变量
-os.environ['STORAGE_BACKEND'] = 'postgresql'
-os.environ['PG_HOST'] = 'localhost'
-os.environ['PG_PORT'] = '5432'
-os.environ['PG_DATABASE'] = 'ai_debug_mcp'
-os.environ['PG_USER'] = 'postgres'
-os.environ['PG_PASSWORD'] = 'REDACTED'
+# 仅切换后端为 postgresql（非敏感）；PG 连接参数（host/port/db/user/password）由 .env 提供，
+# pg_store._get_pool 通过 settings 读取，不在脚本中硬编码凭据。
+os.environ.setdefault('STORAGE_BACKEND', 'postgresql')
 
-from app.mcp.core.storage.pg_store import _get_pool, close_pool  # noqa: E402  # 需先设 PG 环境变量
+from app.mcp.core.storage.pg_store import _get_pool, close_pool  # noqa: E402  # settings 在 import 时从 .env 读 PG 配置
 pool = _get_pool()
 conn = pool.getconn()
 cur = conn.cursor()
