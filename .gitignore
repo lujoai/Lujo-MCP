@@ -32,6 +32,17 @@ t.txt
 
 # IDE 内部数据（非项目源码）
 .codebuddy/
+.reasonix/
+
+# Trae IDE 生成产物（specs/ 由开发者主动跟踪，documents/ 为生成产物忽略）
+.trae/documents/
+
+# 临时测试/审查报告（根目录生成产物）
+/cr_*.xml
+/final*.xml
+/verify*.xml
+/phase35_results.xml
+/report_only.xml
 
 # 参考项目（已迁移完毕，不再依赖，不纳入仓库）
 reference/

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # 仓库现存既有 lint 债务（F401/F841/E402/E401 等），
+      # 先以 advisory 模式运行（问题仍会输出到日志，但不禁行），
+      # 待 lint 清理后移除 continue-on-error 转为硬门禁。
+      - name: Lint with ruff (advisory)
+        continue-on-error: true
+        run: ruff check .
+
+      - name: Run unit tests
+        run: pytest tests/unit -q --tb=short --junitxml=test-results.xml
+
+      - name: Print skip summary (guard against all-skip false-green)
+        if: always()
+        run: |
+          python - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          try:
+              root = ET.parse("test-results.xml").getroot()
+          except FileNotFoundError:
+              print("::error::test-results.xml not found, cannot compute skip summary")
+              sys.exit(1)
+
+          suites = root.findall(".//testsuite") if root.tag == "testsuites" else [root]
+          totals = {"tests": 0, "skipped": 0, "failures": 0, "errors": 0}
+          for s in suites:
+              for k in totals:
+                  totals[k] += int(s.get(k, 0))
+
+          passed = totals["tests"] - totals["skipped"] - totals["failures"] - totals["errors"]
+          print(f"::notice::passed={passed}, skipped={totals['skipped']}, "
+                f"failures={totals['failures']}, errors={totals['errors']}")
+
+          # 全 skip 假绿：没有任何通过、没有任何失败/错误、却存在被跳过的用例
+          if passed == 0 and totals["failures"] == 0 and totals["errors"] == 0 and totals["skipped"] > 0:
+              print("::error::All tests were skipped — possible false-green! "
+                    "请检查是否缺少依赖/环境导致用例整体被跳过。")
+              sys.exit(1)
+          EOF
