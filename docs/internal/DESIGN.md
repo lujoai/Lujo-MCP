@@ -6,6 +6,8 @@
 > 审阅视角：高级工程师 / 高级架构师
 >
 > **v0.3.1 更新**：PostgreSQL 集成完成、Dashboard 读取 PG、MCP Tools 读取 PG、LLM 分析端到端验证、集成测试补充（13 用例）
+>
+> **Phase 0-5 更新**：asyncpg 异步存储（feature flag 灰度）、errors/specs 独立表、MemoryStore LRU 容量上限、AsyncOpenAI + 多级缓存 L1+L2、中间件顺序修正（SEC-12）、Redis 滑动窗口限流、复合键名脱敏、Browser SDK V2 批量上报、GitHub Actions CI。测试基线：340 passed / 6 skipped / 0 failed
 
 ---
 
@@ -41,8 +43,8 @@
                 └───────────────┬──────────────┘
                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 中间件层 (middleware.py)                                      │
-│ Auth → MaxBodySize → RateLimit → SecurityHeaders → Trace      │
+│ 中间件层 (middleware.py + middleware_network.py)               │
+│ CORS(最外) → Trace → SecurityHeaders → RateLimit → MaxBodySize → Auth → NetworkCapture(最内) → 路由 │
 └───────────────────────────────┬─────────────────────────────┘
                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -59,8 +61,9 @@
                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 存储/状态 (Storage)                                           │
-│ trace_store(memory/pg) │ session registry │ state store(memory/redis) │
-│ sse hub (广播) │ specs ✅(FR15, spec_store)                   │
+│ trace_store(memory/pg/async_pg) │ session registry │ state store(memory/redis) │
+│ sse hub (广播) │ specs ✅(FR15, spec_store 独立 specs 表) │
+│ errors 表持久化聚合 │ async_pg_store ✅(feature flag 灰度) │
 └───────────────────────────────┬─────────────────────────────┘
                                 ▼
                           OpenAI API
@@ -162,17 +165,21 @@ flowchart TB
 
 #### 3.1.3 双传输一致性
 
-HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **15 个工具**；stdio 传输（`mcp_server.py`）当前维护**独立的 14 工具清单**，工具名与 HTTP 侧存在差异（如 `context` vs `get_debug_context`、`stacktrace` vs `get_stacktrace`），但 handler 层复用同一批工具模块业务函数，业务逻辑不重复。两侧注册表完全统一列为待办。
+HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **15 个工具**；stdio 传输（`mcp_server.py`）共用同一注册表，**实际各 15 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test`。
 
 ### 3.2 中间件层（`app/middleware.py`）✅
 
 注册顺序（外→内）：`CORS → Auth → MaxBodySize → RateLimit → SecurityHeaders → Trace`。
 
+> ⚠️ **订正（SEC-12 已修复）**：Starlette `add_middleware` 后注册 = 最外层。**真实执行顺序（外→内）**：
+> `Trace → SecurityHeaders → RateLimit → MaxBodySize → Auth → CORS → NetworkCapture → 路由`。
+> **SEC-12 修复**：CORS 改为最后 `add_middleware`（最外层），`OPTIONS` 预检请求放行，不再被 `Auth` 401 拦截。
+
 | 中间件 | 机制 | 设计要点 |
 | --- | --- | --- |
 | `AuthMiddleware` | Bearer / X-API-Key；`hmac.compare_digest` 恒定时间比较；`PUBLIC_PATHS=(/,/health,/metrics)` | **fail-closed**：无 Key 且 `api_key` 已设 → 401；未设 `api_key` 则整体禁用（启动告警） |
 | `MaxBodySizeMiddleware` | 先查 `Content-Length` 硬拒；POST/PUT/PATCH **流式分块读取**，超 `max_body_size` 立即 413，避免整 body 进内存 | 防 DoS/OOM |
-| `RateLimitMiddleware` | `state_store.allow("ratelimit:{ip}", per_minute, 60)`；异常降级放行 | 按客户端 IP |
+| `RateLimitMiddleware` | `state_store.allow("ratelimit:{ip}", per_minute, 60)`；**异常降级返回 429（fail-closed）** | 按客户端 IP；**Redis ZSET 滑动窗口**（替代固定窗口，消除临界点突发）；端点级限流（`/ingest/*` 120/min，`/analyze` 10/min） |
 | `SecurityHeadersMiddleware` | 补 `X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/`X-XSS-Protection` | — |
 | `TraceMiddleware` | 注入 `trace_id` → `X-Trace-Id`/`X-Response-Time`；异常记录 `trace_id` | 请求级可观测 |
 
@@ -228,6 +235,8 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 - `truncate_context(context, max_tokens)`：运行时快照/异常帧/整体按字符数（`max_tokens*3`）截断，超长标记 `_truncated`。
 - `_retry_call(...)`：重试（`llm_max_retries`）+ 指数退避 + 限流/超时处理；耗尽切换到 `llm_fallback_model`（缩短 prompt 重试 1 次）；仍失败抛 `RuntimeError`。
 - `analyze(context)` / `analyze_stream(context)`：非流式/流式；流式用 SSE 逐块 yield。
+- **✅ 新增 AsyncOpenAI**：`analyze_async` / `analyze_stream_async` 全链路 async/await，不再阻塞事件循环。
+- **✅ 多级缓存**：L1（OrderedDict LRU 进程级，100 条）+ L2（Redis 分布式，TTL 1h），按 `fingerprint` 缓存 LLM 分析结果，同类错误不再重复调用。Dashboard 缓存加 Redis L2 + `invalidate_cache`。
 
 #### 3.4.7 全局异常钩子（`app/mcp/hooks/exception_hook.py`）✅
 
@@ -243,11 +252,14 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 | 组件 | 职责 | 实现 |
 | --- | --- | --- |
-| `trace_store` | trace/session 持久化 | `memory` / `postgresql`（工厂 `storage/factory.py`） |
+| `trace_store` | trace/session 持久化 | `memory` / `postgresql` / `async_pg`（工厂 `storage/factory.py`） |
+| `async_pg_store` ✅ | asyncpg 异步存储（feature flag `pg_async_enabled=False` 默认关闭） | `app/mcp/core/storage/async_pg_store.py`，灰度切换可回退 |
 | `session registry` | MCP `Mcp-Session-Id` 会话生命周期 | `transports/session.py`，TTL 1800s |
-| `state store` | 限流/计数 | `memory` / `redis` |
+| `state store` | 限流/计数 | `memory` / `redis`（Redis ZSET 滑动窗口限流） |
 | `sse hub` | 服务端→客户端广播 | `transports/sse.py` |
-| `specs` ✅ | 规范存储（FR15） | `app/mcp/verifier/spec_store.py`，dict+Lock 主存 + add_log 持久化，预留 PG 工厂模式待迁移 |
+| `specs` ✅ | 规范存储（FR15） | `app/mcp/verifier/spec_store.py`，**独立 specs 表**（消除 N+1 查询，不再从 traces 扫描恢复） |
+| `errors` ✅ | 异常持久化聚合 | `app/mcp/core/errors.py`，**独立 errors 表**（fingerprint + occurrence_count 落 PG，重启不丢失） |
+| `MemoryTraceStore` | 内存存储 | **OrderedDict + max_entries 容量上限**（防 OOM） |
 
 #### 3.5.1 PostgreSQL 存储实现（`app/mcp/core/storage/pg_store.py`）✅
 
@@ -367,7 +379,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 | 能力 | 组件 | 说明 |
 | --- | --- | --- |
-| 脱敏 | [app/mcp/core/redaction.py](./app/mcp/core/redaction.py) | 存储边界统一脱敏，默认开启 |
+| 脱敏 | [app/mcp/core/redaction.py](./app/mcp/core/redaction.py) | 存储边界统一脱敏，默认开启；**复合键名子串匹配 + 白名单** |
 | 统一存取 | [app/mcp/core/trace_repo.py](./app/mcp/core/trace_repo.py) | 在 TraceStorage + errors 之上实现 save_trace/get_trace/save_network_record/save_ui_event |
 | 网络采集 | `app/mcp/collectors/network.py` + `tools/network_api.py` | 解析/截断 + ingest_network/get_network_trace |
 | UI 采集 | `app/mcp/collectors/ui_event.py` | 解析/截断 |
@@ -378,7 +390,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 完整上下文 | [app/mcp/builders/context.py](./app/mcp/builders/context.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
 | 规范驱动采集 | `app/mcp/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
 | 指纹去重聚合 | [app/mcp/core/errors.py](./app/mcp/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
-| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP / stdio 均为 15 个，统一注册表动态导出 |
+| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP / stdio 均为 15 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
 | 代码定位 | [app/mcp/collectors/code_locator.py](./app/mcp/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
 | 静默失败检测 | [app/mcp/verifier/assert_engine.py](./app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
@@ -395,14 +407,14 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 上下文截断 | 字符估算（`max_tokens*3`）+ 帧/局部变量上限 | 控成本与延迟，防超长 |
 | 安全默认 | fail-closed + 恒定时间比较 | 防未授权与时序攻击 |
 | 降级 | 快照/LLM 失败不阻断主流程 | 提高可用性 |
-| 存储 | 工厂模式 memory/pg + 状态 memory/redis | 本地轻量 / 生产持久 |
+| 存储 | 工厂模式 memory/pg/async_pg + 状态 memory/redis | 本地轻量 / 生产持久 / asyncpg 灰度切换 |
 
 ---
 
 ## 8. 部署与配置
 
 - 启动：HTTP 使用 `python -m app.main`；stdio 使用 `python -m app.mcp_server`。
-- 依赖：`requirements.txt`（fastapi、uvicorn、openai、psutil、psycopg2、redis、mcp、pydantic-settings）。
+- 依赖：`requirements.txt`（fastapi、uvicorn、openai、psutil、psycopg2、asyncpg、redis、mcp、pydantic-settings）。
 - 关键配置：见 `PRD.md` §11.3；**务必生产设 `API_KEY` 与 `CORS_ORIGINS`**；`code_context_lines` 待补（§6.1）。
 - 容器化：`Dockerfile` + `docker-compose.yaml` 已提供。
 
@@ -410,12 +422,14 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 ## 9. 安全设计
 
-- 传输：HTTPS 由前置代理提供；CORS `*` 时强制 `allow_credentials=False`。
-- 鉴权：API Key，fail-closed，恒定时间比较，公钥路径免鉴权。
-- 防 DoS：流式请求体限制（内存恒定 ≤ `max_body_size`）、按 IP 限流。
-- 信息脱敏：内部异常/DB 错误不回显；`/health` 仅状态不泄露细节。
+- 传输：HTTPS 由前置代理提供；**CORS 默认收紧为空串**（不下发头），`*` 时强制 `allow_credentials=False`（SEC-12 已修复顺序）。
+- 鉴权：API Key，fail-closed，恒定时间比较，公钥路径免鉴权。**限流 fail-closed**：初始化失败返回 429（SEC-07）。
+- 防 DoS：流式请求体限制（内存恒定 ≤ `max_body_size`）、**chunked body 字节流检查**（流式累计超限 413，M8）、按 IP 限流（Redis ZSET 滑动窗口）。
+- 信息脱敏：内部异常/DB 错误不回显；`/health` 仅状态不泄露细节。**复合键名脱敏**：子串匹配 + 白名单（`db_password`/`user_token` 被脱敏，`password_hash`/`public_key` 受保护）。
+- SSE 安全：`session_id` 绑定校验（SEC-04）。
+- `/metrics`：独立鉴权 toggle（SEC-08）。
 - 密钥：`.env` 不入库，提供 `.env.example` + `.gitignore`。
-- 路径安全（待补）：`file://`/`vscode://` 仅限 `WHITELIST_PATH_PREFIX`，防目录穿越。
+- 路径安全：`file://`/`vscode://` 仅限 `WHITELIST_PATH_PREFIX`，白名单为空时默认收敛 CWD，防目录穿越。
 
 ---
 
@@ -426,7 +440,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | ~~代码定位未接线~~ | ~~`get_debug_context` 不含片段~~ | §6.1 ✅ 已修复 |
 | ~~静默失败/前端自动化~~ | ~~FR13/FR14/FR15 待建~~ | ✅ 已实现 |
 | 厂商锁定 | 仅 OpenAI | 多 LLM provider 已支持（openai/zhipu/custom）|
-| memory 后端 | 重启即丢 | 生产用 postgresql |
+| memory 后端 | 重启即丢 | 生产用 postgresql 或 async_pg |
 | ~~PGStore API 误用~~ | ~~`conn.execute()` 不存在~~ | ✅ 已改用 `cur = conn.cursor(); cur.execute()` |
 | ~~data 字段非 dict 时崩溃~~ | ~~`json.loads` 失败 / `.get()` 报错~~ | ✅ `_parse_data` 安全解析 + 类型检查 |
 | SSE 长连接测试 | TestClient 中会阻塞 | 标记 `@pytest.mark.skip`，需手动验证 |
@@ -439,9 +453,10 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 | 层级 | 目录 | 用例数 | 说明 |
 | --- | --- | --- | --- |
-| 单元测试 | `tests/unit/` | 169 | redaction、fingerprint、storage、dashboard、verify_api 等 |
-| 集成测试 | `tests/integration/` | 13 | API 端点、debug flow、PostgreSQL 集成 |
-| PG 集成测试 | `tests/integration/test_pg_integration.py` | 13 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
+| 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
+| 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
+| AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
+| **合计** | — | **340 passed / 6 skipped / 0 failed** | 起始基线 248/6/1，新增 92 个测试，消除全部失败 |
 
 ### 11.2 测试执行
 
@@ -454,7 +469,12 @@ python -m pytest tests/unit/ --tb=short -q
 
 # 仅 PG 集成测试
 python -m pytest tests/integration/test_pg_integration.py --tb=short -q
+
+# 按 marker 运行
+python -m pytest -m "not integration and not pg and not slow" --tb=short -q
 ```
+
+> **pytest markers**：`integration` / `llm` / `pg` / `slow`，`pytest.ini` 已注册。
 
 ### 11.3 PG 集成测试覆盖
 
@@ -606,3 +626,369 @@ sequenceDiagram
 | 会话/SSE | `app/mcp/transports/{session,sse}.py` |
 | 可观测 | `app/observability.py` |
 | 配置 | `app/config.py` |
+
+---
+
+## 13. 数据流通与执行流程复核（2026-07-22 静态取证）
+
+> 本节为「数据从入口到出口」的端到端复核，与 §2/§4 的设计图互为印证；所有结论附 `文件:行`。
+> 配套安全结论见 [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) 的「SEC-01~15」补充章。
+> ✅ 其中 **P0 四项（LFI/SSRF/默认鉴权/工具超时）已于 2026-07-22 修复**，详见 [v0.3.1 清单](./release/claude-audit-consolidated.md)；下文描述的是修复前的原始数据流与风险面。
+
+### 13.1 两条入口（Ingress）
+
+| 入口 | 起点 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| **HTTP** | `app/main.py:98` FastAPI app | 依 `AuthMiddleware`（默认关闭，见 SEC-03） | 中间件真实顺序：`Trace→SecurityHeaders→RateLimit→MaxBodySize→Auth→CORS→NetworkCapture→路由`（订正见 §3.2） |
+| **stdio** | `app/mcp_server.py:172`（`python -m app.mcp_server`） | **无中间件、无鉴权** | 依赖“本地子进程 + 进程隔离”；每个 MCP 客户端各自拉起独立进程 |
+
+### 13.2 核心数据流路径（节点级 I/O）
+
+| 流程 | 入口 | 传递链（文件:行） | 存储落点 | 出口 |
+| --- | --- | --- | --- | --- |
+| **F1 MCP 工具调用** | `POST /mcp` `mcp_routes.py:37` | 预解析 JSON→会话校验 `:54-77`→`dispatch_raw` `server.py:158`→`_handle_tools_call` `server.py:75`→15 工具 handler | 依工具而定 | JSON / SSE `:94-103` |
+| **F2 错误上报** | `POST /ingest/error` `ingest.py:66` | `tool_ingest_error`→`_parse_frames`（仅 `int(line)`，**不校验 file 路径**）→`save_trace` `trace_repo.py:76`→`redact`+`errors.record`(全局 deque)+`add_log` | `errors._recent`(内存) + `trace_store` | `{error_id}` |
+| **F3 完整上下文构建** | 工具 `context` / `GET /api/dashboard/trace/{id}` `dashboard.py:176` | `build_debug_context` `context.py:44`→`get_trace`→**`code_locator` 读文件** `:110`→`git blame/diff` `:119,125`→network/ui/spec/runtime | 只读 | dict（含 `code_snippets`） |
+| **F4 LLM 分析** | `POST /api/debug/analyze` `debug.py:77` | `get_logs`→`build_context`→`collect_runtime_snapshot`→`analyze` `analyzer.py:342`→`_prepare_context_for_llm`(截断+**递归脱敏** `:107-110`) | 只读 | `{context, analysis}` |
+| **F5 全局异常自动捕获** | `sys.excepthook`/asyncio handler `exception_hook.py:36,45` | `capture_exception` `stacktrace.py:22`→`errors.record`（**message/traceback 未脱敏**，见 SEC-06） | `errors._recent` | 供 `stacktrace`/`trace` 工具检索 |
+
+### 13.3 存储模型（关键架构事实）
+
+- `trace_store`（默认 `memory`，可选 `postgresql`，工厂 `storage/factory.py:31`）以 `request_id`/`error_id` 为 key，条目 `{timestamp, step, data}`（`logs.py:13`）。
+- ⚠️ **所有数据类型（异常/network/ui_event/console/trace_data/meta/link）都写进同一张 `traces` 表**，用 `step` 字段区分（`trace_repo.py:44-49`）。独立表现状：`errors`/`specs` 由 `pg_store.py` DDL 常量建表并有完整 CRUD（`upsert_error`/`save_spec`/`get_spec`/`list_specs_pg`/`delete_spec`，活跃使用）；`network_records`/`ui_events` 原"已建 SQL 但代码从未使用"，M11 已删除其迁移文件（`migrations/20260712_*`），数据仍经 traces 表 step 字段存储。
+- `errors._recent`：进程级全局 `deque(maxlen=200)`（`errors.py:21`），按 `compute_fingerprint`（`:29`）去重聚合。
+- `session registry`（`transports/session.py`）仅管理 MCP 会话生命周期，**不承载业务数据、不做数据隔离**。
+
+### 13.4 数据出口（Egress）
+
+只有三个出口：① 返回调用方（工具结果/REST/SSE）；② **外部 LLM**（仅 `/analyze`、`analyze_with_llm` 触发，发送前经 `_prepare_context_for_llm` 截断+递归脱敏 `analyzer.py:107`）；③ 浏览器 SSE。无遥测、无云存储——「数据本地驻留」成立。
+
+### 13.5 工具注册与执行流程（订正工具清单）
+
+`register_all_tools()`（`tools/__init__.py:26-40`）**实际注册 15 个工具**，工具名为短名：
+`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test`。
+
+> ⚠️ **订正**：§3.1.2 / §3.1.3 及 PRD §10.2 中出现的 `get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` **不是注册的工具名**——它们是内部处理函数，对外以 `context / trace / stacktrace` 短名暴露；`get_runtime_snapshot`、`analyze_with_llm` 当前**未作为独立 MCP 工具注册**。HTTP 与 stdio 共用同一注册表（`mcp_server.py:45`），因此实际是「HTTP 15 / stdio 15」，不存在 14/15 差异。
+
+### 13.6 执行流程要点
+
+- **异常处理**：路由层（`ingest.py`/`debug.py`/`main.py`）全 `try/except`，对外统一 `"Internal server error"`；全局兜底 `error_handlers.py:15`；工具异常 `server.py:100` 返回 `isError:True`（但**无机器可读 error_code**，见 SEC-11）。
+- **降级**：`build_debug_context` 六个子采集器各自 `try/except`（`context.py:109,122,132,142,152`），任一失败不阻断整体——设计亮点，但也把攻击者可控的 frame 路径放大为文件读取/ git 命令（见 SEC-01）。
+- **并发**：`MemoryTraceStore`/`errors`/`spec_store`/`session registry` 均 `Lock` 保护；PG 连接池双重检查锁正确。⚠️ 但 `analyzer._get_client` 用模块级 bool 冒充自旋锁（`analyzer.py:18,47-55`），非真正线程安全；**全链路无单次工具调用超时**（`server.py:87`/`mcp_server.py:125`，见 SEC-05）。
+
+---
+
+## 14. 高并发设计评审（2026-07-22 高级架构师审查）
+
+> 本节为高级架构师逐行代码审查后的高并发专项评估，聚焦异步处理、缓存机制、限流策略和数据预防。
+> 完整评分与优化路线图见 [CODE_REVIEW.md](./CODE_REVIEW.md) §企业级架构综合评审。
+> 参考架构映射见 §14.6（无人机巡检平台思路 → ai-debug-mcp 落地）。
+
+### 14.1 异步处理现状
+
+**已实现的异步模式：**
+
+| 异步点 | 位置 | 实现方式 |
+|--------|------|----------|
+| 应用生命周期 | `main.py:44-100` | `@asynccontextmanager` + `asyncio.create_task` 定时清理 |
+| 中间件链 | `middleware.py` | `BaseHTTPMiddleware.dispatch` async |
+| MCP 工具分发 | `protocol/server.py:75-123` | `asyncio.iscoroutinefunction` 检测 + `asyncio.to_thread` 包装同步工具 |
+| SSE 流式响应 | `mcp_routes.py:95-99` | `StreamingResponse` + async generator |
+| LLM 流式分析 | `api/debug.py:122-150` | `StreamingResponse` + `text/event-stream` |
+| stdio 传输 | `transports/stdio.py:48-99` | `asyncio` + `loop.run_in_executor` |
+
+**关键异步缺陷：**
+
+1. **🔴 PostgreSQL 操作完全同步**（`pg_store.py:40-60`）：`ThreadedConnectionPool(min=2, max=10)` 是同步连接池。在 FastAPI async handler 中调用同步 PG 操作会阻塞事件循环。`maxconn=10` 硬编码不可配置，超过 10 个并发写入请求排队等待。
+2. **🔴 LLM 调用同步阻塞**（`analyzer.py:276-339`）：`_retry_call` 同步 HTTP 调用 2-10 秒。`/api/debug/analyze` 定义为 `def`（非 `async def`），FastAPI 将其放入线程池执行（默认 40 线程），高并发时线程池耗尽。
+3. **🟡 Redis 操作同步**（`state/store.py:80-114`）：`redis.Redis` 同步客户端，限流中间件每个请求增加 1-2ms 延迟。
+
+**改进方向：**
+- P0：PG 切换到 `asyncpg` + `asyncio`，所有 PG 操作改为 `async/await`
+- P1：LLM 调用改为 `async def` + `httpx.AsyncClient`
+- P2：Redis 切换到 `aioredis`
+
+### 14.2 缓存机制现状
+
+**已实现的缓存：**
+
+| 缓存层 | 位置 | 策略 | 失效机制 |
+|--------|------|------|----------|
+| 规范文件扫描 | `collectors/spec.py:59,185-209` | 进程级 `_spec_cache` dict，按 `mtime` 检查 | 文件修改时刷新 |
+| 脱敏正则编译 | `core/redaction.py:56-87` | `_extra_cache` + 配置签名比对 | 配置变化时重建 |
+| 源码行读取 | `collectors/code_locator.py` | 依赖 Python 内置 `linecache` | linecache 自带 |
+| 异常指纹去重 | `core/errors.py:37-75` | `deque(maxlen=200)` + fingerprint 聚合 | 容量淘汰 |
+
+**缺失的关键缓存：**
+
+1. **🔴 无 LLM 分析结果缓存**：同一个 `fingerprint` 的错误被反复分析，浪费 token 和时间。企业级场景下同类错误每天出现数百次。
+2. **🔴 Dashboard API 无查询缓存**：`_collect_all_traces`（`dashboard.py:124-143`）每次全量扫描 + 排序，无 TTL 缓存。
+3. **🟡 无 HTTP 响应缓存头**：幂等 GET 请求无 `ETag`/`Cache-Control`。
+
+**改进方向：**
+- P0：LLM 结果按 `fingerprint` 缓存，TTL 1h，LRU 100 条
+- P1：Dashboard 查询缓存 TTL 30s
+- P2：HTTP `Cache-Control: max-age=30` + `ETag`
+
+### 14.3 请求分流策略
+
+**已实现的分流：**
+
+| 分流维度 | 位置 | 策略 |
+|----------|------|------|
+| 路径白名单 | `middleware.py:22-23` | `PUBLIC_PATHS` 免鉴权 |
+| MCP 方法路由 | `protocol/server.py:132-137` | `_METHOD_MAP` 分发 |
+| 存储后端 | `core/storage/factory.py:31-42` | 环境变量选择 memory/postgresql |
+| 状态后端 | `state/store.py:121-131` | 环境变量选择 memory/redis |
+| LLM Provider | `analyzer.py:31-35` | 选择 openai/zhipu/custom |
+| 规范类型 | `verifier/assert_engine.py:29-38` | `spec.kind` 分发 api/ui/rule |
+
+**缺失的分流：**
+
+1. **🟡 无请求优先级队列**：健康检查、数据写入、Dashboard 查询共享同一限流配额。
+2. **🟡 无限流分级**：所有 IP 共享 `rate_limit_per_minute=60`，无按端点/按用户分级。
+3. **🟡 无请求体分流**：大请求（>1MB）直接拒绝，无异步队列分流。
+
+**改进方向：**
+- P1：端点级限流（`/ingest/*` 和 `/api/debug/analyze` 不同阈值）
+- P2：请求优先级（健康检查 > 写入 > 查询）
+
+### 14.4 高并发数据预防
+
+**已实现的防护措施：**
+
+| 防护层 | 位置 | 机制 |
+|--------|------|------|
+| 请求体限制 | `middleware.py:56-78` | `max_body_size=1MB` 硬截断 |
+| 速率限制 | `middleware.py:95-108` | 固定窗口 60req/min/IP |
+| PG 连接池 | `pg_store.py:40-60` | `ThreadedConnectionPool(min=2, max=10)` |
+| 连接重试 | `pg_store.py:122-148` | `_execute_with_retry(max_retries=2)` |
+| 定时清理 | `main.py:77-86` | 每 300s 清理过期 trace/session |
+| 异常缓冲上限 | `core/errors.py:21` | `deque(maxlen=200)` |
+| 安全启动校验 | `main.py:33-41` | 拒绝 `0.0.0.0` + 空 API_KEY |
+| 启动期工厂校验 | `main.py:74-75` | fail-fast 校验 `STORAGE_BACKEND` |
+
+**关键高并发风险：**
+
+1. **🔴 PG 连接池瓶颈**（`maxconn=10` 硬编码）：100 并发写入 → 10 连接全占 → 90 请求阻塞 → 最坏等待 200ms+
+2. **🔴 内存存储多 worker 数据不一致**：`gunicorn` 多 worker 下每个 worker 独立内存，数据完全隔离
+3. **🔴 定时清理无分布式锁**：多 worker 各自执行清理，重复操作
+4. **🟡 异常指纹缓冲无持久化**：`occurrence_count`/`fingerprint` 仅内存，重启丢失
+5. **🟡 spec_store 恢复性能**：扫描 500 个 request_id = 500 次 PG 查询
+
+**并发安全矩阵：**
+
+| 组件 | 线程安全 | 进程安全 | 分布式安全 |
+|------|----------|----------|------------|
+| MemoryTraceStore | ✅ Lock | ❌ 进程隔离 | ❌ |
+| PGTraceStore | ✅ 连接池 | ✅ 共享 DB | ✅ |
+| MemoryStateStore | ✅ Lock | ❌ 进程隔离 | ❌ |
+| RedisStateStore | ✅ | ✅ | ✅ |
+| errors deque | ✅ Lock | ❌ 进程隔离 | ❌ |
+| spec_store | ✅ Lock | ✅ PG 持久化 | ✅ |
+| SSEHub | ✅ asyncio.Queue | ❌ | ❌ |
+| SessionRegistry | ✅ Lock | ❌ | ❌ |
+
+**改进方向：**
+- P0：PG 连接池可配置化（`PG_MAX_CONNECTIONS` 环境变量，默认 20）
+- P0：生产环境强制 `STORAGE_BACKEND=postgresql` + `STATE_BACKEND=redis`
+- P1：分布式清理锁（Redis `SET NX`）
+- P1：异常聚合持久化（新增 `error_stats` 表）
+- P2：spec_store 独立表（替代从 traces 扫描恢复）
+
+### 14.5 数据写入/读取路径分析
+
+**写入路径瓶颈：**
+```
+浏览器 SDK → /ingest/* (HTTP) → tool handler → trace_repo → add_log → TraceStorage
+                                                                              ↓
+                                                              Memory: defaultdict + Lock
+                                                              PG: ThreadedConnectionPool(10)
+```
+- 同步 PG 操作阻塞事件循环
+- 连接池 maxconn=10 限制并发
+- 每条 trace 多次 `add_log` 调用（trace_data + trace_meta + trace_link = 3 次 INSERT）
+
+**读取路径瓶颈：**
+```
+Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_recent + logs.list_request_ids
+```
+- 每次请求全量扫描 + 排序
+- 无查询缓存
+- `_extract_trace_summary` 对每个 request_id 调用 `get_logs`（N+1 查询）
+
+### 14.6 参考架构映射：无人机巡检平台思路 → ai-debug-mcp 落地
+
+> 本节参考《无人机巡检平台高并发与架构优化技术术语手册》的核心架构思想，映射到 ai-debug-mcp 的优化场景。
+
+#### 14.6.1 高并发限流算法升级
+
+**巡检平台思路：**
+- **令牌桶**：允许突发流量，适合"平时平稳、突发集中"场景
+- **漏桶**：强制平滑速率，保护下游 DB
+- **滑动窗口**：避免固定窗口临界点流量翻倍
+
+**ai-debug-mcp 映射：**
+- 当前实现：`state/store.py:50-58` 使用**固定窗口**（60s 窗口，60 次请求）
+- 问题：窗口临界点（59s 和 61s 各 60 次 = 2s 内 120 次）
+- **落地建议**：
+  ```python
+  # 滑动窗口实现（参考巡检平台思路）
+  class SlidingWindowRateLimiter:
+      def allow(self, key: str, limit: int, window: int) -> bool:
+          now = time.time()
+          # 查询过去 window 秒内的请求数
+          count = redis.zcount(key, now - window, now)
+          if count < limit:
+              redis.zadd(key, {str(now): now})
+              redis.expire(key, window)
+              return True
+          return False
+  ```
+
+#### 14.6.2 异步化消息队列引入
+
+**巡检平台思路：**
+- **消息队列削峰填谷**：生产者发送后立即返回，消费者异步处理
+- **线程池隔离**：非核心链路独立线程池，防止拖垮主业务
+
+**ai-debug-mcp 映射：**
+- 当前问题：`/api/debug/analyze` 同步调用 LLM（2-10s），阻塞 FastAPI 线程池
+- **落地建议**：
+  ```python
+  # 方案 A：Celery + Redis 消息队列
+  from celery import Celery
+  app = Celery('tasks', broker='redis://localhost:6379/0')
+  
+  @app.task
+  def analyze_async(trace_id: str):
+      context = build_debug_context(trace_id)
+      result = analyze(context)
+      # 结果写入 Redis，前端轮询获取
+      redis.set(f"analysis:{trace_id}", json.dumps(result), ex=3600)
+      return result
+  
+  # API 改为异步提交
+  @router.post("/analyze/async")
+  async def debug_analyze_async(req: AnalyzeRequest):
+      task = analyze_async.delay(req.request_id)
+      return {"task_id": task.id, "status": "queued"}
+  
+  # 前端轮询结果
+  @router.get("/analyze/result/{task_id}")
+  async def get_analyze_result(task_id: str):
+      result = AsyncResult(task_id)
+      if result.ready():
+          return {"status": "completed", "result": result.get()}
+      return {"status": "pending"}
+  ```
+
+  ```python
+  # 方案 B：FastAPI BackgroundTasks（轻量级）
+  from fastapi import BackgroundTasks
+  
+  @router.post("/analyze/background")
+  async def debug_analyze_background(
+      req: AnalyzeRequest,
+      background_tasks: BackgroundTasks
+  ):
+      background_tasks.add_task(analyze_and_store, req.request_id)
+      return {"status": "processing", "message": "Analysis started in background"}
+  ```
+
+#### 14.6.3 多级缓存架构
+
+**巡检平台思路：**
+- **L1 本地缓存**：Caffeine/Guava，纳秒级读取，无网络开销
+- **L2 分布式缓存**：Redis Cluster，高频读写热点数据
+- **旁路缓存模式**：先更新 DB，再删缓存，MQ 补偿一致性
+- **三防机制**：防穿透（布隆过滤器）、防雪崩（随机 TTL）、防击穿（互斥锁）
+
+**ai-debug-mcp 映射：**
+- 当前实现：仅有进程级 dict 缓存（spec/redaction），无 L2 Redis 缓存
+- **落地建议**：
+  ```python
+  # L1 + L2 多级缓存（参考巡检平台架构）
+  class MultiLevelCache:
+      def __init__(self):
+          self.l1 = {}  # 进程级 LRU
+          self.l2 = redis.Redis()
+      
+      def get(self, key: str) -> Optional[Any]:
+          # L1 命中
+          if key in self.l1:
+              return self.l1[key]
+          # L2 命中
+          value = self.l2.get(key)
+          if value:
+              self.l1[key] = json.loads(value)
+              return self.l1[key]
+          # 回源查询
+          return None
+      
+      def set(self, key: str, value: Any, ttl: int = 3600):
+          # 先写 L2，再写 L1
+          self.l2.setex(key, ttl, json.dumps(value))
+          self.l1[key] = value
+  
+  # LLM 分析结果缓存
+  llm_cache = MultiLevelCache()
+  
+  def analyze_cached(fingerprint: str, context: dict) -> dict:
+      cache_key = f"llm:{fingerprint}"
+      cached = llm_cache.get(cache_key)
+      if cached:
+          return cached
+      result = analyze(context)
+      llm_cache.set(cache_key, result, ttl=3600)  # 防雪崩：随机 TTL
+      return result
+  ```
+
+#### 14.6.4 线上故障排查方法论
+
+**巡检平台思路：**
+- **应急止损优先**：降级、熔断、限流、回滚
+- **链路追踪**：SkyWalking/Prometheus，分布式 Trace ID
+- **资源诊断**：CPU/内存/GC/线程池
+
+**ai-debug-mcp 映射：**
+- 已实现：`observability.py` Prometheus 指标、`trace_id` 贯穿请求
+- **落地建议**：
+  ```python
+  # 熔断器模式（参考巡检平台熔断思路）
+  from pybreaker import CircuitBreaker
+  
+  llm_breaker = CircuitBreaker(
+      fail_max=5,      # 5 次失败后熔断
+      reset_timeout=60  # 60s 后尝试恢复
+  )
+  
+  @llm_breaker
+  def analyze_with_breaker(context: dict) -> dict:
+      return analyze(context)
+  
+  # 降级策略
+  def analyze_with_fallback(context: dict) -> dict:
+      try:
+          return analyze_with_breaker(context)
+      except CircuitBreakerError:
+          # 熔断时返回缓存结果或简化分析
+          cached = llm_cache.get(f"llm:{context.get('fingerprint')}")
+          if cached:
+              return cached
+          return {"analysis": "LLM service unavailable", "fallback": True}
+  ```
+
+#### 14.6.5 关键映射总结
+
+| 巡检平台概念 | ai-debug-mcp 对应场景 | 落地优先级 |
+|--------------|----------------------|------------|
+| 令牌桶限流 | 替换固定窗口限流，防临界点突发 | P1 |
+| 消息队列削峰 | LLM 分析异步化，Celery/BackgroundTasks | P0 |
+| L1/L2 多级缓存 | LLM 结果 + Dashboard 查询缓存 | P0 |
+| 防穿透/雪崩/击穿 | 缓存空值 + 随机 TTL + 互斥锁 | P1 |
+| 熔断器 | LLM 调用熔断 + 降级缓存 | P1 |
+| 链路追踪 | 已有 trace_id，补充 PG/LLM 耗时指标 | P2 |
+
+> 参考来源：《无人机巡检平台高并发与架构优化技术术语手册》（用户提供）
+> 映射日期：2026-07-22

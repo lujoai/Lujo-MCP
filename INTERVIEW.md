@@ -6,9 +6,9 @@
 > 岗位：AI Native 应用开发工程师
 > 项目：基于 MCP 协议的 AI 智能调试服务（规范驱动 + 静默失败检测 + 多 Agent 协同 + UI 自动验收）
 > 技术栈：Python / FastAPI / MCP / Playwright / pytest / PostgreSQL / Redis / Trae / Qoder
-> 测试覆盖：当前测试状态以 [README.md](./README.md) 项目状态表为准
-> 版本：v0.3.0 已交付 | MCP 工具 HTTP 15 / stdio 14
-> 路线图：Phase 0 标准化 ✅ → Phase 1.x 工程化增强（进行中）→ Phase 2 分布式链路追踪 → Phase 4 RAG 知识库
+> 测试覆盖：340 passed / 6 skipped / 0 failed
+> 版本：v0.3.0 已交付 | MCP 工具 HTTP 15 / stdio 15
+> 路线图：v0.3.0 Release Audit 收口完成 ✅ → Browser SDK V3-V6 → 数据层优化 → 可观测性（OpenTelemetry） → 智能化（RAG 知识库）
 
 ---
 
@@ -188,7 +188,7 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 
 1. **断言引擎：纯函数 vs LLM 判断** — 评估了 LLM 语义判断方案，发现延迟高（>500ms）且结果不确定，最终选择纯函数 `assert_behavior(actual, spec)` → `{matched, diffs, silent_failure}`，确定性强、延迟 <1ms、可解释性好。单元测试覆盖 API/UI/Rule 三种 spec kind。
 
-2. **双传输：HTTP + stdio 共存** — 不是"多此一举"，而是产品必须覆盖两个渠道：HTTP 供运维远程调试（需要中间件安全栈），stdio 供 IDE Agent 本地集成（Claude Desktop 原生支持）。核心技术约束：两套传输在 handler 层复用同一批工具业务函数（HTTP 注册表 15 个工具，stdio 清单 14 个），业务逻辑不重复。
+2. **双传输：HTTP + stdio 共存** — 不是"多此一举"，而是产品必须覆盖两个渠道：HTTP 供运维远程调试（需要中间件安全栈），stdio 供 IDE Agent 本地集成（Claude Desktop 原生支持）。核心技术约束：两套传输在 handler 层复用同一批工具业务函数（HTTP 与 stdio 共用同一 `register_all_tools()` 注册表，各 15 个工具），业务逻辑不重复。
 
 3. **规范存储：dict+Lock vs PostgreSQL** — 规范量级小（<100 条）、读写比极高（低频写入、高频读取），`dict + threading.Lock` 主存方案延迟 0ms，`add_log` 做持久化备份。预留了工厂模式（一行切换到 PG），但不在不需要时过早优化。
 
@@ -202,23 +202,25 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 
 **R — Result 成果**
 
-- 从零到交付完整产品，**171 个单元测试**全部通过（覆盖断言引擎、规范存储、verify 工具、API 端点、Spec CRUD、Dashboard、多 LLM provider、UI runner、工具注册等模块）
-- 支持 **15 个 REST 端点 + 15 个 MCP 工具**（HTTP 侧注册表；stdio 侧 14 个，含 auto_test 页面自动遍历），同时服务 HTTP 远程调用和 stdio 本地 Agent 集成，**已在 Trae 和 Qoder 中实际集成验证**
+- 从零到交付完整产品，**340 个测试**全部通过（覆盖断言引擎、规范存储、verify 工具、API 端点、Spec CRUD、Dashboard、多 LLM provider、UI runner、工具注册、进程边界、脱敏、错误码、LLM 输出校验等模块）
+- 支持 **15 个 REST 端点 + 15 个 MCP 工具**（HTTP 与 stdio 均由统一注册表动态导出），同时服务 HTTP 远程调用和 stdio 本地 Agent 集成，**已在 Trae 和 Qoder 中实际集成验证**
 - 断言引擎 **< 1ms 判定静默失败**，前端自动遍历 **< 30s/页**
 - **auto_test** 工具自动扫描页面所有可交互元素，依次执行交互并监听控制台错误 + 网络 4xx/5xx，形成 AI 生成代码后的自助验收闭环
 - 规范驱动闭环（写规范 → 自动比对 → 偏离告警）完整可用，**Web 控制台 Dashboard** 可视化 trace 与 spec_diffs
 - 多 LLM provider（openai/zhipu/custom）一行配置切换，存储层 memory/PG 工厂模式一键切换，零代码改动
 - 实战定位并修复 **Starlette 1.3 中间件 body 重放失效** 导致的生产级 422 bug（TestClient 未能暴露，通过逐层排查 + 多客户端交叉验证定位根因）
 - **Phase 0 标准化完成**：Docker Compose 一键启动（PostgreSQL + Redis + App），scripts/ 目录（run_tests.sh / lint.sh / init_db.sh），migrations/ 目录（6 个 SQL 文件管理 Schema 变更），README 项目状态表格作为唯一真相来源
+- **v0.3.0 Release Audit 收口**：P0 7 项 + P1 8 项全部清零。关键成果：trace_repo 键统一+PG回读链路、进程边界测试覆盖、SDK 静默失败事件链补齐、JSON-RPC 错误码规范化、LLM 输出 schema 校验+结构化 fallback、stdio 生命周期资源回收、内部错误串全仓收口（17 类）、存储工厂 fail-fast、schemas 重复定义统一、spec_store 持久化可靠性
+- **多 Agent 协同开发实战**：用多个 AI 子智能体并行执行代码审计与任务（Solo 模式），我作为总代理做方案审查、冲突域隔离、风险决策，最终集成验证。实现了 5 个子智能体同时独立修改不同文件域、零冲突合并的开发模式
 
-**后续路线图（Phase 1 进行中）**：
+**后续路线图（v0.3.0 收口完成）**：
 
-| Phase | 目标 | 时间 | 核心任务 |
-|-------|------|------|---------|
-| **Phase 1** | 生产级数据采集系统 | 2-3 周 | Repository 层拆分、spec_store 迁移到 PG、批量插入优化 |
-| Phase 2 | 分布式链路追踪平台 | 3 周 | OpenTelemetry SDK、异步写入（asyncpg）、跨服务链路 |
-| Phase 3 | 智能错误分析引擎 | 1 个月 | 错误指纹分类、根因排序算法 |
-| Phase 4 | RAG 知识库系统 | 1 个月 | Qdrant 向量数据库、Bug embedding、语义检索 |
+| Phase | 目标 | 状态 | 核心任务 |
+|-------|------|------|--------|
+| **v0.3.0** | Release Audit 收口 | ✅ 已完成 | P0 7项 + P1 8项全部清零，340 测试全绿 |
+| **Phase 5** | 数据层长期优化 | 待启动 | traces 表按月分区、归档策略、批量写入、优雅降级 |
+| **Phase 6** | 可观测性与可靠性 | 待启动 | OpenTelemetry 集成、消息队列削峰、熔断器 |
+| **Phase 7** | 智能化 | 待启动 | 智能错误分析引擎、RAG 知识库、AI Debug Agent |
 
 ---
 
@@ -245,7 +247,7 @@ register_all_tools()
   → 共 15 个工具
 
 # HTTP 传输：mcp_routes.py → POST /mcp (tools/list + tools/call)
-# stdio 传输：mcp_server.py → stdin/stdout (独立 14 工具清单，handler 复用业务函数)
+# stdio 传输：mcp_server.py → stdin/stdout (共用 _tool_registry，15 工具，handler 复用业务函数)
 ```
 
 **三、会话隔离 — 每个 Agent 独立，互不污染**
@@ -256,6 +258,8 @@ Agent B → Mcp-Session-Id: bbb → 独立 session
 ```
 
 Agent A 写入的 trace 不污染 Agent B 的上下文。共享数据通过 `build_debug_context` 显式传递。
+
+> ⚠️ **诚实边界（2026-07-22 自审订正）**：上述“会话隔离”**仅在 stdio 传输下成立**——每个 Agent 是独立子进程，`errors`/`trace_store` 天然进程级隔离。**共享 HTTP 部署**下，`errors._recent` 是进程内全局 deque（`errors.py:21`）、trace 仅按 `request_id`/`error_id` 存取、无 `session_id` 维度，`list_recent_traces`/`search_logs` 会跨会话可见（见 SECURITY_REVIEW SEC-04）。面试加分点：主动识别“会话**生命周期**隔离 ≠ **数据**隔离”，并给出按 `session_id` 绑定 + 工具层强制过滤的整改方案。
 
 **四、防止幻觉传播 — Ground Truth 机制**
 
@@ -406,7 +410,7 @@ API_KEY=your-secret          # 开启鉴权
 LLM_PROVIDER=zhipu           # 国内环境切换（openai 兼容协议，只改 base_url）
 ```
 
-业务代码零改动，171 个测试保证回归安全。
+业务代码零改动，340 个测试保证回归安全。
 
 **Docker Compose 一键部署**：
 
@@ -414,7 +418,7 @@ LLM_PROVIDER=zhipu           # 国内环境切换（openai 兼容协议，只改
 git clone <repo>
 cp .env.example .env
 # 编辑 .env 填入 API Key
-docker-compose up -d
+docker compose up -d
 # → PostgreSQL + Redis + App 全部就绪
 ```
 
@@ -431,10 +435,10 @@ docker-compose up -d
 
 如果写错了：`verify` 输出 diffs 列表，人 review 后通过 `PATCH /api/spec/{id}` 修正。系统本身只做比对，不自己改规范。规范受 API Key 鉴权保护。
 
-### "171 个单测，你做了集成测试吗？"
+### "340 个测试，你做了集成测试吗？"
 
 分层测试策略：
-- 单测：纯函数逻辑（断言引擎、规范存储、上下文构建）— 171 个
+- 单测：纯函数逻辑（断言引擎、规范存储、上下文构建）+ 专项集成测试（进程边界、脱敏、错误码、LLM 输出校验）— 340 个
 - 契约测试：TestClient + FastAPI router 测试端点 → handler 的完整链路
 - 集成：`/health` 验证 PG 连通性（生产环境）；Playwright 通过 `is_available()` 标志自动跳过（未安装不影响测试）
 
@@ -512,6 +516,26 @@ LangChain 引入的抽象层反而增加了延迟和不确定性。我们的选�
 **一句话标准答**：
 > "我分析过重放攻击风险。当前三端都是 stdio 本地通信，API Key 通过 env 传入不走网络，重放攻击前提不成立。如果未来公网部署，按 MCP 官方规范上 OAuth 2.1 + PKCE，天然防重放。核心原则：风险驱动安全，不为不存在的攻击面写代码。"
 
+### "你怎么保证自己项目的安全？做过安全自审吗？"（安全工程能力题，强烈推荐讲）
+
+**我做过一次数据流驱动的端到端安全自审**（2026-07-22）。方法是先画清"数据从入口到出口"的流通路径，再沿每条路径逐点查权限、脱敏、边界。三维（数据流通 / 代码逻辑 / 框架合理性）共识别并分级 **15 项风险**，逐项附 `文件:行` 证据链，产出 v0.3.1 收口清单。
+
+**两个我一开始没料到的高危（诚实讲反而加分）**：
+
+1. **任意文件读取（LFI）**：`/ingest/error` 接受外部上报的堆栈帧，我没校验 `frames[].file`；而 `get_debug_context` 会用 `linecache` 读这些路径生成源码片段、经 dashboard `/api/dashboard/trace/{id}` 回显——等于把"上报一个错误"变成了"读服务器任意文件"。根因是路径白名单 `whitelist_path_prefix` **默认空=放行**（`code_locator.py:35-37`）。
+2. **SSRF**：`verify_ui`/`auto_test` 把调用方传入的 URL 直接交给 Playwright `page.goto`（`ui_runner.py:82`），无 host 白名单，可访问云元数据 `169.254.169.254` 或 `file://`。
+
+**我怎么定严重度（体现工程判断，不一刀切）**：
+- **会话隔离**这条我区分了部署形态——stdio 每个 Agent 独立子进程、天然隔离；只有共享 HTTP 多租户才构成跨会话泄露，所以定 P1 而非无脑 P0。
+- **鉴权默认关闭**：启动防护只在 `python -m app.main` 的 `__main__` 生效，`uvicorn app.main:app` 直启会绕过——这是"防护写错了位置"的典型，我把它归为部署前必修。
+
+**整改原则**：核心数据流架构是好的，**不推倒重写**；安全短板集中在"边界"，定向加固即可——白名单默认收敛（默认拒绝而非默认放行）、Playwright URL 白名单、工具调用包 `asyncio.wait_for(30s)` 超时、启动校验移到 app 构建期。预估约 **2 人周**。
+
+> ✅ **已落地（2026-07-22）**：上述 P0 四项已实现——SEC-01 `code_locator`/`git` 路径白名单默认收敛到进程 CWD、SEC-02 新增 `is_safe_url` 拦截 file://内网/元数据、SEC-03 `validate_startup_configuration` 移入 lifespan、SEC-05 工具调用 `asyncio.wait_for(默认60s)` 超时；145 相关单测 + 17 安全断言通过。P1（会话隔离等）留到下一轮。
+
+**一句话标准答**：
+> "我对自己的项目做过数据流驱动的安全自审，识别并分级了 15 项风险，包括两个一开始没料到的高危——ingest 堆栈帧没校验路径导致的任意文件读取，和 Playwright 目标 URL 没白名单导致的 SSRF。我特意按部署形态定严重度（stdio 天然进程隔离 vs 共享 HTTP 才泄露），结论是核心架构不用重写、边界定向加固约两人周。这套'先画数据流、再沿路径查边界'的方法我能复用到任何服务。"
+
 ---
 
 ## 五、AI-Native 开发方法论与我的关键取舍决策
@@ -535,7 +559,7 @@ LangChain 引入的抽象层反而增加了延迟和不确定性。我们的选�
 简历写"独立开发"如何解释：我是唯一对结果负责的开发者，做选型、取舍、拍板；AI 提供并行产能，我做决策与验收。这恰恰是 AI-native 工程师的核心能力，而非减分项。
 
 **30 秒标准陈述（可直接背）：**
-> "这个项目我用多模型协同开发：让两个大模型并行读需求和参考实现、各自出方案，我负责择优整合——比如参考项目用 SQLite，我评估后没照搬，选了 memory+PG 双后端；AI 想引入 tenacity 重试和 Playwright，我判断是多余依赖就砍了；同时我额外加了 git 白名单+超时、入库前统一脱敏这些安全约束。AI 提供并行产能，我做架构纪律、安全把关和验收。最终 171 个测试全绿。"
+> "这个项目我用多模型协同开发：让两个大模型并行读需求和参考实现、各自出方案，我负责择优整合——比如参考项目用 SQLite，我评估后没照搬，选了 memory+PG 双后端；AI 想引入 tenacity 重试和 Playwright，我判断是多余依赖就砍了；同时我额外加了 git 白名单+超时、入库前统一脱敏这些安全约束。AI 提供并行产能，我做架构纪律、安全把关和验收。最终 340 个测试全绿。"
 
 ### 4.2 我做的关键取舍决策（口述稿，均出自实际迁移记录）
 

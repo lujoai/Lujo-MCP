@@ -1,5 +1,6 @@
 """面试演示脚本 —— 依次展示 health / debug / verify"""
-import urllib.request, json
+import urllib.request
+import json
 BASE = "http://localhost:8000"
 
 def req(method, path, data=None):

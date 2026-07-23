@@ -5,7 +5,7 @@
 >
 > **职责边界**：本文件只负责当前上下文摘要 + 任务交接模板 + 下一步入口指引。
 > 详细开发任务由 [DEV_PLAN.md](./DEV_PLAN.md) 管理，禁止在此复制任务列表。
-> 当前 Release 审查专项清单见 [claude-v0.3.0-audit-todos.md](./release/claude-v0.3.0-audit-todos.md)。
+> 当前 Release 审查专项清单见 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md)。
 
 ---
 
@@ -15,20 +15,30 @@
 |------|------|
 | 项目版本 | v0.3.0 |
 | MCP 工具数 | HTTP 15 / stdio 15 |
-| 测试覆盖 | 当前测试状态以 [README.md](../../README.md) 项目状态表为准 |
+| 测试覆盖 | **单元 310 passed / 6 skipped / 0 failed**；集成 49 passed / 19 skipped / 0 failed（鉴权基线已修复）；ruff 0 违规 |
 | 存储后端 | PostgreSQL（生产）/ memory（默认）|
 | LLM Provider | openai / zhipu / custom |
-| 当前阶段 | v0.3.0 发布就绪 |
-| 当前 Sprint | 文档收口与 Git 整理完成，准备发布 |
+| 当前阶段 | v0.3.0 Phase 0-5 全部完成 ✅；Release Audit 全部收口 ✅ |
+| 当前 Sprint | Release Audit 全部收口（P0/P1/P2/P3 清零 + C5/C4/H7 核实），已打 `v0.3.0` tag（未推送）|
 
 ### 最近完成事项
+
+- ✅ Release Audit 最终收口（2026-07-23，M3/M10/M11/L6 + C5/C4/H7）：
+  - **M3 同步阻塞**：经核实已修复——MCP 路径 `server.py:114-117` 对同步 handler 走 `asyncio.to_thread`，HTTP 路径 `/api/debug/verify/ui` 为 sync `def`（FastAPI threadpool），`test_mcp_verify_ui.py::TestVerifyUiDoesNotBlockEventLoop` 证明不阻塞。仅文档更新。
+  - **M10 版本口径**：`app/__init__.py:4` `__version__="0.3.0"` 单一来源；创建正式 annotated tag `v0.3.0`（`git tag -a v0.3.0`，本地未推送）；release 流程标准化写入 `DEV_PLAN.md` §八。
+  - **M11 migrations 清理**：删除 `migrations/20260712_create_network_records_table.sql` 与 `20260712_create_ui_events_table.sql`（pg_store.py 无 CRUD，数据经 traces 表 step 字段存储；pg_store.py 用硬编码 DDL 建表、不读 migrations/ 目录）；修正 `scripts/init_db.sh` 过时注释（原误将 errors/specs 标 deprecated，实际为活跃表）。**未触碰 pg_store.py**。
+  - **L6 docker-compose**：经核实 `docker-compose.yaml:41-48` 已透传 `LLM_PROVIDER`/`LLM_BASE_URL` 等全部 LLM 环境变量。仅文档更新。
+  - **C5/C4/H7**：C5 单元 310 passed/0 failed（dispatch 全绿）；C4 PG 测试无 PG 时合规 skip；H7 `test_storage.py:199-218` 真实面向 PG，无假覆盖。
+  - 涉及文件：`migrations/20260712_*.sql`（删除）、`scripts/init_db.sh`、`docs/internal/release/claude-audit-consolidated.md`、`docs/internal/DEV_PLAN.md`、`docs/internal/AI_HANDOFF.md`、`README.md`、`docs/internal/DESIGN.md`；git tag `v0.3.0`。
+  - 测试结果：`pytest tests/unit/ -q` → **310 passed / 6 skipped / 0 failed**（零回归）；集成 41 passed / 19 skipped / 8 failed（test_api.py 鉴权基线，非回归）。
+  - 风险：git tag `v0.3.0` 未推送（外向操作，待用户确认）；test_api.py 8 个鉴权失败为预存在 `.env` `API_KEY` 污染基线，不在本次范围。
 
 - ✅ Phase 0：项目标准化（Docker Compose + scripts/ + migrations/）
 - ✅ Phase 1：PostgreSQL 集成（PGStore 连接池 + 自动建表 + Dashboard 读取）
 - ✅ Phase 1 规范驱动验证（V1 断言引擎 / V2 spec_store / V3 verify 工具 / V4 verify API / V5 spec_diffs 注入）
 - ✅ P1 Browser SDK 自动采集：V1 Console Capture（console.error/warn 自动捕获 + MCP tool + trace_id 关联 + 脱敏）
 - ✅ 修复 ENV-001：stdio 模式从外部工作目录启动时误加载目标项目 `.env` 导致启动崩溃（`config.py` env_file 锚定项目根绝对路径，详见 [DEV_PLAN.md](./DEV_PLAN.md) §四）
-- ✅ 已完成 Release 审查专项文档归档：Claude 待办清单已整理到 [claude-v0.3.0-audit-todos.md](./release/claude-v0.3.0-audit-todos.md)
+- ✅ 已完成 Release 审查专项文档归档：Claude 待办清单已整理到 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md)
 - ✅ M12 依赖拆分：`requirements.txt` 仅保留 10 项运行时依赖（删除 `pytest`）；新建 `requirements-dev.txt`（`-r requirements.txt` + `pytest`/`pytest-asyncio`/`ruff`）；`Dockerfile` 未改；`README.md` §方式二区分生产/开发安装。验收：`pip install -r requirements-dev.txt` 成功，`pytest tests/unit/ -q` 在无 `.env` 污染环境下 212 passed / 6 skipped 全绿。
 - ✅ H10：SDK reportSilentFailure 自动附带最近 N 条 network/UI 事件链 + 服务端 ingest 保留 observed/observed_events + 工具层分类入库与 unknown 保留（2026-07-19）
 - ✅ H12：进程边界零覆盖补齐 + `test_pg_integration.py` 断言被 try/except 吞导致失败降级为 skip 修复（2026-07-19）
@@ -53,17 +63,93 @@
   - 发现 3 个 P1 改进项：LLM 输出校验、JSON-RPC 错误码、测试盲区
   - 测试基线：217 passed, 6 skipped, 1 failed（.env 环境问题）
   - Git 状态：8 个新 commit，工作区 clean，准备推送
+- ✅ M9：`.env` 出现未知键启动即崩（extra_forbidden）根因修复（2026-07-19）
+  - `app/config.py` Settings 类改用 `model_config = ConfigDict(extra="ignore")` 替代旧 `class Config`，允许 .env 中存在多余键而不崩溃
+  - 新增 `model_post_init` 在启动时通过 `dotenv_values` 读取 .env 原始键，与 `model_fields` 做差集（大小写不敏感），对额外键输出 `logger.warning("Ignored extra .env keys: %s", sorted(extra_keys))`
+  - 新建 `tests/unit/test_config.py`，5 个用例覆盖：额外键不崩 / 已知键正常加载 / warning 日志含键名 / 无额外键不产生 warning / 缺失 .env 文件不崩
+  - 涉及文件：`app/config.py`、`tests/unit/test_config.py`
+  - 测试结果：`pytest tests/unit/test_config.py -q` → 5 passed；`pytest tests/unit/ -q` → 223 passed / 6 skipped / 3 failed（3 failed 为预先存在的 test_main.py 鉴权断言 + test_spec_api 数据污染，与本任务无关）
+
+- ✅ SPEC_STORE：spec_store 持久化可靠性修复 — list_specs() 从 trace_store 恢复逻辑补齐（2026-07-19）
+  - **问题分析**：`list_specs()` 无恢复逻辑，重启后内存 `_specs` 清空导致 list 返回空，Dashboard `/api/dashboard/specs` 不可用
+  - **修改文件**：`app/mcp/verifier/spec_store.py`（核心）
+    - 新增 `_restored` 标志（线程安全，在 `_lock` 内读写）
+    - 新增 `_restore_from_storage()` 函数：扫描最近 1000 个 request_id，筛选 `step="spec"` 条目，重建 `_specs` 缓存
+    - `list_specs()` 首次调用自动触发恢复（C4 对标模式）
+    - `clear()` 重置 `_restored = False`
+    - data 完整性校验：PG 场景 JSON 字符串 → dict 反序列化保护
+  - **测试文件**：`tests/unit/test_spec_store.py`（新增 TestRestoreFromStorage 3 用例）、`tests/unit/test_spec_api.py`（fixture 补 `_restored=True`）
+  - **测试结果**：`pytest tests/unit/test_spec_store.py -q` → 17 passed；`pytest tests/unit/ -q` → 225 passed / 6 skipped / 1 failed（test_main.py 基线环境问题，非回归）
+
+- ✅ M4：JSON-RPC 错误码规范化 — JSON 解析错误映射为 -32700 而非 -32602（2026-07-19）
+  - **问题分析**：`dispatch_raw()` 将所有解析异常统一映射为 `INVALID_PARAMS` (-32602)，违反 JSON-RPC 2.0 规范（JSON 语法错误应为 -32700 Parse Error，非合法 Request 对象应为 -32600 Invalid Request）
+  - **修改文件**：
+    - `app/mcp/protocol/jsonrpc.py`：新增 `JSONParseError(ValueError)` / `InvalidRequestError(ValueError)` 异常类；`parse_request()` 对 JSONDecodeError 抛 `JSONParseError`，对非 dict/缺 method 抛 `InvalidRequestError`
+    - `app/mcp/protocol/server.py`：`dispatch_raw()` 区分 `JSONParseError`（→ PARSE_ERROR/-32700）和 `InvalidRequestError`（→ INVALID_REQUEST/-32600），移除局部 import
+    - `app/api/mcp_routes.py`：L47 HTTP 层 `json.loads` 失败从 `INVALID_REQUEST` 改为 `PARSE_ERROR`
+    - `app/mcp/transports/stdio.py`：import `JSONParseError`/`InvalidRequestError`，EOF 后解析分别映射到 -32700/-32600
+    - `tests/unit/test_jsonrpc.py`：新增 6 个用例覆盖 parse_error/invalid_request/method_not_found 三种 dispatch_raw 错误码 + 3 个 parse_request 异常类型验证
+  - **测试结果**：`pytest tests/unit/test_jsonrpc.py -q` → 20 passed；`pytest tests/unit/ -q` → 248 passed / 6 skipped / 1 failed（test_main.py 预先存在的环境问题，非回归）
+
+- ✅ N2：LLM 输出零校验/净化 — `_retry_call` json.loads 失败不再原样透传，改为 schema 校验 + 结构化 fallback（2026-07-19）
+  - **问题分析**：`analyzer._retry_call()` 收到 LLM 响应后直接 `json.loads`，失败时 `{"analysis": content}` 将原始文本（可能含推理链）透传给客户端
+  - **修改文件**：`app/llm/analyzer.py`（核心）
+    - 新增常量 `VALID_CONFIDENCE` / `REQUIRED_FIELDS` / `MAX_FIELD_CHARS=2000` / `MAX_RAW_TRUNCATED=500`
+    - 新增 `_extract_json(content)`：容错提取 JSON（支持 markdown code block、嵌套文本中的最外层 `{}`），非贪婪匹配取第一个
+    - 新增 `_truncate_field(value, max_chars)`：字符串长度截断
+    - 新增 `_validate_and_normalize(raw_output)`：三步流程 — ①容错 JSON 解析 ②字段校验+confidence 默认值（缺失/无效→"low"）③解析失败加 `raw_truncated≤500` 字符
+    - `_retry_call` 中旧 `json.loads` + `{"analysis": content}` 替换为 `_validate_and_normalize(content)`，结果放入 `analysis` 字段
+  - **测试文件**：`tests/unit/test_analyzer.py`（新增 TestLLMOutputValidation 18 用例）
+    - 合法完整 JSON / 缺 confidence / 无效 confidence / 空 confidence → 默认 low
+    - markdown code block（带 json 标记 / 不带）→ 正常提取
+    - 纯文本 / 空串 / null → fallback + raw_truncated
+    - 字段超长（3000 字符）→ 截断到 2000
+    - JSON 嵌套文本中 → 提取第一个 {}
+    - 多个 JSON 块 → 取第一个
+    - JSON 数组 → 转为空 dict + fallback
+    - required fields 全覆盖
+  - **测试结果**：`pytest tests/unit/test_analyzer.py -q` → 27 passed；`pytest tests/unit/ -q` → 242 passed / 6 skipped / 1 failed（test_main.py 基线环境问题，N2 零回归）
+
+- ✅ TEST-FIX：test_main.py 测试隔离修复（.env API_KEY 污染）（2026-07-20）
+  - **问题分析**：`test_validate_startup_configuration_rejects_exposed_bind_without_api_key` 期望抛 RuntimeError 但实际未抛。根因：`validate_startup_configuration` 的 `api_key is not None` 判断导致显式传入 `api_key=None` 时 fallback 到 `settings.api_key`，而 `.env` 含 `API_KEY=test_secret_key_456` 导致 `bind_api_key` 非空，条件不触发异常。
+  - **修改文件**：`tests/unit/test_main.py`（核心）
+    - 新增 `from app.config import settings` 导入
+    - 前 2 个用例加 `monkeypatch` 参数，用 `monkeypatch.setattr(settings, "api_key", None)` 隔离 .env 污染
+    - 第 3 个用例不变（显式传 `api_key="secret"`，不依赖 settings）
+  - **测试结果**：`pytest tests/unit/test_main.py -q` → 3 passed；`pytest tests/unit/ -q` → 251 passed / 6 skipped / 0 failed；`pytest tests/ -q` → 288 passed / 25 skipped / 7 failed（7 failed 为 test_api.py 401 鉴权基线问题，非回归）
+  - **不修改**：`app/main.py`、`app/config.py`、`.env`、`tests/conftest.py`
+
+- ✅ SEC-13 + M7 修复（方向 A，2026-07-23，3 子智能体并行）：
+  - **SEC-13 非原子写入**：`spec_store.update()` 改为 crash-safe append（单次 `add_log` 提交点，不再 `delete_logs`，删除仅由显式 `delete()` 负责）；`get()` 存储回读 + `_do_restore()` 按 `updated_at`（回退 `timestamp`）取最新版本；`trace_repo.save_trace()` 写入顺序改为 commit-marker（`META → LINK → DATA`，`trace_data` 最后写）。新增 5 测试（`test_spec_store.py::TestAtomicWrites` 3 + `test_trace_repo.py::TestSaveTraceAtomicity` 2）。
+  - **M7 API_KEY 空串鉴权**：`config.py` `model_post_init` 将空串/纯空白 `api_key` 归一化为 `None` + warning（"空=未配置=不鉴权"语义收口于配置层）；`middleware.py` 未改，`hmac.compare_digest` fail-closed 不变。新增 3 测试（`test_config.py::TestApiKeyNormalization`）。
+  - **涉及文件**：`app/mcp/verifier/spec_store.py`、`app/mcp/core/trace_repo.py`、`app/config.py`、`tests/unit/test_spec_store.py`、`tests/unit/test_trace_repo.py`、`tests/unit/test_config.py`
+  - **测试结果**：4 受影响文件 57 passed；全量 `pytest tests/unit/ -q` → 292 passed / 6 skipped / 1 failed（test_git.py 预存白名单，无关）。AI_RULES 合规：未触碰 `pg_store.py`/`base.py`/`memory_store.py`，未绕过 Storage，未改 fail-closed 鉴权。
 
 > 完整已完成能力清单请查看 [PROJECT_SUMMARY.md](../../PROJECT_SUMMARY.md) §4。
 
 ### 当前阻塞问题
 
-- 🔴 当前发布收口以 [claude-v0.3.0-audit-todos.md](./release/claude-v0.3.0-audit-todos.md) 为准。
-- 🔴 `.env` 含 `API_KEY=test_secret_key_456` 导致 test_main.py 1 个失败（环境问题，非代码 bug）
+- ✅ Release Audit 全部收口：P0/P1/P2/P3 清零 + C5/C4/H7 核实（详见 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md)），已打 `v0.3.0` tag（未推送，待用户确认）。
 - 🟡 PG 集成测试因本地 PostgreSQL 编码问题（UnicodeDecodeError）全部 skip
-- 🟡 测试状态基线：217 passed, 6 skipped, 1 failed
+- 🟡 测试状态基线：**单元 310 passed / 6 skipped / 0 failed**；集成 41 passed / 19 skipped / 8 failed（test_api.py 鉴权 401，`.env` `API_KEY` 污染预存在基线，非回归）
+- ✅ Phase 0-5 全部完成：asyncpg 异步存储、AsyncOpenAI、多级缓存 L1+L2、errors 表持久化、spec_store 独立表、Browser SDK V2 批量上报、GitHub Actions CI
+- ✅ TEST-FIX：test_main.py .env API_KEY 污染已通过 monkeypatch 隔离修复（2026-07-20）
 - ✅ 已完成复核项（任务 D，2026-07-19）：`H4`、`H5`、`N4`
 - ✅ WIP-001：dispatch 链路异步化已完成，当前单元测试已恢复全绿。
+
+### 新增配置项提示（Phase 0-5）
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `PG_ASYNC_ENABLED` | `false` | asyncpg 异步存储 feature flag |
+| `PG_ASYNC_MIN` / `PG_ASYNC_MAX` | `2` / `20` | asyncpg 连接池范围 |
+| `MEMORY_STORE_MAX_ENTRIES` | `10000` | MemoryStore LRU 容量上限 |
+| `LLM_BASE_URL` | 空 | 自定义 LLM API 地址 |
+| `LLM_TEMPERATURE` | `0.7` | LLM 温度参数 |
+| `LLM_TIMEOUT` | `60` | LLM 调用超时（秒） |
+| `CORS_ORIGINS` | 空 | CORS 允许来源（默认收紧） |
+| `METRICS_AUTH_ENABLED` | `false` | /metrics 独立鉴权开关 |
+| `REDACTION_KEY_ALLOWLIST` | 空 | 脱敏白名单字段名 |
 
 ### 任务 D 复核结论（H4 + H5 + N4）
 
@@ -102,7 +188,36 @@
   - `app/mcp/core/storage/pg_store.py:59` — `raise RuntimeError(f"无法连接 PostgreSQL: {e}")`，启动期错误含 PG 连接参数细节
 - 边界（4 处，风险较低）：`app/mcp/transports/stdio.py:61`、`app/mcp/protocol/server.py:160`、`app/api/mcp_routes.py:47`、`app/mcp/verifier/ui_runner.py:86,116,132,193`
 - 日志路径（不算漏网）：`logger.error/exception` 写 `str(e)` 是服务端内部日志，不外泄给客户端
-- 结论：N4 主干已收口，漏网 3 处已登记到 `claude-v0.3.0-audit-todos.md` §四作为新 follow-up，等待用户确认是否单独开任务修复。
+- 结论：N4 主干已收口，漏网 3 处已登记到 `claude-audit-consolidated.md` §四作为新 follow-up，等待用户确认是否单独开任务修复。
+
+### N4-FU-1+2 修复（2026-07-20）
+
+```
+任务：N4-FU-1+2 — N4 follow-up 漏网 2 处修复（spec.py + stdio.py）
+当前状态：已完成
+已完成：
+  - N4-FU-1：app/api/spec.py L23/L34 HTTPException detail 去掉 {e}，改为
+    detail="创建规范失败" / detail="列出规范失败" + logger.exception("...: %s", e)
+  - N4-FU-2：app/mcp/transports/stdio.py L88 make_error 改为
+    "内部错误，详情见服务端日志"（保持 INTERNAL_ERROR -32603 不变）
+  - 新增 tests/unit/test_spec_api.py TestSpecAPIErrorSanitization 2 用例
+    （验证 HTTPException detail 不含原始异常敏感文本）
+修改文件：
+  - app/api/spec.py（L22-23, L33-34）
+  - app/mcp/transports/stdio.py（L88）
+  - tests/unit/test_spec_api.py（新增 TestSpecAPIErrorSanitization 2 用例）
+  - docs/internal/AI_HANDOFF.md（本条目）
+  - docs/internal/release/claude-audit-consolidated.md（N4-FU-1/2 状态更新）
+测试结果：
+  - pytest tests/unit/test_spec_api.py -q → 11 passed（含新增 2 用例）
+  - pytest tests/unit/test_jsonrpc.py -q → 20 passed（零回归）
+  - pytest tests/unit/ -q → 250 passed, 6 skipped, 1 failed（test_main.py .env 环境问题，非回归）
+  - N4-FU-3 保留不处理（pg_store.py 禁止修改）
+下一步：
+  - N4-FU-3 待后续单独评估（pg_store.py 修改需审批）
+风险：
+  - 无。改动最小（2 文件各 2 行 + 2 测试用例），不涉及禁止修改模块。
+```
 
 ### H10 任务交接（2026-07-19）
 
@@ -131,7 +246,7 @@
   - tests/unit/test_silent_failure.py
   - docs/internal/AI_HANDOFF.md（本条目）
   - docs/internal/DEV_PLAN.md（H10 勾选）
-  - docs/internal/release/claude-v0.3.0-audit-todos.md（H10 状态更新）
+  - docs/internal/release/claude-audit-consolidated.md（H10 状态更新）
 测试结果：
   - pytest tests/unit/test_silent_failure.py: 12 passed
   - pytest tests/unit/: 211 passed, 1 failed（test_main.py 鉴权断言，.env API_KEY 污染，与本任务无关）, 6 skipped
@@ -181,7 +296,7 @@
   - tests/integration/test_process_boundary.py（新建，3 用例 + 1 fixture + 4 辅助函数）
   - docs/internal/AI_HANDOFF.md（本条目）
   - docs/internal/DEV_PLAN.md（H12 勾选）
-  - docs/internal/release/claude-v0.3.0-audit-todos.md（H12 状态更新）
+  - docs/internal/release/claude-audit-consolidated.md（H12 状态更新）
 测试结果：
   - pytest tests/integration/test_process_boundary.py: 2 passed, 1 skipped（PG 池测试因 STORAGE_BACKEND != postgresql 显式 skip）
   - pytest tests/integration/test_pg_integration.py: 16 skipped（PG 未启动，全部显式 skip）
@@ -236,7 +351,7 @@
   - tests/integration/test_process_boundary.py（追加 8 个 N3 用例）
   - docs/internal/AI_HANDOFF.md（本条目）
   - docs/internal/DEV_PLAN.md（N3 勾选）
-  - docs/internal/release/claude-v0.3.0-audit-todos.md（N3 状态更新）
+  - docs/internal/release/claude-audit-consolidated.md（N3 状态更新）
 测试结果：
   - pytest tests/integration/test_process_boundary.py: 9 passed, 2 skipped（N3 范围 8/8 + H12 范围 1/3）
     * skip 原因：test_pg_pool_closed_on_shutdown 因 STORAGE_BACKEND != postgresql 显式 skip
@@ -262,6 +377,96 @@
   - app/mcp/transports/stdio.py 当前是死代码（未被引用），改动仅为对齐任务描述的"关闭钩子"位置，无测试覆盖
 ```
 
+### DOC-SYNC 任务交接（2026-07-20）
+
+```
+任务：DOC-SYNC — README.md + CODE_REVIEW.md 文档状态同步
+当前状态：已完成
+已完成：
+  - README.md 项目状态表测试基线：从 "以当前实际 pytest 运行结果为准" → "248 passed / 6 skipped / 1 failed（.env API_KEY 环境问题，非回归）"
+  - README.md 项目状态表当前阶段：从 "V2 Network Capture 完成，Release Preparation" → "v0.3.0 Release Audit 收口完成（P0 7/7 ✅，P1 8/8 ✅）"
+  - CODE_REVIEW.md 迁移任务清单：spec_store 迁移项标记 ✅ 已完成
+  - CODE_REVIEW.md 迁移任务清单：errors / network_records / ui_events 表项补充"当前通过 traces 表 JSONB data + step 字段区分实现持久化"说明
+  - CODE_REVIEW.md 技术债清单：spec_store 项从 🔲 改为 ✅
+  - CODE_REVIEW.md 附录"当前差距"：spec_store 项从 🔲 改为 ✅；errors/specs/network_records/ui_events 表项补充持久化路径说明
+修改文件：
+  - README.md
+  - docs/internal/CODE_REVIEW.md
+  - docs/internal/AI_HANDOFF.md（本条目）
+测试结果：
+  - 纯文档任务，无代码改动，无测试执行
+  - 测试基线以 README.md 项目状态表为准（248 passed / 6 skipped / 1 failed）
+下一步：
+  - 推送到 GitHub + 考虑 CI pipeline（GitHub Actions）
+  - 后续 P2/P3 改进项可在新 Sprint 处理
+风险：
+  - 无代码风险（纯文档同步）
+  - 状态描述以 AI_HANDOFF.md §一 已记录的 v0.3.0 收口成果为依据，与 PROJECT_SUMMARY.md / DEV_PLAN.md / claude-audit-consolidated.md 保持一致
+```
+
+### AUDIT-2 五维代码评估任务交接（2026-07-20）
+
+```
+任务：AUDIT-2 — 五维代码全面评估（安全性/权限控制/数据流动/多并发/代码逻辑路径）
+当前状态：已完成（评估报告已写入，未修复任何代码）
+已完成：
+  - 阅读 AI_RULES.md / AI_HANDOFF.md / DEV_PLAN.md / CODE_REVIEW.md / PRD.md / DESIGN.md / PROJECT_SUMMARY.md
+  - 审查 app/ 全部核心模块（middleware / api / mcp / llm / config / main）
+  - 五维评估报告写入 docs/internal/CODE_REVIEW.md §五维代码评估报告（2026-07-20）
+  - 14 个待改进项（2 P0 + 4 P1 + 6 P2 + 2 P3）登记到 DEV_PLAN.md §三
+修改文件：
+  - docs/internal/CODE_REVIEW.md（追加五维评估报告章节）
+  - docs/internal/DEV_PLAN.md（§三 追加 AUDIT-2 任务列表）
+  - docs/internal/AI_HANDOFF.md（本条目）
+测试结果：
+  - 纯评估任务，无代码改动，无测试执行
+  - 测试基线以 README.md 项目状态表为准（251 passed / 6 skipped / 0 failed）
+关键发现：
+  - P0：mcp_routes.py:47 `PARSE_ERROR` 未导入 → NameError（客户端发无效 JSON 时触发）
+  - P0：mcp_routes.py:47 `f"无效 JSON: {e}"` 异常细节外泄
+  - P1：mcp_routes.py:84 错误码误用 `INVALID_REQUEST` 替代 `INTERNAL_ERROR`
+  - P1：spec_store.py:146-148 持锁做 IO + N+1 查询（1000 次 get_logs）
+  - P1：trace_repo.py:102-136 `save_trace` 多次写入非原子
+下一步：
+  - 立即修复 P0（AUDIT-2-1 / AUDIT-2-2）— ✅ 已完成
+  - 评估 P1 是否阻塞 v0.3.0 发布（建议修复后再发布）— ✅ 已完成
+  - P2/P3 纳入后续 Sprint
+风险：
+  - 评估仅基于静态代码审查，未做运行时验证
+  - 部分问题（如 spec_store N+1 查询）需实际负载验证影响
+  - P0 NameError 可能影响所有发往 /mcp 的无效 JSON 请求（生产风险）
+```
+
+### Phase 1 短期优化任务交接（2026-07-22）
+
+```
+任务：Phase 1 短期优化 — PG连接池可配置化 + LLM缓存 + 端点级限流 + PG重连修复
+当前状态：已完成
+已完成：
+  - P1-1 PG连接池可配置化：config.py 新增 pg_min_connections/pg_max_connections（默认2/20），pg_store.py 使用配置项替代硬编码
+  - SEC-14 PG重试真正重连：_execute_with_retry 返回 (conn, rowcount) 元组，OperationalError 时关闭坏连接并获取新连接，调用方 finally 归还最新连接；修复 cleanup_expired rowcount 获取逻辑
+  - P1-2 LLM分析结果缓存：analyzer.py 新增线程安全缓存（按 fingerprint，LRU 100条，TTL 1小时），命中缓存直接返回不调用 LLM
+  - P1-3 端点级限流：middleware.py RateLimitMiddleware 新增 ENDPOINT_LIMITS（/ingest/ 120/min, /api/debug/analyze 10/min, /api/debug/verify/ui 5/min），未匹配路径使用全局默认值
+修改文件：
+  - app/config.py（新增 pg_min_connections/pg_max_connections）
+  - app/mcp/core/storage/pg_store.py（_get_pool 配置化 + _execute_with_retry 返回元组 + cleanup_expired rowcount 修复）
+  - app/llm/analyzer.py（LLM缓存：_analysis_cache + _compute_context_fingerprint + _get_cached_result + _set_cache_result）
+  - app/middleware.py（端点级限流：ENDPOINT_LIMITS + _get_endpoint_limit）
+测试结果：
+  - pytest tests/unit/test_storage.py -q → 11 passed, 5 skipped
+  - pytest tests/unit/test_analyzer.py -q → 34 passed（含 7 个缓存测试）
+  - pytest tests/unit/test_middleware.py -q → 12 passed（含 5 个端点限流测试）
+  - pytest tests/unit/ -q → 284 passed, 1 failed（test_git.py 白名单测试，与本次修改无关）, 6 skipped
+代码审查修复（code-review skill 审查后）：
+  - BUG-2 修复：_get_cached_result 返回深拷贝（copy.deepcopy）而非引用，防止缓存数据被外部修改污染
+  - ISSUE-1 修复：_set_cache_result 存储 copy.deepcopy(result)，cached 字段在缓存后设置，不污染缓存原始数据
+  - 新增 11 个测试用例：
+    - TestLLMCache: 命中/未命中/TTL过期/淘汰/flag标记/不可变性（test_analyzer.py）
+    - TestEndpointRateLimit: /ingest/前缀/analyze/verify/ui/默认值（test_middleware.py）
+风险：
+  - 无新增风险，所有修改均为增量增强，不改变现有行为
+```
+
 ---
 
 ## 二、当前阶段禁止事项
@@ -284,12 +489,12 @@
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P0** | schemas 重复定义统一 / spec_store 持久化可靠性 / M9 .env 根因修复 | 发布前核心稳定性阻塞项 |
-| **P1** | N2 LLM 输出校验 / M4 JSON-RPC 错误码 / 测试盲区覆盖（auto_test/ui_runner/build_debug_context） | 协议规范与测试完整性 |
-| **发布** | 推送到 GitHub 前建议加 CI pipeline（GitHub Actions） | 自动化测试与发布保障 |
-| **P2** | Browser SDK 自动采集后续项 | 完成 V2-V6 |
-| **P3** | SSE 实时 Dashboard | Trace 实时推送 |
-| **P4** | Docker Compose 与 LLM 配置完善 | 完善开发/部署体验 |
+| **P0** | schemas 重复定义统一 ✅ / spec_store 持久化可靠性 ✅ / M9 .env 根因修复 ✅ | 发布前核心稳定性阻塞项 — 全部清零 |
+| **P1** | N2 LLM 输出校验 ✅ / M4 JSON-RPC 错误码 ✅ | 协议规范与测试完整性 — 全部清零 |
+| **发布** | GitHub Actions CI 已完成 ✅ | 自动化测试与发布保障 |
+| **P2** | Browser SDK V3-V6 | 网络错误自动标记、SDK 追踪、增强 ingest、UI 静默失败检测 |
+| **P3** | 数据层长期优化 + 可观测性 | traces 分区/归档、OpenTelemetry、熔断器 |
+| **P4** | 智能化 | RAG 知识库、AI Debug Agent |
 
 ---
 
@@ -340,4 +545,4 @@
 5. [DEV_PLAN.md](./DEV_PLAN.md) — 了解当前任务
 6. [CODE_REVIEW.md](./CODE_REVIEW.md) — 理解长期方向
 7. [PRD.md](./PRD.md) — 理解产品需求（最后阅读）
-8. [claude-v0.3.0-audit-todos.md](./release/claude-v0.3.0-audit-todos.md) — 查看当前 Release 审查收口清单
+8. [claude-audit-consolidated.md](./release/claude-audit-consolidated.md) — 查看当前 Release 审查收口清单

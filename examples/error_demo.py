@@ -19,7 +19,6 @@ def risky_function(x, y):
 
 def nested_function():
     """嵌套调用"""
-    config = {"key": "value", "debug": True}
     return risky_function(10, 0)  # 故意触发 ZeroDivisionError
 
 

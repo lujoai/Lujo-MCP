@@ -1,5 +1,9 @@
 """auto_test 演示 —— 直接调用，不走 MCP 协议"""
-import json, threading, os, sys, time, asyncio
+import threading
+import os
+import sys
+import time
+import asyncio
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(HERE, "app", "web")
@@ -17,7 +21,7 @@ time.sleep(1)
 # 2. 直接调用 auto_test
 sys.path.insert(0, HERE)
 os.environ["PYTHONPATH"] = HERE
-from app.mcp.tools.auto_test_api import auto_test_handler
+from app.mcp.tools.auto_test_api import auto_test_handler  # noqa: E402  # 需先设置 sys.path/PYTHONPATH
 
 print("=" * 50)
 print("  auto_test ▸ Playwright 自动遍历演示")

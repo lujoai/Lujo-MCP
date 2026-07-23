@@ -17,14 +17,18 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 - **调试上下文构建** — 将原始追踪日志转换为 AI 可理解的结构化上下文
 - **异常堆栈捕获** — 捕获异常调用栈、局部变量、源码行号
 - **运行时快照** — 采集系统/进程/解释器状态（CPU、内存、线程等）
-- **LLM 智能分析** — 对接智谱 GLM-4.5-Air / OpenAI，自动分析错误根因并给出修复建议
+- **LLM 智能分析** — 对接智谱 GLM-4.5-Air / OpenAI（AsyncOpenAI 异步调用），自动分析错误根因并给出修复建议
+- **多级缓存** — L1(LRU) + L2(Redis) 多级缓存，减少重复 LLM 调用
 - **规范驱动 + verify 自动断言** — 定义期望规范，系统自动比对实际结果，检测"返回正常但不符合规范"的静默失败
 - **UI 自动验收** — auto_test 自动遍历页面所有可交互元素，捕获控制台错误和网络 4xx/5xx
+- **errors 持久化聚合** — 异常自动入库 errors 表，支持指纹去重与聚合统计
+- **spec_store 独立表** — 规范持久化到独立表，支持 CRUD 与审计追溯
 
-### 浏览器 SDK 能力（V2 Network Capture）
+### 浏览器 SDK 能力（V2 Network Capture + 批量上报）
 - **网络请求拦截** — 同时支持 XMLHttpRequest 和 fetch 请求
 - **请求体安全序列化** — 支持 String、FormData、Blob、ArrayBuffer、URLSearchParams
 - **响应体捕获** — 自动截取响应体前 2000 字符
+- **批量上报** — V2 批量上报 + sendBeacon 兜底，减少请求次数
 - **采样控制** — `networkSampleRate` 控制采样比例（0-1）
 - **节流控制** — `networkThrottleMs` 控制相同请求间隔上报
 - **SDK 自排除** — 防止上报请求递归捕获
@@ -37,7 +41,7 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      传输层 (Transport)                      │
-│  MCP (JSON-RPC 2.0) / HTTP REST / WebSocket                 │
+│  MCP (JSON-RPC 2.0) / HTTP REST + stdio (WebSocket 规划中)  │
 ├─────────────────────────────────────────────────────────────┤
 │                     中间件层 (Middleware)                    │
 │  Auth / RateLimit / RequestID / ErrorHandler                │
@@ -54,6 +58,8 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 ```
 
 > 详细架构设计（含架构图、模块关系、数据流）请查看 [DESIGN.md](./docs/internal/DESIGN.md)。
+
+> 📌 **SSE / Notifications**：当前 MCP Streamable HTTP 传输已支持 SSE 响应通道（`GET /mcp` 事件流 + `POST` SSE 响应），但 server→client 主动 notifications 推送为规划中功能，尚未接入业务调用方（`hub.publish()` 无调用方）。
 
 ## 快速启动方式
 
@@ -103,7 +109,7 @@ python -m app.main
 ```
 LLM_PROVIDER=zhipu                          # openai | zhipu | custom
 OPENAI_API_KEY=your-zhipu-or-openai-key
-LLM_MODEL=glm-4.5-air                       # 或 gpt-4o
+LLM_MODEL=gpt-4o                            # 或 glm-4.5-air
 LLM_FALLBACK_MODEL=glm-4-flash
 ```
 
@@ -142,6 +148,17 @@ curl http://localhost:8000/
 - ✅ 规范驱动 + verify 自动断言
 - ✅ UI 自动验收（auto_test）
 
+### Phase 3-5 新增能力
+- ✅ PG 异步存储（asyncpg，feature flag 灰度切换）
+- ✅ LLM 异步调用（AsyncOpenAI）
+- ✅ 多级缓存 L1(LRU) + L2(Redis)
+- ✅ errors 表持久化聚合（指纹去重 + 统计）
+- ✅ spec_store 独立表（CRUD + 审计追溯）
+- ✅ Browser SDK V2 批量上报 + sendBeacon 兜底
+- ✅ /ingest/batch 端点（批量入库）
+- ✅ GitHub Actions CI
+- ✅ 长期路线图（docs/internal/ROADMAP.md）
+
 ### V2 浏览器网络捕获能力
 - ✅ XMLHttpRequest 拦截（open/send hook）
 - ✅ fetch 请求拦截
@@ -159,12 +176,17 @@ curl http://localhost:8000/
 | 指标 | 状态 |
 |------|------|
 | MCP 工具数 | HTTP 15 / stdio 15 |
-| 测试覆盖 | 以当前实际 pytest 运行结果为准 |
-| 存储后端 | PostgreSQL（生产）/ memory（默认）|
-| LLM Provider | openai / zhipu / custom |
+| 测试覆盖 | **单元 310 passed / 6 skipped / 0 failed**；集成 49 passed / 19 skipped / 0 failed（test_api.py 鉴权基线已修复）；ruff 0 违规 |
+| 存储后端 | PostgreSQL（生产，含 asyncpg 异步实现）/ memory（默认）|
+| LLM Provider | openai / zhipu / custom（AsyncOpenAI 异步调用 + 多级缓存） |
 | Dashboard | Web 控制台（实时读取 PostgreSQL） |
-| 集成测试 | PGStore + Dashboard + MCP Tools + LLM |
-| 当前阶段 | V2 Network Capture 完成，Release Preparation |
+| 集成测试 | PGStore + Dashboard + MCP Tools + LLM + AsyncPGStore |
+| 当前阶段 | v0.3.0 Phase 0-5 全部完成 ✅；Release Audit 全部收口 ✅（已打 `v0.3.0` tag）|
+| 安全审查 | 数据流+安全复核：健康度 **8.5/10**，核心架构**无需重写**。**P0 四项已修复**（SEC-01 LFI / SEC-02 SSRF / SEC-03 默认鉴权 / SEC-05 工具超时）；**P1 五项已修复**（SEC-04 会话隔离 / SEC-06 脱敏 / SEC-07 限流 / SEC-08 metrics / SEC-09 SDK）；**P2/P3 全部完成**（SEC-13/M7 + M3/M10/M11/L6 已修复）。详见 [SECURITY_REVIEW.md](./docs/internal/SECURITY_REVIEW.md) |
+
+> ⚠️ **安全提示（v0.3.0 P0+P1+P2+P3 加固后）**：默认更安全——`0.0.0.0`+空 `API_KEY` 会拒绝启动、代码/Git 定位默认仅限项目根、Playwright 默认拒私网/云元数据/`file://`。因此：**本地免鉴权**运行请用 `HOST=127.0.0.1`；**本地联调 Playwright** 设 `UI_URL_ALLOW_PRIVATE=true`（或 `UI_URL_ALLOWLIST`）；读项目根外源码配 `WHITELIST_PATH_PREFIX`/`GIT_PATH_WHITELIST`。新增配置：`TOOL_TIMEOUT_SECONDS`（默认 60）/`UI_URL_ALLOW_PRIVATE`/`UI_URL_ALLOWLIST`/`DEBUG_ENDPOINTS_ENABLED`（默认 false）。Release Audit 全部收口：P0+P1+P2+P3 已全部修复。
+
+> 详细路线图见 [ROADMAP](./docs/internal/ROADMAP.md)
 
 ## 项目结构
 
@@ -183,12 +205,16 @@ ai-debug-mcp/
 │   │   ├── verifier/          # 断言引擎
 │   │   ├── hooks/             # 异常钩子
 │   │   └── transports/        # 传输层
-│   ├── middleware.py          # 中间件栈
+│   ├── middleware.py          # 中间件栈（安全栈）
+│   ├── middleware_network.py  # 网络采集中间件（可选）
 │   └── config.py              # 统一配置
 ├── browser-sdk/               # 浏览器 SDK（V2 Network Capture）
 │   └── ai-debug.js            # SDK 核心文件
 ├── app/web/                   # Web 演示页面
-│   └── network_capture_demo.html  # 网络捕获演示页面
+│   ├── dashboard.html         # Dashboard 控制台
+│   ├── network_capture_demo.html  # 网络捕获演示（/demo）
+│   ├── silent_failure_demo.html   # 静默失败演示
+│   └── auto_test_demo.html        # 自动遍历演示
 ├── migrations/                # SQL 迁移文件
 ├── scripts/                   # 一键式脚本
 ├── tests/                     # 测试
@@ -207,20 +233,23 @@ ai-debug-mcp/
 | [PRD.md](./docs/internal/PRD.md) | 产品需求 |
 | [DESIGN.md](./docs/internal/DESIGN.md) | 技术架构设计 |
 | [DEV_PLAN.md](./docs/internal/DEV_PLAN.md) | 当前开发计划 |
+| [ROADMAP.md](./docs/internal/ROADMAP.md) | 长期路线图 |
 | [CODE_REVIEW.md](./docs/internal/CODE_REVIEW.md) | 长期技术路线 |
 
 ## 测试
 
 ```bash
-# 运行全部测试（需要 PostgreSQL 运行中）
+# 运行全部测试（集成测试需要 PostgreSQL 运行中，单元测试不需要）
 python -m pytest tests/ --tb=short -q
 
-# 仅运行单元测试
+# 仅运行单元测试（无需外部依赖）
 python -m pytest tests/unit/ --tb=short -q
 
-# 仅运行集成测试
+# 仅运行集成测试（需要 PostgreSQL/Redis）
 python -m pytest tests/integration/ --tb=short -q
 ```
+
+> ⚠️ **注意**：单元测试前请确保 `.env` 不含 `API_KEY`（SEC-03 鉴权会导致集成测试 401 失败）；集成测试需 PostgreSQL/Redis（`docker compose up -d`）。
 
 MCP stdio 唯一启动命令：
 

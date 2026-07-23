@@ -18,7 +18,7 @@ trace_result = json.loads(resp.read().decode())
 print(f'✅ /api/dashboard/trace 响应: {trace_result["trace_kind"]}')
 
 print('\n3. 验证 PostgreSQL 数据')
-import os
+import os  # noqa: E402  # 需先打印进度再设环境变量
 os.environ['STORAGE_BACKEND'] = 'postgresql'
 os.environ['PG_HOST'] = 'localhost'
 os.environ['PG_PORT'] = '5432'
@@ -26,7 +26,7 @@ os.environ['PG_DATABASE'] = 'ai_debug_mcp'
 os.environ['PG_USER'] = 'postgres'
 os.environ['PG_PASSWORD'] = 'REDACTED'
 
-from app.mcp.core.storage.pg_store import _get_pool, close_pool
+from app.mcp.core.storage.pg_store import _get_pool, close_pool  # noqa: E402  # 需先设 PG 环境变量
 pool = _get_pool()
 conn = pool.getconn()
 cur = conn.cursor()

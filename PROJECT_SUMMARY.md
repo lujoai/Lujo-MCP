@@ -70,10 +70,13 @@
 ### 存储能力 ✅
 
 - ✅ PostgreSQL 16 集成
-- ✅ PGStore 连接池（minconn=2, maxconn=10）
-- ✅ 自动建表（traces、sessions）
+- ✅ PGStore 连接池（minconn=2, maxconn=20）
+- ✅ **asyncpg 异步存储**（feature flag 灰度切换，`PG_ASYNC_ENABLED`）
+- ✅ 自动建表（traces、sessions、errors、specs、network_records、ui_events）
 - ✅ 存储工厂模式（memory/pg 一键切换）
 - ✅ Dashboard 从 PostgreSQL 读取
+- ✅ **errors 表持久化聚合**（指纹去重 + 统计）
+- ✅ **spec_store 独立表**（CRUD + 审计追溯）
 
 ### 传输能力 ✅
 
@@ -88,11 +91,14 @@
 - ✅ 请求体大小限制（防 DoS）
 - ✅ IP 限流（Redis 计数）
 - ✅ 安全响应头
-- ✅ 入库前脱敏
+- ✅ 入库前脱敏（复合键名子串匹配 + 白名单）
+- ✅ /metrics 独立鉴权 toggle
+- ✅ CORS 可配置来源
 
 ### 前端能力 ✅
 
 - ✅ 浏览器 SDK（UMD/CJS/ESM）
+- ✅ **SDK V2 批量上报 + sendBeacon 兜底**
 - ✅ Console 自动采集（console.error/warn 自动上报 + trace_id 关联 + 脱敏）
 - ✅ Playwright 自动遍历（auto_test）
 - ✅ Web 控制台 Dashboard
@@ -102,28 +108,56 @@
 - ✅ Docker Compose 一键启动
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
-- ✅ 测试覆盖（当前测试状态以 [README.md](./README.md) 项目状态表为准）
+- ✅ GitHub Actions CI
+- ✅ 测试基线：**340 passed / 6 skipped / 0 failed**（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
+
+### v0.3.0 Release Audit 收口 ✅
+
+- ✅ C3/C4 trace_repo 键统一 + PG 持久化回读链路
+- ✅ H4/H5/H12 进程边界 + 脱敏复核 + 测试卫生
+- ✅ H10 SDK 静默失败事件链补齐（network/UI 环形缓冲 + observed_events 入库）
+- ✅ M1 storage factory 拼写错误 fail-fast
+- ✅ M4 JSON-RPC 错误码规范化（-32700/-32600/-32601/-32602/-32603）
+- ✅ M12 依赖拆分（requirements.txt / requirements-dev.txt）
+- ✅ N2 LLM 输出 schema 校验 + 结构化 fallback
+- ✅ N3 stdio 生命周期资源回收（PG 连接池 / excepthook 卸载 / atexit+signal 兜底）
+- ✅ N4 内部错误串全仓复核（已收口 17 类，漏网 3 处登记 follow-up）
+- ✅ M9 .env 未知键 fail-fast（ConfigDict extra="ignore" + model_post_init warning）
+- ✅ schemas 重复定义统一（删除死代码 debug.py + 重命名冲突类）
+- ✅ spec_store 持久化可靠性（list_specs 恢复逻辑补齐）
 
 ---
 
 ## 5. 当前开发阶段
 
-**当前阶段**：Phase 1.x 工程化增强阶段
+**当前阶段**：v0.3.0 Phase 0-5 全部完成 ✅
 
 **已完成**：
 - Phase 0：项目标准化 ✅
 - Phase 1：PostgreSQL 集成 ✅
-- Phase 1 当前：规范驱动验证 ✅（V1-V5 全部完成）
+- Phase 1 规范驱动验证 ✅（V1-V5 全部完成）
+- v0.3.0 Release Audit 收口 ✅（P0 7/7 ✅，P1 8/8 ✅，2026-07-19）
+- Phase 2：PG 异步存储（asyncpg）+ errors 表持久化聚合 ✅
+- Phase 3：LLM 异步调用（AsyncOpenAI）+ 多级缓存 ✅
+- Phase 4：Browser SDK V2 批量上报 + /ingest/batch ✅
+- Phase 5：安全加固（SEC-04/07/08/12/LFI/SSRF/auth hardening）✅
 
-**调整后的优先级**：
+**测试基线：340 passed / 6 skipped / 0 failed**（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
+
+**后续优先级**（详见 [ROADMAP.md](./docs/internal/ROADMAP.md)）：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P1** | Browser SDK 自动采集 | 让浏览器端错误、网络请求、UI事件自动进入 Trace 系统 |
-| **P2** | SSE 实时 Dashboard | 实现 Trace 实时推送 |
-| **P3** | Docker Compose 完善 | 一键启动完整开发环境 |
-| **P4** | LLM Root Cause Analysis 增强 | 增强 LLM 分析能力 |
-| **P5** | Repository 层优化和 spec_store 持久化 | 延后执行 |
+| **P1** | Browser SDK V3-V6 | 网络错误自动标记、SDK 初始化追踪、增强 ingest、UI 静默失败检测 |
+| **P2** | 数据层长期优化 | traces 表分区、归档策略、批量写入、优雅降级 |
+| **P3** | 可观测性与可靠性 | OpenTelemetry 集成、消息队列削峰、熔断器 |
+| **P4** | 智能化 | 智能错误分析引擎、RAG 知识库、AI Debug Agent |
+
+**v0.3.0 收口成果**：
+- 测试基线：340 passed / 6 skipped / 0 failed（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
+- P0 全部清零：C3/C4 键统一+PG回读、H4/H5 复核、H10 SDK事件链、H12 进程边界、M9 .env fail-fast、schemas 统一、spec_store 持久化
+- P1 全部清零：N2 LLM输出校验、N3 stdio资源回收、M1 storage factory、M4 JSON-RPC错误码、M12 依赖拆分
+- Phase 2-5 新增：asyncpg 异步存储、AsyncOpenAI、多级缓存、errors 聚合、spec_store 独立表、SDK V2 批量上报、GitHub Actions CI
 
 ---
 
@@ -199,7 +233,7 @@
 
 ```bash
 # Docker Compose（推荐）
-docker-compose up -d
+docker compose up -d
 
 # 本地开发（确保 PostgreSQL 已运行）
 python -m app.main
@@ -207,3 +241,28 @@ python -m app.main
 # stdio 模式（供 Claude Desktop 等本地客户端）
 python -m app.mcp_server
 ```
+
+---
+
+## 10. 安全审查结论（2026-07-23，AI 阅读须知）
+
+> AI 进入本项目做任何安全相关判断前，请先读本节与 [docs/internal/SECURITY_REVIEW.md](./docs/internal/SECURITY_REVIEW.md) SEC-01~15、[DESIGN.md](./docs/internal/DESIGN.md) §13。
+
+**整体健康度：8.5 / 10**（工程质量 8.5 / 安全性 8.0 / 架构可维护性 8.5 / 文档可信度 9.0）。核心数据流架构**合理、无需重写**；安全基线扎实，部分长期项（如 C7 source-map）未完成。
+
+**P0（部署前必修）—— ✅ 四项已于 2026-07-22 修复**（下表为原始风险与证据；行为变更见文末）：
+
+| 项 | 一句话 | 证据 |
+|----|--------|------|
+| SEC-01 LFI | `ingest` 任意 `frames[].file` → dashboard trace 详情 `linecache` 回显文件 | `ingest.py:73`→`code_locator.py:85` |
+| SEC-02 SSRF | `verify_ui`/`auto_test` 的 `url` 直连 Playwright `page.goto`，无白名单 | `ui_runner.py:82` |
+| SEC-03 免鉴权 | `API_KEY` 默认空即免鉴权；启动防护仅 `__main__`+`0.0.0.0` | `config.py:74`、`main.py:233` |
+| SEC-05 无超时 | 工具调用无 `wait_for`，可数分钟阻塞 | `server.py:87` |
+
+**须订正的既有认知**：① “入库前脱敏”对 `exception_hook→errors` 的自动捕获路径不成立（message/traceback 未脱敏，SEC-06）；② “会话隔离”仅 stdio 成立，共享 HTTP 无 `session_id` 维度（SEC-04）；③ 路径白名单默认放行；④ 中间件真实顺序为 `Trace` 最外、`CORS` 内于 `Auth`（非文档所述）。
+
+**已复核为安全**：SQL 全参数化（无注入）、LLM 发送前递归脱敏、assert_engine 纯函数无 `eval`、PG 连接池双检锁正确。**无支付/资金逻辑**；唯一间接财务风险是 LLM 调用无配额（费用失控）。
+
+> 整改追踪见 [release/claude-audit-consolidated.md](./docs/internal/release/claude-audit-consolidated.md)。修任一项须回填状态 + `文件:行` 验证。
+
+**P0 修复后的行为变更（AI 须知）**：① 0.0.0.0+空 `API_KEY` 现会拒绝启动（本地免鉴权用 `HOST=127.0.0.1`）；② 代码/Git 定位默认仅限进程 CWD，读 CWD 外源码需配 `WHITELIST_PATH_PREFIX`/`GIT_PATH_WHITELIST`；③ `verify_ui`/`auto_test` 默认拒私网/元数据/`file://`，本地联调设 `UI_URL_ALLOW_PRIVATE=true`；④ 工具调用受 `TOOL_TIMEOUT_SECONDS`（默认 60s）约束。P1（SEC-04/06/07/08/09）与 P2（SEC-13/M7）已修复。

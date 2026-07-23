@@ -148,7 +148,7 @@
 | FR4 | 运行时快照 | P0 | ✅ | `psutil` 采集，降级 |
 | FR5 | LLM 智能分析 | P0 | ✅ | 重试/超时/fallback/截断/流式 |
 | FR6 | MCP 工具集（HTTP/REST 侧） | P0 | ✅ | `debug`/`context`/`trace`/`stacktrace` |
-| FR6b | MCP 工具集（stdio 侧） | P0 | ✅ | `mcp_server.py` 暴露 14 工具，完整清单见 §10.2 |
+| FR6b | MCP 工具集（stdio 侧） | P0 | ✅ | `mcp_server.py` 暴露 15 工具，完整清单见 §10.2 |
 | FR7 | 双传输 | P0 | ✅ | Streamable HTTP + stdio |
 | FR8 | REST 调试 API | P1 | ✅ | `/api/debug/run` `/analyze` `/analyze/stream` `/runtime` `/session` |
 | FR9 | 可观测性 | P1 | ✅ | `/metrics` `/health` |
@@ -164,7 +164,7 @@
   2. `code_locator.py` 生成 `vscode://file/<abs>:<lineno>` 可点击链接，支持路径映射与白名单防穿越。
   3. `stacktrace` / `context` 工具及 `/api/debug/run` 在异常含帧时自动附加 `code_snippets`。
   4. 新建 `app/mcp/core/errors.py` 近期异常存储；`exception_hook` 真正持久化捕获的异常，供 `get_debug_context`/`list_recent_traces`/`search_logs` 检索。
-  5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，当时的 6 个 stdio 工具全部可用（现已扩至 14 个，见 §10.2）。
+  5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，当时的 6 个 stdio 工具全部可用（现已扩至 15 个，见 §10.2）。
 - **验收**：`get_debug_context` / `stacktrace` 返回每帧源码片段与 IDE 链接；点击可在 IDE 打开到对应行。
 
 #### FR12 调试提示词（规范）自动生成（P0）✅ 设计已解决（宿主 AI 推理模式）
@@ -206,7 +206,7 @@
 | 规范驱动采集 | `collectors/spec.py` + `tools/spec_api.py`（扫描/标签匹配/缓存/脱敏） | ✅ |
 | 规范注入上下文 | `build_debug_context` 注入 `related_specs`（前3帧去重限长） | ✅ |
 | 指纹去重聚合 | `core/errors.py` compute_fingerprint + occurrence_count（避免重复刷屏） | ✅ |
-| 双传输工具注册 | HTTP 11 工具 + stdio 13 工具 | ✅ |
+| 双传输工具注册 | HTTP 15 工具 + stdio 15 工具 | ✅ |
 
 > **已补齐**：Playwright 自动遍历（FR14，`ui_runner.py` + `verify_ui`）；浏览器 SDK TS（`browser-sdk/ai-debug.js`）；FR15 verify 自动断言+spec 存储（`assert_engine` + `spec_store` + `verify` 工具）。proj2 的 tenacity 评估为不适用，未迁移。
 
@@ -220,7 +220,7 @@
 | --- | --- | --- |
 | 鉴权 / 限流 / 请求体限制 / CORS / 安全头 / 脱敏 | 同 v1.0 | ✅ |
 | 规范存储鉴权 | `specs` 读写受 API Key 保护 | ✅ |
-| 路径安全 | `vscode://`/`file://` 仅限白名单前缀，防路径穿越 | ✅ |
+| 路径安全 | `vscode://`/`file://` 仅限白名单前缀，防路径穿越 | ✅ **已修复（2026-07-22，SEC-01）**：原默认空=放行任意路径（LFI）；现 `code_locator`/`git` 白名单为空时**默认收敛到进程 CWD**，默认拒绝目录外路径。读 CWD 外源码需配 `WHITELIST_PATH_PREFIX` |
 
 ### 8.2 性能 / 可靠性 / 兼容性
 
@@ -240,7 +240,7 @@ flowchart TB
 
     subgraph Transport["传输层"]
         HTTP["Streamable HTTP"]
-        STDIO["stdio 子进程 (14 工具)"]
+        STDIO["stdio 子进程 (15 工具)"]
     end
 
     subgraph Core["核心服务 (FastAPI)"]
@@ -331,11 +331,13 @@ sequenceDiagram
 | GET/POST | `/api/spec` | 规范 CRUD | ✅ |
 | GET/POST | `/api/debug/prompt`（可选增强） | 生成提示词文本 | 🔲 FR12 增强 |
 
-### 10.2 stdio MCP 工具（**14 个**，已注册）✅
+### 10.2 stdio MCP 工具（**15 个**，已注册）✅
 
 `get_stacktrace` / `get_runtime_snapshot` / `search_logs` / `get_debug_context` / `list_recent_traces` / `analyze_with_llm` / `ingest_network` / `get_network_trace` / `get_blame_for_frame` / `get_recent_diff` / `ingest_silent_failure` / `ingest_error` / `get_related_specs` / `auto_test`。
 
 > HTTP 传输侧（`register_all_tools()` 注册表）为 15 个工具（含 `verify` / `verify_ui` / `ingest_console`），与 stdio 清单有差异，注册表统一为待办。
+
+> ⚠️ **订正（2026-07-22 代码核实）**：以上 stdio 工具名清单与实际不符。`register_all_tools()`（`tools/__init__.py:26-40`）HTTP 与 stdio **共用同一注册表，实际各 15 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test`。此处列出的 `get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` 是**内部函数名**，对外以 `context/trace/stacktrace` 暴露；`get_runtime_snapshot`、`analyze_with_llm` **未作为独立 MCP 工具注册**。不存在 14/15 差异。
 
 ### 10.3 已实现接口（FR13/FR14/FR15）✅
 
@@ -406,7 +408,7 @@ sequenceDiagram
 
 | 编号 | 验收项 |
 | --- | --- |
-| AC1 | 14 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
+| AC1 | 15 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
 | AC2 | `exception_hook` 安装后，未捕获异常自动进入 trace，`list_recent_traces` 可见 |
 | AC3 | LLM 分析返回 `root_cause/impact/fix/confidence` |
 | AC4 | 上下文超长被截断且不报错 |
@@ -424,7 +426,7 @@ sequenceDiagram
 | **AC11** | 给定"200 但字段缺失"请求，`verify` 输出 `silent_failure` 而非误判成功 | P5/P6 | ✅ |
 | **AC12** | 含"按钮无反应"规范，FR14 自动遍历并报告 `silent_failure` | P4 | ✅ |
 | **AC13** | 定义规范后 `verify` 对后续同类请求自动校验，偏离即告警 | P4/P5/P6 | ✅ |
-| **AC14** | `file://`/`vscode://` 链接仅限白名单前缀 | 安全 | ✅ |
+| **AC14** | `file://`/`vscode://` 链接仅限白名单前缀 | 安全 | ✅ **已修复（2026-07-22）**：白名单为空时默认收敛到进程 CWD，默认拒绝目录外路径（SEC-01） |
 
 ---
 

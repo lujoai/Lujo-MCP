@@ -19,14 +19,14 @@ cp .env.example .env
 # OPENAI_API_KEY=your-zhipu-api-key
 
 # 启动所有服务
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 方式二：本地开发
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
+# 安装依赖（生产部署用 requirements.txt，本地开发用 requirements-dev.txt）
+pip install -r requirements-dev.txt
 
 # 复制环境变量模板
 cp .env.example .env
@@ -34,7 +34,7 @@ cp .env.example .env
 # 编辑 .env 配置
 
 # 启动服务
-python -m uvicorn app.main:app --reload
+python -m app.main
 ```
 
 ### 验证服务启动
