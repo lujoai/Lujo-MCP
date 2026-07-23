@@ -88,3 +88,53 @@ def test_json_nested_password_masked():
 def test_json_no_false_positive():
     assert redact('{"username":"admin"}') == '{"username":"admin"}'
     assert redact('{"email":"test@example.com"}') == '{"email":"test@example.com"}'
+
+
+def test_capture_exception_message_redacted():
+    """exception_hook 路径：capture_exception 返回的 message 经 _redact_exception_data 后被脱敏"""
+    from app.mcp.collectors.stacktrace import capture_exception
+    from app.mcp.hooks.exception_hook import _redact_exception_data
+
+    try:
+        raise ValueError('login failed password="super_secret"')
+    except ValueError as e:
+        data = capture_exception(e, source="test")
+
+    _redact_exception_data(data)
+    assert "super_secret" not in data["message"]
+    assert "***" in data["message"]
+
+
+def test_capture_exception_traceback_redacted():
+    """exception_hook 路径：capture_exception 返回的 traceback 经 _redact_exception_data 后被脱敏"""
+    from app.mcp.collectors.stacktrace import capture_exception
+    from app.mcp.hooks.exception_hook import _redact_exception_data
+
+    secret_token = "ghp_abc123secrettoken"
+    try:
+        # 把敏感值放进局部变量，它会出现在 traceback 的 repr 中
+        api_token = secret_token  # noqa: F841  # 故意留在局部变量，供 traceback 捕获并测试按键名脱敏
+        raise RuntimeError("error with token in context")
+    except RuntimeError as e:
+        data = capture_exception(e, source="test")
+
+    _redact_exception_data(data)
+    # traceback 文本中不应出现原始 token 值
+    # 注意：token 值可能以 repr 形式出现在局部变量中
+    # redact 的正则会对 token=xxx 形式做掩码
+    assert "ghp_abc123secrettoken" not in data["traceback"]
+
+
+def test_format_trace_for_ai_redacted():
+    """format_trace_for_ai 输出文本中敏感信息已被 redact() 掩码"""
+    from app.mcp.collectors.stacktrace import format_trace_for_ai
+
+    exc_data = {
+        "type": "ValueError",
+        "message": 'password="leaked_pwd"',
+        "frame_count": 0,
+        "frames": [],
+    }
+    output = format_trace_for_ai(exc_data)
+    assert "leaked_pwd" not in output
+    assert "***" in output

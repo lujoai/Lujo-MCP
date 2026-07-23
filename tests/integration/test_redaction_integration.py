@@ -22,8 +22,6 @@ locals 脱敏的端到端验证通过 save_trace 直接调用完成（绕过 _pa
 """
 import uuid
 
-import pytest
-
 from app.mcp.core.trace_repo import (
     save_trace,
     get_trace,
@@ -96,8 +94,7 @@ class TestSaveTraceRedactsLocals:
                 "code": "",
                 "locals": {
                     "config": {
-                        # 注意：_SENSITIVE_KEYS 是精确匹配，只含 password/passwd/pwd/
-                        # token/secret/api_key/authorization/cookie，不含 db_password 等复合键名
+                        # 子串匹配：键名含 password/token/secret/key/auth 等子串即脱敏
                         "password": "should-not-leak",
                         "name": "production",
                         "credentials": {
@@ -118,19 +115,18 @@ class TestSaveTraceRedactsLocals:
         got = get_trace(error_id)
         config = got["frames"][0]["locals"]["config"]
 
-        # 嵌套 dict 中 password / secret / token 均脱敏（精确匹配 _SENSITIVE_KEYS）
+        # 嵌套 dict 中 password / secret / token 均脱敏（子串匹配）
         assert config["password"] == "***REDACTED***"
         assert config["credentials"]["secret"] == "***REDACTED***"
         assert config["credentials"]["token"] == "***REDACTED***"
         # 非敏感键保留
         assert config["name"] == "production"
 
-    def test_compound_sensitive_key_names_not_caught_by_dict_key_path(self):
-        """审计发现：复合键名（如 db_password / user_token）不在 _SENSITIVE_KEYS 集合中，
-        dict-key 路径不会脱敏。仅当字符串值匹配 redact() 正则时才会被掩码。
+    def test_compound_sensitive_key_names_redacted_by_substring_match(self):
+        """复合键名（如 db_password / user_token）含敏感子串，dict-key 路径脱敏。
 
-        这是一条审计发现（不是 bug），记录当前实现的精确匹配边界。
-        若后续要扩展为子串匹配，需先评估误伤风险（如 password_hash 字段）。
+        Phase 2 扩展：_SENSITIVE_KEYS 改为子串包含判断，
+        db_password 含 "password"、user_token 含 "token" 均被脱敏。
         """
         trace_id = _unique_trace_id()
         frames = [
@@ -140,9 +136,13 @@ class TestSaveTraceRedactsLocals:
                 "function": "load",
                 "code": "",
                 "locals": {
-                    "db_password": "compound-key-value",  # 复合键名，不在 _SENSITIVE_KEYS
-                    "user_token": "compound-token",       # 复合键名
-                    "password": "exact-key-value",        # 精确匹配 _SENSITIVE_KEYS
+                    "db_password": "compound-key-value",   # 含 "password" 子串
+                    "user_token": "compound-token",        # 含 "token" 子串
+                    "auth_header": "bearer-xyz",          # 含 "auth" 子串
+                    "secret_config": "secret-val",        # 含 "secret" 子串
+                    "api_key_id": "akid-123",             # 含 "key" 子串
+                    "password": "exact-key-value",        # 精确匹配
+                    "cookie_value": "session-cookie",    # 含 "cookie" 子串
                 },
             }
         ]
@@ -156,12 +156,14 @@ class TestSaveTraceRedactsLocals:
         got = get_trace(error_id)
         local_vars = got["frames"][0]["locals"]
 
-        # 精确匹配的键被脱敏
+        # 精确匹配 + 复合键名均被脱敏
         assert local_vars["password"] == "***REDACTED***"
-        # 复合键名当前不被 dict-key 路径脱敏（值原样保留）
-        # 若值本身不匹配 redact() 正则，则完全保留
-        assert local_vars["db_password"] == "compound-key-value"
-        assert local_vars["user_token"] == "compound-token"
+        assert local_vars["db_password"] == "***REDACTED***"
+        assert local_vars["user_token"] == "***REDACTED***"
+        assert local_vars["auth_header"] == "***REDACTED***"
+        assert local_vars["secret_config"] == "***REDACTED***"
+        assert local_vars["api_key_id"] == "***REDACTED***"
+        assert local_vars["cookie_value"] == "***REDACTED***"
 
 
 class TestSaveTraceRedactsMessage:
@@ -454,3 +456,178 @@ class TestRedactionNonRegression:
         # 手机号脱敏为 ***PHONE***（grep 确认 redaction.py:51）
         assert "13800138000" not in msg
         assert "***PHONE***" in msg, f"手机号未脱敏: {msg!r}"
+
+
+class TestRedactionAllowlist:
+    """Phase 2 复合键名脱敏扩展 —— 白名单测试集。
+
+    子串匹配会误伤含敏感子串的正常字段（如 password_hash 含 "password"），
+    白名单（内置默认 + 用户配置 redaction_key_allowlist）优先于子串匹配，命中白名单不脱敏。
+    """
+
+    def test_password_hash_not_redacted(self):
+        """password_hash 含 "password" 子串，但在内置白名单中，不应被脱敏。"""
+        trace_id = _unique_trace_id()
+        frames = [
+            {
+                "file": "app/models.py",
+                "line": 1,
+                "function": "to_dict",
+                "code": "",
+                "locals": {
+                    "password_hash": "$2b$12$abcdef...",
+                    "password": "plaintext-secret",
+                },
+            }
+        ]
+        error_id = save_trace(
+            exc_type="ValueError",
+            message="err",
+            frames=frames,
+            trace_id=trace_id,
+        )
+
+        got = get_trace(error_id)
+        local_vars = got["frames"][0]["locals"]
+
+        # password_hash 在白名单中，不脱敏
+        assert local_vars["password_hash"] == "$2b$12$abcdef..."
+        # password 不在白名单中，被脱敏
+        assert local_vars["password"] == "***REDACTED***"
+
+    def test_public_key_not_redacted(self):
+        """public_key 含 "key" 子串，但在内置白名单中，不应被脱敏。"""
+        trace_id = _unique_trace_id()
+        frames = [
+            {
+                "file": "app/crypto.py",
+                "line": 1,
+                "function": "verify",
+                "code": "",
+                "locals": {
+                    "public_key": "-----BEGIN PUBLIC KEY-----\nMIIB...",
+                    "private_key": "-----BEGIN PRIVATE KEY-----\nabc...",
+                },
+            }
+        ]
+        error_id = save_trace(
+            exc_type="ValueError",
+            message="err",
+            frames=frames,
+            trace_id=trace_id,
+        )
+
+        got = get_trace(error_id)
+        local_vars = got["frames"][0]["locals"]
+
+        # public_key 在白名单中，不脱敏
+        assert local_vars["public_key"] == "-----BEGIN PUBLIC KEY-----\nMIIB..."
+        # private_key 含 "key" 且不在白名单中，被脱敏
+        assert local_vars["private_key"] == "***REDACTED***"
+
+    def test_key_count_not_redacted(self):
+        """key_count 含 "key" 子串，但在内置白名单中，不应被脱敏。"""
+        trace_id = _unique_trace_id()
+        frames = [
+            {
+                "file": "app/cache.py",
+                "line": 1,
+                "function": "stats",
+                "code": "",
+                "locals": {
+                    "key_count": 42,
+                    "key_id": "cache-key-001",
+                    "key_type": "redis",
+                    "api_key": "sk-secret",
+                },
+            }
+        ]
+        error_id = save_trace(
+            exc_type="ValueError",
+            message="err",
+            frames=frames,
+            trace_id=trace_id,
+        )
+
+        got = get_trace(error_id)
+        local_vars = got["frames"][0]["locals"]
+
+        # key_count / key_id / key_type 在白名单中，不脱敏
+        assert local_vars["key_count"] == 42
+        assert local_vars["key_id"] == "cache-key-001"
+        assert local_vars["key_type"] == "redis"
+        # api_key 含 "key" 但不在白名单中，被脱敏
+        assert local_vars["api_key"] == "***REDACTED***"
+
+    def test_nested_allowlist_field_not_redacted(self):
+        """嵌套 dict 中白名单字段同样不被脱敏。"""
+        trace_id = _unique_trace_id()
+        frames = [
+            {
+                "file": "app/models.py",
+                "line": 1,
+                "function": "serialize",
+                "code": "",
+                "locals": {
+                    "user": {
+                        "password_hash": "hash-value",
+                        "public_key": "pub-key-data",
+                        "db_password": "should-be-redacted",
+                    },
+                },
+            }
+        ]
+        error_id = save_trace(
+            exc_type="ValueError",
+            message="err",
+            frames=frames,
+            trace_id=trace_id,
+        )
+
+        got = get_trace(error_id)
+        user_data = got["frames"][0]["locals"]["user"]
+
+        # 白名单字段不脱敏
+        assert user_data["password_hash"] == "hash-value"
+        assert user_data["public_key"] == "pub-key-data"
+        # 非白名单的敏感复合键名被脱敏
+        assert user_data["db_password"] == "***REDACTED***"
+
+    def test_user_configured_allowlist_protects_field(self):
+        """用户通过 redaction_key_allowlist 配置的自定义白名单字段不被脱敏。"""
+        from app.config import settings
+
+        saved = settings.redaction_key_allowlist
+        settings.redaction_key_allowlist = "my_secret_counter,custom_token_id"
+        try:
+            trace_id = _unique_trace_id()
+            frames = [
+                {
+                    "file": "app/app.py",
+                    "line": 1,
+                    "function": "f",
+                    "code": "",
+                    "locals": {
+                        "my_secret_counter": 100,      # 含 "secret" 但在用户白名单
+                        "custom_token_id": "tk-001",  # 含 "token" 但在用户白名单
+                        "secret_value": "leak",        # 含 "secret" 不在白名单
+                    },
+                }
+            ]
+            error_id = save_trace(
+                exc_type="ValueError",
+                message="err",
+                frames=frames,
+                trace_id=trace_id,
+            )
+
+            got = get_trace(error_id)
+            local_vars = got["frames"][0]["locals"]
+
+            # 用户白名单字段不脱敏
+            assert local_vars["my_secret_counter"] == 100
+            assert local_vars["custom_token_id"] == "tk-001"
+            # 非白名单的敏感字段被脱敏
+            assert local_vars["secret_value"] == "***REDACTED***"
+        finally:
+            settings.redaction_key_allowlist = saved

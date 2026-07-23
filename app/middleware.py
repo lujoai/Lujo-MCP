@@ -2,7 +2,6 @@
 
 import time
 import logging
-import asyncio
 import hmac
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +18,7 @@ logger = logging.getLogger("ai-debug-mcp.middleware")
 class AuthMiddleware(BaseHTTPMiddleware):
     """简单的 Bearer Token / X-API-Key 鉴权（fail-closed）"""
 
-    PUBLIC_PATHS = ("/", "/health", "/metrics")
+    PUBLIC_PATHS = ("/", "/health")
 
     def __init__(self, app):
         super().__init__(app)
@@ -34,13 +33,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return auth_header[7:]
         if api_key_header:
             return api_key_header
+        # sendBeacon 无法设置自定义 header，降级从 query 参数提取
+        api_key_query = request.query_params.get("api_key", "")
+        if api_key_query:
+            return api_key_query
         return ""
 
     async def dispatch(self, request: Request, call_next):
         if not self.enabled:
             return await call_next(request)
 
-        # 健康检查与指标端点免鉴权（不泄露敏感信息）
+        # CORS 预检（OPTIONS）免鉴权，直接放行交由 CORSMiddleware 处理
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # 健康检查免鉴权
         if request.url.path in self.PUBLIC_PATHS:
             return await call_next(request)
 
@@ -54,7 +61,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 # ── 请求体大小限制中间件 ──
 class MaxBodySizeMiddleware(BaseHTTPMiddleware):
-    """防御超大请求体导致的 OOM / DoS（按 Content-Length 硬检查）"""
+    """防御超大请求体导致的 OOM / DoS
+
+    - 带 Content-Length：先做硬检查，不读 body。
+    - 无 Content-Length 或 chunked：用 request.stream() 流式累计字节数，
+      超限即中断返回 413；未超限则把已读 body 回填到 request._body，
+      交由下游路由重新读取（利用 Starlette _CachedRequest 的 _body 缓存机制）。
+    """
 
     async def dispatch(self, request: Request, call_next):
         limit = settings.max_body_size
@@ -71,10 +84,28 @@ class MaxBodySizeMiddleware(BaseHTTPMiddleware):
             except ValueError:
                 return JSONResponse(status_code=400, content={"detail": "无效的 Content-Length"})
 
-        # 注：不在中间件层流式消费 body。
-        # 在 BaseHTTPMiddleware 中读取 body 并靠 request._receive 重放，
-        # 在 Starlette 新版下会失效，导致下游路由收到空 body（422 missing）。
-        # 因此仅靠 Content-Length 硬检查，body 读取交给路由层。
+        # 无 Content-Length 或 chunked transfer-encoding：流式累计计数，超限即中断
+        transfer_encoding = request.headers.get("transfer-encoding", "")
+        if not content_length or "chunked" in transfer_encoding.lower():
+            total = 0
+            exceeded = False
+            chunks: list[bytes] = []
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > limit:
+                    exceeded = True
+                    break
+                chunks.append(chunk)
+
+            if exceeded:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"请求体过大，限制 {limit} 字节"},
+                )
+
+            # 未超限：回填已读 body，确保下游路由能重新读取（避免空 body 422）
+            request._body = b"".join(chunks)
+
         return await call_next(request)
 
 
@@ -93,19 +124,47 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 # ── 速率限制中间件 ──
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """P1-3: 端点级限流 —— 不同端点设置不同的速率限制"""
+
+    ENDPOINT_LIMITS = {
+        "/ingest/": (120, 60),
+        "/api/debug/analyze": (10, 60),
+        "/api/debug/verify/ui": (5, 60),
+    }
+
     async def dispatch(self, request: Request, call_next):
         try:
             client_ip = request.client.host if request.client else "unknown"
             store = get_state_store()
-            if not store.allow(f"ratelimit:{client_ip}", settings.rate_limit_per_minute, 60):
+            path = request.url.path
+
+            limit, window = self._get_endpoint_limit(path)
+            key = f"ratelimit:{client_ip}:{path}"
+
+            if not store.allow(key, limit, window):
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Too many requests, please slow down"},
                 )
         except Exception:
-            logger.exception("RateLimitMiddleware 异常，降级放行")
+            # SEC-07: 与 store 层 fail-closed 语义对齐——
+            # 状态后端初始化失败（如 Redis 不可用）等异常不再降级放行，
+            # 而是拒绝请求，避免 Redis 故障时限流形同虚设。
+            logger.exception("RateLimitMiddleware 异常，fail-closed 拒绝请求")
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit service unavailable"},
+            )
 
         return await call_next(request)
+
+    @staticmethod
+    def _get_endpoint_limit(path: str) -> tuple[int, int]:
+        """根据路径获取限流配置，未匹配则使用全局默认值"""
+        for prefix, (limit, window) in RateLimitMiddleware.ENDPOINT_LIMITS.items():
+            if path.startswith(prefix):
+                return limit, window
+        return settings.rate_limit_per_minute, 60
 
 
 # ── 请求追踪中间件 ──
@@ -145,24 +204,36 @@ class TraceMiddleware(BaseHTTPMiddleware):
 
 
 def setup_middleware(app: FastAPI):
-    """在 FastAPI app 上批量注册中间件（顺序：外→内）"""
-    # CORS
-    if settings.cors_origins == "*":
-        allow_origins = ["*"]
-        allow_credentials = False  # 规范不允许 * 与 credentials 同时使用
-    else:
-        allow_origins = settings.cors_origins.split(",")
-        allow_credentials = True
+    """在 FastAPI app 上批量注册中间件（顺序：外→内）。
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allow_origins,
-        allow_credentials=allow_credentials,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    Starlette 中间件栈为 LIFO：后 add 的中间件位于栈顶（最外层），
+    最先处理请求、最后处理响应。因此 CORSMiddleware 必须**最后** add，
+    使其位于最外层，OPTIONS 预检先于 AuthMiddleware 鉴权处理，
+    避免预检被 401 拦截。
+    """
+    # 内层中间件先注册（add 顺序：内→外）
     app.add_middleware(AuthMiddleware)
     app.add_middleware(MaxBodySizeMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(TraceMiddleware)
+
+    # CORS 默认收紧：cors_origins 为空串时不注册 CORSMiddleware（不下发 CORS 头）。
+    # 显式设置 CORS_ORIGINS=* 时开放所有来源（opt-in）；否则按逗号分隔白名单。
+    # 必须最后 add，使其成为最外层。
+    if settings.cors_origins:
+        if settings.cors_origins == "*":
+            allow_origins = ["*"]
+            allow_credentials = False  # 规范不允许 * 与 credentials 同时使用
+        else:
+            allow_origins = [
+                o.strip() for o in settings.cors_origins.split(",") if o.strip()
+            ]
+            allow_credentials = True
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )

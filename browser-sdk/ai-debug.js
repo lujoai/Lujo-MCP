@@ -1,6 +1,7 @@
 /**
- * ai-debug-mcp Browser SDK v0.1.0
+ * ai-debug-mcp Browser SDK v0.2.0
  *
+ * V2：批量上报 + sendBeacon 降级 + 指数退避重试。
  * 前端自动采集：全局异常捕获、网络请求记录、UI 事件上报、静默失败标记。
  * 无需构建工具，直接 <script> 引入或 import 使用。
  *
@@ -13,9 +14,34 @@
  * 或 ES module：
  *   import { init, reportSilentFailure } from "./ai-debug.js";
  *   init({ endpoint: "http://localhost:8000" });
+ *
+ * ── 路线图 ──
+ * V3：网络错误自动标记静默失败
+ *     - 对 5xx / 网络错误 / 超时自动生成 silent_failure 上报
+ *     - 关联最近的 UI 事件链，减少手动 reportSilentFailure 调用
+ *
+ * V4：SDK 初始化追踪 + 请求关联
+ *     - 初始化时生成 trace_id 并贯穿所有请求 header（X-Trace-Id）
+ *     - 后端按 trace_id 关联 SDK 生命周期内的全部事件
+ *
+ * V5：增强 ingest 端点
+ *     - /ingest/batch 支持按事件类型分组批量入库
+ *     - 压缩传输（gzip / brotli）
+ *     - 端点级 QoS（error 优先级 > network > ui）
+ *
+ * V6：自动检测 UI 静默失败
+ *     - 基于用户行为序列（click → 无网络请求 → 无路由变更）自动推断
+ *     - 配合 V3 网络错误标记，实现端到端静默失败自动发现
  */
 (function (global) {
   "use strict";
+
+  // ── 内置默认敏感键名列表（用户将 redactFields 设为空时回退使用） ──
+  var _DEFAULT_REDACT_FIELDS = [
+    "password", "token", "secret", "authorization",
+    "cookie", "access_token", "api_key", "apikey",
+    "passwd", "pwd", "private_key", "auth_token"
+  ];
 
   // ── 配置 ──
   var cfg = {
@@ -31,6 +57,10 @@
     networkThrottleMs: 0,
     // reportSilentFailure 自动附加最近 N 条 network/UI 事件链
     silentFailureContextSize: 20,
+    // V2 批量上报配置
+    batchSize: 20,         // 队列满阈值，达到即 flush
+    batchInterval: 1000,   // 定时 flush 间隔（ms）
+    maxRetries: 3,         // XHR 失败最大重试次数
   };
 
   var _inited = false;
@@ -43,6 +73,11 @@
   var _recentUI = [];
   // body 预览长度上限（约束 3 选项 A）
   var _NETWORK_BODY_PREVIEW = 512;
+
+  // ── V2 批量上报状态 ──
+  var _batchQueue = [];       // 批量事件队列：[{ path, payload }, ...]
+  var _batchTimer = null;     // 定时 flush 定时器
+  var _BEACON_SIZE_LIMIT = 65536; // sendBeacon 64KB 限制
 
   function _pushRecent(arr, item, maxSize) {
     arr.push(item);
@@ -74,13 +109,35 @@
     return Math.random() < cfg.sampleRate;
   }
 
+  function _getRedactFields() {
+    return (cfg.redactFields && cfg.redactFields.length > 0) ? cfg.redactFields : _DEFAULT_REDACT_FIELDS;
+  }
+
   function _redact(obj) {
     if (!obj || typeof obj !== "object") return obj;
     var out = Array.isArray(obj) ? [] : {};
+    var fields = _getRedactFields();
+    // Build lowercase lookup set for case-insensitive matching
+    var lowerFields = [];
+    for (var i = 0; i < fields.length; i++) {
+      lowerFields.push(fields[i].toLowerCase());
+    }
     for (var k in obj) {
       if (obj.hasOwnProperty(k)) {
-        if (cfg.redactFields.indexOf(k) >= 0) {
+        if (lowerFields.indexOf(k.toLowerCase()) >= 0) {
           out[k] = "***REDACTED***";
+        } else if (typeof obj[k] === "string") {
+          // Try to parse string as JSON for deep redaction
+          try {
+            var parsed = JSON.parse(obj[k]);
+            if (parsed && typeof parsed === "object") {
+              out[k] = JSON.stringify(_redact(parsed));
+            } else {
+              out[k] = obj[k];
+            }
+          } catch (e) {
+            out[k] = obj[k];
+          }
         } else if (typeof obj[k] === "object") {
           out[k] = _redact(obj[k]);
         } else {
@@ -91,18 +148,117 @@
     return out;
   }
 
+  // ── V2 批量上报 ──
   function _send(path, payload) {
     if (!cfg.endpoint || !_shouldSample()) return;
-    var body = JSON.stringify(_redact(payload));
-    var url = cfg.endpoint.replace(/\/+$/, "") + path;
+    var redacted = _redact(payload);
+    _batchQueue.push({ path: path, payload: redacted });
+
+    // 队列满 → 立即 flush
+    if (_batchQueue.length >= cfg.batchSize) {
+      _flushBatch(false);
+    } else if (!_batchTimer) {
+      // 启动定时 flush
+      _batchTimer = setTimeout(function () {
+        _flushBatch(false);
+      }, cfg.batchInterval);
+    }
+  }
+
+  function _hasSendBeacon() {
+    return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function";
+  }
+
+  function _flushBatch(useBeacon) {
+    if (_batchQueue.length === 0 || !cfg.endpoint) return;
+
+    if (_batchTimer) {
+      clearTimeout(_batchTimer);
+      _batchTimer = null;
+    }
+
+    var batch = _batchQueue.splice(0, _batchQueue.length);
+    var body = JSON.stringify({ events: batch });
+    var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
+
+    // 页面关闭场景：优先 sendBeacon
+    if (useBeacon && _hasSendBeacon()) {
+      if (body.length <= _BEACON_SIZE_LIMIT) {
+        var beaconUrl = url;
+        if (cfg.apiKey) {
+          beaconUrl += "?api_key=" + encodeURIComponent(cfg.apiKey);
+        }
+        var blob = new Blob([body], { type: "application/json" });
+        if (navigator.sendBeacon(beaconUrl, blob)) {
+          return; // sendBeacon 成功
+        }
+      }
+      // 超限或 sendBeacon 失败 → 同步 XHR 降级
+      _sendBatchSync(url, body);
+      return;
+    }
+
+    // 常规 flush：异步 XHR + 指数退避重试
+    _sendBatchXhr(url, body, 0);
+  }
+
+  function _sendBatchXhr(url, body, attempt) {
     try {
       var xhr = new XMLHttpRequest();
       xhr.open("POST", url, true);
       xhr.setRequestHeader("Content-Type", "application/json");
       if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status >= 200 && xhr.status < 300) return; // 成功
+        // 失败 → 重试
+        if (attempt < cfg.maxRetries) {
+          var delay = 500 * Math.pow(2, attempt); // 500 → 1000 → 2000
+          setTimeout(function () {
+            _sendBatchXhr(url, body, attempt + 1);
+          }, delay);
+        }
+        // 超过重试次数 → 丢弃，避免无限堆积
+      };
       xhr.send(body);
     } catch (e) {
-      // SDK 自身异常静默，不影响业务
+      if (attempt < cfg.maxRetries) {
+        var delay = 500 * Math.pow(2, attempt);
+        setTimeout(function () {
+          _sendBatchXhr(url, body, attempt + 1);
+        }, delay);
+      }
+    }
+  }
+
+  function _sendBatchSync(url, body) {
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", url, false); // 同步
+      xhr.setRequestHeader("Content-Type", "application/json");
+      if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
+      xhr.send(body);
+    } catch (e) {
+      // 页面关闭时同步 XHR 失败，无法重试
+    }
+  }
+
+  function _installPageHideHook() {
+    function _onVisibilityChange() {
+      if (document.hidden) {
+        _flushBatch(true);
+      }
+    }
+
+    function _onPageHide() {
+      _flushBatch(true);
+    }
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", _onVisibilityChange);
+    }
+    if (typeof global !== "undefined") {
+      global.addEventListener("pagehide", _onPageHide);
     }
   }
 
@@ -548,7 +704,7 @@
   // ── 公开 API ──
   /**
    * 初始化 SDK
-   * @param {object} opts - { endpoint, apiKey, captureErrors, captureNetwork, captureUI, sampleRate, networkSampleRate, networkThrottleMs, silentFailureContextSize }
+   * @param {object} opts - { endpoint, apiKey, captureErrors, captureNetwork, captureUI, captureConsole, sampleRate, networkSampleRate, networkThrottleMs, silentFailureContextSize, batchSize, batchInterval, maxRetries }
    */
   function init(opts) {
     if (_inited) return;
@@ -558,6 +714,10 @@
           cfg[k] = opts[k];
         }
       }
+    }
+    // 空数组回退到内置默认列表，防止关闭脱敏
+    if (!cfg.redactFields || (Array.isArray(cfg.redactFields) && cfg.redactFields.length === 0)) {
+      cfg.redactFields = _DEFAULT_REDACT_FIELDS;
     }
     if (!cfg.endpoint) {
       console.warn("[ai-debug] endpoint 未配置，SDK 不上报");
@@ -569,6 +729,7 @@
     _installXhrHook();
     _installUIHook();
     _installConsoleHook();
+    _installPageHideHook();
     console.log("[ai-debug] SDK initialized, session=" + _sessionId);
   }
 
@@ -678,9 +839,17 @@
     if (id) _traceId = id;
   }
 
+  /**
+   * 手动 flush 批量队列（用于测试或需要立即上报的场景）
+   */
+  function flush() {
+    _flushBatch(false);
+  }
+
   // ── 导出 ──
   var api = {
     init: init,
+    flush: flush,
     reportSilentFailure: reportSilentFailure,
     reportError: reportError,
     reportUIEvent: reportUIEvent,

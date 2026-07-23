@@ -10,6 +10,7 @@
 """
 import re
 import logging
+import threading
 from typing import Optional
 
 from app.config import settings
@@ -48,35 +49,42 @@ _DEFAULT_RULES: list[tuple["re.Pattern[str]", str]] = [
         r'"\1":"***"',
     ),
     # 中国大陆 11 位手机号
-    (re.compile(r"\b1[3-9]\d{9}\b"), "***PHONE***"),
+    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "***PHONE***"),
 ]
 
 # 额外规则缓存（按配置内容签名，配置变化时重建）
 _extra_cache: Optional[list[tuple["re.Pattern[str]", str]]] = None
 _extra_signature: Optional[str] = None
+_extra_lock = threading.Lock()
 
 
 def _load_extra_rules() -> list[tuple["re.Pattern[str]", str]]:
-    """编译并缓存用户配置的额外正则；配置变化时重新编译。"""
+    """编译并缓存用户配置的额外正则；配置变化时重新编译。线程安全。"""
     global _extra_cache, _extra_signature
-    raw = settings.redaction_extra_patterns or ""
-    if raw == _extra_signature and _extra_cache is not None:
+    # 快速路径：缓存命中
+    if _extra_cache is not None and _extra_signature == (settings.redaction_extra_patterns or ""):
         return _extra_cache
 
-    rules: list[tuple["re.Pattern[str]", str]] = []
-    for line in raw.splitlines():
-        pattern = line.strip()
-        if not pattern:
-            continue
-        try:
-            rules.append((re.compile(pattern), "***"))
-        except re.error as e:
-            logger.warning("跳过无效的脱敏正则 %r: %s", pattern, e)
-            continue
+    with _extra_lock:
+        # double-check
+        if _extra_cache is not None and _extra_signature == (settings.redaction_extra_patterns or ""):
+            return _extra_cache
 
-    _extra_cache = rules
-    _extra_signature = raw
-    return rules
+        raw = settings.redaction_extra_patterns or ""
+        rules: list[tuple["re.Pattern[str]", str]] = []
+        for line in raw.splitlines():
+            pattern = line.strip()
+            if not pattern:
+                continue
+            try:
+                rules.append((re.compile(pattern), "***"))
+            except re.error as e:
+                logger.warning("跳过无效的脱敏正则 %r: %s", pattern, e)
+                continue
+
+        _extra_cache = rules
+        _extra_signature = raw
+        return rules
 
 
 def redact(text: Optional[str]) -> Optional[str]:
@@ -88,6 +96,7 @@ def redact(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str) or not text:
         return text
     if not settings.redaction_enabled:
+        logger.warning("redaction is disabled — sensitive data will NOT be masked")
         return text
     for pattern, repl in _DEFAULT_RULES:
         text = pattern.sub(repl, text)

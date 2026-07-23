@@ -6,14 +6,15 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 import json
 
+from app.config import settings
 from app.mcp.core.logs import create_request_id, add_log, get_logs
 from app.mcp.core.session import session_manager
 import time
 from app.mcp.builders.context import build_context
 from app.mcp.collectors.runtime import collect_runtime_snapshot
 from app.mcp.collectors.stacktrace import capture_exception
-from app.llm.analyzer import analyze, analyze_stream
-from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse, DebugContext
+from app.llm.analyzer import analyze, analyze_stream_async
+from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse
 
 logger = logging.getLogger("ai-debug-mcp.api")
 
@@ -139,7 +140,9 @@ async def debug_analyze_stream(req: AnalyzeRequest):
 
     async def event_stream():
         try:
-            for chunk in analyze_stream(context):
+            # Phase 3.2：直接使用异步流式分析，原生 async for 迭代，
+            # 无需 to_thread 包装同步生成器。
+            async for chunk in analyze_stream_async(context):
                 data = json.dumps({"chunk": chunk}, ensure_ascii=False)
                 yield f"data: {data}\n\n"
             yield "data: [DONE]\n\n"
@@ -230,10 +233,14 @@ def debug_health():
 @router.post("/echo")
 def debug_echo(body: dict):
     """回显接口，返回请求体"""
+    if not settings.debug_endpoints_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
     return {"status": "ok", "received": body}
 
 
 @router.get("/token")
 def debug_token():
     """返回带 token 的响应，用于测试响应脱敏"""
+    if not settings.debug_endpoints_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
     return {"token": "abc123", "user_id": 123, "username": "admin"}

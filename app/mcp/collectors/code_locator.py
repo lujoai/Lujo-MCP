@@ -30,12 +30,24 @@ def _remap_path(file_path: str) -> str:
     return file_path
 
 
-def _is_allowed(path: str) -> bool:
-    """路径白名单校验，防止生成指向敏感目录的 file:// 链接。"""
+def _allowed_roots() -> list[str]:
+    """允许读取的根目录列表。
+    配置了 whitelist_path_prefix 则用配置；否则（SEC-01）默认收敛到进程工作目录
+    （stdio 模式下即被调试项目根），默认拒绝根目录之外的任意路径。"""
     prefix = (settings.whitelist_path_prefix or "").strip()
-    if not prefix:
-        return True
-    return path.startswith(tuple(p.strip() for p in prefix.split(",") if p.strip()))
+    if prefix:
+        return [os.path.abspath(p.strip()) for p in prefix.split(",") if p.strip()]
+    return [os.path.abspath(os.getcwd())]
+
+
+def _is_allowed(path: str) -> bool:
+    """路径白名单校验（SEC-01：默认拒绝允许根之外的任意路径，防任意文件读取 / LFI）。"""
+    abs_path = os.path.abspath(path)
+    for root in _allowed_roots():
+        # 用 os.sep 边界比较，避免 /app 命中 /app-secrets
+        if abs_path == root or abs_path.startswith(root + os.sep):
+            return True
+    return False
 
 
 def make_ide_link(file_path: str, line_no: int) -> Optional[str]:

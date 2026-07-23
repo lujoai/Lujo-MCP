@@ -102,10 +102,10 @@ def _extract_trace_summary(request_id: str) -> dict | None:
     return summary
 
 
-def list_recent_traces(limit: int = 10) -> list:
+def list_recent_traces(limit: int = 10, session_id: str | None = None) -> list:
     """列出最近被自动捕获的异常摘要（含指纹/发生次数/首末时间，不含完整堆栈）。"""
     results = []
-    memory_items = list_recent(limit)
+    memory_items = list_recent(limit, session_id=session_id)
     for e in memory_items:
         results.append({
             "trace_id": e["error_id"],
@@ -134,7 +134,7 @@ def list_recent_traces(limit: int = 10) -> list:
     return results[:limit]
 
 
-def search_logs(keyword: str, since_minutes: int = 30) -> list:
+def search_logs(keyword: str, since_minutes: int = 30, session_id: str | None = None) -> list:
     """按关键字 + 时间窗搜索近期捕获的异常（含指纹/发生次数）。"""
     keyword = (keyword or "").lower()
     cutoff = 0
@@ -143,7 +143,7 @@ def search_logs(keyword: str, since_minutes: int = 30) -> list:
         cutoff = time.time() - since_minutes * 60
 
     results = []
-    memory_items = search_errors(keyword, since_minutes)
+    memory_items = search_errors(keyword, since_minutes, session_id=session_id)
     for e in memory_items:
         last_seen = e.get("last_seen", e.get("timestamp", 0))
         if last_seen >= cutoff:

@@ -18,11 +18,21 @@ from types import TracebackType
 
 from app.mcp.collectors.stacktrace import capture_exception
 from app.mcp.core.errors import record as record_error
+from app.mcp.core.redaction import redact
 
 _installed = False
 _original_hook = None  # install 时保存，供 uninstall 恢复
 _original_asyncio_handler = None  # asyncio loop 的原 handler（可能为 None）
 logger = logging.getLogger("ai-debug-mcp.exception-hook")
+
+
+def _redact_exception_data(data: dict) -> dict:
+    """对 capture_exception 返回的 message / traceback 字段做脱敏。"""
+    if "message" in data:
+        data["message"] = redact(data["message"])
+    if "traceback" in data:
+        data["traceback"] = redact(data["traceback"])
+    return data
 
 
 def install_global_hook():
@@ -35,7 +45,10 @@ def install_global_hook():
 
     def _hook(exc_type: type[BaseException], exc_value: BaseException, tb: TracebackType | None):
         try:
-            record_error(capture_exception(exc_value, source="global_hook"), source="global_hook")
+            exc_data = capture_exception(exc_value, source="global_hook")
+            exc_data["message"] = redact(exc_data.get("message", ""))
+            exc_data["traceback"] = redact(exc_data.get("traceback", ""))
+            record_error(exc_data, source="global_hook")
         except Exception as e:
             logger.error(f"Exception hook failed: {e}", exc_info=True)
         _original_hook(exc_type, exc_value, tb)
@@ -46,16 +59,16 @@ def install_global_hook():
         exc = context.get("exception")
         if exc is not None:
             try:
-                record_error(
-                    capture_exception(exc, source="asyncio_loop", extra={"message": context.get("message", "")}),
-                    source="asyncio_loop",
-                )
+                exc_data = capture_exception(exc, source="asyncio_loop", extra={"message": context.get("message", "")})
+                exc_data["message"] = redact(exc_data.get("message", ""))
+                exc_data["traceback"] = redact(exc_data.get("traceback", ""))
+                record_error(exc_data, source="asyncio_loop")
             except Exception as e:
                 logger.error(f"Exception hook failed: {e}", exc_info=True)
         loop.default_exception_handler(context)
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         _original_asyncio_handler = loop.get_exception_handler()
         loop.set_exception_handler(_asyncio_handler)
     except RuntimeError:
@@ -83,7 +96,7 @@ def uninstall_global_hook():
 
     # 恢复 asyncio loop exception handler（若 loop 仍可用）
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if _original_asyncio_handler is None:
             loop.set_exception_handler(None)
         else:

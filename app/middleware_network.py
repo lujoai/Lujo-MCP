@@ -8,6 +8,7 @@ setup_middleware 之前添加，使其位于安全栈最内层（仅记录已通
 - 跳过 /、/health、/metrics 公共路径。
 - 通过响应头 X-Debug-Request-Id 返回 request_id，便于调用方按 id 查询该 inbound 记录。
 """
+import asyncio
 import time
 import uuid
 import logging
@@ -39,7 +40,10 @@ class NetworkCaptureMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             try:
-                save_network_record(
+                # Phase 2 过渡桥：async 上下文中的同步 PG 写入用 to_thread
+                # 包装，避免阻塞事件循环。Phase 3 全异步化后移除。
+                await asyncio.to_thread(
+                    save_network_record,
                     {
                         "direction": "inbound",
                         "method": request.method,

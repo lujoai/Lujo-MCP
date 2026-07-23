@@ -12,7 +12,14 @@ import asyncio
 from app.mcp.tools import register_all_tools
 from app.mcp.protocol.server import dispatch
 from app.mcp.protocol.jsonrpc import parse_request
-from app.mcp.protocol.jsonrpc import make_error, INVALID_REQUEST, INTERNAL_ERROR
+from app.mcp.protocol.jsonrpc import (
+    make_error,
+    INVALID_REQUEST,
+    INTERNAL_ERROR,
+    PARSE_ERROR,
+    JSONParseError,
+    InvalidRequestError,
+)
 
 logger = logging.getLogger("ai-debug-mcp.mcp.stdio")
 
@@ -62,7 +69,12 @@ async def run_stdio():
                 continue
             try:
                 req = parse_request(line)
-            except Exception as e:
+            except JSONParseError as e:
+                _write_response(
+                    make_error(None, PARSE_ERROR, str(e))
+                )
+                continue
+            except InvalidRequestError as e:
                 _write_response(
                     make_error(None, INVALID_REQUEST, str(e))
                 )
@@ -70,10 +82,10 @@ async def run_stdio():
 
             try:
                 result = await dispatch(req)
-            except Exception as e:
+            except Exception:
                 logger.exception("dispatch 执行异常")
                 _write_response(
-                    make_error(req.id, INTERNAL_ERROR, f"内部错误: {e}")
+                    make_error(req.id, INTERNAL_ERROR, "内部错误，详情见服务端日志")
                 )
                 continue
 

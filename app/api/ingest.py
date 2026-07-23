@@ -57,6 +57,7 @@ def ingest_silent_failure(req: dict):
             source=req.get("source", "browser_sdk"),
             extra=req.get("extra"),
             trace_id=req.get("trace_id"),
+            session_id=req.get("session_id"),
         )
     except Exception as e:
         logger.error(str(e), exc_info=True)
@@ -74,6 +75,7 @@ def ingest_error(req: dict):
             source=req.get("source", "http_ingest"),
             extra=req.get("extra"),
             trace_id=req.get("trace_id"),
+            session_id=req.get("session_id"),
         )
     except Exception as e:
         logger.error(str(e), exc_info=True)
@@ -111,3 +113,96 @@ def ingest_ui_event(req: dict):
     except Exception as e:
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=400, detail="Internal server error")
+
+
+def _dispatch_single(path: str, payload: dict) -> dict:
+    """将单条批量事件分发到对应的 ingest 处理器。
+
+    path 为 SDK 原始上报路径（如 /ingest/error），payload 为该路径对应的完整请求体。
+    各路径的参数提取逻辑与独立 ingest 端点保持一致。
+    """
+    if path == "/ingest/error":
+        return tool_ingest_error(
+            exc_type=payload.get("exc_type", "UnknownError"),
+            message=payload.get("message", ""),
+            frames=payload.get("frames", []),
+            source=payload.get("source", "http_ingest"),
+            extra=payload.get("extra"),
+            trace_id=payload.get("trace_id"),
+            session_id=payload.get("session_id"),
+        )
+    if path == "/ingest/network":
+        return tool_ingest_network(
+            record=payload.get("record", {}),
+            trace_id=payload.get("trace_id"),
+            request_id=payload.get("request_id"),
+        )
+    if path == "/ingest/ui-event":
+        trace_id = payload.get("trace_id")
+        event_id = save_ui_event(
+            event=payload.get("event", {}) or {},
+            trace_id=trace_id,
+            extra=payload.get("extra"),
+        )
+        return {"event_id": event_id, "trace_id": trace_id, "saved": True}
+    if path == "/ingest/console":
+        return tool_ingest_console(
+            level=payload.get("level", "info"),
+            message=payload.get("message", ""),
+            source=payload.get("source", "browser_sdk"),
+            extra=payload.get("extra"),
+            trace_id=payload.get("trace_id"),
+            request_id=payload.get("request_id"),
+        )
+    if path == "/ingest/silent-failure":
+        return tool_ingest_silent_failure(
+            message=payload.get("message", ""),
+            frames=payload.get("frames"),
+            ui_events=payload.get("ui_events"),
+            network_records=payload.get("network_records"),
+            expectation=payload.get("expectation"),
+            observed=payload.get("observed"),
+            observed_events=payload.get("observed_events"),
+            source=payload.get("source", "browser_sdk"),
+            extra=payload.get("extra"),
+            trace_id=payload.get("trace_id"),
+            session_id=payload.get("session_id"),
+        )
+    raise ValueError(f"Unknown ingest path: {path}")
+
+
+@router.post("/batch")
+def ingest_batch(req: dict):
+    """批量上报端点 —— 接收事件数组并分发给各 ingest 处理器。
+
+    请求体格式::
+
+        {
+          "events": [
+            {"path": "/ingest/error", "payload": {...}},
+            {"path": "/ingest/network", "payload": {...}},
+            ...
+          ]
+        }
+
+    每条事件独立处理，单条失败不影响其余事件。
+    """
+    events = req.get("events", [])
+    if not isinstance(events, list):
+        events = [events] if events else []
+
+    results = []
+    for event in events:
+        path = event.get("path", "")
+        payload = event.get("payload", {})
+        try:
+            result = _dispatch_single(path, payload)
+            results.append({"path": path, "ok": True, "result": result})
+        except ValueError as e:
+            logger.error(str(e), exc_info=True)
+            results.append({"path": path, "ok": False, "error": "Invalid request payload"})
+        except Exception as e:
+            logger.error(str(e), exc_info=True)
+            results.append({"path": path, "ok": False, "error": "Internal server error"})
+
+    return {"results": results, "count": len(results)}

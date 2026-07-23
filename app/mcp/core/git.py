@@ -23,14 +23,17 @@ _MAX_COMMITS_BACK = 50
 
 
 def _is_allowed(file_path: str) -> bool:
-    """路径白名单校验。白名单为空=不限制（与 proj1 whitelist_path_prefix 约定一致）。"""
+    """路径白名单校验（SEC-01）。
+    配置了 git_path_whitelist 用配置；否则默认收敛到进程工作目录，默认拒绝目录外路径，
+    防止通过任意路径探测其他 git 仓库历史（信息泄露）。"""
     prefix = (settings.git_path_whitelist or "").strip()
-    if not prefix:
-        return True
+    if prefix:
+        allowed = [os.path.abspath(p.strip()) for p in prefix.split(",") if p.strip()]
+    else:
+        allowed = [os.path.abspath(os.getcwd())]
     abs_path = os.path.abspath(file_path)
-    # 白名单前缀同样规范化为绝对路径，保证两侧分隔符/驱动器一致
-    allowed = [os.path.abspath(p.strip()) for p in prefix.split(",") if p.strip()]
-    return any(abs_path.startswith(p) for p in allowed)
+    # 用 os.sep 边界比较，避免 /app 命中 /app-secrets
+    return any(abs_path == p or abs_path.startswith(p + os.sep) for p in allowed)
 
 
 def _git_cmd(args: list[str], cwd: Path) -> str | None:
@@ -96,6 +99,8 @@ def get_blame_for_frame(file_path: str, line_no: int) -> Optional[dict]:
     if not _is_allowed(file_path):
         logger.warning("git blame 被白名单拒绝: %s", file_path)
         return None
+
+    line_no = int(line_no)
 
     path = Path(file_path)
     if not path.exists():

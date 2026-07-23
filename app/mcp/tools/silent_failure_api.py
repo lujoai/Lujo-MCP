@@ -118,6 +118,7 @@ def tool_ingest_silent_failure(
     source: str = "browser_sdk",
     extra: dict | None = None,
     trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """保存一条前端静默失败 trace，同时关联 UI 事件与网络请求。
 
@@ -167,6 +168,7 @@ def tool_ingest_silent_failure(
         extra=extra,
         trace_kind="silent_failure",
         trace_id=trace_id,
+        session_id=session_id,
     )
 
     # 关联入库（单条失败不阻断整体）
@@ -204,4 +206,5 @@ def silent_failure_handler(arguments: dict) -> dict:
         source=arguments.get("source", "browser_sdk"),
         extra=arguments.get("extra"),
         trace_id=arguments.get("trace_id"),
+        session_id=arguments.get("session_id"),
     )

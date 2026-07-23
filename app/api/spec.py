@@ -19,8 +19,8 @@ def create_spec(spec: Spec):
         saved = spec_store.get(spec_id)
         return {"spec_id": spec_id, "spec": saved}
     except Exception as e:
-        logger.exception("创建规范失败")
-        raise HTTPException(status_code=500, detail=f"创建规范失败: {e}")
+        logger.exception("创建规范失败: %s", e)
+        raise HTTPException(status_code=500, detail="创建规范失败")
 
 
 @router.get("/spec")
@@ -30,8 +30,8 @@ def list_specs(kind: str | None = None, target: str | None = None):
         specs = spec_store.list_specs(kind=kind, target=target)
         return SpecListResponse(count=len(specs), specs=specs).model_dump()
     except Exception as e:
-        logger.exception("列出规范失败")
-        raise HTTPException(status_code=500, detail=f"列出规范失败: {e}")
+        logger.exception("列出规范失败: %s", e)
+        raise HTTPException(status_code=500, detail="列出规范失败")
 
 
 @router.get("/spec/{spec_id}")

@@ -64,6 +64,7 @@ def tool_ingest_error(
     source: str = "ingest",
     extra: dict | None = None,
     trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """接收外部上报的错误，落库后返回 trace_id。"""
     frames = _parse_frames(frames)
@@ -75,6 +76,7 @@ def tool_ingest_error(
         extra=extra or {},
         trace_kind="exception",
         trace_id=trace_id,
+        session_id=session_id,
     )
     return {"trace_id": result_trace_id, "saved": True, "frame_count": len(frames)}
 
@@ -87,4 +89,5 @@ def ingest_error_handler(arguments: dict) -> dict:
         source=arguments.get("source", "ingest"),
         extra=arguments.get("extra"),
         trace_id=arguments.get("trace_id"),
+        session_id=arguments.get("session_id"),
     )

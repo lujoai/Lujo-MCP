@@ -1,14 +1,37 @@
 """Dashboard API —— Web 控制台后端接口"""
 
 import logging
+import time
+import json
 
 from fastapi import APIRouter, HTTPException
 
-from app.mcp.core import errors, trace_repo, logs
+from app.mcp.core import errors, logs
+from app.llm.analyzer import _get_redis_cache
 
 logger = logging.getLogger("ai-debug-mcp.dashboard")
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+# ── 缓存 ──
+_CACHE_TTL = 30  # 秒
+_cache: dict = {}  # key -> (timestamp, data)
+_REDIS_CACHE_KEY = "ai-debug:dashboard:all_traces"
+
+
+def invalidate_cache() -> None:
+    """清除 Dashboard 概览缓存（L1 内存 + L2 Redis），使新写入的 trace 立即可见。
+
+    由 trace 写入路径（logs.add_log 的 save_entry 路径、以及 errors.record）
+    在持久化新数据后调用，避免 30s TTL 期间 Dashboard 仍展示旧数据。
+    """
+    _cache.pop("all_traces", None)
+    redis_client = _get_redis_cache()
+    if redis_client is not None:
+        try:
+            redis_client.delete(_REDIS_CACHE_KEY)
+        except Exception:
+            logger.warning("Dashboard L2 Redis 缓存清除失败", exc_info=True)
 
 
 def _safe_int(value, default=0):
@@ -122,7 +145,30 @@ def _extract_trace_summary(request_id: str) -> dict | None:
 
 
 def _collect_all_traces(limit: int = 100) -> list[dict]:
-    """合并 errors 缓冲和 TraceStorage 中的 trace 摘要"""
+    """合并 errors 缓冲和 TraceStorage 中的 trace 摘要（带多级缓存 L1+L2）"""
+    limit = min(max(limit, 1), 1000)
+
+    now = time.monotonic()
+
+    # ── L1: 内存缓存 ──
+    cached = _cache.get("all_traces")
+    if cached and (now - cached[0]) < _CACHE_TTL:
+        return cached[1][:limit]
+
+    # ── L2: Redis 缓存 ──
+    redis_client = _get_redis_cache()
+    if redis_client is not None:
+        try:
+            raw = redis_client.get(_REDIS_CACHE_KEY)
+            if raw:
+                result = json.loads(raw)
+                # L2 命中 → 回填 L1
+                _cache["all_traces"] = (now, result)
+                return result[:limit]
+        except Exception:
+            logger.warning("Dashboard L2 Redis 缓存读取失败", exc_info=True)
+
+    # ── 计算 ──
     result = []
     seen_ids = set()
 
@@ -140,6 +186,19 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
                 seen_ids.add(rid)
 
     result.sort(key=lambda t: t.get("timestamp", 0), reverse=True)
+
+    # ── 写 L1 + L2 ──
+    _cache["all_traces"] = (now, result)
+    if redis_client is not None:
+        try:
+            redis_client.setex(
+                _REDIS_CACHE_KEY,
+                _CACHE_TTL,
+                json.dumps(result, ensure_ascii=False, default=str),
+            )
+        except Exception:
+            logger.warning("Dashboard L2 Redis 缓存写入失败", exc_info=True)
+
     return result[:limit]
 
 
@@ -167,8 +226,9 @@ def get_stats():
 
 
 @router.get("/traces")
-def list_traces(limit: int = 20):
-    """列出最近 traces（含 verify 结果摘要）"""
+def list_traces(limit: int = 100):
+    """列出最近 traces（含 verify 结果摘要），limit 上限 1000"""
+    limit = min(max(limit, 1), 1000)
     result = _collect_all_traces(limit=limit)
     return {"traces": result, "total": len(result)}
 

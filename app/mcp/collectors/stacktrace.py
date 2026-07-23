@@ -95,4 +95,4 @@ def format_trace_for_ai(exc_data: dict, max_locals: int = 5) -> str:
         if locals_shown:
             lines.append(f"      局部变量: {dict(locals_shown)}")
 
-    return "\n".join(lines)
+    return redact("\n".join(lines))

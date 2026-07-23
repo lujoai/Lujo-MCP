@@ -15,7 +15,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.config import settings
-from app.mcp.protocol.jsonrpc import make_error, INVALID_REQUEST
+from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INTERNAL_ERROR
 from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES
 from app.mcp.transports.session import registry
 from app.mcp.transports.sse import hub
@@ -43,8 +43,8 @@ async def mcp_post(request: Request):
     # 预解析以判断 method / id / session
     try:
         parsed = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
-    except Exception as e:
-        return JSONResponse(make_error(None, INVALID_REQUEST, f"无效 JSON: {e}"), status_code=400)
+    except Exception:
+        return JSONResponse(make_error(None, PARSE_ERROR, "无效 JSON，详情见服务端日志"), status_code=400)
 
     method = parsed.get("method", "")
     req_id = parsed.get("id")
@@ -81,7 +81,7 @@ async def mcp_post(request: Request):
         result = await dispatch_raw(raw)
     except Exception:
         logger.exception("MCP dispatch 异常")
-        return JSONResponse(make_error(req_id, INVALID_REQUEST, "请求处理失败，详情见服务端日志"), status_code=400)
+        return JSONResponse(make_error(req_id, INTERNAL_ERROR, "内部错误，详情见服务端日志"), status_code=400)
 
     # 通知类消息无 id，不返回响应体
     if req_id is None:
