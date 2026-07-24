@@ -24,6 +24,15 @@ class MemoryTraceStore(TraceStorage):
                 self._store[request_id] = []
             self._store[request_id].append(entry)
 
+    def save_entries(self, request_id: str, entries: list[dict]) -> None:
+        """批量写入（单次锁，原子化）。覆写 ABC 默认实现以减少锁竞争。"""
+        with self._lock:
+            if request_id not in self._store:
+                if len(self._store) >= self._max_entries and self._store:
+                    self._store.popitem(last=False)  # 弹出最早插入的 request_id
+                self._store[request_id] = []
+            self._store[request_id].extend(entries)
+
     def get_entries(self, request_id: str) -> list[dict]:
         with self._lock:
             return self._store.get(request_id, []).copy()

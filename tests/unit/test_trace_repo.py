@@ -222,23 +222,31 @@ class TestSaveTraceAtomicity:
     """验证 save_trace 采用 META → LINK → DATA 写入顺序，DATA 作为提交标记。"""
 
     def test_save_trace_writes_data_last_as_commit_marker(self):
-        """带 trace_id 调用 save_trace 时，add_log 调用顺序中 _STEP_DATA 必须是最后一步。
+        """带 trace_id 调用 save_trace 时，写入顺序中 _STEP_DATA 必须是最后一步。
 
         期望顺序：META → LINK → DATA。
+        META+LINK 通过 add_logs_batch 批量写入，DATA 通过 add_log 单独写入。
         """
         caller_tid = "sdk-sec13-001"
-        with patch("app.mcp.core.trace_repo.add_log") as mock_add_log:
+        with patch("app.mcp.core.trace_repo.add_log") as mock_add_log, \
+             patch("app.mcp.core.trace_repo.add_logs_batch") as mock_batch:
             trace_repo.save_trace(
                 "SilentFailure", "click no response", [],
                 source="browser_sdk", trace_kind="silent_failure",
                 trace_id=caller_tid,
             )
-        # 收集每次 add_log 调用的 step 参数（add_log(request_id, step, data)）
-        steps = [call.args[1] for call in mock_add_log.call_args_list]
-        assert steps, "add_log 应至少被调用一次"
-        # DATA 必须在末尾
+
+        steps = []
+        # add_logs_batch 调用：args[1] 是 items 列表 [(step, data), ...]
+        for call in mock_batch.call_args_list:
+            items = call.args[1]
+            steps.extend(item[0] for item in items)
+        # add_log 调用：args[1] 是 step
+        for call in mock_add_log.call_args_list:
+            steps.append(call.args[1])
+
+        assert steps, "应至少有一次写入调用"
         assert steps[-1] == "trace_data", f"DATA 应为最后写入步骤，实际顺序: {steps}"
-        # META 在 LINK 之前，LINK 在 DATA 之前
         assert steps == ["trace_meta", "trace_link", "trace_data"], f"期望顺序 META→LINK→DATA，实际: {steps}"
 
     def test_save_trace_data_present_implies_meta_present(self):

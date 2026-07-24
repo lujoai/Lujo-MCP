@@ -26,7 +26,7 @@ import threading
 from typing import Any, Optional
 
 from app.config import settings
-from app.mcp.core.logs import add_log, get_logs
+from app.mcp.core.logs import add_log, add_logs_batch, get_logs
 from app.mcp.core.errors import record as _record_error, get_by_id as _get_error, get_latest as _get_latest
 from app.mcp.core.redaction import redact
 
@@ -158,29 +158,27 @@ def save_trace(
     # DATA 作为提交标记最后写入。这样 trace_data 存在即保证 META（及 LINK）已落库；
     # 若崩溃发生在 DATA 写入之前，则无 trace_data，_rebuild_trace_from_store 返回 None（干净失败）。
 
-    # 1) trace_meta 始终以 error_id 为 key 写入 trace_store，保证与 errors 缓冲对齐
-    try:
-        add_log(error_id, _STEP_META, {
+    # 1+2) 批量写入 META + LINK（准备数据，非提交标记），减少调用开销
+    batch_items = [(
+        _STEP_META,
+        {
             "trace_kind": trace_kind,
             "extra": _redact_nested(extra),
             "error_id": error_id,
             "ts": time.time(),
-        })
-    except Exception:
-        logger.exception("写入 trace_meta 失败 (error_id=%s)", error_id)
-
-    # 2) C3：caller 提供 trace_id 时，以 error_id 为 key 写入 trace_link 记录关联
-    # （写入方向：error_id 下记录 caller_trace_id，便于从 error_id 反查 SDK 关联）
+        },
+    )]
     if trace_id and trace_id != error_id:
-        try:
-            add_log(error_id, _STEP_LINK, {
-                "caller_trace_id": trace_id,
-                "ts": time.time(),
-            })
-        except Exception:
-            logger.exception("写入 trace_link 失败 (error_id=%s, caller_trace_id=%s)", error_id, trace_id)
+        batch_items.append((
+            _STEP_LINK,
+            {"caller_trace_id": trace_id, "ts": time.time()},
+        ))
+    try:
+        add_logs_batch(error_id, batch_items)
+    except Exception:
+        logger.exception("写入 trace_meta/link 批次失败 (error_id=%s)", error_id)
 
-    # 3) C4：把完整异常数据落 trace_store（提交标记，最后写入），重启后仍可回读
+    # 3) C4 + SEC-13：DATA 作为提交标记单独最后写入（不合并进批次），保证原子语义
     try:
         add_log(error_id, _STEP_DATA, {
             **exc_data,
