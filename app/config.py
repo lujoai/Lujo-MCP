@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     storage_backend: str = "memory"  # "memory" | "postgresql"
     # 内存存储容量上限（按 request_id 条数计），超限时按最旧条目 FIFO 淘汰，防 OOM
     memory_store_max_entries: int = 10000
+    # PG 不可达时是否自动降级到 memory 存储（生产建议 True，保证服务可用性）
+    # False = PG 不可达时启动直接失败（fail-fast，适用于强一致性场景）
+    storage_fallback_to_memory: bool = True
 
     # ── 状态后端（限流/指标计数）──
     state_backend: str = "memory"  # "memory" | "redis"
