@@ -174,8 +174,8 @@
 | Phase 5 | P3-1 分区 | traces 表按月分区（pg_partman） | Phase 3 异步化 | 🔲 待开发 |
 | Phase 5 | P3-2 归档 | >30 天数据自动归档 | P3-1 | 🔲 待开发 |
 | Phase 6 | P3-4 OpenTelemetry | 替换自研 Prometheus 指标，OTLP exporter | Phase 3 | 🔲 待开发 |
-| Phase 6 | P3-8 熔断器 | pybreaker，LLM/PG 调用熔断降级 | 无 | 🔲 待开发 |
-| Phase 7 | 智能错误分析引擎 | 指纹聚合 + 根因排序（errors 表已落地） | 无 | 🔲 待开发 |
+| Phase 6 | P3-8 熔断器 | pybreaker 包装 LLM/PG 调用，config 配置项控制熔断参数，熔断时返回结构化 fallback | 无 | ✅ 已完成（2026-07-24）|
+| Phase 7 | 智能错误分析引擎 | 指纹聚合统计（aggregate_by_fingerprint）+ 根因排序（rank_by_impact）+ PG errors 表查询（query_pg_errors）+ 3 个 dashboard API 端点 | 无 | ✅ 已完成（2026-07-24）|
 
 ### Browser SDK 续作
 

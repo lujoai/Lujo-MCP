@@ -23,6 +23,11 @@
 
 ### 最近完成事项
 
+- ✅ Phase 6 P3-8 熔断器 + Phase 7 智能错误分析引擎（2026-07-24）：
+  - **P3-8 熔断器**：`config.py` 新增 7 个配置项（circuit_breaker_enabled、cb_llm_*、cb_pg_*）；`analyzer.py` 引入 pybreaker 包装 LLM 调用，熔断时返回结构化 fallback（含 `_circuit_breaker_triggered` 标记）；`pg_store.py` 引入 pybreaker 包装 `_execute_with_retry`/`_query_with_retry`；新增 `test_circuit_breaker.py`（10 个用例）。
+  - **Phase 7 智能错误分析引擎**：`errors.py` 新增 `aggregate_by_fingerprint()` 按指纹聚合统计、`rank_by_impact()` 根因排序（权重算法：频次 40% + 会话数 30% + 时效性 30%）、`query_pg_errors()` PG 查询；`dashboard.py` 新增 `/errors/aggregated`、`/errors/ranked`、`/errors/history` 三个端点；新增 `test_error_analysis.py`（19 个用例）。
+  - 测试：单元全部通过；ruff 0 违规。
+
 - ✅ Phase 5 架构优化（2026-07-24）：
   - **P3-5 优雅降级**：`config.py` 新增 `storage_fallback_to_memory`（默认 True）；`factory.py` 在 `get_trace_store()`/`get_session_store()` 中包裹 PG 构造的 try/except，失败时 log warning 并自动降级到 Memory 实现；`storage_fallback_to_memory=False` 时保持 fail-fast。新增 `test_storage_fallback.py`（6 个用例）。
   - **P3-3 批量写入**：`base.py` TraceStorage ABC 新增 `save_entries` 非抽象方法（默认逐条写入）；`memory_store.py` MemoryTraceStore 覆写（单次锁批量 extend）；`logs.py` 新增 `add_logs_batch`；`trace_repo.py` save_trace 改造为 META+LINK 批量写入、DATA 保留单独提交标记（SEC-13 语义不变）；dashboard 缓存失效从 3 次降为 2 次。新增 `test_batch_writes.py`（10 个用例），修复 `test_trace_repo.py` 现有 SEC-13 测试适配批量调用。
