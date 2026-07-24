@@ -260,3 +260,66 @@ def list_specs():
     """列出所有已存规范"""
     from app.mcp.verifier import spec_store
     return {"specs": spec_store.list_specs()}
+
+
+# ── 智能错误分析引擎端点 ──
+
+@router.get("/errors/aggregated")
+def get_errors_aggregated(session_id: str | None = None):
+    """按指纹聚合统计错误（智能分析引擎 Phase 7）"""
+    aggregated = errors.aggregate_by_fingerprint(session_id=session_id)
+    return {
+        "aggregates": aggregated,
+        "total_fingerprints": len(aggregated),
+        "total_occurrences": sum(g["total_occurrences"] for g in aggregated),
+    }
+
+
+@router.get("/errors/ranked")
+def get_errors_ranked(
+    session_id: str | None = None,
+    since_minutes: int = 60,
+    limit: int = 20,
+):
+    """按影响程度排序错误（根因排序，智能分析引擎 Phase 7）"""
+    since_minutes = max(since_minutes, 1)
+    limit = min(max(limit, 1), 100)
+
+    ranked = errors.rank_by_impact(
+        session_id=session_id,
+        since_minutes=since_minutes,
+    )[:limit]
+
+    return {
+        "ranked_errors": ranked,
+        "total": len(ranked),
+        "since_minutes": since_minutes,
+    }
+
+
+@router.get("/errors/history")
+def get_errors_history(
+    fingerprint: str | None = None,
+    session_id: str | None = None,
+    since_minutes: int = 1440,
+    limit: int = 100,
+):
+    """查询错误历史记录（智能分析引擎 Phase 7）
+
+    优先从 PostgreSQL 查询（长期历史），PG 不可用时返回空列表。
+    """
+    since_minutes = max(since_minutes, 1)
+    limit = min(max(limit, 1), 1000)
+
+    history = errors.query_pg_errors(
+        fingerprint=fingerprint,
+        session_id=session_id,
+        since_minutes=since_minutes,
+        limit=limit,
+    )
+
+    return {
+        "errors": history,
+        "total": len(history),
+        "since_minutes": since_minutes,
+    }
