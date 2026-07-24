@@ -167,15 +167,15 @@
 
 ### 架构级优化（Phase 5-7）
 
-| 阶段 | 任务 | 说明 | 依赖 |
-|------|------|------|------|
-| Phase 5 | P3-3 批量写入 | `executemany` 替代单条 INSERT，提升吞吐量 | 无 |
-| Phase 5 | P3-5 优雅降级 | PG 不可用时自动降级到内存存储 | 无 |
-| Phase 5 | P3-1 分区 | traces 表按月分区（pg_partman） | Phase 3 异步化 |
-| Phase 5 | P3-2 归档 | >30 天数据自动归档 | P3-1 |
-| Phase 6 | P3-4 OpenTelemetry | 替换自研 Prometheus 指标，OTLP exporter | Phase 3 |
-| Phase 6 | P3-8 熔断器 | pybreaker，LLM/PG 调用熔断降级 | 无 |
-| Phase 7 | 智能错误分析引擎 | 指纹聚合 + 根因排序（errors 表已落地） | 无 |
+| 阶段 | 任务 | 说明 | 依赖 | 状态 |
+|------|------|------|------|------|
+| Phase 5 | P3-3 批量写入 | storage ABC 新增 `save_entries` 默认实现 + MemoryTraceStore 覆写（单次锁）+ logs `add_logs_batch` + trace_repo save_trace 复用（META+LINK 批量，DATA 保留提交标记） | 无 | ✅ 已完成（2026-07-24）|
+| Phase 5 | P3-5 优雅降级 | config 新增 `storage_fallback_to_memory` 配置 + factory 层 PG 构造异常捕获 + 自动降级 memory + fail-fast 模式 | 无 | ✅ 已完成（2026-07-24）|
+| Phase 5 | P3-1 分区 | traces 表按月分区（pg_partman） | Phase 3 异步化 | 🔲 待开发 |
+| Phase 5 | P3-2 归档 | >30 天数据自动归档 | P3-1 | 🔲 待开发 |
+| Phase 6 | P3-4 OpenTelemetry | 替换自研 Prometheus 指标，OTLP exporter | Phase 3 | 🔲 待开发 |
+| Phase 6 | P3-8 熔断器 | pybreaker，LLM/PG 调用熔断降级 | 无 | 🔲 待开发 |
+| Phase 7 | 智能错误分析引擎 | 指纹聚合 + 根因排序（errors 表已落地） | 无 | 🔲 待开发 |
 
 ### Browser SDK 续作
 

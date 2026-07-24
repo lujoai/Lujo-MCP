@@ -23,6 +23,12 @@
 
 ### 最近完成事项
 
+- ✅ Phase 5 架构优化（2026-07-24）：
+  - **P3-5 优雅降级**：`config.py` 新增 `storage_fallback_to_memory`（默认 True）；`factory.py` 在 `get_trace_store()`/`get_session_store()` 中包裹 PG 构造的 try/except，失败时 log warning 并自动降级到 Memory 实现；`storage_fallback_to_memory=False` 时保持 fail-fast。新增 `test_storage_fallback.py`（6 个用例）。
+  - **P3-3 批量写入**：`base.py` TraceStorage ABC 新增 `save_entries` 非抽象方法（默认逐条写入）；`memory_store.py` MemoryTraceStore 覆写（单次锁批量 extend）；`logs.py` 新增 `add_logs_batch`；`trace_repo.py` save_trace 改造为 META+LINK 批量写入、DATA 保留单独提交标记（SEC-13 语义不变）；dashboard 缓存失效从 3 次降为 2 次。新增 `test_batch_writes.py`（10 个用例），修复 `test_trace_repo.py` 现有 SEC-13 测试适配批量调用。
+  - **未触碰 pg_store.py**：AI_RULES 约束下，PG 的 executemany 优化留待后续审批再加；当前 ABC 默认循环实现可正常工作。
+  - 测试：单元 310 passed / 6 skipped / 0 failed；ruff 0 违规。
+
 - ✅ 技术债清理（2026-07-23）：
   - **test_full_flow.py 硬编码密码**：移除 5 行硬编码 PG 配置（含明文密码），改为 `os.environ.setdefault('STORAGE_BACKEND','postgresql')`，PG 连接参数由 `.env` 经 `settings` 读取（`pg_store._get_pool` 用 `settings.pg_*`，不读 os.environ）。commit `ad6f8dd`。
   - **pg_store.py 拆分评估**（只读分析，未改代码）：598 行，结论"有条件值得"——真正问题是 errors/specs 无 ABC 的设计债（非文件大小）。推荐方案 C（完整拆分 + 补 `ErrorStorage`/`SpecStorage` ABC + pg_store/async_pg_store 同步，2-2.5 人日，需审批）；方案 A（仅提 DDL 到 `pg_schema.py`）为零风险试水第一步。发现隐藏缺陷：`_execute_with_retry` 读取路径覆盖不一致（无重连重试）。详见 [ROADMAP.md](./ROADMAP.md) 技术债务。
