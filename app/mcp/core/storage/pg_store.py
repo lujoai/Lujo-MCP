@@ -1,4 +1,4 @@
-"""PostgreSQL 存储 —— 线程安全连接池 + 自动重连 + 优雅关闭"""
+"""PostgreSQL 存储 —— 线程安全连接池 + 自动重连 + 优雅关闭 + 熔断器"""
 
 import json
 import time
@@ -14,6 +14,33 @@ from app.config import settings
 from app.mcp.core.storage.base import TraceStorage, SessionStorage
 
 logger = logging.getLogger("ai-debug-mcp.storage.pg")
+
+# ── 熔断器（P3-8）──
+try:
+    import pybreaker
+except ImportError:
+    pybreaker = None
+    logger.warning("pybreaker 未安装，熔断器功能已禁用")
+
+
+_pg_circuit_breaker = None
+_pg_circuit_breaker_lock = threading.Lock()
+
+
+def _get_pg_circuit_breaker():
+    global _pg_circuit_breaker
+    if _pg_circuit_breaker is not None:
+        return _pg_circuit_breaker
+    if not pybreaker or not settings.circuit_breaker_enabled:
+        return None
+    with _pg_circuit_breaker_lock:
+        if _pg_circuit_breaker is None:
+            _pg_circuit_breaker = pybreaker.CircuitBreaker(
+                fail_max=settings.cb_pg_max_failures,
+                reset_timeout=settings.cb_pg_reset_timeout,
+                exclude=[pybreaker.CircuitBreakerError],
+            )
+    return _pg_circuit_breaker
 
 
 def _parse_data(value):
@@ -161,7 +188,7 @@ def _ensure_init():
             pool.putconn(conn)
 
 
-# ── 带重试的 SQL 执行装饰器 ──
+# ── 带重试和熔断器的 SQL 执行 ──
 def _execute_with_retry(
     conn,
     sql: str,
@@ -174,41 +201,88 @@ def _execute_with_retry(
     SEC-14 修复：OperationalError 时获取新连接并重试，而不是在旧连接上重试。
     坏连接使用 putconn(close=True) 关闭，避免污染连接池。
 
+    P3-8: 熔断器保护，当 PG 连续失败时触发熔断。
+
     返回 (conn, rowcount)：
     - conn: 最新的连接对象（可能是重连后的新连接）
     - rowcount: cursor.rowcount（用于 DELETE/INSERT/UPDATE 的行数统计）
     """
-    last_error = None
-    pool = _get_pool()
-    rowcount = 0
-    for attempt in range(max_retries + 1):
+
+    def _do_execute():
+        nonlocal conn
+        last_error = None
+        pool = _get_pool()
+        rowcount = 0
+        for attempt in range(max_retries + 1):
+            try:
+                cur = conn.cursor()
+                cur.execute(sql, params)
+                rowcount = cur.rowcount
+                if commit:
+                    conn.commit()
+                return conn, rowcount
+            except psycopg2.OperationalError as e:
+                last_error = e
+                if attempt < max_retries:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    conn = pool.getconn()
+                    logger.warning(f"PG 操作重试 ({attempt + 1}/{max_retries}): {e}")
+                    time.sleep(0.1)
+                else:
+                    try:
+                        pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    raise last_error
+
+    cb = _get_pg_circuit_breaker()
+    if cb:
+        try:
+            return cb.call(_do_execute)
+        except pybreaker.CircuitBreakerError:
+            logger.warning("PG 熔断器已触发")
+            raise
+    return _do_execute()
+
+
+def _query_with_retry(conn, sql: str, params: tuple = (), fetch_all: bool = True):
+    """执行查询 SQL（SELECT），受熔断器保护。
+
+    P3-8: 熔断器保护，当 PG 连续失败时触发熔断。
+
+    返回: fetch_all=True 返回所有行列表，fetch_all=False 返回单行
+    """
+
+    def _do_query():
+        pool = _get_pool()
         try:
             cur = conn.cursor()
             cur.execute(sql, params)
-            rowcount = cur.rowcount
-            if commit:
-                conn.commit()
-            return conn, rowcount
-        except psycopg2.OperationalError as e:
-            last_error = e
-            if attempt < max_retries:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                try:
-                    pool.putconn(conn, close=True)
-                except Exception:
-                    pass
-                conn = pool.getconn()
-                logger.warning(f"PG 操作重试 ({attempt + 1}/{max_retries}): {e}")
-                time.sleep(0.1)
-            else:
-                try:
-                    pool.putconn(conn, close=True)
-                except Exception:
-                    pass
-                raise last_error
+            if fetch_all:
+                return cur.fetchall()
+            return cur.fetchone()
+        except psycopg2.OperationalError:
+            try:
+                pool.putconn(conn, close=True)
+            except Exception:
+                pass
+            raise
+
+    cb = _get_pg_circuit_breaker()
+    if cb:
+        try:
+            return cb.call(_do_query)
+        except pybreaker.CircuitBreakerError:
+            logger.warning("PG 熔断器已触发（查询）")
+            raise
+    return _do_query()
 
 
 # ════════════════════════════════════════════
@@ -251,12 +325,11 @@ class PGTraceStore(TraceStorage):
     def get_entries(self, request_id: str) -> list[dict]:
         conn = self._conn()
         try:
-            cur = conn.cursor()
-            cur.execute(
+            rows = _query_with_retry(
+                conn,
                 "SELECT timestamp, step, data FROM traces WHERE request_id = %s ORDER BY timestamp",
                 (request_id,),
             )
-            rows = cur.fetchall()
             return [
                 {
                     "timestamp": r[0],
@@ -298,14 +371,13 @@ class PGTraceStore(TraceStorage):
     def list_request_ids(self, limit: int = 50) -> list[str]:
         conn = self._conn()
         try:
-            cur = conn.cursor()
-            cur.execute(
+            rows = _query_with_retry(
+                conn,
                 "SELECT request_id FROM ("
                 "  SELECT request_id, MAX(timestamp) as max_ts FROM traces GROUP BY request_id"
                 ") t ORDER BY max_ts DESC LIMIT %s",
                 (limit,),
             )
-            rows = cur.fetchall()
             return [r[0] for r in rows]
         finally:
             self._put(conn)
@@ -348,19 +420,19 @@ class PGSessionStore(SessionStorage):
     def get(self, session_id: str) -> Optional[dict]:
         conn = self._conn()
         try:
-            cur = conn.cursor()
-            cur.execute(
+            row = _query_with_retry(
+                conn,
                 "SELECT session_id, created_at, last_active, metadata FROM sessions WHERE session_id = %s",
                 (session_id,),
+                fetch_all=False,
             )
-            row = cur.fetchone()
             if row is None:
                 return None
-            cur.execute(
+            conn, _ = _execute_with_retry(
+                conn,
                 "UPDATE sessions SET last_active = %s WHERE session_id = %s",
                 (time.time(), session_id),
             )
-            conn.commit()
             return {
                 "session_id": row[0],
                 "created_at": row[1],
@@ -385,12 +457,11 @@ class PGSessionStore(SessionStorage):
         conn = self._conn()
         try:
             cutoff = time.time() - ttl_seconds
-            cur = conn.cursor()
-            cur.execute(
+            rows = _query_with_retry(
+                conn,
                 "SELECT session_id, created_at, last_active, metadata FROM sessions WHERE last_active > %s",
                 (cutoff,),
             )
-            rows = cur.fetchall()
             return [
                 {
                     "session_id": r[0],
@@ -407,11 +478,12 @@ class PGSessionStore(SessionStorage):
         conn = self._conn()
         try:
             cutoff = time.time() - ttl_seconds
-            cur = conn.cursor()
-            cur.execute("DELETE FROM sessions WHERE last_active < %s", (cutoff,))
-            count = cur.rowcount
-            conn.commit()
-            return count
+            conn, rowcount = _execute_with_retry(
+                conn,
+                "DELETE FROM sessions WHERE last_active < %s",
+                (cutoff,),
+            )
+            return rowcount
         finally:
             self._put(conn)
 
@@ -520,13 +592,13 @@ def get_spec(spec_id: str) -> Optional[dict]:
     pool = _get_pool()
     conn = pool.getconn()
     try:
-        cur = conn.cursor()
-        cur.execute(
+        row = _query_with_retry(
+            conn,
             "SELECT id, kind, target, expect, created_at, updated_at "
             "FROM specs WHERE id = %s",
             (spec_id,),
+            fetch_all=False,
         )
-        row = cur.fetchone()
         if row is None:
             return None
         return {
@@ -550,7 +622,6 @@ def list_specs_pg(
     pool = _get_pool()
     conn = pool.getconn()
     try:
-        cur = conn.cursor()
         sql = (
             "SELECT id, kind, target, expect, created_at, updated_at FROM specs"
         )
@@ -565,8 +636,7 @@ def list_specs_pg(
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY updated_at DESC"
-        cur.execute(sql, params)
-        rows = cur.fetchall()
+        rows = _query_with_retry(conn, sql, tuple(params))
         return [
             {
                 "id": r[0],

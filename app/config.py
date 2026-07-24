@@ -135,6 +135,23 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: str = "json"  # "json" | "text"
 
+    # ── 熔断器（P3-8）──
+    # 全局开关：开启后 LLM 和 PG 调用都受熔断器保护
+    circuit_breaker_enabled: bool = False
+
+    # LLM 熔断器配置（cb_llm_*）
+    # 滑动窗口内的最大失败次数，超过则熔断
+    cb_llm_max_failures: int = 5
+    # 熔断后半开状态等待时间（秒），期间允许一次试探调用
+    cb_llm_reset_timeout: int = 30
+    # 滑动窗口大小（秒），超过窗口的失败不计入统计
+    cb_llm_window_size: int = 60
+
+    # PG 熔断器配置（cb_pg_*）
+    cb_pg_max_failures: int = 3
+    cb_pg_reset_timeout: int = 15
+    cb_pg_window_size: int = 60
+
     # ── 服务 ──
     host: str = "0.0.0.0"
     port: int = 8000

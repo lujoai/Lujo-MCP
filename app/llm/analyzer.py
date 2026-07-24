@@ -1,4 +1,4 @@
-"""LLM 错误分析器（加强版）—— 重试、超时、上下文截断、流式输出、输出校验净化"""
+"""LLM 错误分析器（加强版）—— 重试、超时、上下文截断、流式输出、输出校验净化、熔断器"""
 
 import copy
 import json
@@ -17,6 +17,53 @@ from app.config import settings
 from app.mcp.core.redaction import redact
 
 logger = logging.getLogger("ai-debug-mcp.llm")
+
+# ── 熔断器（P3-8）──
+try:
+    import pybreaker
+except ImportError:
+    pybreaker = None
+    logger.warning("pybreaker 未安装，熔断器功能已禁用")
+
+
+_llm_circuit_breaker = None
+_llm_circuit_breaker_lock = threading.Lock()
+
+
+def _get_llm_circuit_breaker():
+    global _llm_circuit_breaker
+    if _llm_circuit_breaker is not None:
+        return _llm_circuit_breaker
+    if not pybreaker or not settings.circuit_breaker_enabled:
+        return None
+    with _llm_circuit_breaker_lock:
+        if _llm_circuit_breaker is None:
+            _llm_circuit_breaker = pybreaker.CircuitBreaker(
+                fail_max=settings.cb_llm_max_failures,
+                reset_timeout=settings.cb_llm_reset_timeout,
+                exclude=[pybreaker.CircuitBreakerError],
+            )
+    return _llm_circuit_breaker
+
+
+def _llm_fallback_result() -> dict:
+    return {
+        "analysis": {
+            "root_cause": "LLM 服务暂时不可用（熔断器已触发）",
+            "impact": "分析功能降级，返回默认分析结果",
+            "fix": "请稍后重试，或联系管理员检查 LLM 服务状态",
+            "confidence": "low",
+        },
+        "model": "__circuit_breaker_fallback__",
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+        "attempts": 0,
+        "cached": False,
+        "_circuit_breaker_triggered": True,
+    }
 
 _client: Optional[OpenAI] = None
 # _client_lock：模块级 bool 标志，作为轻量自旋锁使用。
@@ -571,9 +618,10 @@ async def _retry_call_async(
 
 def analyze(context: dict, model: Optional[str] = None) -> dict:
     """
-    调用 LLM 分析调试上下文（带重试、fallback 和缓存）
+    调用 LLM 分析调试上下文（带重试、fallback、缓存和熔断器）
 
     P1-2: 按上下文 fingerprint 缓存分析结果，避免相同问题重复调用 LLM。
+    P3-8: 熔断器保护，当 LLM 服务连续失败时触发熔断，返回结构化 fallback。
     """
     fingerprint = _compute_context_fingerprint(context)
     cached = _get_cached_result(fingerprint)
@@ -594,12 +642,23 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
         {"role": "user", "content": f"请分析以下调试上下文：\n\n{prompt_str}"},
     ]
 
+    def _call_llm():
+        return _retry_call(
+            client, model_name, messages,
+            temperature=settings.llm_temperature,
+            max_retries=settings.llm_max_retries,
+        )
+
     start = time.time()
-    result = _retry_call(
-        client, model_name, messages,
-        temperature=settings.llm_temperature,
-        max_retries=settings.llm_max_retries,
-    )
+    try:
+        cb = _get_llm_circuit_breaker()
+        if cb:
+            result = cb.call(_call_llm)
+        else:
+            result = _call_llm()
+    except pybreaker.CircuitBreakerError:
+        logger.warning("LLM 熔断器已触发，返回 fallback 结果")
+        return _llm_fallback_result()
     elapsed = time.time() - start
 
     _set_cache_result(fingerprint, copy.deepcopy(result))
@@ -621,11 +680,12 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
 
 async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
     """
-    异步调用 LLM 分析调试上下文（带重试、fallback 和多级缓存）
+    异步调用 LLM 分析调试上下文（带重试、fallback、多级缓存和熔断器）
 
     Phase 3.2：用 AsyncOpenAI 替代同步客户端，await 调用 + asyncio.sleep 重试。
     缓存逻辑复用 _get_cached_result/_set_cache_result（已支持 L1+L2 多级缓存），
     用 asyncio.to_thread 包装避免阻塞事件循环。
+    P3-8: 熔断器保护，当 LLM 服务连续失败时触发熔断，返回结构化 fallback。
     """
     fingerprint = _compute_context_fingerprint(context)
     cached = await asyncio.to_thread(_get_cached_result, fingerprint)
@@ -646,12 +706,26 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
         {"role": "user", "content": f"请分析以下调试上下文：\n\n{prompt_str}"},
     ]
 
+    async def _call_llm():
+        return await _retry_call_async(
+            client, model_name, messages,
+            temperature=settings.llm_temperature,
+            max_retries=settings.llm_max_retries,
+        )
+
     start = time.time()
-    result = await _retry_call_async(
-        client, model_name, messages,
-        temperature=settings.llm_temperature,
-        max_retries=settings.llm_max_retries,
-    )
+    try:
+        cb = _get_llm_circuit_breaker()
+        if cb:
+            result = await asyncio.to_thread(
+                cb.call,
+                lambda: asyncio.run(_call_llm()),
+            )
+        else:
+            result = await _call_llm()
+    except pybreaker.CircuitBreakerError:
+        logger.warning("LLM 熔断器已触发，返回 fallback 结果")
+        return _llm_fallback_result()
     elapsed = time.time() - start
 
     await asyncio.to_thread(_set_cache_result, fingerprint, copy.deepcopy(result))
