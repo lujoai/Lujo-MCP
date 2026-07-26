@@ -426,6 +426,114 @@ docker compose up -d
 
 ---
 
+### Q5：你的 RAG 是怎么搭建的？原始数据怎么来的？有切片吗？
+
+> **设计前提**：我的 RAG 和传统"文档切片 RAG"设计思路不同。传统 RAG 面向静态知识库（Markdown/PDF → 切片 → Embedding → 向量库），我的 RAG 面向**运行时分析结果复用**——解决的是"同类错误不用每次都调 LLM，直接复用历史分析结论"的场景。
+
+**一、原始数据来源——不是静态文档，是运行时自动沉淀**
+
+传统 RAG 数据流：
+```
+Markdown/PDF 文件 → 切片(chunking) → Embedding → 向量库 → 检索 → LLM 生成
+```
+
+我的 RAG 数据流：
+```
+用户 POST /api/debug/analyze → LLM 分析成功
+  → _persist_analysis_to_knowledge_base() 自动沉淀
+    ├─ upsert_knowledge_entry()  → 进程内 LRU 知识库（精确匹配用）
+    └─ vector_store.add([...])  → 向量库（语义检索用）
+         doc = {fingerprint, analysis, fix_suggestion, source:"llm"}
+```
+
+**关键差异**：原始数据不是文件，而是 LLM 分析成功后的结构化 JSON（`root_cause` + `fix_suggestion`，几十～几百 token）。**不需要手动导入，不需要批处理，完全是运行时自动沉淀。**
+
+**二、没有传统切片——因为数据形态不需要**
+
+传统 RAG 需要切片（chunk_size=512, overlap=50），因为原始数据是长文本文件（几百～几千 token），要适配 embedding 模型输入窗口。
+
+我的 RAG **没有切片**，原因：
+
+| 维度 | 传统文档 RAG | 本项目 RAG |
+|------|-------------|-----------|
+| 原始数据 | 长文本文件（几百～几千 token） | 短 JSON dict（几十～几百 token） |
+| 切片 | 按 token/段落/字符数切块 | **无需切片**——单条数据本身就是合理粒度 |
+| 向量化单位 | 每个 chunk 独立 embedding | 整条 JSON 序列化后直接 embedding |
+
+**替代方案**——轻量化数据处理管线（3 步）：
+
+1. **序列化**（所有后端共用）：`{"fingerprint":"xxx", "analysis":{...}}` → JSON 字符串
+2. **Token 化**（InProcessVectorStore 用）：按非字母数字切分为 token set → Jaccard 相似度 = \|交集\|/\|并集\|
+3. **Embedding**（QdrantVectorStore 用）：序列化后的 JSON 整体做 embedding。注意 `2048 条/批` 是 **API 批量限制**（OpenAI Embeddings API 单次上限），不是数据切片
+
+**三、三层回退机制（核心设计亮点）**
+
+```
+analyze(context)
+  │
+  ├─ L1: get_knowledge_entry(fingerprint)    ← 精确指纹匹配
+  │       O(1) 哈希查找，<1ms，零成本
+  │       命中 → 直接返回历史分析，analysis_source="knowledge_base"
+  │
+  ├─ L2: _try_vector_rag(context)            ← L1 miss 时
+  │       query = json.dumps(context)
+  │       → retrieve_similar(query, top_k=3)
+  │         → vector_store.search(query, top_k)
+  │            ├─ InProcess: token Jaccard 相似度（≥ min_score=0.3 才召回）
+  │            └─ Qdrant: cosine 语义相似度
+  │       命中 → 返回历史分析，analysis_source="vector_rag"
+  │
+  └─ L3: LLM 新分析                          ← L2 也 miss 时
+          _retry_call() 调 LLM 做全新分析
+          → 成功后自动回写 L1 + L2（下次即可命中）
+```
+
+| 层级 | 方法 | 成本 | 延迟 | 触发条件 |
+|------|------|------|------|----------|
+| **L1 精确命中** | `get_knowledge_entry()` | O(1) 哈希查找 | <1ms | 错误指纹完全匹配 |
+| **L2 向量召回** | `retrieve_similar()` | O(N) 扫描 / 1 次 Embedding API | 10-500ms | L1 miss，精确指纹不存在 |
+| **L3 LLM 新分析** | `_retry_call()` | 1-N 次 LLM API 调用 | 2-30s | L2 也 miss，全新错误 |
+
+**四、双后端实现（一行配置切换）**
+
+| 维度 | InProcessVectorStore（默认） | QdrantVectorStore（生产） |
+|------|---------------------------|--------------------------|
+| 相似度算法 | Jaccard = \|交集\|/\|并集\| | Cosine 向量相似度 |
+| 依赖 | 零外部依赖 | qdrant-client + OpenAI/智谱 Embeddings |
+| 语义理解 | 无（纯 token 重叠） | 有（Embeddings 模型语义空间） |
+| 数据存储 | 进程内 OrderedDict | Qdrant 向量数据库 |
+| 持久化 | 进程级（重启丢失） | 服务级（重启保留） |
+| 幂等写入 | 不适用 | uuid5(fingerprint) 确定性 id |
+| 切换方式 | `VECTOR_STORE_BACKEND=in_process` | `VECTOR_STORE_BACKEND=qdrant` |
+
+**五、全链路降级容错**
+
+| 故障场景 | 行为 |
+|----------|------|
+| `vector_store_enabled=False` | 返回 `NullVectorStore`，add=no-op，search=[] |
+| qdrant-client 未安装 | 静默降级为 no-op，warning 日志 |
+| Qdrant 连接失败 | 标记后不再重试，search 返回空列表 |
+| Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op |
+| 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM |
+| 向量库关闭时 | `get_vector_store()` 返回 `NullVectorStore` |
+
+**六、知识库 LRU 淘汰机制**
+
+`KnowledgeBaseStore` 用 `OrderedDict` 实现 LRU（[knowledge_base.py:42-114](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/knowledge_base.py#L42-L114)）：
+- 容量上限：100 条
+- 每次 get/upsert 后 `move_to_end(fingerprint)` 标记为最近使用
+- 超上限时 `popitem(last=False)` 淘汰最久未使用条目
+- 线程安全：`threading.Lock` 保护所有读写
+
+**七、Agent 侧 RAG 消费（第二个消费方）**
+
+`RepairContextAssembler._safe_vector_recall()`（[context_assembler.py:71-86](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/agent/context_assembler.py#L71-L86)）独立调用 `retrieve_similar()`，将召回结果注入 `repair_context.vector_recall`，供 `RepairAgent` 生成修复方案时参考历史相似案例。
+
+**一句话标准答**：
+> "我的 RAG 不是传统文档 RAG，而是**运行时分析结果 RAG**。原始数据是 LLM 每次分析成功后自动沉淀的结构化 JSON，不需要切片——因为数据本身就是短 JSON，直接序列化即可做 embedding 或 token 化。检索用**三层回退机制**：先按错误指纹精确命中（O(1)、零成本），miss 后用语义向量召回（Jaccard 或 Qdrant cosine），再 miss 才走 LLM 新分析并自动回写。支持 Jaccard（零依赖）和 Qdrant（语义召回）两种后端，全链路降级容错不阻断主流程。详细数据流和代码位置见 [DESIGN.md §16.3.7](./docs/internal/DESIGN.md)。"
+
+---
+
 ## 四、常见追问 & 防守回答
 
 ### "规范谁来写？写错了怎么办？"

@@ -18,7 +18,7 @@
   - 统一工具注册表（HTTP 17 个工具，stdio 17 个）；stdio 传输下每个 Agent 独立子进程，进程级隔离
   - **v0.3.0 收口**：JSON-RPC 错误码规范化（-32700/-32600/-32601/-32602/-32603）、LLM 输出 schema 校验+结构化 fallback、stdio 生命周期资源回收
 - Playwright 前端自动遍历（auto_test）+ 浏览器 SDK V2-V6（批量上报、网络错误自动标记、UI 静默失败自动检测），可选依赖不影响核心功能
-- 指纹知识库基础能力：按错误指纹复用历史分析结论，命中优先返回，并在 LLM 成功后自动沉淀
+- 指纹知识库 + 向量检索 RAG：按错误指纹精确匹配（O(1)命中优先），miss 后降级为语义向量召回（Jaccard/Qdrant Cosine 双后端可配），LLM 成功后自动沉淀为下次命中；三层回退机制确保同类错误零重复分析
 - 存储工厂模式（memory/PG 一键切换）+ 状态工厂（memory/Redis）+ 多 LLM provider
 - Docker Compose 一键启动（PostgreSQL + Redis + App），scripts/ + migrations/ 标准化
 - **安全加固**：fail-closed 鉴权、入库前脱敏（locals/message/frames/network/UI/console）、存储工厂 fail-fast、内部错误串全仓收口（17 类已收口）

@@ -52,7 +52,9 @@
 | 规范存储 | [app/mcp/verifier/spec_store.py](./app/mcp/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
 | 异常钩子 | [app/mcp/hooks/exception_hook.py](./app/mcp/hooks/exception_hook.py) | sys.excepthook + asyncio |
 | LLM 分析 | [app/llm/analyzer.py](./app/llm/analyzer.py) | 重试/超时/fallback/流式 |
-| 指纹知识库 | [app/rag/knowledge_base.py](./app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论 |
+| 指纹知识库 | [app/rag/knowledge_base.py](./app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀） |
+| 向量检索抽象 | [app/rag/vector_store.py](./app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
+| Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](./app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
 | 工具注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
 | AI Debug Agent | [app/agent/](./app/agent/) | 自动修复方案生成 + 多 Agent 协同框架（Phase 1） |
 | 浏览器 SDK | [browser-sdk/ai-debug.js](./browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
@@ -69,6 +71,7 @@
 - ✅ 运行时快照（psutil）
 - ✅ LLM 智能分析（openai/zhipu/custom）
 - ✅ 指纹知识库命中与自动沉淀（命中优先返回 + LLM 成功后自动写入）
+- ✅ 向量检索 RAG（Phase 7）：`VectorStore` ABC + `InProcessVectorStore`（Jaccard 零依赖）+ `QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回，uuid5 幂等 upsert）；精确指纹 miss 后向量召回 fallback；全链路降级容错
 - ✅ 规范驱动验证（assert_behavior 纯函数）
 - ✅ 静默失败检测（< 1ms 判定）
 - ✅ 全局异常自动捕获（exception_hook）

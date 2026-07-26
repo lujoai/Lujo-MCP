@@ -91,6 +91,13 @@
     - `app/llm/analyzer.py` KB hook 区集成：精确指纹 miss 后做向量召回 fallback，返回结果新增 `knowledge_base_hit`/`analysis_source` 字段
     - 配置项：`vector_store_enabled=False`、`vector_store_backend="in_process"`、`vector_store_top_k=3`、`vector_store_min_score=0.3`、`qdrant_url`、`qdrant_collection`、`qdrant_api_key`
     - 测试：`tests/unit/test_vector_store.py`
+    - **RAG 架构详解（2026-07-26 补充，面试/答辩参考）**：
+      - **原始数据来源**：不是静态文档，而是 LLM 每次分析成功后自动沉淀的结构化 JSON（`root_cause` + `fix_suggestion`），写入唯一入口 `analyzer._persist_analysis_to_knowledge_base()`
+      - **没有传统切片**：数据本身是短 JSON（几十～几百 token），直接序列化即可做 embedding，无需 chunking。若接入静态文档可在 `app/rag/` 下新增加载器+切片器
+      - **三层回退机制**：L1 精确指纹命中（O(1)，零延迟）→ L2 向量召回 fallback（O(N) + Embedding）→ L3 LLM 新分析（全新调用，成功后自动回写 L1+L2）
+      - **双后端可切换**：默认 `InProcessVectorStore`（Jaccard 零依赖），生产切 `QdrantVectorStore`（Cosine 语义召回），仅改配置不改代码
+      - **全链路降级**：任何环节故障（Qdrant 挂、Embedding 不可用）自动降级为精确匹配或直接 LLM 分析，不阻断主链路
+      - **详细数据流图和代码位置**：见 `DESIGN.md` §16.3.7
   - **Track C — RBAC + API_KEY 轮换（AUDIT-2-13/14）**：
     - 新增 `app/auth/key_rotation.py`：多 key 恒定时间比较（`hmac.compare_digest` 遍历不短路）+ 单 key 向后兼容
     - 新增 `app/auth/rbac.py`：角色分级 admin > developer > viewer + `require_role(*allowed_roles)` FastAPI 依赖工厂

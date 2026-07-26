@@ -1398,6 +1398,142 @@ analyze(context)
 - **为何在精确指纹 miss 后才做向量召回？** 精确命中走缓存（O(1) L1/L2），miss 才进入向量召回（O(N) 扫描）——分级降级，最大化缓存命中率。
 - **为何禁止静默回退？** 配置 `backend=qdrant` 但 Qdrant 运行时不可用时，静默回退到 `in_process` 会让用户误以为在用 Qdrant——这是"静默半死"反模式。当前实现采用"静默降级"：后端类型不变（仍是 `QdrantVectorStore`），但 `add` 变 no-op、`search` 返回空，绝不抛异常穿透 LLM 主链路，绝不偷偷换后端。
 
+#### 16.3.7 RAG 数据流详解（2026-07-26 补充）
+
+##### 原始数据来源
+
+> **关键设计判断**：本项目的 RAG 不是传统"文档切片 RAG"，而是**"运行时分析结果 RAG"**。原始数据不是静态文件（Markdown/PDF），而是 LLM 实时分析产生的结构化 JSON。
+
+**唯一写入源头**：`analyzer._persist_analysis_to_knowledge_base()`（[analyzer.py:610-645](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py#L610-L645)）
+
+```
+用户 POST /api/debug/analyze
+  → analyzer.analyze(context)
+    → LLM 分析成功，获得 result["analysis"]
+      → _persist_analysis_to_knowledge_base(fingerprint, result)
+        ├─ upsert_knowledge_entry()  → 进程内 LRU 知识库（精确匹配用）
+        └─ vector_store.add([...])  → 向量库（语义检索用）
+             └─ doc = {fingerprint, analysis, fix_suggestion, source}
+```
+
+**写入数据结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `fingerprint` | str | 错误指纹（`_get_error_fingerprint(context)` 生成），作为知识库 key 和 Qdrant point id |
+| `analysis` | dict | LLM 分析结果：`{root_cause, impact, confidence, fix, ...}` |
+| `fix_suggestion` | str | 修复建议（`analysis.get("fix", "")`） |
+| `source` | str | 固定 `"llm"`，标记数据来源 |
+
+**触发时机**：每次 LLM 分析成功后自动沉淀，无需手动导入或批处理任务。
+
+##### 切片（Chunking）机制说明
+
+> **本项目没有传统意义上的文档切片**。原因是数据形态不同。
+
+**对比传统 RAG**：
+
+| 维度 | 传统文档 RAG | 本项目 RAG |
+|------|-------------|-----------|
+| 原始数据 | 长文本文件（几百～几千 token） | 短 JSON dict（几十～几百 token） |
+| 切片方式 | 按 token/段落/字符数切块（chunk_size=512, overlap=50） | **无需切片**——单条数据本身就是合理粒度 |
+| 向量化单位 | 每个 chunk 独立 embedding | 整条 JSON 序列化后直接 embedding |
+
+**实际的数据处理管线**（替代切片的轻量化方案）：
+
+**Step 1 — 序列化**（所有后端共用）：
+```python
+# vector_store.py:36-38
+def _serialize_doc(doc: dict) -> str:
+    return json.dumps(doc, ensure_ascii=False, default=str)
+```
+把 dict → JSON 字符串，确保可序列化/可比较。
+
+**Step 2 — Token 化**（仅 InProcessVectorStore 用）：
+```python
+# vector_store.py:29-33
+def _tokenize(text: str) -> set[str]:
+    _TOKEN_SPLIT = re.compile(r"[^0-9A-Za-z]+")
+    return {tok for tok in _TOKEN_SPLIT.split(text.lower()) if tok}
+```
+按非字母数字切分为 token set，用于 Jaccard 相似度。**这不是切片，而是标准化数据粒度**——把 JSON 字符串转为 token 集合，便于集合运算。
+
+**Step 3 — Embedding**（仅 QdrantVectorStore 用）：
+```python
+# qdrant_vector_store.py:180-217
+def _embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
+    for i in range(0, len(texts), 2048):  # 2048 条/批，API 限制
+        chunk = texts[i : i + 2048]
+        response = client.embeddings.create(model=..., input=chunk)
+```
+这里的 `chunk` 是 **API 批量分片**（2048 条/批，受 OpenAI Embeddings API 单次输入上限限制），**不是数据切片**。每条 JSON 字符串整体做 embedding。
+
+**给答辩的话术建议**：
+> "我的 RAG 没有传统意义上的文档切片。因为我的原始数据是 LLM 实时分析产生的结构化 JSON（root_cause + fix_suggestion，通常几十到几百 token），不是长文本文件。每条数据本身就是合理的检索粒度，直接序列化后就可以做 embedding 或 token 化，不需要再切块。如果未来要接入静态文档知识库，我会在 `app/rag/` 下新增文档加载器和切片器模块，保持现有 VectorStore 接口不变。"
+
+##### 三层 RAG 回退机制
+
+```
+analyze(context)
+  │
+  ├─ L1: get_knowledge_entry(fingerprint)
+  │       精确指纹匹配 → 零延迟零成本 → 直接返回历史分析
+  │
+  ├─ L2: _try_vector_rag(context)  ← L1 miss 时
+  │       query = json.dumps(context)
+  │       → retrieve_similar(query)
+  │         → vector_store.search(query, top_k)
+  │            ├─ InProcess: token Jaccard 相似度
+  │            └─ Qdrant: cosine 语义相似度
+  │       → 命中 → 返回历史分析，标记 analysis_source="vector_rag"
+  │
+  └─ L3: LLM 新分析  ← L2 也 miss 时
+          _retry_call() 调 LLM 做全新分析
+          → 成功后自动回写 L1 + L2
+```
+
+| 层级 | 方法 | 成本 | 延迟 | 触发条件 |
+|------|------|------|------|----------|
+| **L1 精确命中** | `get_knowledge_entry()` | O(1) 哈希查找 | <1ms | 错误指纹完全匹配 |
+| **L2 向量召回** | `retrieve_similar()` | O(N) 扫描 / 1 次 Embedding API | 10-500ms | L1 miss，精确指纹不存在 |
+| **L3 LLM 新分析** | `_retry_call()` | 1-N 次 LLM API 调用 | 2-30s | L2 也 miss，全新错误 |
+
+##### 双后端实现对比
+
+| 维度 | InProcessVectorStore（默认） | QdrantVectorStore（生产） |
+|------|---------------------------|--------------------------|
+| **相似度算法** | Jaccard = \|交集\|/\|并集\| | Cosine 向量相似度 |
+| **依赖** | 零外部依赖 | qdrant-client + OpenAI/智谱 Embeddings |
+| **语义理解** | 无（纯 token 重叠） | 有（Embeddings 模型语义空间） |
+| **数据存储** | 进程内 OrderedDict | Qdrant 向量数据库 |
+| **持久化** | 进程级（重启丢失） | 服务级（重启保留） |
+| **幂等写入** | 不适用 | uuid5(fingerprint) 确定性 id |
+| **适用场景** | 开发/测试/离线 | 生产环境 |
+| **切换方式** | `VECTOR_STORE_BACKEND=in_process` | `VECTOR_STORE_BACKEND=qdrant` |
+
+##### 知识库 LRU 淘汰机制
+
+`KnowledgeBaseStore` 用 `OrderedDict` 实现 LRU（[knowledge_base.py:42-114](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/knowledge_base.py#L42-L114)）：
+
+- 容量上限：100 条（`DEFAULT_MAX_ENTRIES = 100`）
+- 每次 `get`/`upsert` 后 `move_to_end(fingerprint)` 标记为最近使用
+- 超上限时 `popitem(last=False)` 淘汰最久未使用条目
+- 线程安全：`threading.Lock` 保护所有读写
+
+##### 全链路降级容错
+
+| 故障场景 | 行为 | 代码位置 |
+|----------|------|----------|
+| `vector_store_enabled=False` | 返回 `NullVectorStore`，add=no-op，search=[] | [vector_store.py:157-158](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/vector_store.py#L157-L158) |
+| qdrant-client 未安装 | 静默降级为 no-op，warning 日志 | [qdrant_vector_store.py:70-76](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/qdrant_vector_store.py#L70-L76) |
+| Qdrant 连接失败 | `_qdrant_collection_ready=True` 后不再重试 | [qdrant_vector_store.py:126-134](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/qdrant_vector_store.py#L126-L134) |
+| Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op | [qdrant_vector_store.py:214-216](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/qdrant_vector_store.py#L214-L216) |
+| 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM | [analyzer.py:582-584](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py#L582-L584) |
+
+##### Agent 侧 RAG 消费
+
+`RepairContextAssembler._safe_vector_recall()`（[context_assembler.py:71-86](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/agent/context_assembler.py#L71-L86)）独立调用 `retrieve_similar()`，将召回结果注入 `repair_context.vector_recall`，供 `RepairAgent` 生成修复方案时参考历史相似案例。这是 RAG 的第二个消费方（第一个是 `analyzer._get_knowledge_base_result()`）。
+
 ### 16.4 Track C — RBAC + API_KEY 轮换（AUDIT-2-13/14）
 
 #### 16.4.1 零签名变更成交条件
