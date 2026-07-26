@@ -34,6 +34,10 @@ def _health_payload() -> dict:
     }
 
 
+def _accepted_sse(request: Request) -> bool:
+    return "text/event-stream" in request.headers.get("Accept", "")
+
+
 @router.post("")
 async def mcp_post(request: Request):
     raw = await request.body()
@@ -68,7 +72,14 @@ async def mcp_post(request: Request):
             )
         if method == "notifications/initialized":
             registry.mark_initialized(session_id)
-            return Response(status_code=202)
+            hub.publish_notification(
+                session_id,
+                "notifications/session/ready",
+                {"sessionId": session_id, "initialized": True},
+            )
+            resp = Response(status_code=202)
+            resp.headers["Mcp-Session-Id"] = session_id
+            return resp
         # 其它请求（tools/list、tools/call 等）需要已初始化
         if not sess.initialized and method not in ("ping",):
             return JSONResponse(
@@ -90,8 +101,12 @@ async def mcp_post(request: Request):
         return resp
 
     # 根据 Accept 决定返回 JSON 还是 SSE 流
-    accept = request.headers.get("Accept", "")
-    if "text/event-stream" in accept:
+    if _accepted_sse(request) and session_id and hub.publish(session_id, result):
+        resp = Response(status_code=202)
+        resp.headers["Mcp-Session-Id"] = session_id
+        return resp
+
+    if _accepted_sse(request):
         async def event_gen():
             yield hub.format_event(result)
         sr = StreamingResponse(event_gen(), media_type="text/event-stream")
@@ -105,8 +120,7 @@ async def mcp_post(request: Request):
 
 @router.get("")
 async def mcp_get(request: Request):
-    accept = request.headers.get("Accept", "")
-    if "text/event-stream" not in accept:
+    if not _accepted_sse(request):
         # 非 SSE → 返回服务健康信息（保持旧行为）
         return _health_payload()
 
@@ -124,6 +138,8 @@ async def mcp_get(request: Request):
             yield ": connected\n\n"
             while True:
                 msg = await q.get()
+                if hub.is_close_event(msg):
+                    break
                 yield hub.format_event(msg)
         except asyncio.CancelledError:
             pass
@@ -140,4 +156,5 @@ async def mcp_delete(request: Request):
         if not registry.get(session_id):
             return JSONResponse({"detail": "MCP session not found, please re-initialize"}, status_code=404)
         registry.delete(session_id)
+        hub.close_session(session_id)
     return Response(status_code=204)

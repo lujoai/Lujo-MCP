@@ -14,6 +14,8 @@ from typing import Optional, Generator, AsyncGenerator
 from openai import OpenAI, AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 
 from app.config import settings
+from app.llm.knowledge_base import get_knowledge_entry, retrieve_similar, upsert_knowledge_entry
+from app.llm.vector_store import get_vector_store
 from app.mcp.core.redaction import redact
 
 logger = logging.getLogger("ai-debug-mcp.llm")
@@ -62,6 +64,8 @@ def _llm_fallback_result() -> dict:
         },
         "attempts": 0,
         "cached": False,
+        "knowledge_base_hit": False,
+        "analysis_source": "fallback",
         "_circuit_breaker_triggered": True,
     }
 
@@ -184,6 +188,30 @@ def _set_cache_result(fingerprint: str, result: dict) -> None:
             )
         except Exception:
             logger.warning("L2 Redis 缓存写入失败，降级为 L1", exc_info=True)
+
+
+def _set_l1_only(fingerprint: str, result: dict) -> None:
+    """仅写入 L1 缓存（OrderedDict LRU），不写 L2、不刷新 L2 TTL。
+
+    仅供 ``app.llm.cache_prewarm`` 使用——预热场景下 L2 已有数据，
+    若调 ``_set_cache_result`` 会 ``setex`` 刷新 L2 TTL，导致定时预热
+    周期下 L2 永不自然淘汰，违反 TTL 淘汰语义。本函数让 L2 TTL 自然流逝，
+    该过期的过期，下次 SCAN 时自然不在结果集里。
+
+    LRU 逻辑与 ``_set_cache_result`` 的 L1 段完全一致：容量满且新键时
+    ``popitem(last=False)`` 淘汰最久未访问；已存在键 ``move_to_end``。
+    必须与 ``_set_cache_result`` 共享 ``_cache_lock`` 避免并发竞态。
+    """
+    with _cache_lock:
+        is_new = fingerprint not in _analysis_cache
+        if is_new and len(_analysis_cache) >= _MAX_CACHE_SIZE:
+            _analysis_cache.popitem(last=False)
+        _analysis_cache[fingerprint] = {
+            "result": result,
+            "cached_at": time.time(),
+        }
+        if not is_new:
+            _analysis_cache.move_to_end(fingerprint)
 
 
 _PROVIDER_BASE_URLS = {
@@ -484,6 +512,139 @@ def _validate_and_normalize(raw_output: str) -> dict:
     return result
 
 
+def _get_error_fingerprint(context: dict) -> Optional[str]:
+    exception = context.get("exception")
+    if isinstance(exception, dict):
+        fingerprint = exception.get("fingerprint")
+        if fingerprint:
+            return str(fingerprint)
+
+    for error in context.get("errors", []) or []:
+        if isinstance(error, dict):
+            fingerprint = error.get("fingerprint")
+            if fingerprint:
+                return str(fingerprint)
+
+    return None
+
+
+def _annotate_analysis_result(
+    result: dict,
+    *,
+    knowledge_base_hit: bool,
+    analysis_source: str,
+) -> dict:
+    annotated = copy.deepcopy(result)
+    annotated["knowledge_base_hit"] = knowledge_base_hit
+    annotated["analysis_source"] = analysis_source
+    return annotated
+
+
+def _get_knowledge_base_result(context: dict) -> Optional[dict]:
+    fingerprint = _get_error_fingerprint(context)
+    if not fingerprint:
+        return None
+
+    entry = get_knowledge_entry(fingerprint)
+    if entry is None:
+        # 精确指纹 miss → 向量检索 RAG fallback（二级召回）
+        return _try_vector_rag(context, fingerprint)
+
+    analysis = copy.deepcopy(entry.get("analysis") or {})
+    fix_suggestion = entry.get("fix_suggestion")
+    if fix_suggestion and not analysis.get("fix"):
+        analysis["fix"] = fix_suggestion
+
+    logger.info("Knowledge base hit (fingerprint=%s)", fingerprint)
+    return {
+        "analysis": analysis,
+        "model": "__knowledge_base__",
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+        "attempts": 0,
+        "cached": False,
+        "knowledge_base_hit": True,
+        "analysis_source": "knowledge_base",
+    }
+
+
+def _try_vector_rag(context: dict, fingerprint: str) -> Optional[dict]:
+    """向量检索 RAG fallback：精确指纹 miss 后按相似度召回历史分析。
+
+    返回 None 表示无相似结果，调用方应继续走 LLM 链路。
+    """
+    try:
+        query_text = json.dumps(context, ensure_ascii=False, default=str)
+        similar = retrieve_similar(query_text)
+    except Exception:
+        logger.warning("Vector retrieval failed", exc_info=True)
+        return None
+    if not similar:
+        return None
+
+    doc = similar[0]
+    analysis = copy.deepcopy(doc.get("analysis") or {})
+    fix_suggestion = doc.get("fix_suggestion") or analysis.get("fix")
+    if fix_suggestion and not analysis.get("fix"):
+        analysis["fix"] = fix_suggestion
+
+    logger.info("Vector RAG hit (fingerprint=%s)", fingerprint)
+    return {
+        "analysis": analysis,
+        "model": "__vector_rag__",
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+        "attempts": 0,
+        "cached": False,
+        "knowledge_base_hit": False,
+        "analysis_source": "vector_rag",
+    }
+
+
+def _persist_analysis_to_knowledge_base(fingerprint: Optional[str], result: dict) -> None:
+    if not fingerprint:
+        return
+
+    analysis = result.get("analysis")
+    if not isinstance(analysis, dict):
+        return
+
+    try:
+        upsert_knowledge_entry(
+            fingerprint=fingerprint,
+            analysis=analysis,
+            fix_suggestion=analysis.get("fix", ""),
+            source="llm",
+        )
+    except Exception:
+        logger.warning(
+            "Knowledge base auto-persist failed (fingerprint=%s)",
+            fingerprint,
+            exc_info=True,
+        )
+
+    # 向量检索 RAG：将分析结果同步写入向量库，供未来相似问题召回
+    try:
+        get_vector_store().add([{
+            "fingerprint": fingerprint,
+            "analysis": analysis,
+            "fix_suggestion": analysis.get("fix", ""),
+            "source": "llm",
+        }])
+    except Exception:
+        logger.warning(
+            "Vector store persist failed (fingerprint=%s)",
+            fingerprint,
+            exc_info=True,
+        )
+
+
 def _retry_call(
     client: OpenAI,
     model: str,
@@ -623,12 +784,21 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
     P1-2: 按上下文 fingerprint 缓存分析结果，避免相同问题重复调用 LLM。
     P3-8: 熔断器保护，当 LLM 服务连续失败时触发熔断，返回结构化 fallback。
     """
+    knowledge_base_result = _get_knowledge_base_result(context)
+    if knowledge_base_result:
+        return knowledge_base_result
+
     fingerprint = _compute_context_fingerprint(context)
+    knowledge_base_fingerprint = _get_error_fingerprint(context)
     cached = _get_cached_result(fingerprint)
     if cached:
         logger.info("LLM analysis cache hit (fingerprint=%s)", fingerprint)
         cached["cached"] = True
-        return cached
+        return _annotate_analysis_result(
+            cached,
+            knowledge_base_hit=False,
+            analysis_source="llm",
+        )
 
     client = _get_client()
     model_name = model or settings.llm_model
@@ -662,6 +832,7 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
     elapsed = time.time() - start
 
     _set_cache_result(fingerprint, copy.deepcopy(result))
+    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result)
 
     logger.info(
         "LLM analysis complete",
@@ -675,7 +846,11 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
     )
 
     result["cached"] = False
-    return result
+    return _annotate_analysis_result(
+        result,
+        knowledge_base_hit=False,
+        analysis_source="llm",
+    )
 
 
 async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
@@ -687,12 +862,21 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
     用 asyncio.to_thread 包装避免阻塞事件循环。
     P3-8: 熔断器保护，当 LLM 服务连续失败时触发熔断，返回结构化 fallback。
     """
+    knowledge_base_result = await asyncio.to_thread(_get_knowledge_base_result, context)
+    if knowledge_base_result:
+        return knowledge_base_result
+
     fingerprint = _compute_context_fingerprint(context)
+    knowledge_base_fingerprint = _get_error_fingerprint(context)
     cached = await asyncio.to_thread(_get_cached_result, fingerprint)
     if cached:
         logger.info("LLM analysis cache hit (fingerprint=%s)", fingerprint)
         cached["cached"] = True
-        return cached
+        return _annotate_analysis_result(
+            cached,
+            knowledge_base_hit=False,
+            analysis_source="llm",
+        )
 
     client = _get_async_client()
     model_name = model or settings.llm_model
@@ -729,6 +913,7 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
     elapsed = time.time() - start
 
     await asyncio.to_thread(_set_cache_result, fingerprint, copy.deepcopy(result))
+    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result)
 
     logger.info(
         "LLM analysis complete",
@@ -742,7 +927,11 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
     )
 
     result["cached"] = False
-    return result
+    return _annotate_analysis_result(
+        result,
+        knowledge_base_hit=False,
+        analysis_source="llm",
+    )
 
 
 def analyze_stream(context: dict, model: Optional[str] = None) -> Generator[str, None, None]:

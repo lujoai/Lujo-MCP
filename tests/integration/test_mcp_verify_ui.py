@@ -54,6 +54,85 @@ def _parse_content(resp: dict) -> dict:
     return json.loads(content_text)
 
 
+class _FakeTimeout(Exception):
+    pass
+
+
+class _FakeElement:
+    def __init__(self, page, selector: str):
+        self._page = page
+        self._selector = selector
+
+    def click(self):
+        if self._selector == "#submit":
+            return None
+        raise AssertionError(f"unexpected selector: {self._selector}")
+
+    def fill(self, value: str):
+        self._page.values[self._selector] = value
+
+    def hover(self):
+        return None
+
+
+class _FakePage:
+    def __init__(self):
+        self.url = ""
+        self.values = {}
+
+    def set_default_timeout(self, timeout_ms: int):
+        self.timeout_ms = timeout_ms
+
+    def goto(self, url: str, wait_until="domcontentloaded"):
+        self.url = url
+
+    def wait_for_selector(self, selector: str, timeout=5000):
+        if selector in {"#submit", "#status"}:
+            return _FakeElement(self, selector)
+        raise _FakeTimeout(f"selector not found: {selector}")
+
+    def text_content(self, selector: str, timeout=5000):
+        if selector == "#status":
+            return "Pending"
+        raise _FakeTimeout(f"selector not found: {selector}")
+
+    def wait_for_function(self, expression: str, arg, timeout=5000):
+        if "includes" in expression and arg in self.url:
+            return True
+        if "===" in expression and self.url == arg:
+            return True
+        raise AssertionError("condition not met")
+
+
+class _FakeBrowser:
+    def __init__(self):
+        self.page = _FakePage()
+
+    def new_page(self):
+        return self.page
+
+    def close(self):
+        return None
+
+
+class _FakeChromium:
+    def launch(self, headless=True):
+        return _FakeBrowser()
+
+
+class _FakePlaywright:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+
+class _FakePlaywrightContext:
+    def __enter__(self):
+        return _FakePlaywright()
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 class TestVerifyUiHandlerNature:
     """验证 verify_ui handler 的同步性质 —— to_thread 包装路径的前提。"""
 
@@ -140,6 +219,67 @@ class TestVerifyUiViaDispatch:
         assert "playwright 未安装" in content["error"], (
             f"应包含 playwright 未安装提示，实际: {content['error']}"
         )
+
+    def test_private_url_rejection_returns_structured_security(self, monkeypatch):
+        """私网目标经 MCP 调用时返回结构化安全拒绝结果。"""
+        monkeypatch.setattr("app.config.settings.ui_url_allow_private", False)
+        monkeypatch.setattr("app.config.settings.ui_url_allowlist", "")
+
+        req = _make_tools_call_req("verify_ui", {
+            "spec": {"kind": "ui", "target": "http://127.0.0.1:8123/private"},
+        })
+        resp = asyncio.run(protocol_server.dispatch(req))
+
+        assert resp["result"]["isError"] is False
+        content = _parse_content(resp)
+        assert content["matched"] is False
+        assert content["security"]["target"]["allowed"] is False
+        assert content["security"]["target"]["rule"] == "private_network"
+        assert content["failure_evidence"]["stage"] == "security_check"
+
+    def test_assertion_failure_returns_structured_evidence(self, monkeypatch):
+        """业务断言失败时经 MCP 返回 assertions 与 failure_evidence。"""
+        monkeypatch.setattr(ui_runner, "_PLAYWRIGHT_AVAILABLE", True)
+        monkeypatch.setattr(
+            ui_runner, "sync_playwright", lambda: _FakePlaywrightContext(), raising=False
+        )
+        monkeypatch.setattr(ui_runner, "PlaywrightTimeout", _FakeTimeout, raising=False)
+
+        req = _make_tools_call_req("verify_ui", {
+            "spec": {
+                "kind": "ui",
+                "target": "https://example.com/form",
+                "expect": {
+                    "interactions": [
+                        {
+                            "action": "click",
+                            "selector": "#submit",
+                            "expect": {
+                                "assertions": [
+                                    {"type": "text", "selector": "#status", "equals": "Ready"}
+                                ]
+                            },
+                        }
+                    ]
+                },
+            }
+        })
+        resp = asyncio.run(protocol_server.dispatch(req))
+
+        assert resp["result"]["isError"] is False
+        content = _parse_content(resp)
+        assert content["matched"] is False
+        assert content["diffs"] == [{
+            "field": "click(#submit).text",
+            "expected": "Ready",
+            "actual": "Pending",
+        }]
+        assert len(content["interactions"]) == 1
+        interaction = content["interactions"][0]
+        assert interaction["assertions"][0]["type"] == "text"
+        assert interaction["assertions"][0]["matched"] is False
+        assert interaction["failure_evidence"]["stage"] == "assertion"
+        assert interaction["failure_evidence"]["selector"] == "#status"
 
     def test_unknown_tool_returns_method_not_found(self):
         """调用未注册的工具应返回 METHOD_NOT_FOUND 错误。"""

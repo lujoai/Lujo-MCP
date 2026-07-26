@@ -2,6 +2,8 @@
 
 本文档介绍如何启动项目并展示核心功能。
 
+> 演示能力不等同于默认交付状态；功能完成度与环境前提请以 [docs/internal/DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md) 和 [docs/internal/STABILITY_REPORT.md](./docs/internal/STABILITY_REPORT.md) 为准。
+
 ## 一、启动项目
 
 ### 方式一：Docker Compose（推荐）
@@ -61,6 +63,7 @@ curl http://localhost:8000/
 | networkSampleRate 验证 | 测试采样率控制 |
 | networkThrottleMs 验证 | 测试节流控制 |
 | 业务兼容性验证 | 测试 xhr.onload / onreadystatechange 回调 |
+| V3 网络错误自动上报 | 测试 fetch/XHR 失败自动转静默失败 |
 | 默认 captureNetwork=true | 验证默认配置 |
 | Request Body 序列化测试 | 测试 FormData、Blob、URLSearchParams |
 
@@ -93,6 +96,12 @@ curl http://localhost:8000/
 2. 点击「测试 Blob 请求」→ 确认 Blob 显示类型和大小
 3. 点击「测试 URLSearchParams 请求」→ 确认参数被正确序列化
 
+#### 步骤 6：测试网络错误自动上报（V3）
+
+1. 点击「触发失败请求并自动上报」
+2. 观察页面展示的 silent failure payload
+3. 确认 `observed_events` 中带有最近网络事件摘要，且 URL / body 已脱敏
+
 ## 三、展示 Network Capture
 
 ### 1. 功能亮点
@@ -101,6 +110,8 @@ curl http://localhost:8000/
 - **智能序列化**：自动识别并安全处理多种请求体类型
 - **采样节流**：支持采样率和时间间隔控制，避免性能影响
 - **递归保护**：SDK 自身上报请求自动排除
+- **网络错误自动标记**：请求失败会自动转为 silent failure
+- **UI 静默失败自动检测**：支持点击/提交后的 DOM/路由/网络观察窗口判定
 
 ### 2. 演示要点
 
@@ -136,6 +147,8 @@ AiDebug.init({
   // captureNetwork 默认开启（V2 新特性）
   // networkSampleRate 默认 1.0（全部采样）
   // networkThrottleMs 默认 0（无节流）
+  // autoDetectNetworkErrors 默认 true（V3）
+  // autoDetectUISilentFailures 默认 true（V6）
 });
 ```
 
@@ -195,6 +208,17 @@ curl -X POST http://localhost:8000/api/debug/verify \
   }'
 ```
 
+### 4. Browser SDK UI 静默失败自动检测演示（V6）
+
+仓库内提供演示页 `app/web/silent_failure_demo.html`，用于本地验证 SDK 对点击/提交后“无 DOM 变化、无路由变化、无网络变化”的自动判定能力。
+
+推荐方式：
+
+1. 保持服务运行
+2. 直接打开该 HTML 文件，或在本地静态文件服务器下访问
+3. 点击「点击后“假装提交”但不更新 UI」
+4. 观察右侧 payload 区域是否出现自动生成的 silent failure 上报内容
+
 ## 五、常见问题
 
 ### Q1: Demo 页面无法加载？
@@ -210,6 +234,7 @@ curl http://localhost:8000/
 1. SDK 是否已正确初始化（查看控制台日志）
 2. endpoint 是否配置正确
 3. 网络请求是否被 `_isSelfRequest` 排除（SDK 自身请求会被跳过）
+4. 若在验证 V3 / V6，确认 `autoDetectNetworkErrors` / `autoDetectUISilentFailures` 未被关闭
 
 ### Q3: LLM 分析失败？
 

@@ -1,0 +1,27 @@
+﻿........................................................................ [ 14%]
+........................................................................ [ 29%]
+........................................................................ [ 43%]
+........................................................................ [ 58%]
+........................................................................ [ 73%]
+................sssss................................................... [ 87%]
+..........s................................................              [100%]
+============================== warnings summary ===============================
+tests/unit/test_config.py::TestSettingsExtraEnvKeys::test_settings_warning_logged_for_extra_keys
+  C:\Users\ASUS\Dev\Projects\ai-debug-mcp\tests\unit\test_config.py:94: PydanticDeprecatedSince211: Accessing the 'model_fields' attribute on the instance is deprecated. Instead, you should access this attribute from the model class. Deprecated in Pydantic V2.11 to be removed in V3.0.
+    known_lower = {k.lower() for k in self.model_fields.keys()}
+
+tests/unit/test_config.py::TestSettingsExtraEnvKeys::test_settings_no_warning_when_no_extra_keys
+  C:\Users\ASUS\Dev\Projects\ai-debug-mcp\tests\unit\test_config.py:133: PydanticDeprecatedSince211: Accessing the 'model_fields' attribute on the instance is deprecated. Instead, you should access this attribute from the model class. Deprecated in Pydantic V2.11 to be removed in V3.0.
+    known_lower = {k.lower() for k in self.model_fields.keys()}
+
+tests/unit/test_config.py::TestSettingsExtraEnvKeys::test_settings_missing_env_file_handled_gracefully
+  C:\Users\ASUS\Dev\Projects\ai-debug-mcp\tests\unit\test_config.py:167: PydanticDeprecatedSince211: Accessing the 'model_fields' attribute on the instance is deprecated. Instead, you should access this attribute from the model class. Deprecated in Pydantic V2.11 to be removed in V3.0.
+    known_lower = {k.lower() for k in self.model_fields.keys()}
+
+tests/unit/test_config.py::TestApiKeyNormalization::test_empty_api_key_normalized_to_none
+tests/unit/test_config.py::TestApiKeyNormalization::test_whitespace_api_key_normalized_to_none
+tests/unit/test_config.py::TestApiKeyNormalization::test_nonempty_api_key_preserved
+  C:\Users\ASUS\Dev\Projects\ai-debug-mcp\tests\unit\test_config.py:204: PydanticDeprecatedSince211: Accessing the 'model_fields' attribute on the instance is deprecated. Instead, you should access this attribute from the model class. Deprecated in Pydantic V2.11 to be removed in V3.0.
+    known_lower = {k.lower() for k in self.model_fields.keys()}
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

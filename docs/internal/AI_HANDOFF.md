@@ -6,6 +6,7 @@
 > **职责边界**：本文件只负责当前上下文摘要 + 任务交接模板 + 下一步入口指引。
 > 详细开发任务由 [DEV_PLAN.md](./DEV_PLAN.md) 管理，禁止在此复制任务列表。
 > 当前 Release 审查专项清单见 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md)。
+> 功能完成度口径以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准；待开发项见 [TODO.md](./TODO.md)；稳定性启用状态见 [STABILITY_REPORT.md](./STABILITY_REPORT.md)。
 
 ---
 
@@ -14,16 +15,113 @@
 | 指标 | 状态 |
 |------|------|
 | 项目版本 | v0.3.0 |
-| MCP 工具数 | HTTP 15 / stdio 15 |
-| 测试覆盖 | **单元 310 passed / 6 skipped / 0 failed**；集成 49 passed / 19 skipped / 0 failed（鉴权基线已修复）；ruff 0 违规 |
-| 存储后端 | PostgreSQL（生产）/ memory（默认）|
-| LLM Provider | openai / zhipu / custom |
-| 当前阶段 | v0.3.0 Phase 0-5 全部完成 ✅；Release Audit 全部收口 ✅ |
-| 当前 Sprint | Release Audit 全部收口（P0/P1/P2/P3 清零 + C5/C4/H7 核实），已打 `v0.3.0` tag（未推送）|
+| MCP 工具数 | HTTP 17 / stdio 17（新增 `repair_async` / `repair_result`，FR19） |
+| 测试覆盖 | 保留单元、集成与环境依赖型 skip 测试；实际可交付状态需结合 `DELIVERY_MATRIX.md` 与 `STABILITY_REPORT.md` 判断 |
+| 存储后端 | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境 |
+| 数据层优化 | 分区、归档、批量写入、优雅降级、熔断器均有真实代码；默认启用范围以配置和运行环境为准 |
+| LLM Provider | openai / zhipu / custom（真实代码已落地；启用依赖外部 LLM 服务） |
+| 当前阶段 | 真实完成度收口、MCP HTTP 流式闭环与稳定性验证已完成，现已进入 AI Debug Agent Phase 1 落地后的多 Agent 协同演进阶段 |
+| 当前 Sprint | AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）+ Qdrant 适配器 + L3 缓存预热 + 三轨并行均已完成；下一步为 AI Debug Agent Phase 2（多 Agent DAG，AGENT-002）、Browser SDK 压缩 e2e 联调降级为 CI 任务 |
 
 ### 最近完成事项
 
-- ✅ Phase 6 P3-8 熔断器 + Phase 7 智能错误分析引擎（2026-07-24）：
+- ✅ AI Debug Agent Phase 1 完成档（2026-07-26，AGENT-001）：
+  - **Phase 1 定位**：单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）；Phase 2 多 Agent DAG（Git Agent + Test Agent + Security Agent）登记为 `AGENT-002` 待办
+  - **新增模块** `app/agent/`（7 文件）：
+    - `base.py`：`BaseAgent` ABC + `AgentContext` / `AgentResult` / `AgentTrace` + `AgentStatus` 枚举（pending / running / succeeded / failed / fallback）；ABC 定义 `run(ctx) -> AgentResult` 抽象方法，trace 收集 / 状态机 / 错误兜底由基类承担
+    - `schemas.py`：Pydantic 模型 `RepairRequest` / `RepairPlan` / `RepairJob` / `Sources`
+    - `context_assembler.py`：`RepairContextAssembler` 并发聚合 `analyze_async`（LLM 根因分析）+ `retrieve_similar`（向量召回）+ `get_recent_diff`（Git diff），用 `asyncio.gather(return_exceptions=True)` 各失败静默降级
+    - `repair_agent.py`：`RepairAgent` 复用 `analyzer._get_async_client` 取 LLM 客户端；独立重试 / fallback（与 `analyzer._retry_call` 同构但解耦）；`_validate_repair_plan` 容错 JSON（与 `analyzer._validate_and_normalize` 风格一致）
+    - `repair_queue.py`：`RepairQueue` + lifespan helper，结构对称 `analysis_queue.py`（有界 `asyncio.Queue` + `Semaphore(K)` + K 常驻消费协程 + `drain(timeout)`）
+    - `coordinator.py`：`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace），对外暴露 `submit_repair` / `get_repair_result`，是 Phase 2 多 Agent DAG 的编排入口
+    - `__init__.py`：模块导出
+  - **修改文件**：
+    - `app/config.py`：新增 9 个 `agent_*` 配置项（`agent_enabled` 默认 False / `agent_queue_maxsize=50` / `agent_queue_workers=2` / `agent_queue_drain_timeout=30` / `agent_repair_model` / `agent_repair_fallback_model` / `agent_repair_max_retries` / `agent_repair_timeout` / `agent_repair_temperature`）
+    - `app/api/debug.py`：新增 2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）
+    - `app/mcp/tools/repair_api.py`：新增 2 MCP 工具（`repair_async` + `repair_result`，工具数 15→17）
+    - `app/mcp/tools/__init__.py`：注册新工具
+    - `app/main.py`：lifespan 钩子（启动 `start_repair_queue`，停机 `drain_repair_queue`）
+  - **测试**：6 单元测试文件（63 用例）+ 3 集成测试文件（8 用例，e2e skip-if-no-api-key）
+  - **测试基线**：583 passed / 6 skipped / 0 failed（从 520 增加 63）；Ruff 0 违规
+  - **降级矩阵**：`agent_enabled=False` 路由不挂载；LLM 不可用返回结构化 fallback；上下文子采集器失败静默降级；LLM 返回非 JSON 由 `_validate_repair_plan` 容错填充默认值并标记 `confidence=low`
+  - **后续待办**：Phase 2 多 Agent DAG（`AGENT-002`）——新增 `GitAgent` / `TestAgent` / `SecurityAgent` 继承 `BaseAgent`，`Coordinator` 扩展为多 Agent DAG 并行编排
+
+- ✅ Qdrant 向量检索适配器完成（2026-07-26）：
+  - 新增 `app/llm/qdrant_vector_store.py`：`QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回）+ `uuid5(fingerprint)` 幂等 upsert + 静默降级（add=no-op / search=空）
+  - `app/llm/vector_store.py` 工厂改造：qdrant 分支从 `raise NotImplementedError` 改为函数内 `import QdrantVectorStore` 实例化（破循环 + 可选依赖隔离）
+  - 配置项：`qdrant_embedding_model`、`qdrant_embedding_dim`、`qdrant_connect_timeout`、`qdrant_request_timeout`
+  - 测试：`tests/unit/test_qdrant_vector_store.py`（23 用例）+ `tests/integration/test_qdrant_integration.py`（4 集成测试，skip-if-unavailable）
+  - 验证：单元测试 520 passed / 6 skipped / 0 failed；Ruff 0 违反
+- ✅ P3-7 L3 缓存预热完成（2026-07-26）：
+  - 新增 `app/llm/cache_prewarm.py`：从 L2 Redis 扫描热门 fingerprint 回填 L1，只写 L1 不刷新 L2 TTL
+  - `app/llm/analyzer.py` 新增 `_set_l1_only`；`app/main.py` lifespan 集成启动/停机钩子
+- ✅ 全量 Markdown 文档同步完成（2026-07-26，DOC-004）：
+  - 清理 Qdrant 留空插槽 / 待实现 / 待引入等陈旧引用，与代码实际状态对齐
+  - 修正 PRD/AI_HANDOFF/DESIGN/CODE_REVIEW/ROADMAP/INTERVIEW/PROJECT_SUMMARY 7 份文档
+  - 历史修订记录与 RESUME.md 保留；详见 [handoff.md](../../handoff.md) 本轮完成节
+- ✅ 三轨并行开发完成（2026-07-25）：
+  - **Track A — P3-6 异步分析队列（消息队列削峰）**：
+    - 新增 `app/llm/analysis_queue.py`：`AnalysisQueue` 类（有界 `asyncio.Queue(maxsize=N)` + `asyncio.Semaphore(K)` + K 常驻消费协程 + drain）
+    - 新增端点 `POST /api/debug/analyze/async`、`GET /api/debug/analyze/result/{job_id}`（在 `app/api/debug.py`）
+    - `app/main.py` lifespan 启动期 `start_analysis_queue()`，停机期 `drain_analysis_queue(timeout)`
+    - 配置项：`llm_async_analysis_enabled`、`llm_queue_maxsize=100`、`llm_queue_workers=4`、`llm_queue_drain_timeout=30`
+    - 测试：`tests/unit/test_analysis_queue.py`
+    - 隔离：零侵入 analyzer.py（消费协程延迟导入）
+  - **Track B — 向量检索 RAG（Phase 7）**：
+    - 新增 `app/llm/vector_store.py`：`VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂 `get_vector_store()` + 注册表 `register_vector_backend()`
+    - Qdrant 后端插槽本轮留空（配置 `backend=qdrant` 显式 `raise NotImplementedError`）→ **已于 2026-07-26 实现**，见 §一 最近完成事项
+    - `app/llm/analyzer.py` KB hook 区集成：精确指纹 miss 后做向量召回 fallback，返回结果新增 `knowledge_base_hit`/`analysis_source` 字段
+    - 配置项：`vector_store_enabled=False`、`vector_store_backend="in_process"`、`vector_store_top_k=3`、`vector_store_min_score=0.3`、`qdrant_url`、`qdrant_collection`、`qdrant_api_key`
+    - 测试：`tests/unit/test_vector_store.py`
+  - **Track C — RBAC + API_KEY 轮换（AUDIT-2-13/14）**：
+    - 新增 `app/auth/key_rotation.py`：多 key 恒定时间比较（`hmac.compare_digest` 遍历不短路）+ 单 key 向后兼容
+    - 新增 `app/auth/rbac.py`：角色分级 admin > developer > viewer + `require_role(*allowed_roles)` FastAPI 依赖工厂
+    - `app/middleware.py` `AuthMiddleware` 仅体内修改（公共签名未变）：`__init__` 调 `auth_enabled()`，`dispatch` 调 `verify_api_key()` + 注入 `request.state.role`
+    - 配置项：`api_keys`、`api_key_rotation_enabled`、`rbac_enabled`、`rbac_role_mapping`
+    - 测试：`tests/unit/test_key_rotation.py`、`tests/unit/test_rbac.py`
+    - 零签名变更：`setup_middleware(app)` 签名未变，`ingest.py` 完全无鉴权改动
+  - **三轨物理隔离**：A 在 `app/llm/analysis_queue.py`、B 在 `app/llm/vector_store.py`、C 在 `app/auth/`
+  - **验证结果**：单元测试 **485 passed, 6 skipped, 0 failed**（相比基线 381 增加 104 项新测试）；Ruff 三轨文件 0 违反（3 处预存违反位于 `ui_runner.py` / `test_sdk_v5_enhancements.py` / `test_otel_collector_integration.py`，不在三轨范围）
+  - **后续待办**：P3-7 L3 缓存预热（已完成 2026-07-26）；Browser SDK 压缩 e2e 联调（降级为 CI 任务，代码已完成，仅验证）；Qdrant 适配器（已完成 2026-07-26）；下一步为 AI Debug Agent（Qdrant 语义召回已就绪）
+
+- ✅ Browser SDK V3 / V6 + 指纹知识库基础能力（2026-07-25）：
+  - `browser-sdk/ai-debug.js` 已补网络错误自动标记静默失败、`reportNetworkError()`、`onSilentFailureReport()`、UI 静默失败自动检测观察器，以及 `autoDetectNetworkErrors` / `autoDetectUISilentFailures` / `uiSilentFailureTimeoutMs` / `uiSilentFailureObserveSelector` 配置项
+  - `examples/network_capture_demo.html` 已补 V3 网络错误自动上报演示；`app/web/silent_failure_demo.html` 已补 V6 UI 静默失败自动检测演示
+  - `app/llm/knowledge_base.py` 新增进程内最小知识库实现；`app/llm/analyzer.py` 已接入知识库优先命中、`knowledge_base_hit` / `analysis_source` 标记，以及 LLM 成功后的自动沉淀
+  - 新增 `tests/unit/test_knowledge_base.py`，并补齐 `tests/unit/test_analyzer.py` 中的知识库命中 / 未命中 / 自动沉淀 / 失败降级覆盖
+  - T6 相关验证结果：`tests/unit/test_knowledge_base.py` 与 `tests/unit/test_analyzer.py` 合并验证 **41 passed**
+  - 文档已同步更新：`README.md`、`PROJECT_SUMMARY.md`、`DEMO_GUIDE.md`、`AI_HANDOFF.md`、`DEV_PLAN.md`、`ROADMAP.md`、`TODO.md`、`DELIVERY_MATRIX.md`、`RELEASE_NOTES.md`
+
+- ✅ 真实完成度收口 + MCP HTTP 流式闭环（2026-07-25）：
+  - 新增 `DELIVERY_MATRIX.md`：以代码为唯一依据，统一标记 `已完成 / 部分完成 / 需依赖环境 / 仅配置预埋`
+  - 新增 `TODO.md`：将 SSE/notifications、稳定性验证等散落待开发项正式纳入台账
+  - 新增 `STABILITY_REPORT.md`：汇总 PG/asyncpg、Playwright、Redis L2、熔断器、OTel 的启用前提与验证缺口
+  - 新增 `ENABLEMENT_GUIDE.md`：给出本机 / Docker 两种部署与功能启用路径
+  - `mcp_routes.py` + `sse.py`：补齐 `notifications/session/ready` 推送、`POST Accept: text/event-stream` 到 `GET /mcp` 的结果桥接，以及 `DELETE /mcp` 的订阅清理语义
+  - 新增 `tests/unit/test_mcp_routes.py` 用例覆盖 ready 推送、SSE 结果桥接、DELETE 清理订阅
+  - 新增 `tests/integration/test_runtime_enablement.py`：补 PostgreSQL、asyncpg、Redis、OTel、熔断器的运行时 smoke tests
+  - 新增 `tests/integration/test_redis_cache_integration.py`：补 LLM L2 缓存与 Dashboard L2 缓存的真实 Redis 回填测试
+  - 新增 `tests/integration/test_ui_verify_live.py`：补 Playwright + Chromium + 本地 HTTP 页面 + DOM 断言的真实浏览器验证
+  - 新增 `tests/integration/test_otel_collector_integration.py`：补 OTel exporter -> 本地 gRPC collector 的真实导出验证
+  - 新增 `tests/integration/test_circuit_breaker_recovery.py`：补 LLM / PG breaker 的 `open -> half-open -> close` 恢复验证
+  - 运行时验证结果：本机 PostgreSQL 端口可达，且在修正本地 `.env` 的 PG 密码后，`psql`、`psycopg2`、`asyncpg` smoke test 与 `test_pg_integration.py` 均已通过；本机 Redis 可通过 `redis-server --port 6379 --appendonly no` 启动并通过 smoke test；OTel 与熔断器 smoke test 通过，OTel exporter 本地 collector 集成测试已通过
+  - 发布前小范围回归结果：已再次执行 `tests/unit/test_mcp_routes.py`、`tests/integration/test_api.py`、`tests/integration/test_pg_integration.py`、`tests/integration/test_runtime_enablement.py -k "postgresql or asyncpg"`、`tests/integration/test_runtime_enablement.py/tests/integration/test_redis_cache_integration.py -k redis`、`tests/unit/test_otel.py`、`tests/unit/test_circuit_breaker.py`、`tests/integration/test_otel_collector_integration.py`、`tests/integration/test_circuit_breaker_recovery.py`、`tests/integration/test_mcp_verify_ui.py`、`tests/integration/test_ui_verify_live.py`，关键交付链路均通过
+  - 当前稳定性验证状态：Playwright 真实浏览器链路、Redis L2 缓存链路、OTel 本地 collector 导出链路、熔断恢复链路、PG/asyncpg 链路均已验证；剩余环境项主要集中在 Docker daemon 不可用导致的容器化复现实验未完成
+  - 测试质量修复：`pytest.ini` 已显式配置 `asyncio_default_fixture_loop_scope=function`，`app/config.py` 已去除 Pydantic `model_fields` 实例级弃用访问
+  - 同步修正文档口径：`README.md`、`PROJECT_SUMMARY.md`、`DEV_PLAN.md`、`ROADMAP.md`、`PRD.md`、`DESIGN.md`、`INTERVIEW.md`、`RESUME.md`、`DEMO_GUIDE.md`、`claude-audit-consolidated.md`
+
+- ✅ **Phase 5 P3-1 分区 + P3-2 归档**（2026-07-24）：
+  - **P3-1 数据分区**：`config.py` 新增 2 个配置项（`pg_partition_enabled` 默认关闭、`pg_partition_precreate_months` 默认 2）；`pg_store.py` 与 `async_pg_store.py` 同步实现——新增 `_month_partition_name`、`_month_range_epoch`、`_create_partition_for_month`、`_ensure_partitions` 工具函数；`_ensure_init` 支持分区模式下创建 RANGE 分区表（`PARTITION BY RANGE (timestamp)`），自动预创建当月及未来 N 个月分区；`save_entry` 添加惰性分区检查（每 1000 次写入检查一次）；全部功能默认关闭，向后兼容。
+  - **P3-2 归档策略**：`config.py` 新增 3 个配置项（`pg_archive_enabled` 默认关闭、`pg_archive_days` 默认 30、`pg_archive_delete_after` 默认 True）；新增 `DDL_TRACES_ARCHIVE` 归档表 DDL（结构同主表 + `archived_at` 时间戳）；新增 `_archive_old_traces` 函数（CTE `WITH moved AS DELETE...RETURNING` 原子移动，或 `INSERT...SELECT` 仅复制模式）；`cleanup_expired` 改造为先归档再删除，归档失败不影响删除（try/except + rollback）；同步实现 `pg_store.py` 与 `async_pg_store.py`。
+  - **测试**：`test_storage.py` 新增 `TestPartitionUtils`（6 用例，纯函数：分区名格式、月份范围、sync/async 一致性、区间上界排他）+ `TestArchiveMock`（5 用例，mock 集成：启用/禁用归档 SQL 调用、启用/禁用分区惰性检查、检查频率 1000 次）。测试结果：**单元 369 passed / 6 skipped / 0 failed**；ruff 0 违规。
+  - 涉及文件：`app/config.py`、`app/mcp/core/storage/pg_store.py`、`app/mcp/core/storage/async_pg_store.py`、`tests/unit/test_storage.py`
+
+- ✅ Phase 6 P3-4 OpenTelemetry（2026-07-24）：
+  - **P3-4 OpenTelemetry**：`config.py` 新增 4 个配置项（`otel_enabled` 默认关闭、`otel_service_name`、`otel_exporter_endpoint`、`otel_metrics_interval_ms`）；`requirements.txt` 新增 `opentelemetry-api`/`opentelemetry-sdk`/`opentelemetry-exporter-otlp-proto-grpc`；`observability.py` 重构为双模式设计——保留原有 `/metrics` Prometheus 文本端点（向后兼容），同时引入 OTel SDK 作为指标记录主路径；惰性初始化（仅首次记录时初始化），初始化失败自动降级为仅 Prometheus；核心指标：`http_requests_total`（method/path/status）、`http_errors_total`（method/path）、`http_request_duration_seconds`（histogram，method/path）；新增 `shutdown_observability()` 优雅关闭函数，在 `main.py` lifespan shutdown 中调用；新增 `test_otel.py`（12 个用例）覆盖配置、初始化、降级、幂等性、中间件集成、关闭机制、向后兼容性；`.env.example` 新增 OTel 配置项示例。
+  - 测试：单元 **381 passed / 6 skipped / 0 failed**；ruff 0 违规。
+  - 涉及文件：`app/config.py`、`app/observability.py`、`app/main.py`、`tests/unit/test_otel.py`、`requirements.txt`、`.env.example`
+
+- ✅ Phase 6 P3-8 熔断器 + Phase 7 智能错误分析引擎（2026-07-24）:
   - **P3-8 熔断器**：`config.py` 新增 7 个配置项（circuit_breaker_enabled、cb_llm_*、cb_pg_*）；`analyzer.py` 引入 pybreaker 包装 LLM 调用，熔断时返回结构化 fallback（含 `_circuit_breaker_triggered` 标记）；`pg_store.py` 引入 pybreaker 包装 `_execute_with_retry`/`_query_with_retry`；新增 `test_circuit_breaker.py`（10 个用例）。
   - **Phase 7 智能错误分析引擎**：`errors.py` 新增 `aggregate_by_fingerprint()` 按指纹聚合统计、`rank_by_impact()` 根因排序（权重算法：频次 40% + 会话数 30% + 时效性 30%）、`query_pg_errors()` PG 查询；`dashboard.py` 新增 `/errors/aggregated`、`/errors/ranked`、`/errors/history` 三个端点；新增 `test_error_analysis.py`（19 个用例）。
   - 测试：单元全部通过；ruff 0 违规。
@@ -79,7 +177,7 @@
   - **C4 下半段**：`get_trace` 在 errors 内存未命中时从 trace_store 回读 `step=trace_data` 重建 trace 对象，解决"重启即丢"
   - 新增 6 个单元测试 + 3 个 PG 集成测试覆盖以上修复
   - 涉及文件：`app/mcp/core/trace_repo.py`、`tests/unit/test_trace_repo.py`、`tests/integration/test_pg_integration.py`
-  - 测试结果：`python -m pytest tests/unit/test_trace_repo.py -q` → 15 passed；PG 集成测试受本地环境 UnicodeDecodeError 阻塞（预存在问题，与本任务无关）
+  - 测试结果：`python -m pytest tests/unit/test_trace_repo.py -q` → 15 passed；当时的 PG 集成测试曾被本地 `.env` 凭据错误阻塞，现已在 2026-07-25 通过修正 PG 密码完成闭环
 - ✅ 2026-07-19 代码审计与 Git 整理（6 个子智能体并行执行）：
   - 全面源码审计（6 个 AI 子智能体并行）：生产就绪度评估 8.0/10
     - Agent 1 — 文档一致性核查：修复 4 处文档/代码不一致
@@ -159,9 +257,9 @@
 ### 当前阻塞问题
 
 - ✅ Release Audit 全部收口：P0/P1/P2/P3 清零 + C5/C4/H7 核实（详见 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md)），已打 `v0.3.0` tag（未推送，待用户确认）。
-- 🟡 PG 集成测试因本地 PostgreSQL 编码问题（UnicodeDecodeError）全部 skip
-- 🟡 测试状态基线：**单元 310 passed / 6 skipped / 0 failed**；集成 41 passed / 19 skipped / 8 failed（test_api.py 鉴权 401，`.env` `API_KEY` 污染预存在基线，非回归）
-- ✅ Phase 0-5 全部完成：asyncpg 异步存储、AsyncOpenAI、多级缓存 L1+L2、errors 表持久化、spec_store 独立表、Browser SDK V2 批量上报、GitHub Actions CI
+- 🟡 Docker 容器化验证仍未完成：当前机器仅有 Docker CLI，daemon 未启动
+- 🟡 测试状态基线：以仓库内最新 `pytest` 实际执行结果为准；当前已完成稳定性专项回归与 T6 知识库专项验证（41 passed）
+- ✅ Phase 0-5 全部完成：asyncpg 异步存储、AsyncOpenAI、多级缓存 L1+L2、errors 表持久化、spec_store 独立表、Browser SDK V2、GitHub Actions CI；后续增量中 Browser SDK V3/V6 与指纹知识库基础能力也已落地
 - ✅ TEST-FIX：test_main.py .env API_KEY 污染已通过 monkeypatch 隔离修复（2026-07-20）
 - ✅ 已完成复核项（任务 D，2026-07-19）：`H4`、`H5`、`N4`
 - ✅ WIP-001：dispatch 链路异步化已完成，当前单元测试已恢复全绿。
@@ -521,9 +619,10 @@
 | **P0** | schemas 重复定义统一 ✅ / spec_store 持久化可靠性 ✅ / M9 .env 根因修复 ✅ | 发布前核心稳定性阻塞项 — 全部清零 |
 | **P1** | N2 LLM 输出校验 ✅ / M4 JSON-RPC 错误码 ✅ | 协议规范与测试完整性 — 全部清零 |
 | **发布** | GitHub Actions CI 已完成 ✅ | 自动化测试与发布保障 |
-| **P2** | Browser SDK V3-V6 | 网络错误自动标记、SDK 追踪、增强 ingest、UI 静默失败检测 |
-| **P3** | 数据层长期优化 + 可观测性 | traces 分区/归档、OpenTelemetry、熔断器 |
-| **P4** | 智能化 | RAG 知识库、AI Debug Agent |
+| **P2** | Browser SDK V3-V6 | ✅ 基础版已完成；Browser SDK 压缩 e2e 联调已降级为 CI 任务（代码已完成，仅验证） |
+| **P3** | 数据层长期优化 + 可观测性 | traces 分区/归档 ✅、OpenTelemetry ✅、熔断器 ✅、P3-6 异步分析队列 ✅、P3-7 L3 缓存预热 ✅（2026-07-26，只写 L1 不刷新 L2 TTL） |
+| **P4** | 智能化 | 指纹知识库基础版 ✅、向量检索 RAG 双后端（in_process + Qdrant 语义召回）✅（2026-07-26）、AI Debug Agent Phase 1 ✅（2026-07-26，单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）；下一步 AI Debug Agent Phase 2 多 Agent DAG（`AGENT-002`） |
+| **AUDIT-2** | 安全加固 | AUDIT-2-13/14 RBAC + API_KEY 轮换 ✅；多 key 恒定时间比较 + 角色分级（admin > developer > viewer）已落地 |
 
 ---
 

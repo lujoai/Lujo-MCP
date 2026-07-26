@@ -103,6 +103,38 @@ CREATE INDEX IF NOT EXISTS idx_specs_kind ON specs(kind);
 CREATE INDEX IF NOT EXISTS idx_specs_target ON specs(target);
 """
 
+# Phase 5 P3-2：traces 归档表（结构同主表，用于冷数据归档）
+DDL_TRACES_ARCHIVE = """
+CREATE TABLE IF NOT EXISTS traces_archive (
+    id          BIGINT,
+    request_id  TEXT        NOT NULL,
+    timestamp   DOUBLE PRECISION NOT NULL,
+    step        TEXT        NOT NULL,
+    data        JSONB,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_traces_archive_rid ON traces_archive(request_id);
+CREATE INDEX IF NOT EXISTS idx_traces_archive_ts  ON traces_archive(timestamp);
+"""
+
+
+def _month_partition_name(year: int, month: int) -> str:
+    """生成分区表名：traces_YYYY_MM"""
+    return f"traces_{year:04d}_{month:02d}"
+
+
+def _month_range_epoch(year: int, month: int) -> tuple[float, float]:
+    """计算某月的起止 unix 时间戳（秒）。返回 (start_ts, end_ts)，区间为 [start, end)。"""
+    from datetime import datetime, timezone
+
+    start_dt = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        next_year, next_month = year + 1, 1
+    else:
+        next_year, next_month = year, month + 1
+    end_dt = datetime(next_year, next_month, 1, tzinfo=timezone.utc)
+    return start_dt.timestamp(), end_dt.timestamp()
+
 
 # ── 全局连接池（asyncio 单线程，用 asyncio.Lock 防并发重复创建） ──
 _pool: Optional[asyncpg.Pool] = None
@@ -206,6 +238,80 @@ async def _exec_multi(conn, sql: str) -> None:
             await conn.execute(s)
 
 
+async def _create_partition_for_month(conn, year: int, month: int) -> bool:
+    """为指定年月创建 traces 表的 RANGE 分区（异步版）。"""
+    part_name = _month_partition_name(year, month)
+    start_ts, end_ts = _month_range_epoch(year, month)
+
+    row = await conn.fetchrow(
+        "SELECT 1 FROM pg_tables WHERE tablename = $1",
+        part_name,
+    )
+    if row is not None:
+        return False
+
+    sql = (
+        f"CREATE TABLE {part_name} "
+        f"PARTITION OF traces FOR VALUES FROM ({start_ts}) TO ({end_ts})"
+    )
+    await conn.execute(sql)
+    logger.info("已创建分区: %s (%.0f ~ %.0f)", part_name, start_ts, end_ts)
+    return True
+
+
+async def _ensure_partitions(conn) -> int:
+    """确保当月及未来 N 个月的分区存在。返回新创建的分区数量。"""
+    if not settings.pg_partition_enabled:
+        return 0
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    created = 0
+    precreate = max(0, settings.pg_partition_precreate_months)
+
+    for i in range(precreate + 1):
+        y = now.year
+        m = now.month + i
+        while m > 12:
+            y += 1
+            m -= 12
+        if await _create_partition_for_month(conn, y, m):
+            created += 1
+
+    return created
+
+
+async def _archive_old_traces(conn, days: int) -> int:
+    """将超过 days 天的 traces 数据归档到 traces_archive 表（异步版）。"""
+    if not settings.pg_archive_enabled:
+        return 0
+
+    cutoff = time.time() - days * 86400
+
+    if settings.pg_archive_delete_after:
+        status = await conn.execute(
+            "WITH moved AS ("
+            "  DELETE FROM traces WHERE timestamp < $1 "
+            "  RETURNING id, request_id, timestamp, step, data"
+            ") "
+            "INSERT INTO traces_archive (id, request_id, timestamp, step, data) "
+            "SELECT id, request_id, timestamp, step, data FROM moved",
+            cutoff,
+        )
+    else:
+        status = await conn.execute(
+            "INSERT INTO traces_archive (id, request_id, timestamp, step, data) "
+            "SELECT id, request_id, timestamp, step, data FROM traces "
+            "WHERE timestamp < $1 AND id NOT IN (SELECT id FROM traces_archive)",
+            cutoff,
+        )
+    count = _affected_rows(status)
+    if count > 0:
+        logger.info("已归档 %d 条 traces 数据到 traces_archive (>%d天)", count, days)
+    return count
+
+
 async def _ensure_init() -> None:
     """确保表已就绪（仅初始化一次）。"""
     global _initialized
@@ -216,10 +322,40 @@ async def _ensure_init() -> None:
             return
         pool = await _get_pool()
         async with pool.acquire() as conn:
-            await _exec_multi(conn, DDL_TRACES)
+            # P3-1：分区模式下用分区表替代普通表
+            if settings.pg_partition_enabled:
+                row = await conn.fetchrow(
+                    "SELECT 1 FROM pg_tables WHERE tablename = 'traces'"
+                )
+                if row is None:
+                    await conn.execute("""
+                        CREATE TABLE traces (
+                            id          BIGSERIAL,
+                            request_id  TEXT        NOT NULL,
+                            timestamp   DOUBLE PRECISION NOT NULL,
+                            step        TEXT        NOT NULL,
+                            data        JSONB,
+                            PRIMARY KEY (id, timestamp)
+                        ) PARTITION BY RANGE (timestamp)
+                    """)
+                    await conn.execute("CREATE INDEX idx_traces_rid ON traces(request_id)")
+                    await conn.execute("CREATE INDEX idx_traces_ts  ON traces(timestamp)")
+                    logger.info("已创建分区表 traces (RANGE BY timestamp)")
+            else:
+                await _exec_multi(conn, DDL_TRACES)
+
             await _exec_multi(conn, DDL_SESSIONS)
             await _exec_multi(conn, DDL_ERRORS)
             await _exec_multi(conn, DDL_SPECS)
+
+            # P3-2：归档表
+            if settings.pg_archive_enabled:
+                await _exec_multi(conn, DDL_TRACES_ARCHIVE)
+
+            # P3-1：确保分区存在
+            if settings.pg_partition_enabled:
+                await _ensure_partitions(conn)
+
         _initialized = True
         logger.info("asyncpg 表初始化完成")
 
@@ -264,6 +400,23 @@ class AsyncPGTraceStore(TraceStorage):
                 data_str,
             )
 
+            # P3-1：惰性检查是否需要创建新分区
+            if settings.pg_partition_enabled and self._should_check_partitions():
+                try:
+                    await _ensure_partitions(conn)
+                except Exception as e:
+                    logger.warning("分区预创建失败（不影响写入）: %s", e)
+
+    def _should_check_partitions(self) -> bool:
+        """惰性分区检查：每 1000 次写入检查一次。"""
+        if not hasattr(self, "_write_counter"):
+            self._write_counter = 0
+        self._write_counter += 1
+        if self._write_counter >= 1000:
+            self._write_counter = 0
+            return True
+        return False
+
     async def get_entries(self, request_id: str) -> list[dict]:
         _check_async_context()
         await _ensure_init()
@@ -298,6 +451,13 @@ class AsyncPGTraceStore(TraceStorage):
         await _ensure_init()
         pool = await _get_pool()
         async with pool.acquire() as conn:
+            # P3-2：先执行归档
+            if settings.pg_archive_enabled:
+                try:
+                    await _archive_old_traces(conn, settings.pg_archive_days)
+                except Exception as e:
+                    logger.warning("归档失败，继续执行过期清理: %s", e)
+
             cutoff = time.time() - ttl_seconds
             status = await conn.execute(
                 "DELETE FROM traces WHERE request_id IN ("

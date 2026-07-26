@@ -5,9 +5,11 @@
 鉴权由 AuthMiddleware 统一兜底（fail-closed + 恒定时间比较），不在此重复实现，
 保持 proj1 安全中间件体系不变。
 """
+import gzip
+import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.mcp.tools.network_api import tool_ingest_network, tool_get_network_trace
 from app.mcp.tools.silent_failure_api import tool_ingest_silent_failure
@@ -172,7 +174,7 @@ def _dispatch_single(path: str, payload: dict) -> dict:
 
 
 @router.post("/batch")
-def ingest_batch(req: dict):
+async def ingest_batch(request: Request):
     """批量上报端点 —— 接收事件数组并分发给各 ingest 处理器。
 
     请求体格式::
@@ -186,7 +188,22 @@ def ingest_batch(req: dict):
         }
 
     每条事件独立处理，单条失败不影响其余事件。
+    
+    V5 增强：支持 gzip 压缩传输（Content-Encoding: gzip）。
     """
+    # V5 处理 gzip 压缩请求
+    content_encoding = request.headers.get("content-encoding", "").lower()
+    try:
+        if content_encoding == "gzip":
+            body = await request.body()
+            body = gzip.decompress(body)
+            req = json.loads(body.decode("utf-8"))
+        else:
+            req = await request.json()
+    except Exception as e:
+        logger.error(f"Failed to parse request body: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
     events = req.get("events", [])
     if not isinstance(events, list):
         events = [events] if events else []

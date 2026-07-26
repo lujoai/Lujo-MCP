@@ -364,7 +364,9 @@ class TestLLMCache:
     def setup_method(self):
         """每个测试前清空缓存，避免互相影响"""
         from app.llm.analyzer import _analysis_cache
+        from app.llm.knowledge_base import clear_knowledge_base
         _analysis_cache.clear()
+        clear_knowledge_base()
 
     def test_cache_hit_on_second_call(self):
         """相同 context 二次调用应命中缓存，不调用 LLM"""
@@ -515,3 +517,340 @@ class TestLLMCache:
         result2 = analyze(ctx, model="mock-model")
         assert result2["analysis"]["root_cause"] == "original"
         assert mock_client.chat.completions.create.call_count == 1
+
+    @patch("app.llm.analyzer._get_client")
+    def test_analyze_returns_knowledge_base_result_before_llm(self, mock_get_client):
+        """知识库命中时直接返回结果，并跳过 LLM 调用"""
+        from app.llm.analyzer import analyze
+        from app.llm.knowledge_base import upsert_knowledge_entry
+
+        upsert_knowledge_entry(
+            fingerprint="kb-hit-fp",
+            analysis={
+                "root_cause": "历史已知异常",
+                "impact": "请求失败",
+                "confidence": "high",
+            },
+            fix_suggestion="检查下游服务状态",
+            source="llm",
+        )
+
+        ctx = {
+            "request_id": "kb-hit-001",
+            "exception": {"fingerprint": "kb-hit-fp"},
+            "errors": ["err"],
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["knowledge_base_hit"] is True
+        assert result["analysis_source"] == "knowledge_base"
+        assert result["analysis"]["root_cause"] == "历史已知异常"
+        assert result["analysis"]["fix"] == "检查下游服务状态"
+        assert result["model"] == "__knowledge_base__"
+        assert result["cached"] is False
+        assert result["attempts"] == 0
+        assert result["usage"]["total_tokens"] == 0
+        mock_get_client.assert_not_called()
+
+    @patch("app.llm.analyzer._get_client")
+    def test_analyze_falls_back_to_llm_when_knowledge_base_misses(self, mock_get_client):
+        """知识库未命中时保持现有 LLM 分析链路和结果结构"""
+        from app.llm.analyzer import analyze
+        import json
+
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = json.dumps({
+            "root_cause": "实时分析结果",
+            "impact": "接口报错",
+            "fix": "修复参数",
+            "confidence": "high",
+        })
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "mock-model"
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        ctx = {
+            "request_id": "kb-miss-001",
+            "exception": {"fingerprint": "kb-miss-fp"},
+            "errors": ["err"],
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["knowledge_base_hit"] is False
+        assert result["analysis_source"] == "llm"
+        assert result["cached"] is False
+        assert result["analysis"]["root_cause"] == "实时分析结果"
+        assert result["model"] == "mock-model"
+        assert result["usage"]["total_tokens"] == 15
+        assert result["attempts"] == 1
+        assert mock_client.chat.completions.create.call_count == 1
+
+
+class TestKnowledgeBaseAutoPersist:
+    def setup_method(self):
+        from app.llm.analyzer import _analysis_cache
+        from app.llm.knowledge_base import clear_knowledge_base
+
+        _analysis_cache.clear()
+        clear_knowledge_base()
+
+    @patch("app.llm.analyzer._get_redis_cache", return_value=None)
+    @patch("app.llm.analyzer._get_client")
+    def test_analyze_auto_persists_knowledge_base_entry(self, mock_get_client, _mock_get_redis_cache):
+        from app.llm.analyzer import analyze
+        from app.llm.knowledge_base import get_knowledge_entry
+        import json
+
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = json.dumps({
+            "root_cause": "数据库连接超时",
+            "impact": "请求失败",
+            "fix": "增加连接池重试",
+            "confidence": "high",
+        })
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "mock-model"
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        ctx = {
+            "request_id": "kb-auto-001",
+            "errors": ["err"],
+            "exception": {"fingerprint": "fp-auto-001"},
+        }
+
+        result = analyze(ctx, model="mock-model")
+        entry = get_knowledge_entry("fp-auto-001")
+
+        assert result["analysis"]["root_cause"] == "数据库连接超时"
+        assert entry is not None
+        assert entry["analysis"]["root_cause"] == "数据库连接超时"
+        assert entry["fix_suggestion"] == "增加连接池重试"
+        assert entry["source"] == "llm"
+
+    @patch("app.llm.analyzer._get_redis_cache", return_value=None)
+    @patch("app.llm.analyzer.logger.warning")
+    @patch("app.llm.analyzer.upsert_knowledge_entry", side_effect=RuntimeError("kb write failed"))
+    @patch("app.llm.analyzer._get_client")
+    def test_analyze_ignores_knowledge_base_write_failure(
+        self,
+        mock_get_client,
+        mock_upsert_knowledge_entry,
+        mock_logger_warning,
+        _mock_get_redis_cache,
+    ):
+        from app.llm.analyzer import analyze
+        import json
+
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = json.dumps({
+            "root_cause": "服务配置错误",
+            "impact": "分析可返回",
+            "fix": "修正配置",
+            "confidence": "medium",
+        })
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "mock-model"
+        mock_response.usage.prompt_tokens = 12
+        mock_response.usage.completion_tokens = 6
+        mock_response.usage.total_tokens = 18
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        ctx = {
+            "request_id": "kb-auto-002",
+            "errors": ["err"],
+            "exception": {"fingerprint": "fp-auto-002"},
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["analysis"]["root_cause"] == "服务配置错误"
+        assert result["cached"] is False
+        mock_upsert_knowledge_entry.assert_called_once()
+        mock_logger_warning.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Phase 7：向量检索 RAG fallback 测试
+# ---------------------------------------------------------------------------
+
+
+class TestVectorRagFallback:
+    """P7 — 精确指纹 miss 后的向量检索 RAG fallback 行为测试"""
+
+    def setup_method(self):
+        from app.llm.analyzer import _analysis_cache
+        from app.llm.knowledge_base import clear_knowledge_base
+        from app.llm.vector_store import _reset_vector_store
+
+        _analysis_cache.clear()
+        clear_knowledge_base()
+        _reset_vector_store()
+
+    def teardown_method(self):
+        from app.llm.vector_store import _reset_vector_store
+
+        _reset_vector_store()
+
+    @patch("app.llm.analyzer._get_client")
+    @patch("app.llm.analyzer.retrieve_similar")
+    def test_vector_rag_hit_when_fingerprint_misses(
+        self, mock_retrieve_similar, mock_get_client
+    ):
+        """KB 指纹 miss + 向量召回 hit → 返回 analysis_source=vector_rag，跳过 LLM"""
+        from app.llm.analyzer import analyze
+
+        mock_retrieve_similar.return_value = [{
+            "fingerprint": "similar-fp",
+            "analysis": {
+                "root_cause": "相似历史根因",
+                "fix": "相似修复",
+                "confidence": "medium",
+            },
+            "fix_suggestion": "相似修复",
+        }]
+
+        ctx = {
+            "request_id": "vector-rag-001",
+            "exception": {"fingerprint": "different-fp"},
+            "errors": ["err"],
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["analysis_source"] == "vector_rag"
+        assert result["knowledge_base_hit"] is False
+        assert result["model"] == "__vector_rag__"
+        assert result["analysis"]["root_cause"] == "相似历史根因"
+        assert result["analysis"]["fix"] == "相似修复"
+        assert result["attempts"] == 0
+        assert result["cached"] is False
+        mock_get_client.assert_not_called()
+
+    @patch("app.llm.analyzer._get_client")
+    @patch("app.llm.analyzer.retrieve_similar", return_value=[])
+    def test_vector_rag_miss_falls_through_to_llm(
+        self, mock_retrieve_similar, mock_get_client
+    ):
+        """KB miss + 向量 miss → 走 LLM，返回 analysis_source=llm"""
+        from app.llm.analyzer import analyze
+        import json
+
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = json.dumps({
+            "root_cause": "实时根因",
+            "impact": "影响",
+            "fix": "修复",
+            "confidence": "high",
+        })
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "mock-model"
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        ctx = {
+            "request_id": "vector-rag-miss-001",
+            "exception": {"fingerprint": "no-match-fp"},
+            "errors": ["err"],
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["analysis_source"] == "llm"
+        assert result["knowledge_base_hit"] is False
+        assert result["analysis"]["root_cause"] == "实时根因"
+        assert result["model"] == "mock-model"
+        assert result["usage"]["total_tokens"] == 15
+        assert mock_client.chat.completions.create.call_count == 1
+        mock_retrieve_similar.assert_called_once()
+
+    @patch("app.llm.analyzer._get_client")
+    @patch("app.llm.analyzer.retrieve_similar", return_value=[])
+    def test_vector_store_disabled_does_not_break_analyze(
+        self, mock_retrieve_similar, mock_get_client
+    ):
+        """vector_store 关闭（retrieve_similar 返回 []）→ 现有 LLM 行为不回归"""
+        from app.llm.analyzer import analyze
+        import json
+
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = json.dumps({
+            "root_cause": "结果",
+            "impact": "",
+            "fix": "",
+            "confidence": "low",
+        })
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "mock-model"
+        mock_response.usage.prompt_tokens = 1
+        mock_response.usage.completion_tokens = 1
+        mock_response.usage.total_tokens = 2
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        ctx = {
+            "request_id": "vector-disabled-001",
+            "exception": {"fingerprint": "disabled-fp"},
+            "errors": ["err"],
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["analysis_source"] == "llm"
+        assert result["model"] == "mock-model"
+        mock_retrieve_similar.assert_called_once()
+
+    @patch("app.llm.analyzer.retrieve_similar")
+    @patch("app.llm.analyzer._get_client")
+    def test_exact_fingerprint_takes_priority_over_vector_rag(
+        self, mock_get_client, mock_retrieve_similar
+    ):
+        """KB 精确指纹命中优先于向量召回（向量检索不应被调用）"""
+        from app.llm.analyzer import analyze
+        from app.llm.knowledge_base import upsert_knowledge_entry
+
+        upsert_knowledge_entry(
+            fingerprint="exact-fp",
+            analysis={"root_cause": "已知根因", "confidence": "high"},
+            fix_suggestion="已知修复",
+            source="llm",
+        )
+
+        ctx = {
+            "request_id": "priority-test-001",
+            "exception": {"fingerprint": "exact-fp"},
+            "errors": ["err"],
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["analysis_source"] == "knowledge_base"
+        assert result["knowledge_base_hit"] is True
+        assert result["model"] == "__knowledge_base__"
+        assert result["analysis"]["root_cause"] == "已知根因"
+        # 向量检索 fallback 不应被调用
+        mock_retrieve_similar.assert_not_called()
+        mock_get_client.assert_not_called()

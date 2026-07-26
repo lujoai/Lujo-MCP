@@ -171,11 +171,12 @@
       var sampleRate = parseFloat(document.getElementById('sampleRate').value);
       var throttleMs = parseInt(document.getElementById('throttleMs').value);
       AiDebug.init({
-        endpoint: 'http://localhost:8000',
-        captureNetwork: true,
-        networkSampleRate: sampleRate,
-        networkThrottleMs: throttleMs
-      });
+      endpoint: 'http://localhost:8000',
+      apiKey: 'test_secret_key_456',
+      captureNetwork: true,
+      networkSampleRate: sampleRate,
+      networkThrottleMs: throttleMs
+    });
       capturedTraces = [];
       captureCount = 0;
       updateCaptures();
@@ -331,6 +332,7 @@
 
     AiDebug.init({
       endpoint: 'http://localhost:8000',
+      apiKey: 'test_secret_key_456',
       captureNetwork: true,
       networkSampleRate: 1.0,
       networkThrottleMs: 0

@@ -2,13 +2,14 @@
 
 > 定位：面试资料，帮助作者讲清楚项目价值、技术难点、架构决策。
 > 本文件不参与日常 AI 开发，AI 开发请见 [AI_RULES.md](./AI_RULES.md)。
+> 功能完成度与默认可交付状态请以 [docs/internal/DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md) 为准；本文件允许保留面试叙事视角。
 >
 > 岗位：AI Native 应用开发工程师
 > 项目：基于 MCP 协议的 AI 智能调试服务（规范驱动 + 静默失败检测 + 多 Agent 协同 + UI 自动验收）
 > 技术栈：Python / FastAPI / MCP / Playwright / pytest / PostgreSQL / Redis / Trae / Qoder
-> 测试覆盖：340 passed / 6 skipped / 0 failed
-> 版本：v0.3.0 已交付 | MCP 工具 HTTP 15 / stdio 15
-> 路线图：v0.3.0 Release Audit 收口完成 ✅ → Browser SDK V3-V6 → 数据层优化 → 可观测性（OpenTelemetry） → 智能化（RAG 知识库）
+> 测试覆盖：以仓库内最新 `pytest` 实际执行结果为准（当前 `583 passed / 6 skipped / 0 failed`，含 AI Debug Agent Phase 1 新增 63 项）
+> 版本：v0.3.0 已交付 | MCP 工具 HTTP 17 / stdio 17（含 `repair_async` / `repair_result`，FR19）
+> 路线图：v0.3.0 Release Audit 收口 ✅ → Phase 5 数据层优化 ✅ → Browser SDK V3-V6 ✅ → 指纹知识库 ✅ → 向量检索版 RAG（in-process + Qdrant 语义召回）✅ → AI Debug Agent Phase 1（单 Agent `RepairAgent` + 多 Agent 协同框架预留）✅ → Phase 2 多 Agent DAG（待启动）
 
 ---
 
@@ -180,7 +181,7 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 1. **自动异常捕获 + 代码定位**：任何未处理异常自动入库，附带源码片段和 IDE 可跳转链接，开发者零翻找
 2. **规范驱动验证**：用期望规范（Spec）作为"地面真相"，系统自动比对实际结果 vs 预期，偏离即告警
 3. **多 Agent 协同**：同时支持 HTTP 远程调用和 stdio 本地集成，Claude Desktop / Trae / Codex 等 AI 编码助手可直接发现并调用工具
-4. **前端自动化**：浏览器 SDK 自动上报 + Playwright 自动遍历 UI，解决"按钮没反应但无报错"的静默失败
+4. **前端自动化**：浏览器 SDK 自动上报 + Playwright 自动遍历 UI；其中 SDK 已支持网络错误自动标记和 UI 静默失败自动检测
 
 **A — Action 行动**
 
@@ -188,11 +189,11 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 
 1. **断言引擎：纯函数 vs LLM 判断** — 评估了 LLM 语义判断方案，发现延迟高（>500ms）且结果不确定，最终选择纯函数 `assert_behavior(actual, spec)` → `{matched, diffs, silent_failure}`，确定性强、延迟 <1ms、可解释性好。单元测试覆盖 API/UI/Rule 三种 spec kind。
 
-2. **双传输：HTTP + stdio 共存** — 不是"多此一举"，而是产品必须覆盖两个渠道：HTTP 供运维远程调试（需要中间件安全栈），stdio 供 IDE Agent 本地集成（Claude Desktop 原生支持）。核心技术约束：两套传输在 handler 层复用同一批工具业务函数（HTTP 与 stdio 共用同一 `register_all_tools()` 注册表，各 15 个工具），业务逻辑不重复。
+2. **双传输：HTTP + stdio 共存** — 不是"多此一举"，而是产品必须覆盖两个渠道：HTTP 供运维远程调试（需要中间件安全栈），stdio 供 IDE Agent 本地集成（Claude Desktop 原生支持）。核心技术约束：两套传输在 handler 层复用同一批工具业务函数（HTTP 与 stdio 共用同一 `register_all_tools()` 注册表，各 17 个工具），业务逻辑不重复。
 
 3. **规范存储：dict+Lock vs PostgreSQL** — 规范量级小（<100 条）、读写比极高（低频写入、高频读取），`dict + threading.Lock` 主存方案延迟 0ms，`add_log` 做持久化备份。预留了工厂模式（一行切换到 PG），但不在不需要时过早优化。
 
-**多 Agent 协同实现：** 基于 MCP JSON-RPC 2.0 协议，全局 `_tool_registry` 注册 15 个工具。每个 Agent 有独立 `Mcp-Session-Id`（TTL 30 分钟），Agent A 采集的数据（异常堆栈、源码片段、运行时快照）通过 `build_debug_context` 统一打包，Agent B 可直接消费。
+**多 Agent 协同实现：** 基于 MCP JSON-RPC 2.0 协议，全局 `_tool_registry` 注册 17 个工具。每个 Agent 有独立 `Mcp-Session-Id`（TTL 30 分钟），Agent A 采集的数据（异常堆栈、源码片段、运行时快照）通过 `build_debug_context` 统一打包，Agent B 可直接消费。
 
 **UI 自动验收闭环：** 在已有的 `verify_ui`（按选择器精确测试）基础上扩展 `auto_test` 工具，自动扫描页面所有可交互元素（按钮/链接/输入框），依次执行交互并实时监听浏览器控制台错误 + 网络 4xx/5xx，无需手动指定选择器，形成 AI 生成代码后的"部署→自动遍历→缺陷捕获→反馈修复"闭环。
 
@@ -202,8 +203,8 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 
 **R — Result 成果**
 
-- 从零到交付完整产品，**340 个测试**全部通过（覆盖断言引擎、规范存储、verify 工具、API 端点、Spec CRUD、Dashboard、多 LLM provider、UI runner、工具注册、进程边界、脱敏、错误码、LLM 输出校验等模块）
-- 支持 **15 个 REST 端点 + 15 个 MCP 工具**（HTTP 与 stdio 均由统一注册表动态导出），同时服务 HTTP 远程调用和 stdio 本地 Agent 集成，**已在 Trae 和 Qoder 中实际集成验证**
+- 从零到交付完整产品，**583 个单元测试**全部通过（覆盖断言引擎、规范存储、verify 工具、API 端点、Spec CRUD、Dashboard、多 LLM provider、UI runner、工具注册、进程边界、脱敏、错误码、LLM 输出校验、Qdrant 语义召回、AI Debug Agent 等模块）
+- 支持 **17 个 REST 端点 + 17 个 MCP 工具**（HTTP 与 stdio 均由统一注册表动态导出，新增 `repair_async` / `repair_result` 自动修复工具 + 对应 REST 端点），同时服务 HTTP 远程调用和 stdio 本地 Agent 集成，**已在 Trae 和 Qoder 中实际集成验证**
 - 断言引擎 **< 1ms 判定静默失败**，前端自动遍历 **< 30s/页**
 - **auto_test** 工具自动扫描页面所有可交互元素，依次执行交互并监听控制台错误 + 网络 4xx/5xx，形成 AI 生成代码后的自助验收闭环
 - 规范驱动闭环（写规范 → 自动比对 → 偏离告警）完整可用，**Web 控制台 Dashboard** 可视化 trace 与 spec_diffs
@@ -217,10 +218,11 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 
 | Phase | 目标 | 状态 | 核心任务 |
 |-------|------|------|--------|
-| **v0.3.0** | Release Audit 收口 | ✅ 已完成 | P0 7项 + P1 8项全部清零，340 测试全绿 |
-| **Phase 5** | 数据层长期优化 | 待启动 | traces 表按月分区、归档策略、批量写入、优雅降级 |
-| **Phase 6** | 可观测性与可靠性 | 待启动 | OpenTelemetry 集成、消息队列削峰、熔断器 |
-| **Phase 7** | 智能化 | 待启动 | 智能错误分析引擎、RAG 知识库、AI Debug Agent |
+| **v0.3.0** | Release Audit 收口 | ✅ 已完成 | P0 7项 + P1 8项全部清零，发布口径已收口 |
+| **Phase 5** | 数据层长期优化 | ✅ 已完成 | traces 表按月分区、归档策略、批量写入、优雅降级、熔断器 |
+| **Post v0.3.0** | Browser SDK V3-V6 基础版 | ✅ 已完成 | 网络错误自动标记、trace_id 关联、批量 ingest、UI 静默失败自动检测 |
+| **Post v0.3.0** | 指纹知识库基础能力 | ✅ 已完成 | 命中优先返回、`knowledge_base_hit` 标记、LLM 成功后自动沉淀 |
+| **Phase 7** | 智能化续作 | 部分完成 | 向量检索版 RAG（in-process + Qdrant 语义召回）✅ 已完成（2026-07-26）；AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）✅ 已完成（2026-07-26）；Phase 2 多 Agent DAG 待启动 |
 
 ---
 
@@ -244,10 +246,10 @@ LLM 判断: "这个接口返回了 200，看起来正常" → 可能误判
 register_all_tools()
   → _tool_registry["verify"] = {name, description, inputSchema, handler}
   → _tool_registry["verify_ui"] = ...
-  → 共 15 个工具
+  → 共 17 个工具
 
 # HTTP 传输：mcp_routes.py → POST /mcp (tools/list + tools/call)
-# stdio 传输：mcp_server.py → stdin/stdout (共用 _tool_registry，15 工具，handler 复用业务函数)
+# stdio 传输：mcp_server.py → stdin/stdout (共用 _tool_registry，17 工具，handler 复用业务函数)
 ```
 
 **三、会话隔离 — 每个 Agent 独立，互不污染**
@@ -305,7 +307,7 @@ Playwright 未安装 → 跳过 UI 遍历（不影响 API verify）
 
 5. Agent 发现     protocol/server.py         POST /mcp → tools/list
                                               _handle_tools_list() → 遍历 _tool_registry
-                                              → 返回全部 15 个工具定义
+                                              → 返回全部 17 个工具定义
 
 6. Agent 调用     protocol/server.py         POST /mcp → tools/call
                                               _handle_tools_call():
@@ -410,7 +412,7 @@ API_KEY=your-secret          # 开启鉴权
 LLM_PROVIDER=zhipu           # 国内环境切换（openai 兼容协议，只改 base_url）
 ```
 
-业务代码零改动，340 个测试保证回归安全。
+业务代码零改动，583 个测试保证回归安全。
 
 **Docker Compose 一键部署**：
 
@@ -435,10 +437,10 @@ docker compose up -d
 
 如果写错了：`verify` 输出 diffs 列表，人 review 后通过 `PATCH /api/spec/{id}` 修正。系统本身只做比对，不自己改规范。规范受 API Key 鉴权保护。
 
-### "340 个测试，你做了集成测试吗？"
+### "583 个测试，你做了集成测试吗？"
 
 分层测试策略：
-- 单测：纯函数逻辑（断言引擎、规范存储、上下文构建）+ 专项集成测试（进程边界、脱敏、错误码、LLM 输出校验）— 340 个
+- 单测：纯函数逻辑（断言引擎、规范存储、上下文构建）+ 专项集成测试（进程边界、脱敏、错误码、LLM 输出校验、Qdrant 语义召回、AI Debug Agent 编排/削峰/降级）— 583 个
 - 契约测试：TestClient + FastAPI router 测试端点 → handler 的完整链路
 - 集成：`/health` 验证 PG 连通性（生产环境）；Playwright 通过 `is_available()` 标志自动跳过（未安装不影响测试）
 
@@ -559,7 +561,7 @@ LangChain 引入的抽象层反而增加了延迟和不确定性。我们的选�
 简历写"独立开发"如何解释：我是唯一对结果负责的开发者，做选型、取舍、拍板；AI 提供并行产能，我做决策与验收。这恰恰是 AI-native 工程师的核心能力，而非减分项。
 
 **30 秒标准陈述（可直接背）：**
-> "这个项目我用多模型协同开发：让两个大模型并行读需求和参考实现、各自出方案，我负责择优整合——比如参考项目用 SQLite，我评估后没照搬，选了 memory+PG 双后端；AI 想引入 tenacity 重试和 Playwright，我判断是多余依赖就砍了；同时我额外加了 git 白名单+超时、入库前统一脱敏这些安全约束。AI 提供并行产能，我做架构纪律、安全把关和验收。最终 340 个测试全绿。"
+> "这个项目我用多模型协同开发：让两个大模型并行读需求和参考实现、各自出方案，我负责择优整合——比如参考项目用 SQLite，我评估后没照搬，选了 memory+PG 双后端；AI 想引入 tenacity 重试和 Playwright，我判断是多余依赖就砍了；同时我额外加了 git 白名单+超时、入库前统一脱敏这些安全约束。AI 提供并行产能，我做架构纪律、安全把关和验收。最终 583 个测试全绿。"
 
 ### 4.2 我做的关键取舍决策（口述稿，均出自实际迁移记录）
 

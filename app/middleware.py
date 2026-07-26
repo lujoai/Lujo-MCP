@@ -2,7 +2,6 @@
 
 import time
 import logging
-import hmac
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -18,12 +17,13 @@ logger = logging.getLogger("ai-debug-mcp.middleware")
 class AuthMiddleware(BaseHTTPMiddleware):
     """简单的 Bearer Token / X-API-Key 鉴权（fail-closed）"""
 
-    PUBLIC_PATHS = ("/", "/health")
+    PUBLIC_PATHS = ("/", "/health", "/demo", "/demo/silent-failure", "/ai-debug.js")
 
     def __init__(self, app):
         super().__init__(app)
-        self.api_key = settings.api_key
-        self.enabled = self.api_key is not None
+        # 多 key 轮换 + 单 key 向后兼容由 app.auth.key_rotation 统一管理
+        from app.auth.key_rotation import auth_enabled
+        self.enabled = auth_enabled()
 
     @staticmethod
     def _extract_key(request: Request) -> str:
@@ -51,10 +51,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in self.PUBLIC_PATHS:
             return await call_next(request)
 
-        # 恒定时间比较，避免时序攻击
+        # 多 key 轮换：恒定时间比较在 app.auth.key_rotation 内部完成（遍历所有 key 不短路）
         key = self._extract_key(request)
-        if not hmac.compare_digest(key, self.api_key or ""):
+        from app.auth.key_rotation import verify_api_key
+        from app.auth.rbac import get_role_for_key
+        if not verify_api_key(key):
             return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+
+        # 注入角色到 request.state，供下游 FastAPI 依赖（require_role）使用
+        request.state.role = get_role_for_key(key)
 
         return await call_next(request)
 

@@ -22,6 +22,10 @@ def register_all_tools():
     from app.mcp.tools.verify_api import VERIFY_DEF, verify_handler
     from app.mcp.tools.verify_ui_api import VERIFY_UI_DEF, verify_ui_handler
     from app.mcp.tools.auto_test_api import AUTO_TEST_DEF, auto_test_handler
+    from app.mcp.tools.repair_api import (
+        REPAIR_ASYNC_DEF, REPAIR_RESULT_DEF,
+        repair_async_handler, repair_result_handler,
+    )
 
     register_tool(**debug_tool, handler=debug_handler)
     register_tool(**context_tool, handler=context_handler)
@@ -38,3 +42,5 @@ def register_all_tools():
     register_tool(**VERIFY_DEF, handler=verify_handler)
     register_tool(**VERIFY_UI_DEF, handler=verify_ui_handler)
     register_tool(**AUTO_TEST_DEF, handler=auto_test_handler)
+    register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler)
+    register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler)

@@ -85,6 +85,21 @@ class Settings(BaseSettings):
     trace_ttl_seconds: int = 3600
     session_ttl_seconds: int = 3600
 
+    # ── Phase 5：数据层长期优化 ──
+    # P3-1：traces 表按月分区（PostgreSQL 声明式 RANGE 分区）
+    # 默认关闭，启用后自动创建当月及下月分区，历史数据需手动迁移
+    pg_partition_enabled: bool = False
+    # 自动预创建未来 N 个月的分区（默认 2，保证跨月不中断）
+    pg_partition_precreate_months: int = 2
+
+    # P3-2：归档策略（>N 天数据自动归档到 traces_archive 表）
+    # 默认关闭，启用后 cleanup_expired 先归档再删除
+    pg_archive_enabled: bool = False
+    # 归档阈值天数，超过该天数的 traces 数据自动归档（默认 30 天）
+    pg_archive_days: int = 30
+    # 归档后是否从主表删除（默认 True，False=仅复制不删除，用于验证）
+    pg_archive_delete_after: bool = True
+
     # ── 安全 ──
     api_key: Optional[str] = None  # 不设置 = 不鉴权
     cors_origins: str = ""  # 空串=不下发 CORS 头（默认收紧）；"*"=显式开放所有来源（opt-in）
@@ -97,6 +112,17 @@ class Settings(BaseSettings):
     # False（默认）= 不额外鉴权，依赖全局 AuthMiddleware
     # True = 在 /metrics 端点层独立校验 API Key（Bearer/X-API-Key），与全局中间件解耦
     metrics_auth_enabled: bool = False
+
+    # ── OpenTelemetry（P3-4）──
+    # 是否启用 OTel 指标导出（默认关闭）
+    # 开启后使用 OTel SDK 记录指标，同时保留 /metrics Prometheus 文本端点向后兼容
+    otel_enabled: bool = False
+    # OTel 服务名（用于指标标签）
+    otel_service_name: str = "ai-debug-mcp"
+    # OTLP gRPC 导出端点（如 http://localhost:4317），为空则使用 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量
+    otel_exporter_endpoint: str = ""
+    # OTel 采样率（0.0-1.0）
+    otel_metrics_interval_ms: int = 60000
 
     # ── 脱敏（redaction）──
     # 默认开启：数据入库前统一掩码敏感字段（fail-safe，宁可多掩不泄露）
@@ -152,6 +178,83 @@ class Settings(BaseSettings):
     cb_pg_reset_timeout: int = 15
     cb_pg_window_size: int = 60
 
+    # ── P3-6 异步分析队列（消息队列削峰）──
+    # 全局开关：开启后 /api/debug/analyze/async 走有界队列 + K 常驻消费协程，对齐 LLM RPM/TPM
+    # 裸 BackgroundTasks 无削峰语义；真正削峰靠有界 asyncio.Queue(maxsize=N) + Semaphore(K)
+    llm_async_analysis_enabled: bool = False
+    # N：队列峰容量，满则背压（返回 429 + 排队号），不得无限堆积
+    llm_queue_maxsize: int = 100
+    # K：常驻消费协程数，对齐 LLM RPM（并发上限旋钮）
+    llm_queue_workers: int = 4
+    # 优雅停机排空超时（秒），超时后记录未完成 job 并退出
+    llm_queue_drain_timeout: int = 30
+
+    # ── P3-7 L3 缓存预热 ──
+    # 全局开关：开启后服务启动时从 L2 Redis 扫描热门 fingerprint 回填 L1，避免冷启动 miss 洪峰
+    # 只写 L1 不写 L2（保护 L2 TTL 淘汰语义）；analyzer.py 缓存区零改动，仅通过 _set_l1_only 写入
+    llm_cache_prewarm_enabled: bool = False
+    # 预热条数上限（受 L1 _MAX_CACHE_SIZE=100 约束，超出会 cap + warning）
+    llm_cache_prewarm_top_n: int = 20
+    # 定时预热间隔（秒）；0=仅启动时预热一次，不创建定时任务
+    llm_cache_prewarm_interval_seconds: int = 3600
+
+    # ── 向量检索 RAG（Phase 7）──
+    # 全局开关：开启后 LLM 分析前先做向量召回（精确指纹 miss 后的二级 fallback）
+    # 抽象落在检索语义 add(docs)/search(query, top_k)，禁止 Qdrant collection/point 概念 leak 进接口
+    vector_store_enabled: bool = False
+    # 向量库后端：in_process（默认，零外部依赖）| qdrant（接入 OpenAI/智谱 Embeddings，语义召回）
+    vector_store_backend: str = "in_process"
+    # 召回 top_k 数量
+    vector_store_top_k: int = 3
+    # 召回相似度阈值，低于该分数不返回
+    vector_store_min_score: float = 0.3
+    # Qdrant 配置（backend=qdrant 时生效；依赖未装或连接失败时静默降级为 add=no-op / search=空）
+    qdrant_url: str = ""
+    qdrant_collection: str = "ai-debug-kb"
+    qdrant_api_key: str = ""
+    # Embedding 模型：OpenAI 用 text-embedding-3-small（1536维）；智谱用 embedding-3（1024维）
+    # 与 llm_provider 解耦而非自动推导——用户可能 LLM 与 embedding 用不同 provider
+    qdrant_embedding_model: str = "text-embedding-3-small"
+    # 向量维度：必须与 qdrant_embedding_model 对齐，且与已建 collection 维度一致
+    # 维度不匹配时适配器不自动重建 collection（避免丢数据），改为 warning + 降级
+    qdrant_embedding_dim: int = 1536
+    # Qdrant 建连超时（秒），参照 Redis socket_timeout=2 的快速失败风格
+    qdrant_connect_timeout: int = 5
+    # Qdrant upsert/query 单次请求超时（秒）；embedding 调用走 llm_timeout
+    qdrant_request_timeout: int = 10
+
+    # ── RBAC + API_KEY 轮换（AUDIT-2-13/14）──
+    # 多 key 轮换：逗号分隔的有效 key 列表（新/旧 key 重叠期共存）；空时回退单 api_key
+    api_keys: str = ""
+    api_key_rotation_enabled: bool = False
+    # RBAC 角色分级开关
+    rbac_enabled: bool = False
+    # key→role 映射，逗号分隔，如 "key1:admin,key2:viewer"；未配置时默认 admin（向后兼容）
+    rbac_role_mapping: str = ""
+
+    # ── AI Debug Agent（Phase 1：自动修复 + 多 Agent 协同）──
+    # 全局开关：开启后 POST /api/debug/repair/async 走有界队列 + K 常驻消费协程
+    # 静默降级：Agent 失败不影响主链路（与 Qdrant 适配器一致）
+    agent_enabled: bool = False
+    # N：队列峰容量，满则背压（返回 429）
+    agent_queue_maxsize: int = 50
+    # K：常驻消费协程数（与 llm_queue_workers 解耦，避免抢 LLM RPM 配额）
+    agent_queue_workers: int = 2
+    # 优雅停机排空超时（秒）
+    agent_queue_drain_timeout: int = 60
+    # 是否启用上下文装配的 prior_analysis（复用 analyzer.analyze_async）
+    # 关闭时 RepairAgent 仅基于原始 debug_context 生成方案，节省 LLM 调用
+    agent_prior_analysis_enabled: bool = True
+    # RepairAgent 用的 LLM 模型（与 llm_model 解耦，可指定更强模型）；空串=回退 llm_model
+    agent_model: str = ""
+    # RepairAgent 重试次数（独立于 llm_max_retries）
+    agent_max_retries: int = 2
+    # RepairAgent 单次执行总超时（秒，含 LLM 调用 + 重试）
+    agent_timeout: int = 90
+    # Phase 2 预留：多 Agent 协同模式开关（Phase 1 不生效，仅占位）
+    # 启用后 Coordinator 按 plan 调度 GitAgent / TestAgent / SecurityAgent
+    agent_multi_agent_enabled: bool = False
+
     # ── 服务 ──
     host: str = "0.0.0.0"
     port: int = 8000
@@ -163,7 +266,7 @@ class Settings(BaseSettings):
 
         dotenv_values_map = dotenv_values(str(_PROJECT_ROOT / ".env"))
         # 字段名统一小写后做差集，避免 .env 大写键名与 model_fields 小写键名不匹配
-        known_lower = {k.lower() for k in self.model_fields.keys()}
+        known_lower = {k.lower() for k in type(self).model_fields.keys()}
         extra_keys = {k for k in dotenv_values_map.keys() if k.lower() not in known_lower}
         if extra_keys:
             logger.warning("Ignored extra .env keys: %s", sorted(extra_keys))

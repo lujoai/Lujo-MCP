@@ -2,11 +2,14 @@
 
 > AI Agent 第一入口文件。任何 AI 进入项目请先读本文件，3 分钟理解项目全貌。
 
+> 当前项目功能完成度以 [docs/internal/DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md) 为唯一权威口径。  
+> 待开发项见 [docs/internal/TODO.md](./docs/internal/TODO.md)，稳定性验证状态见 [docs/internal/STABILITY_REPORT.md](./docs/internal/STABILITY_REPORT.md)。
+
 ---
 
 ## 1. 项目一句话介绍
 
-基于 MCP 协议的 AI 智能调试服务，解决"无报错但功能不对"的静默失败检测和"多 Agent 协同调试"两个核心问题。
+基于 MCP 协议的 AI 智能调试服务，解决"无报错但功能不对"的静默失败检测、"多 Agent 协同调试"以及历史结论复用三个核心问题。
 
 ---
 
@@ -49,7 +52,9 @@
 | 规范存储 | [app/mcp/verifier/spec_store.py](./app/mcp/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
 | 异常钩子 | [app/mcp/hooks/exception_hook.py](./app/mcp/hooks/exception_hook.py) | sys.excepthook + asyncio |
 | LLM 分析 | [app/llm/analyzer.py](./app/llm/analyzer.py) | 重试/超时/fallback/流式 |
-| 工具注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) | register_all_tools（15 个工具） |
+| 指纹知识库 | [app/llm/knowledge_base.py](./app/llm/knowledge_base.py) | 按错误指纹复用历史分析结论 |
+| 工具注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
+| AI Debug Agent | [app/agent/](./app/agent/) | 自动修复方案生成 + 多 Agent 协同框架（Phase 1） |
 | 浏览器 SDK | [browser-sdk/ai-debug.js](./browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
 
 ---
@@ -63,6 +68,7 @@
 - ✅ 异常堆栈捕获（sync + asyncio）
 - ✅ 运行时快照（psutil）
 - ✅ LLM 智能分析（openai/zhipu/custom）
+- ✅ 指纹知识库命中与自动沉淀（命中优先返回 + LLM 成功后自动写入）
 - ✅ 规范驱动验证（assert_behavior 纯函数）
 - ✅ 静默失败检测（< 1ms 判定）
 - ✅ 全局异常自动捕获（exception_hook）
@@ -77,13 +83,19 @@
 - ✅ Dashboard 从 PostgreSQL 读取
 - ✅ **errors 表持久化聚合**（指纹去重 + 统计）
 - ✅ **spec_store 独立表**（CRUD + 审计追溯）
+- ✅ **P3-1 数据分区**（traces 表按月 RANGE 分区，自动预创建 + 惰性检查，默认关闭）
+- ✅ **P3-2 归档策略**（>N 天数据自动归档到 traces_archive，cleanup_expired 先归档再删除，默认关闭）
+- ✅ **P3-3 批量写入**（save_entries + add_logs_batch，trace_repo META+LINK 批量）
+- ✅ **P3-5 优雅降级**（PG 不可用时自动降级到 memory，默认开启）
+- ✅ **P3-8 熔断器**（pybreaker，LLM/PG 调用熔断保护）
 
 ### 传输能力 ✅
 
-- ✅ Streamable HTTP 传输（/mcp 端点）
+- ✅ Streamable HTTP 传输（`/mcp` 端点）
 - ✅ stdio 传输（Claude Desktop 子进程）
-- ✅ SSE 广播中心
-- ✅ MCP 工具双传输注册（HTTP / stdio 均由统一注册表动态导出，当前各 15 个）
+- ✅ SSE 广播中心与会话化长连接
+- ⚠️ MCP HTTP notifications 已具备基础推送闭环，丰富通知类型仍待补齐
+- ✅ MCP 工具双传输注册（HTTP / stdio 均由统一注册表动态导出，当前各 17 个，含 `repair_async`/`repair_result`）
 
 ### 安全能力 ✅
 
@@ -99,9 +111,23 @@
 
 - ✅ 浏览器 SDK（UMD/CJS/ESM）
 - ✅ **SDK V2 批量上报 + sendBeacon 兜底**
+- ✅ **SDK V3 网络错误自动标记静默失败**
+- ✅ **SDK V4 trace_id 初始化与请求关联**
+- ✅ **SDK V5 分类型批量 ingest 接入**
+- ✅ **SDK V6 UI 静默失败自动检测**
 - ✅ Console 自动采集（console.error/warn 自动上报 + trace_id 关联 + 脱敏）
 - ✅ Playwright 自动遍历（auto_test）
 - ✅ Web 控制台 Dashboard
+
+### AI Debug Agent ✅（Phase 1，2026-07-26）
+
+- ✅ **自动修复方案生成**：从 analyzer 的"给建议"升级为"生成可执行修复方案"（`{patch, affected_files, validation_strategy, risk_assessment, confidence, rationale}`）
+- ✅ **多 Agent 协同框架**：`BaseAgent` ABC + `Coordinator` 编排器，Phase 1 仅 `RepairAgent`，Phase 2 GitAgent/TestAgent/SecurityAgent 继承 `BaseAgent` 即可接入
+- ✅ **零侵入主链路**：新增 `app/agent/` 目录，复用 `analyzer._get_async_client` / `knowledge_base.retrieve_similar` / `git.get_recent_diff` / `analyzer.analyze_async`，不改 analyzer.py 公共签名
+- ✅ **异步削峰队列**：`RepairQueue` 结构对称 `AnalysisQueue`，独立 workers 配额避免抢 LLM RPM
+- ✅ **静默降级**：三层兜底（agent 内 / coordinator / queue），任何失败不穿透主链路
+- ✅ **feature flag 控制**：`agent_enabled=False` 默认关闭，零行为变更
+- ✅ 新增 2 REST 端点 + 2 MCP 工具（`repair_async` + `repair_result`，工具数 15→17）
 
 ### 工程化 ✅
 
@@ -109,7 +135,7 @@
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：**340 passed / 6 skipped / 0 failed**（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **583 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项）
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -130,7 +156,7 @@
 
 ## 5. 当前开发阶段
 
-**当前阶段**：v0.3.0 Phase 0-5 全部完成 ✅
+**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent` + 多 Agent 协同框架预留）均已落地，当前进入 AI Debug Agent Phase 2（多 Agent DAG）与 Docker 容器化复现阶段
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -140,18 +166,23 @@
 - Phase 2：PG 异步存储（asyncpg）+ errors 表持久化聚合 ✅
 - Phase 3：LLM 异步调用（AsyncOpenAI）+ 多级缓存 ✅
 - Phase 4：Browser SDK V2 批量上报 + /ingest/batch ✅
+- Browser SDK V3 / V6：网络错误自动标记 + UI 静默失败自动检测 ✅
+- 指纹知识库基础能力：命中优先 + 自动沉淀 ✅
 - Phase 5：安全加固（SEC-04/07/08/12/LFI/SSRF/auth hardening）✅
+- Phase 5-6 数据层优化：P3-1 分区 / P3-2 归档 / P3-3 批量写入 / P3-4 OpenTelemetry / P3-5 优雅降级 / P3-6 异步分析队列 / P3-7 L3 缓存预热 / P3-8 熔断器 ✅
+- Phase 7 智能化：智能错误分析引擎 + 向量检索 RAG（in-process + Qdrant 语义召回 + uuid5 幂等 upsert）✅
+- AUDIT-2-13/14：RBAC 角色分级 + API_KEY 多 key 轮换 ✅
+- AI Debug Agent Phase 1：单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留 ✅（2026-07-26）
 
-**测试基线：340 passed / 6 skipped / 0 failed**（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **583 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项）。
 
-**后续优先级**（详见 [ROADMAP.md](./docs/internal/ROADMAP.md)）：
+**当前优先级**（详见 [ROADMAP.md](./docs/internal/ROADMAP.md) 与 [DEV_PLAN.md](./docs/internal/DEV_PLAN.md)）：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P1** | Browser SDK V3-V6 | 网络错误自动标记、SDK 初始化追踪、增强 ingest、UI 静默失败检测 |
-| **P2** | 数据层长期优化 | traces 表分区、归档策略、批量写入、优雅降级 |
-| **P3** | 可观测性与可靠性 | OpenTelemetry 集成、消息队列削峰、熔断器 |
-| **P4** | 智能化 | 智能错误分析引擎、RAG 知识库、AI Debug Agent |
+| **P1** | AI Debug Agent Phase 2 | 多 Agent DAG（GitAgent / TestAgent / SecurityAgent 继承 `BaseAgent`），落地 AGENT-002 |
+| **P2** | Docker 容器化复现实验 | 完成 `STAB-007`，把 Redis / OTel / PG 容器化验证补齐 |
+| **P3** | Browser SDK 端到端联调 | 对 V3/V6 演示页与上报链路做手工联调收口（CI 交错任务） |
 
 **v0.3.0 收口成果**：
 - 测试基线：340 passed / 6 skipped / 0 failed（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
@@ -225,9 +256,13 @@
 | `PG_HOST` | `localhost` | PostgreSQL 主机 |
 | `PG_PORT` | `5432` | PostgreSQL 端口 |
 | `PG_DATABASE` | `ai_debug_mcp` | 数据库名 |
+| `PG_USER` | `postgres` | PostgreSQL 用户名 |
+| `PG_PASSWORD` | — | PostgreSQL 权威密码来源 |
 | `LLM_PROVIDER` | `openai` | `openai` / `zhipu` / `custom` |
 | `OPENAI_API_KEY` | — | LLM API Key |
 | `API_KEY` | — | 鉴权密钥（留空不启用） |
+
+> 环境固化约定：应用只读取 `PG_*` 变量；`POSTGRES_PASSWORD` 仅供 Docker 初始化数据库；`DATABASE_URL` 仅作兼容项，应用本身不会读取。
 
 **启动命令**：
 

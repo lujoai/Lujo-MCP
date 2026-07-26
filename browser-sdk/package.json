@@ -1,6 +1,6 @@
 {
   "name": "ai-debug-sdk",
-  "version": "0.3.0",
-  "description": "Browser SDK for ai-debug-mcp - XHR/fetch interception, UI event capture",
+  "version": "0.5.0",
+  "description": "Browser SDK for ai-debug-mcp - network auto-detection, XHR/fetch interception, UI event capture, gzip compression, throttle control, localStorage fallback",
   "main": "ai-debug.js"
 }

@@ -161,8 +161,48 @@ async def lifespan(app: FastAPI):
                         _local_lock.release()
 
     task = asyncio.create_task(periodic_cleanup())
+
+    # ── P3-6 异步分析队列：启动 K 常驻消费协程 ──
+    if settings.llm_async_analysis_enabled:
+        from app.llm.analysis_queue import start_analysis_queue
+        await start_analysis_queue()
+
+    # ── P3-7 L3 缓存预热：启动期一次性回填 L1 + 启动定时任务 ──
+    if settings.llm_cache_prewarm_enabled:
+        from app.llm.cache_prewarm import (
+            prewarm_once_with_timeout,
+            start_prewarm_task,
+        )
+        prewarm_stats = await prewarm_once_with_timeout(
+            settings.llm_cache_prewarm_top_n
+        )
+        logger.info("L3 cache prewarm (startup): %s", prewarm_stats)
+        start_prewarm_task()
+
+    # ── AI Debug Agent：启动 K 常驻消费协程（Phase 1）──
+    if settings.agent_enabled:
+        from app.agent.repair_queue import start_repair_queue
+        await start_repair_queue()
+
     yield
     task.cancel()
+
+    # ── AI Debug Agent 优雅停机：排空修复队列（限时 agent_queue_drain_timeout 秒）──
+    if settings.agent_enabled:
+        from app.agent.repair_queue import drain_repair_queue
+        repair_drain_stats = await drain_repair_queue(settings.agent_queue_drain_timeout)
+        logger.info("repair queue drain stats: %s", repair_drain_stats)
+
+    # ── P3-7 优雅停机：取消定时预热任务（cancel + await，抑制 CancelledError）──
+    if settings.llm_cache_prewarm_enabled:
+        from app.llm.cache_prewarm import stop_prewarm_task
+        await stop_prewarm_task()
+
+    # ── P3-6 优雅停机：排空分析队列（限时 llm_queue_drain_timeout 秒）──
+    if settings.llm_async_analysis_enabled:
+        from app.llm.analysis_queue import drain_analysis_queue
+        drain_stats = await drain_analysis_queue(settings.llm_queue_drain_timeout)
+        logger.info("analysis queue drain stats: %s", drain_stats)
 
     # 优雅关闭：关闭 PG 连接池
     if settings.storage_backend == "postgresql":
@@ -171,6 +211,13 @@ async def lifespan(app: FastAPI):
             close_pool()
         except Exception as e:
             logger.warning(f"关闭 PG 连接池失败: {e}")
+
+    # 优雅关闭：关闭 OTel 指标导出器
+    try:
+        from app.observability import shutdown_observability
+        shutdown_observability()
+    except Exception as e:
+        logger.warning(f"关闭 OTel 失败: {e}")
 
     logger.info("服务已停止")
 
@@ -255,6 +302,15 @@ def dashboard():
 def demo():
     """网络捕获演示页面"""
     demo_path = pathlib.Path(__file__).parent / "web" / "network_capture_demo.html"
+    if demo_path.exists():
+        return HTMLResponse(demo_path.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Demo page not found</h1>", status_code=404)
+
+
+@app.get("/demo/silent-failure", response_class=HTMLResponse)
+def demo_silent_failure():
+    """静默失败检测演示页面"""
+    demo_path = pathlib.Path(__file__).parent / "web" / "silent_failure_demo.html"
     if demo_path.exists():
         return HTMLResponse(demo_path.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>Demo page not found</h1>", status_code=404)

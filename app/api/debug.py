@@ -3,7 +3,7 @@
 import logging
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import json
 
 from app.config import settings
@@ -14,6 +14,8 @@ from app.mcp.builders.context import build_context
 from app.mcp.collectors.runtime import collect_runtime_snapshot
 from app.mcp.collectors.stacktrace import capture_exception
 from app.llm.analyzer import analyze, analyze_stream_async
+from app.llm.analysis_queue import get_analysis_queue, QueueFullError
+from app.agent.repair_queue import get_repair_queue, QueueFullError as RepairQueueFullError
 from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse
 
 logger = logging.getLogger("ai-debug-mcp.api")
@@ -151,6 +153,133 @@ async def debug_analyze_stream(req: AnalyzeRequest):
             yield f"data: {json.dumps({'error': 'Tool execution failed'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/analyze/async")
+async def debug_analyze_async(req: AnalyzeRequest):
+    """异步 LLM 分析（P3-6 削峰队列）。
+
+    走有界队列 + K 常驻消费协程，对齐 LLM RPM/TPM；
+    返回 job_id，客户端轮询 ``/api/debug/analyze/result/{job_id}`` 取结果。
+    """
+    if not settings.llm_async_analysis_enabled:
+        raise HTTPException(status_code=501, detail="async analysis disabled")
+
+    try:
+        trace = get_logs(req.request_id)
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    if not trace:
+        raise HTTPException(status_code=404, detail=f"找不到请求 {req.request_id}")
+
+    try:
+        context = build_context(req.request_id, trace)
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    # 与 /analyze 保持一致：errors 中含堆栈帧则提升到 exception
+    for err in context.get("errors", []):
+        if isinstance(err, dict) and err.get("frames"):
+            context["exception"] = err
+            break
+
+    try:
+        context["runtime"] = collect_runtime_snapshot()
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        context["runtime"] = {"error": "Tool execution failed"}
+
+    try:
+        job_id = await get_analysis_queue().enqueue(context, model=None)
+    except QueueFullError:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "queue_full",
+                "queue_size": get_analysis_queue().queue_size(),
+            },
+        )
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/analyze/result/{job_id}")
+def debug_analyze_result(job_id: str):
+    """查询异步分析任务状态/结果。"""
+    if not settings.llm_async_analysis_enabled:
+        raise HTTPException(status_code=501, detail="async analysis disabled")
+
+    job = get_analysis_queue().get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"找不到任务 {job_id}")
+    return job
+
+
+@router.post("/repair/async")
+async def debug_repair_async(req: AnalyzeRequest):
+    """异步生成可执行修复方案（AI Debug Agent Phase 1）。
+
+    走有界队列 + K 常驻消费协程；返回 job_id，
+    客户端轮询 ``/api/debug/repair/result/{job_id}`` 取结果。
+    需 settings.agent_enabled=True，否则返回 501。
+    """
+    if not settings.agent_enabled:
+        raise HTTPException(status_code=501, detail="agent disabled")
+
+    try:
+        trace = get_logs(req.request_id)
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    if not trace:
+        raise HTTPException(status_code=404, detail=f"找不到请求 {req.request_id}")
+
+    try:
+        context = build_context(req.request_id, trace)
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    # 与 /analyze 保持一致：errors 中含堆栈帧则提升到 exception
+    for err in context.get("errors", []):
+        if isinstance(err, dict) and err.get("frames"):
+            context["exception"] = err
+            break
+
+    try:
+        context["runtime"] = collect_runtime_snapshot()
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        context["runtime"] = {"error": "Tool execution failed"}
+
+    try:
+        job_id = await get_repair_queue().enqueue(context, model=None)
+    except RepairQueueFullError:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "queue_full",
+                "queue_size": get_repair_queue().queue_size(),
+            },
+        )
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/repair/result/{job_id}")
+def debug_repair_result(job_id: str):
+    """查询异步修复任务状态/结果。结构对称 /analyze/result/{job_id}。"""
+    if not settings.agent_enabled:
+        raise HTTPException(status_code=501, detail="agent disabled")
+
+    job = get_repair_queue().get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"找不到任务 {job_id}")
+    return job
 
 
 @router.get("/runtime")

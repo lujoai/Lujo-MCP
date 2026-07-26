@@ -1,5 +1,5 @@
 /**
- * ai-debug-mcp Browser SDK v0.2.0
+ * ai-debug-mcp Browser SDK v0.5.0
  *
  * V2：批量上报 + sendBeacon 降级 + 指数退避重试。
  * 前端自动采集：全局异常捕获、网络请求记录、UI 事件上报、静默失败标记。
@@ -24,9 +24,11 @@
  *     - 初始化时生成 trace_id 并贯穿所有请求 header（X-Trace-Id）
  *     - 后端按 trace_id 关联 SDK 生命周期内的全部事件
  *
- * V5：增强 ingest 端点
+ * V5：增强 ingest 端点 + 传输优化
  *     - /ingest/batch 支持按事件类型分组批量入库
- *     - 压缩传输（gzip / brotli）
+ *     - 压缩传输（gzip，payload > 4KB 时自动启用）
+ *     - 节流控制（5秒内最多2批，防止高频上报）
+ *     - 失败降级（超过重试次数后暂存 localStorage，下次启动重试）
  *     - 端点级 QoS（error 优先级 > network > ui）
  *
  * V6：自动检测 UI 静默失败
@@ -55,12 +57,24 @@
     sampleRate: 1.0,
     networkSampleRate: 1.0,
     networkThrottleMs: 0,
+    autoDetectNetworkErrors: true,
+    autoDetectUISilentFailures: true,
+    uiSilentFailureTimeoutMs: 1800,
+    uiSilentFailureObserveSelector: "body",
     // reportSilentFailure 自动附加最近 N 条 network/UI 事件链
     silentFailureContextSize: 20,
     // V2 批量上报配置
     batchSize: 20,         // 队列满阈值，达到即 flush
     batchInterval: 1000,   // 定时 flush 间隔（ms）
     maxRetries: 3,         // XHR 失败最大重试次数
+    // V5 传输优化配置
+    enableCompression: true,           // 是否启用 gzip 压缩
+    compressionThreshold: 4096,        // 压缩阈值（字节），payload > 4KB 时自动压缩
+    throttleWindowMs: 5000,            // 节流窗口（ms）
+    maxBatchesPerWindow: 2,            // 每个节流窗口内最多发送批次数
+    enableLocalStorageFallback: true,  // 超过重试次数后是否暂存 localStorage
+    localStorageKey: "ai-debug-pending-batches",  // localStorage 键名
+    maxPendingBatches: 10,             // 最多暂存的批次数
   };
 
   var _inited = false;
@@ -71,6 +85,11 @@
   // 仅存摘要（method/url/status/duration/timestamp/body 前 512 字符），完整 record 走实时上报
   var _recentNetwork = [];
   var _recentUI = [];
+  var _pendingUISilentFailure = null;
+  var _uiSilentFailureTimer = null;
+  var _uiMutationObserver = null;
+  var _lastDomMutationAt = 0;
+  var _lastRoutePath = "";
   // body 预览长度上限（约束 3 选项 A）
   var _NETWORK_BODY_PREVIEW = 512;
 
@@ -78,6 +97,11 @@
   var _batchQueue = [];       // 批量事件队列：[{ path, payload }, ...]
   var _batchTimer = null;     // 定时 flush 定时器
   var _BEACON_SIZE_LIMIT = 65536; // sendBeacon 64KB 限制
+  var _onSilentFailureReport = null;
+
+  // ── V5 传输优化状态 ──
+  var _batchTimestamps = [];  // 记录每次发送的时间戳，用于节流控制
+  var _pendingBatches = [];   // 待发送的批次（节流延迟时暂存）
 
   function _pushRecent(arr, item, maxSize) {
     arr.push(item);
@@ -98,9 +122,10 @@
       url: record ? record.url : "",
       status_code: record ? record.status_code : null,
       duration_ms: record ? record.duration_ms : null,
-      timestamp: Date.now() / 1000,
+      timestamp: _nowSeconds(),
       request_body_preview: body.slice(0, _NETWORK_BODY_PREVIEW),
-      error: record && record.error ? record.error : null,
+      error: !!(record && record.error),
+      error_message: record && record.error ? String(record.error) : null,
     };
   }
 
@@ -113,7 +138,32 @@
     return (cfg.redactFields && cfg.redactFields.length > 0) ? cfg.redactFields : _DEFAULT_REDACT_FIELDS;
   }
 
+  function _escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function _nowSeconds() {
+    return Date.now() / 1000;
+  }
+
+  function _redactString(value) {
+    if (typeof value !== "string" || !value) return value;
+    var text = value;
+    var fields = _getRedactFields();
+    for (var i = 0; i < fields.length; i++) {
+      var field = fields[i];
+      var escaped = _escapeRegex(field);
+      var queryPattern = new RegExp("([?&]" + escaped + "=)([^&#]+)", "ig");
+      var kvPattern = new RegExp("(" + escaped + "\\s*[:=]\\s*)([^\\s,;&]+)", "ig");
+      text = text.replace(queryPattern, "$1***REDACTED***");
+      text = text.replace(kvPattern, "$1***REDACTED***");
+    }
+    text = text.replace(/(authorization\s*[:=]\s*bearer\s+)([^\s,;]+)/ig, "$1***REDACTED***");
+    return text;
+  }
+
   function _redact(obj) {
+    if (typeof obj === "string") return _redactString(obj);
     if (!obj || typeof obj !== "object") return obj;
     var out = Array.isArray(obj) ? [] : {};
     var fields = _getRedactFields();
@@ -133,10 +183,10 @@
             if (parsed && typeof parsed === "object") {
               out[k] = JSON.stringify(_redact(parsed));
             } else {
-              out[k] = obj[k];
+              out[k] = _redactString(obj[k]);
             }
           } catch (e) {
-            out[k] = obj[k];
+            out[k] = _redactString(obj[k]);
           }
         } else if (typeof obj[k] === "object") {
           out[k] = _redact(obj[k]);
@@ -181,6 +231,90 @@
     var body = JSON.stringify({ events: batch });
     var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
 
+    // V5 节流控制：检查是否在节流窗口内
+    var now = Date.now();
+    _batchTimestamps = _batchTimestamps.filter(function(ts) {
+      return now - ts < cfg.throttleWindowMs;
+    });
+    
+    if (_batchTimestamps.length >= cfg.maxBatchesPerWindow) {
+      // 超过节流限制，延迟到窗口结束后发送
+      var delay = cfg.throttleWindowMs - (now - _batchTimestamps[0]);
+      _pendingBatches.push(body);
+      setTimeout(function() {
+        var pendingBody = _pendingBatches.shift();
+        if (pendingBody) {
+          _sendBatchWithCompression(url, pendingBody, useBeacon);
+        }
+      }, delay);
+      return;
+    }
+
+    _sendBatchWithCompression(url, body, useBeacon);
+  }
+
+  // V5 压缩传输：根据 payload 大小决定是否压缩
+  function _sendBatchWithCompression(url, body, useBeacon) {
+    var shouldCompress = cfg.enableCompression && 
+                         body.length > cfg.compressionThreshold &&
+                         typeof CompressionStream !== "undefined";
+
+    if (shouldCompress) {
+      _compressAndSend(url, body, useBeacon);
+    } else {
+      _sendBatchDirect(url, body, useBeacon);
+    }
+  }
+
+  // V5 gzip 压缩实现（使用 Compression Streams API）
+  function _compressAndSend(url, body, useBeacon) {
+    try {
+      var blob = new Blob([body]);
+      var cs = new CompressionStream("gzip");
+      var compressedStream = blob.stream().pipeThrough(cs);
+      
+      new Response(compressedStream).blob().then(function(compressedBlob) {
+        var reader = new FileReader();
+        reader.onload = function() {
+          var compressedBody = reader.result;
+          _batchTimestamps.push(Date.now());
+          
+          // 页面关闭场景：优先 sendBeacon
+          if (useBeacon && _hasSendBeacon()) {
+            if (compressedBody.byteLength <= _BEACON_SIZE_LIMIT) {
+              var beaconUrl = url;
+              if (cfg.apiKey) {
+                beaconUrl += "?api_key=" + encodeURIComponent(cfg.apiKey);
+              }
+              var beaconBlob = new Blob([compressedBody], { type: "application/json" });
+              if (navigator.sendBeacon(beaconUrl, beaconBlob)) {
+                return; // sendBeacon 成功
+              }
+            }
+            // 超限或 sendBeacon 失败 → 同步 XHR 降级
+            _sendBatchSyncCompressed(url, compressedBody);
+            return;
+          }
+
+          // 常规 flush：异步 XHR + 指数退避重试
+          _sendBatchXhrCompressed(url, compressedBody, 0);
+        };
+        reader.readAsArrayBuffer(compressedBlob);
+      }).catch(function(err) {
+        // 压缩失败，降级为未压缩发送
+        console.warn("[ai-debug] Compression failed, falling back to uncompressed:", err);
+        _sendBatchDirect(url, body, useBeacon);
+      });
+    } catch (e) {
+      // CompressionStream 不可用，降级为未压缩发送
+      _sendBatchDirect(url, body, useBeacon);
+    }
+  }
+
+  // 未压缩直接发送
+  function _sendBatchDirect(url, body, useBeacon) {
+    _batchTimestamps.push(Date.now());
+    
     // 页面关闭场景：优先 sendBeacon
     if (useBeacon && _hasSendBeacon()) {
       if (body.length <= _BEACON_SIZE_LIMIT) {
@@ -217,8 +351,10 @@
           setTimeout(function () {
             _sendBatchXhr(url, body, attempt + 1);
           }, delay);
+        } else if (cfg.enableLocalStorageFallback) {
+          // V5 失败降级：超过重试次数后暂存 localStorage
+          _saveToLocalStorage(body);
         }
-        // 超过重试次数 → 丢弃，避免无限堆积
       };
       xhr.send(body);
     } catch (e) {
@@ -227,7 +363,121 @@
         setTimeout(function () {
           _sendBatchXhr(url, body, attempt + 1);
         }, delay);
+      } else if (cfg.enableLocalStorageFallback) {
+        _saveToLocalStorage(body);
       }
+    }
+  }
+
+  // V5 压缩版本的 XHR 发送
+  function _sendBatchXhrCompressed(url, compressedBody, attempt) {
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", url, true);
+      xhr.setRequestHeader("Content-Type", "application/json");
+      xhr.setRequestHeader("Content-Encoding", "gzip");
+      if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status >= 200 && xhr.status < 300) return; // 成功
+        // 失败 → 重试
+        if (attempt < cfg.maxRetries) {
+          var delay = 500 * Math.pow(2, attempt);
+          setTimeout(function () {
+            _sendBatchXhrCompressed(url, compressedBody, attempt + 1);
+          }, delay);
+        } else if (cfg.enableLocalStorageFallback) {
+          // 压缩版本失败降级：转为未压缩存储
+          var textDecoder = new TextDecoder();
+          var text = textDecoder.decode(compressedBody);
+          _saveToLocalStorage(text);
+        }
+      };
+      xhr.send(compressedBody);
+    } catch (e) {
+      if (attempt < cfg.maxRetries) {
+        var delay = 500 * Math.pow(2, attempt);
+        setTimeout(function () {
+          _sendBatchXhrCompressed(url, compressedBody, attempt + 1);
+        }, delay);
+      } else if (cfg.enableLocalStorageFallback) {
+        var textDecoder = new TextDecoder();
+        var text = textDecoder.decode(compressedBody);
+        _saveToLocalStorage(text);
+      }
+    }
+  }
+
+  // V5 压缩版本的同步 XHR 发送（页面关闭场景）
+  function _sendBatchSyncCompressed(url, compressedBody) {
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", url, false); // 同步
+      xhr.setRequestHeader("Content-Type", "application/json");
+      xhr.setRequestHeader("Content-Encoding", "gzip");
+      if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
+      xhr.send(compressedBody);
+    } catch (e) {
+      // 页面关闭时同步 XHR 失败，无法重试
+    }
+  }
+
+  // V5 失败降级：暂存到 localStorage
+  function _saveToLocalStorage(body) {
+    try {
+      if (typeof localStorage === "undefined") return;
+      
+      var pending = [];
+      var stored = localStorage.getItem(cfg.localStorageKey);
+      if (stored) {
+        try {
+          pending = JSON.parse(stored);
+        } catch (e) {
+          pending = [];
+        }
+      }
+      
+      // 限制暂存数量
+      if (pending.length >= cfg.maxPendingBatches) {
+        pending.shift(); // 移除最旧的批次
+      }
+      
+      pending.push(body);
+      localStorage.setItem(cfg.localStorageKey, JSON.stringify(pending));
+    } catch (e) {
+      // localStorage 不可用或已满，静默失败
+    }
+  }
+
+  // V5 启动时恢复暂存的批次
+  function _restorePendingBatches() {
+    try {
+      if (typeof localStorage === "undefined") return;
+      
+      var stored = localStorage.getItem(cfg.localStorageKey);
+      if (!stored) return;
+      
+      var pending = [];
+      try {
+        pending = JSON.parse(stored);
+      } catch (e) {
+        return;
+      }
+      
+      // 清空 localStorage
+      localStorage.removeItem(cfg.localStorageKey);
+      
+      // 逐个重新发送
+      pending.forEach(function(body) {
+        _batchQueue.push(JSON.parse(body));
+      });
+      
+      // 立即 flush
+      if (_batchQueue.length > 0) {
+        _flushBatch(false);
+      }
+    } catch (e) {
+      // 恢复失败，静默处理
     }
   }
 
@@ -415,6 +665,22 @@
 
   function _reportNetworkRecord(record) {
     try {
+      if (record && record.url) {
+        record.url = _redact(record.url);
+      }
+      if (record && record.request_body) {
+        record.request_body = _redact(record.request_body);
+      }
+      if (record && record.response_body) {
+        record.response_body = _redact(record.response_body);
+      }
+      if (record && record.error) {
+        record.error = _redact(String(record.error));
+      }
+      if (_pendingUISilentFailure) {
+        _pendingUISilentFailure.sawNetwork = true;
+        _pendingUISilentFailure.lastNetworkAt = _nowSeconds();
+      }
       // 摘要入环形缓冲，供 reportSilentFailure 拼装 observed_events
       _pushRecent(_recentNetwork, _summarizeNetworkRecord(record), cfg.silentFailureContextSize);
       _notifyNetworkCapture(record);
@@ -426,6 +692,187 @@
       });
     } catch (e) {
     }
+  }
+
+  function _normalizeNetworkError(input) {
+    var payload = {};
+    if (input instanceof Error) {
+      payload.error = input.message || String(input);
+    } else if (input && typeof input === "object") {
+      for (var key in input) {
+        if (input.hasOwnProperty(key)) {
+          payload[key] = input[key];
+        }
+      }
+    } else if (input !== undefined && input !== null) {
+      payload.error = String(input);
+    }
+
+    payload.method = (payload.method || "GET").toUpperCase();
+    payload.url = _redact(payload.url || (global.location ? global.location.href : ""));
+    payload.status_code = typeof payload.status_code === "number"
+      ? payload.status_code
+      : (typeof payload.status === "number" ? payload.status : 0);
+    payload.duration_ms = typeof payload.duration_ms === "number" ? payload.duration_ms : 0;
+    payload.request_body = payload.request_body === undefined ? null : _redact(payload.request_body);
+    payload.response_body = payload.response_body === undefined ? null : _redact(payload.response_body);
+    payload.error = _redact(payload.error || payload.error_message || "Network error");
+    return payload;
+  }
+
+  function _buildNetworkErrorDescription(record) {
+    var method = record && record.method ? record.method : "GET";
+    var url = record && record.url ? record.url : "unknown";
+    var status = record && typeof record.status_code === "number" ? record.status_code : 0;
+    var detail = record && record.error ? String(record.error) : "network request failed";
+    return method + " " + url + " failed (" + status + "): " + detail;
+  }
+
+  function _autoReportNetworkError(record) {
+    if (!cfg.autoDetectNetworkErrors) return;
+    reportSilentFailure({
+      description: _buildNetworkErrorDescription(record),
+      observed: "Detected by Browser SDK V3 network error auto-report",
+      expected: {
+        type: "network_success",
+        status_code: "2xx",
+      },
+      route: global.location ? global.location.pathname : "",
+    });
+  }
+
+  function _getTextPreview(node) {
+    if (!node) return "";
+    var text = "";
+    if (typeof node.textContent === "string") {
+      text = node.textContent;
+    } else {
+      text = String(node);
+    }
+    return text.replace(/\s+/g, " ").trim().slice(0, 160);
+  }
+
+  function _captureDomSnapshot(target) {
+    var element = target && target.nodeType === 1 ? target : (document && document.body ? document.body : null);
+    if (!element) return null;
+    return {
+      selector: _getSelector(element),
+      text_preview: _getTextPreview(element),
+      route_path: global.location ? global.location.pathname : "",
+      timestamp: _nowSeconds(),
+    };
+  }
+
+  function _cancelPendingUISilentFailure() {
+    if (_uiSilentFailureTimer) {
+      clearTimeout(_uiSilentFailureTimer);
+      _uiSilentFailureTimer = null;
+    }
+    _pendingUISilentFailure = null;
+  }
+
+  function _markUISilentFailureDomChange(target) {
+    if (!_pendingUISilentFailure) return;
+    _pendingUISilentFailure.domChanged = true;
+    _pendingUISilentFailure.domSnapshot = _captureDomSnapshot(target || document.body);
+  }
+
+  function _buildUISilentFailureDescription(pending) {
+    var selector = pending && pending.selector ? pending.selector : "unknown target";
+    var route = pending && pending.routePath ? pending.routePath : "/";
+    return "UI interaction " + pending.eventType + " on " + selector + " produced no visible change on " + route;
+  }
+
+  function _scheduleUISilentFailureCheck() {
+    if (!_pendingUISilentFailure) return;
+    if (_uiSilentFailureTimer) {
+      clearTimeout(_uiSilentFailureTimer);
+    }
+    _uiSilentFailureTimer = setTimeout(function () {
+      if (!_pendingUISilentFailure) return;
+      var pending = _pendingUISilentFailure;
+      _uiSilentFailureTimer = null;
+      var routeChanged = (global.location ? global.location.pathname : "") !== pending.routePath;
+      var recentDomChange = _lastDomMutationAt > pending.startedAt;
+      if (pending.domChanged || pending.sawNetwork || routeChanged || recentDomChange) {
+        _pendingUISilentFailure = null;
+        return;
+      }
+
+      var snapshot = _captureDomSnapshot(pending.target);
+      if (snapshot) {
+        _pushRecent(_recentUI, {
+          event_type: "silent_failure_dom_snapshot",
+          target_selector: snapshot.selector,
+          target_text: snapshot.text_preview,
+          timestamp: snapshot.timestamp,
+          route_path: snapshot.route_path,
+        }, cfg.silentFailureContextSize);
+      }
+
+      reportSilentFailure({
+        description: _buildUISilentFailureDescription(pending),
+        observed: "Detected by Browser SDK V6 UI silent failure observer",
+        expected: {
+          type: "ui_feedback",
+          selector: pending.selector,
+          within_ms: cfg.uiSilentFailureTimeoutMs,
+        },
+        route: pending.routePath,
+      });
+      _pendingUISilentFailure = null;
+    }, cfg.uiSilentFailureTimeoutMs);
+  }
+
+  function _armUISilentFailureDetection(eventType, target) {
+    if (!cfg.autoDetectUISilentFailures) return;
+    if (!target) return;
+    var selector = _getSelector(target);
+    if (!selector) return;
+    _cancelPendingUISilentFailure();
+    
+    // 延迟 100ms 再开始观察，避免点击本身的 DOM 变化（focus、:active）被误判
+    var observeStartTime = _nowSeconds() + 0.1;
+    
+    _pendingUISilentFailure = {
+      eventType: eventType,
+      selector: selector,
+      target: target,
+      targetText: _getTextPreview(target),
+      routePath: global.location ? global.location.pathname : "",
+      startedAt: observeStartTime,
+      domChanged: false,
+      sawNetwork: false,
+      lastNetworkAt: null,
+    };
+    _scheduleUISilentFailureCheck();
+  }
+
+  function _installUISilentFailureObserver() {
+    if (!cfg.captureUI || !cfg.autoDetectUISilentFailures) return;
+    if (typeof MutationObserver === "undefined" || typeof document === "undefined") return;
+    if (_uiMutationObserver) return;
+    var root = document.querySelector(cfg.uiSilentFailureObserveSelector) || document.body;
+    if (!root) return;
+    _lastRoutePath = global.location ? global.location.pathname : "";
+    _uiMutationObserver = new MutationObserver(function (mutations) {
+      _lastDomMutationAt = _nowSeconds();
+      if (_pendingUISilentFailure && mutations && mutations.length > 0) {
+        var first = mutations[0];
+        _markUISilentFailureDomChange(first.target || root);
+      }
+      var currentRoute = global.location ? global.location.pathname : "";
+      if (_pendingUISilentFailure && currentRoute !== _lastRoutePath) {
+        _pendingUISilentFailure.domChanged = true;
+      }
+      _lastRoutePath = currentRoute;
+    });
+    _uiMutationObserver.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
   }
 
   function _installNetworkHook() {
@@ -484,6 +931,7 @@
             request_body: reqBody,
           };
           _reportNetworkRecord(record);
+          _autoReportNetworkError(record);
           throw err;
         });
       };
@@ -559,6 +1007,7 @@
             request_body: reqBody,
           };
           _reportNetworkRecord(record);
+          _autoReportNetworkError(record);
         } catch (e) {
         }
       }
@@ -574,6 +1023,7 @@
             request_body: reqBody,
           };
           _reportNetworkRecord(record);
+          _autoReportNetworkError(record);
         } catch (e) {
         }
       }
@@ -589,6 +1039,7 @@
             request_body: reqBody,
           };
           _reportNetworkRecord(record);
+          _autoReportNetworkError(record);
         } catch (e) {
         }
       }
@@ -638,6 +1089,10 @@
           source: "browser-sdk",
           extra: { session_id: _sessionId },
         });
+
+        if (evt === "click" || evt === "submit") {
+          _armUISilentFailureDetection(evt, target);
+        }
       }, true);
     });
   }
@@ -704,7 +1159,7 @@
   // ── 公开 API ──
   /**
    * 初始化 SDK
-   * @param {object} opts - { endpoint, apiKey, captureErrors, captureNetwork, captureUI, captureConsole, sampleRate, networkSampleRate, networkThrottleMs, silentFailureContextSize, batchSize, batchInterval, maxRetries }
+   * @param {object} opts - { endpoint, apiKey, captureErrors, captureNetwork, captureUI, captureConsole, sampleRate, networkSampleRate, networkThrottleMs, autoDetectNetworkErrors, autoDetectUISilentFailures, uiSilentFailureTimeoutMs, uiSilentFailureObserveSelector, silentFailureContextSize, batchSize, batchInterval, maxRetries }
    */
   function init(opts) {
     if (_inited) return;
@@ -728,8 +1183,10 @@
     _installNetworkHook();
     _installXhrHook();
     _installUIHook();
+    _installUISilentFailureObserver();
     _installConsoleHook();
     _installPageHideHook();
+    _restorePendingBatches(); // V5 恢复暂存的批次
     console.log("[ai-debug] SDK initialized, session=" + _sessionId);
   }
 
@@ -765,7 +1222,7 @@
     for (var j = 0; j < _recentUI.length; j++) {
       observedEvents.push({ kind: "ui", data: _recentUI[j] });
     }
-    _send("/ingest/silent-failure", {
+    var silentPayload = {
       message: payload.description,
       expectation: payload.expected,
       observed: payload.observed,
@@ -776,7 +1233,32 @@
         session_id: _sessionId,
         url: global.location ? global.location.href : "",
       },
+    };
+    if (_onSilentFailureReport && typeof _onSilentFailureReport === "function") {
+      try {
+        _onSilentFailureReport(silentPayload);
+      } catch (e) {
+      }
+    }
+    _send("/ingest/silent-failure", {
+      message: silentPayload.message,
+      expectation: silentPayload.expectation,
+      observed: silentPayload.observed,
+      observed_events: silentPayload.observed_events,
+      trace_id: silentPayload.trace_id,
+      source: silentPayload.source,
+      extra: silentPayload.extra,
     });
+  }
+
+  /**
+   * 手动上报网络错误，并自动附带最近的 UI / network 上下文。
+   * @param {Error|object|string} error - Error 实例或 {method, url, status_code, duration_ms, request_body, response_body, error}
+   */
+  function reportNetworkError(error) {
+    var record = _normalizeNetworkError(error);
+    _reportNetworkRecord(record);
+    _autoReportNetworkError(record);
   }
 
   /**
@@ -851,15 +1333,23 @@
     init: init,
     flush: flush,
     reportSilentFailure: reportSilentFailure,
+    reportNetworkError: reportNetworkError,
     reportError: reportError,
     reportUIEvent: reportUIEvent,
     getSessionId: getSessionId,
     getTraceId: getTraceId,
     setTraceId: setTraceId,
     _cfg: cfg,
+    _getPendingUISilentFailure: function() { return _pendingUISilentFailure; },
+    _getLastDomMutationAt: function() { return _lastDomMutationAt; },
+    _getUIMutationObserver: function() { return _uiMutationObserver; },
     onNetworkCapture: function (callback) {
       _onNetworkCapture = callback;
     },
+    onSilentFailureReport: function (callback) {
+      _onSilentFailureReport = callback;
+    },
+    _captureDomSnapshot: _captureDomSnapshot,
   };
 
   // 支持 CommonJS / ES module / 全局变量

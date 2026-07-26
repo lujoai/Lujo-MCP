@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Debug Network Capture Demo</title>
+  <title>AI Debug Network Capture Demo - V3</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
     .container { max-width: 1200px; margin: 0 auto; }
     h1 { color: #58a6ff; margin-bottom: 20px; font-size: 24px; }
+    .subtitle { color: #8b949e; margin-bottom: 16px; }
     h2 { color: #8b949e; margin: 20px 0 10px; font-size: 18px; border-left: 4px solid #58a6ff; padding-left: 10px; }
     .test-group { background: #161b22; border-radius: 8px; padding: 16px; margin-bottom: 16px; border: 1px solid #30363d; }
     button { background: #238636; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-right: 8px; margin-bottom: 8px; font-size: 14px; }
@@ -41,6 +42,7 @@
 <body>
   <div class="container">
     <h1>AI Debug Network Capture Demo - XHR Hook 验证</h1>
+    <div class="subtitle">V3 新增：网络错误自动标记静默失败，并展示实际 observed_events 上报内容。</div>
     
     <div class="config-panel">
       <strong>SDK 配置：</strong>
@@ -100,6 +102,13 @@
         <button onclick="testOnReadyStateChange()">测试 xhr.onreadystatechange 回调</button>
         <div class="result info" id="compatResult">确认业务回调正常执行</div>
       </div>
+
+      <h2>8. V3 网络错误自动标记静默失败</h2>
+      <div class="test-group">
+        <button class="danger" onclick="testNetworkErrorAutoReport()">触发失败请求并自动上报</button>
+        <button class="warning" onclick="testManualReportNetworkError()">手动调用 reportNetworkError</button>
+        <div class="result info" id="networkErrorResult">点击按钮后将展示自动生成的 silent failure payload 与 observed_events。</div>
+      </div>
     </div>
 
     <div id="captures" class="tab-content">
@@ -125,6 +134,7 @@
   <script>
     var capturedTraces = [];
     var captureCount = 0;
+    var lastSilentFailurePayload = null;
 
     function showTab(tabId) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -164,6 +174,7 @@
       });
       capturedTraces = [];
       captureCount = 0;
+      lastSilentFailurePayload = null;
       updateCaptures();
       alert('SDK 已重置，配置更新');
     }
@@ -315,11 +326,52 @@
       xhr.send();
     }
 
+    function renderSilentFailurePayload(title) {
+      var result = document.getElementById('networkErrorResult');
+      if (!lastSilentFailurePayload) {
+        result.className = 'result error';
+        result.textContent = title + '\n未捕获到 silent failure payload';
+        return;
+      }
+      result.className = 'result success';
+      result.textContent = title + '\n' + JSON.stringify(lastSilentFailurePayload, null, 2);
+    }
+
+    function testNetworkErrorAutoReport() {
+      lastSilentFailurePayload = null;
+      fetch('http://127.0.0.1:65531/this-endpoint-will-fail?token=demo-secret')
+        .catch(function(err) {
+          setTimeout(function() {
+            renderSilentFailurePayload('✓ 自动网络错误上报已触发，fetch reject: ' + err.message);
+          }, 300);
+        });
+    }
+
+    function testManualReportNetworkError() {
+      lastSilentFailurePayload = null;
+      AiDebug.reportNetworkError({
+        method: 'POST',
+        url: 'https://api.example.com/payment?api_key=demo-key',
+        status_code: 0,
+        duration_ms: 123,
+        request_body: '{"password":"123456","amount":99}',
+        error: 'Manual simulated network failure'
+      });
+      setTimeout(function() {
+        renderSilentFailurePayload('✓ 手动 reportNetworkError 已触发');
+      }, 300);
+    }
+
     AiDebug.init({
       endpoint: 'http://localhost:8000',
       captureNetwork: true,
       networkSampleRate: 1.0,
-      networkThrottleMs: 0
+      networkThrottleMs: 0,
+      autoDetectNetworkErrors: true
+    });
+
+    AiDebug.onSilentFailureReport(function(payload) {
+      lastSilentFailurePayload = payload;
     });
 
     console.log('Demo page loaded. Start backend server first: python -m uvicorn app.main:app --reload');

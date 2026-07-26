@@ -2,7 +2,8 @@
 
 > 定位：项目长期演进路线图，汇总已完成阶段与待开发阶段的技术方向。
 > 当前开发执行计划见 [DEV_PLAN.md](./DEV_PLAN.md)，技术架构设计见 [DESIGN.md](./DESIGN.md)，企业级架构综合评审见 [CODE_REVIEW.md](./CODE_REVIEW.md)。
-> 最近更新：2026-07-23
+> 最近更新：2026-07-26（AI Debug Agent Phase 1 落地）
+> 功能完成度请以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准；本文件只描述长期演进方向，不直接代表默认可交付状态。
 
 ---
 
@@ -43,44 +44,66 @@
 
 - 批量上报 + sendBeacon 降级 + 指数退避重试
 
+### Phase 4.5：Browser SDK V3-V6（当前已具备基础版）✅
+
+- V3 网络错误自动标记静默失败（fetch / XHR 失败自动转 silent failure）
+- V4 SDK 初始化 trace_id + 请求关联（trace_id 贯穿 SDK 生命周期内事件）
+- V5 增强 ingest 端点（`/ingest/batch` 分类型批量入库已落地）
+- V6 自动检测 UI 静默失败（基于 DOM / 路由 / 网络观察窗口）
+
+### Phase 5：数据层长期优化 ✅
+
+| 编号 | 任务 | 说明 | 状态 |
+|------|------|------|------|
+| P3-1 | traces 表按月 RANGE 分区 | PostgreSQL 声明式分区（非 pg_partman），自动预创建未来 N 个月分区，惰性检查（每 1000 次写入），默认关闭 | ✅ 已完成（2026-07-24）|
+| P3-2 | 归档策略 | >N 天数据自动归档到 traces_archive 表，cleanup_expired 先归档再删除，配置项控制，默认关闭 | ✅ 已完成（2026-07-24）|
+| P3-3 | 批量写入 | storage ABC 新增 save_entries 默认实现 + MemoryTraceStore 覆写 + logs add_logs_batch + trace_repo 复用 | ✅ 已完成（2026-07-24）|
+| P3-5 | 优雅降级 | PG 不可用时自动降级到 memory，factory 层异常捕获，配置项控制 | ✅ 已完成（2026-07-24）|
+| P3-8 | 熔断器 | pybreaker 包装 LLM/PG 调用，配置项控制熔断参数，熔断时返回结构化 fallback | ✅ 已完成（2026-07-24）|
+
+### Phase 6：可观测性与可靠性 ✅
+
+| 编号 | 任务 | 说明 | 状态 |
+|------|------|------|------|
+| P3-4 | OpenTelemetry 集成 | 双模式 OTel SDK + Prometheus 文本端点向后兼容；OTLP gRPC 导出；惰性初始化 + 失败降级 | ✅ 已完成（2026-07-24）|
+| P3-6 | 消息队列削峰 | 有界 `asyncio.Queue(maxsize=N)` + K 常驻消费协程 + `asyncio.Semaphore(K)` 对齐 LLM RPM/TPM；队列满返回 429；优雅停机 drain；零侵入 analyzer.py | ✅ 已完成（2026-07-25）|
+| P3-7 | 多级缓存深化 | L1 LRU + L2 Redis 已落地；L3 预热已落地（`app/llm/cache_prewarm.py`，只写 L1 不刷新 L2 TTL，2026-07-26） | ✅ 已完成 |
+
+### Phase 7：智能化 ✅
+
+- ✅ 智能错误分析引擎（指纹聚合 + 根因排序 + dashboard API）
+- ✅ 指纹知识库基础版（命中优先返回 + LLM 成功后自动沉淀）
+- ✅ 向量检索 RAG 抽象层（`VectorStore` ABC + `add(docs)`/`search(query, top_k)` 检索语义；`InProcessVectorStore` Jaccard 实现；工厂 + 注册表插槽；analyzer.py KB hook 区集成作为精确指纹 miss 后的二级 fallback）
+- ✅ Qdrant 适配器（`QdrantVectorStore`：OpenAI/智谱 Embeddings 语义召回；uuid5 幂等 upsert；静默降级；2026-07-26 完成）
+- ✅ AI Debug Agent Phase 1（单 Agent `RepairAgent` + 多 Agent 协同框架 `BaseAgent` ABC 预留；2026-07-26 完成）
+
 ---
 
 ## 待开发阶段
 
-### Phase 5：数据层长期优化
-
-| 编号 | 任务 | 说明 | 依赖 |
-|------|------|------|------|
-| P3-1 | traces 表按月分区 | 用 pg_partman 在线分区，需迁移历史数据 | Phase 3 异步化完成 |
-| P3-2 | 归档策略 | >30 天自动归档到 traces_archive | P3-1 分区完成 |
-| P3-3 | 批量写入 | executemany 替代单条 INSERT | 无 |
-| P3-5 | 优雅降级 | PG 不可用时自动降级内存存储 | 无 |
-
-### Phase 6：可观测性与可靠性
-
-| 编号 | 任务 | 说明 | 依赖 |
-|------|------|------|------|
-| P3-4 | OpenTelemetry 集成 | 替换自研 Prometheus 指标，OTLP exporter，span 覆盖 PG/LLM/中间件 | Phase 3 异步化完成 |
-| P3-6 | 消息队列削峰 | Celery + Redis broker，异步处理高写入 | 评估 broker 运维成本 |
-| P3-7 | 多级缓存深化 | L1 LRU + L2 Redis 已落地，后续加 L3 预热 | 无 |
-| P3-8 | 熔断器 | pybreaker，LLM/PG 调用熔断降级 | 无 |
-
-### Phase 7：智能化
+### Phase 8：AI Debug Agent Phase 2（多 Agent DAG）
 
 | 方向 | 说明 | 依赖 |
 |------|------|------|
-| 智能错误分析引擎 | 指纹聚合 + 根因排序 | errors 表持久化已落地 |
-| RAG 知识库 | Qdrant 向量数据库，历史错误/修复方案检索 | 评估 Qdrant 运维成本 |
-| AI Debug Agent | 自动修复，多 Agent 协同 | RAG 知识库 |
+| 多 Agent DAG 编排 | 在 Phase 1 已预留的 `BaseAgent` ABC 与 `Coordinator` 编排框架基础上扩展多 Agent DAG（Git Agent + Test Agent + Security Agent）与并行编排 | Phase 1 AI Debug Agent 已落地（`app/agent/` 模块） |
+| Browser SDK 压缩 e2e 联调 | V5 压缩传输增强验证 | 代码已完成，仅 CI 验证 |
+
+### Phase 7：智能化续作（剩余项）
+
+| 方向 | 说明 | 依赖 |
+|------|------|------|
+| Qdrant 向量检索适配器 | ✅ 已完成（2026-07-26）：OpenAI/智谱 Embeddings 语义召回；不可用时静默降级 | 已落地 |
+| AI Debug Agent Phase 1 | ✅ 已完成（2026-07-26）：单 Agent `RepairAgent` + `BaseAgent` ABC 预留 + `Coordinator` 编排 + `RepairQueue` 削峰 + 2 REST 端点 + 2 MCP 工具 | Qdrant 语义召回已就绪 |
+| P3-7 L3 缓存预热 | ✅ 已完成（2026-07-26）：只写 L1 不刷新 L2 TTL | 已落地 |
 
 ### Browser SDK 续作
 
 | 版本 | 方向 | 说明 |
 |------|------|------|
-| V3 | 网络错误自动标记静默失败 | XHR/fetch error → 静默失败检测 |
-| V4 | SDK 初始化追踪 + 请求关联 | trace_id 贯穿 SDK → 后端 |
-| V5 | 增强 ingest 端点 | 批量 ingest、压缩传输 |
-| V6 | 自动检测 UI 静默失败 | DOM 变化检测 + 断言 |
+| V3 | 网络错误自动标记静默失败 | ✅ 已完成，支持自动与手动 `reportNetworkError()` 上报 |
+| V4 | SDK 初始化追踪 + 请求关联 | ✅ 已完成，trace_id 贯穿 header / payload |
+| V5 | 增强 ingest 端点 | ✅ 已完成基础批量 ingest；压缩传输仍可作为后续增强 |
+| V6 | 自动检测 UI 静默失败 | ✅ 已完成，支持点击/提交后观察窗口自动判定 |
 
 ### 安全 follow-up
 

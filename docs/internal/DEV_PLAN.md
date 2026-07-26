@@ -2,38 +2,46 @@
 
 > 定位：当前开发执行计划，记录当前 Sprint 目标、近期任务、Bug 列表和开发顺序。
 > 长期路线请见 [CODE_REVIEW.md](./CODE_REVIEW.md)。
-> 最近更新：2026-07-23
-> 当前进度：v0.3.0 Phase 0-5 全部完成 ✅；Release Audit 全部收口 ✅（P0/P1/P2/P3 清零 + C5/C4/H7 核实，已打 `v0.3.0` tag）；测试基线全绿 **单元 310 / 集成 49 passed，0 failed**（test_api.py 鉴权基线已修复）；ruff 0 违规；`.env` BOM 已剥离
+> 最近更新：2026-07-26
+> 当前进度：`真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证` 已完成；Browser SDK V3/V6、指纹知识库、P3-6 削峰队列、向量检索 RAG（in-process + Qdrant 语义召回）、P3-7 L3 缓存预热、RBAC + 多 key 轮换均已落地。功能口径以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准，待开发项统一收敛到 [TODO.md](./TODO.md)，环境验证状态见 [STABILITY_REPORT.md](./STABILITY_REPORT.md)。
 
 ---
 
 ## 一、当前 Sprint 目标
 
-**目标**：完成 Claude v0.3.0 Release Audit 收口 — ✅ 已完成
+**目标**：在完成真实完成度收口后，继续推进前端自动采集增强与调试分析智能化落地
 
-**为什么先做这个**：当前已经进入发布前收口阶段，Claude 审查中仍有阻塞发布与高优先级协议/安全问题未清理，必须先确保核心能力、协议一致性、测试与仓库卫生达标。**所有 P0/P1 已清零。**
+**为什么先做这个**：当前项目的核心链路已经具备可交付基础，接下来的关键不是继续堆功能点，而是把“采集更完整、命中更快、文档更准”三件事同步推进，减少重复分析成本，并让 SDK 到分析链路的协同能力真正可复用。
 
 **交付物**：
-- ✅ 剩余 P0 问题完成修复并标记验证状态
-- ✅ P1 高优先级问题完成归类与执行排期
-- ✅ 发布审查专项清单与交接文档保持同步
-- ✅ 核心测试命令具备可复核结果（**340 passed / 6 skipped / 0 failed**）
+- 真实交付功能矩阵（`DELIVERY_MATRIX.md`）
+- 已纳入项目管理的 TODO 与需求跟踪台账（`TODO.md`）
+- MCP HTTP SSE / notifications 闭环代码与测试
+- 稳定性验证报告（`STABILITY_REPORT.md`）
+- Browser SDK V3 / V6 能力与演示页
+- 指纹知识库基础模块与调试链路接入
 
 ---
 
-## 二、近期任务（Release Audit 收口）
+## 二、近期任务（当前 Sprint）
 
-> Release Audit 审计追踪与待办状态详见 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md)（P0/P1 已全部清零）。
-
-### Browser SDK 后续项
-
-> Browser SDK V2（批量上报 + sendBeacon）已完成，V3-V6 为下一阶段任务。
-
-- ~~`V2` 默认开启网络捕获 + 批量上报 + sendBeacon 兜底~~ — ✅ 已完成
-- `V3` 网络错误自动标记静默失败
-- `V4` SDK 初始化追踪 + 请求关联
-- `V5` 增强 ingest 端点
-- `V6` 自动检测 UI 静默失败
+| 优先级 | 编号 | 任务 | 当前状态 | 同步位置 |
+|--------|------|------|----------|----------|
+| P0 | DOC-001 | 输出代码实情驱动的真实交付矩阵 | ✅ 已完成 | `DELIVERY_MATRIX.md` |
+| P0 | DOC-002 | 统一 README / PROJECT_SUMMARY / AI_HANDOFF / DEV_PLAN 的完成度口径 | ✅ 已完成 | `TODO.md` |
+| P1 | STREAM-001 | 打通 `GET /mcp` SSE 订阅队列与消息生产者 | ✅ 已完成 | `TODO.md` |
+| P1 | STREAM-002 | 完成 `notifications/initialized` 与 `POST Accept: text/event-stream` 的推送闭环 | ✅ 已完成 | `TODO.md` |
+| P1 | STREAM-003 | 补齐 DELETE 会话与 SSE 订阅清理语义 | ✅ 已完成 | `TODO.md` |
+| P2 | STAB-001 | asyncpg 端到端启用验证 | ✅ 已完成 | `STABILITY_REPORT.md` |
+| P2 | STAB-002 | Playwright/Chromium UI verify 真实验证 | ✅ 已完成 | `STABILITY_REPORT.md` |
+| P2 | STAB-003 | Redis L2 缓存与共享限流集成验证 | ✅ 已完成 | `STABILITY_REPORT.md` |
+| P2 | STAB-004 | OTel exporter 启用与关闭 smoke test | ✅ 已完成 | `STABILITY_REPORT.md` |
+| P2 | STAB-005 | 熔断器真实故障恢复验证 | ✅ 已完成 | `STABILITY_REPORT.md` |
+| P2 | SDK-003 | Browser SDK 网络错误自动标记静默失败（V3） | ✅ 已完成 | `DELIVERY_MATRIX.md` |
+| P2 | SDK-006 | Browser SDK 自动检测 UI 静默失败（V6） | ✅ 已完成 | `DELIVERY_MATRIX.md` |
+| P2 | KB-001 | 指纹知识库基础能力（命中优先 + 自动沉淀） | ✅ 已完成 | `DELIVERY_MATRIX.md` |
+| P2 | DOC-003 | 同步内外部文档以反映 SDK V3/V6 与知识库成果 | ✅ 已完成 | `TODO.md` |
+| P3 | STAB-007 | Docker 容器化复现实验 | 🔲 待环境具备 | `STABILITY_REPORT.md` |
 
 ---
 
@@ -59,17 +67,17 @@
 | P2 | `AUDIT-2-10` | exception_hook.py:58,86 `asyncio.get_event_loop()` 废弃 | ✅ 已修复（2026-07-20）|
 | P2 | `AUDIT-2-11` | main.py:135-140 `/health` PG 检查未 commit/rollback | ✅ 已修复（2026-07-20）|
 | P2 | `AUDIT-2-12` | redaction.py:51 手机号正则 `\b` 失效 | ✅ 已修复（2026-07-20）|
-| P3 | `AUDIT-2-13` | RBAC 角色分级 | 🔲 长期（待后续 Sprint）|
-| P3 | `AUDIT-2-14` | API_KEY 轮换机制 | 🔲 长期（待后续 Sprint）|
+| P3 | `AUDIT-2-13` | RBAC 角色分级 | ✅ 已完成（2026-07-25，admin/developer/viewer 三级 + `require_role` 依赖工厂）|
+| P3 | `AUDIT-2-14` | API_KEY 轮换机制 | ✅ 已完成（2026-07-25，多 key 恒定时间比较 + 单 key 向后兼容）|
 
-### 原 Sprint 任务
+### 已转入后续迭代的功能扩展项
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P1** | Browser SDK 自动采集续作 | 完成 V2-V6 |
-| **P2** | SSE 实时 Dashboard | 实现 Trace 实时推送 |
+| **P1** | Browser SDK 端到端联调与压缩上报增强 | 在现有 V2-V6 基础上补手动联调与压缩传输验证 |
+| **P2** | SSE 实时 Dashboard | 在当前 MCP SSE 闭环稳定后再做 Trace 实时推送 |
 | **P3** | Docker Compose 完善 | 一键启动完整开发环境 |
-| **P4** | LLM Root Cause Analysis 增强 | 增强 LLM 分析能力 |
+| **P4** | AI Debug Agent | Qdrant 向量检索适配器已完成（Phase 7，2026-07-26，OpenAI/智谱 Embeddings 语义召回）；AI Debug Agent 可启动开发 |
 
 ### 高并发与企业级数据预防任务（2026-07-22 高级架构师评审）
 
@@ -100,14 +108,14 @@
 
 | 优先级 | 编号 | 任务 | 修改文件 | 状态 |
 |--------|------|------|----------|------|
-| P1 | P3-1 | 数据分区（traces 表按月分区） | `migrations/` | 🔲 待开发 |
-| P1 | P3-2 | 归档策略（自动归档 >30 天数据） | `app/mcp/core/storage/pg_store.py` | 🔲 待开发 |
-| P2 | P3-3 | 批量写入（executemany 优化） | `app/mcp/core/trace_repo.py` | 🔲 待开发 |
-| P2 | P3-4 | 分布式追踪（OpenTelemetry 集成） | 新增 `app/tracing.py` | 🔲 待开发 |
-| P2 | P3-5 | 优雅降级（PG 不可用时降级到内存存储） | `app/mcp/core/storage/factory.py` | 🔲 待开发 |
-| P3 | P3-6 | 消息队列削峰（Celery/BackgroundTasks 异步 LLM 分析） | `app/llm/analyzer.py`, `app/api/debug.py` | 🔲 待开发 |
-| P3 | P3-7 | 多级缓存（L1 进程 LRU + L2 Redis + 防穿透/雪崩/击穿） | 新增 `app/cache.py` | ✅ 已完成（Phase 3，L1 LRU + L2 Redis）|
-| P3 | P3-8 | 熔断器（LLM 调用 pybreaker 熔断） | `app/llm/analyzer.py` | 🔲 待开发 |
+| P1 | P3-1 | 数据分区（traces 表按月分区） | `app/mcp/core/storage/pg_store.py`, `app/mcp/core/storage/async_pg_store.py`, `app/config.py` | ✅ 已完成（Phase 5，2026-07-24，PostgreSQL 声明式 RANGE 分区）|
+| P1 | P3-2 | 归档策略（自动归档 >30 天数据） | `app/mcp/core/storage/pg_store.py`, `app/mcp/core/storage/async_pg_store.py`, `app/config.py` | ✅ 已完成（Phase 5，2026-07-24，traces_archive 归档表）|
+| P2 | P3-3 | 批量写入（executemany 优化） | `app/mcp/core/trace_repo.py` | ✅ 已完成（Phase 5）|
+| P2 | P3-4 | 分布式追踪（OpenTelemetry 集成） | `app/observability.py`, `app/main.py`, `app/config.py` | ✅ 已完成（Phase 6，OTLP exporter + /metrics 向后兼容） |
+| P2 | P3-5 | 优雅降级（PG 不可用时降级到内存存储） | `app/mcp/core/storage/factory.py` | ✅ 已完成（Phase 5）|
+| P3 | P3-6 | 消息队列削峰（有界 asyncio.Queue + Semaphore(K) 异步 LLM 分析） | `app/llm/analysis_queue.py`, `app/api/debug.py`, `app/main.py` | ✅ 已完成（Phase 6，2026-07-25，有界 Queue(maxsize=N) + K 常驻消费协程 + Semaphore(K) + 优雅 drain）|
+| P3 | P3-7 | 多级缓存（L1 进程 LRU + L2 Redis + 防穿透/雪崩/击穿 + L3 预热） | 新增 `app/cache.py` + `app/llm/cache_prewarm.py` | ✅ 已完成（Phase 3 L1 LRU + L2 Redis；Phase 6 L3 预热 2026-07-26，只写 L1 不刷新 L2 TTL）|
+| P3 | P3-8 | 熔断器（LLM 调用 pybreaker 熔断） | `app/llm/analyzer.py` | ✅ 已完成（Phase 5）|
 
 **预期收益：**
 - Phase 1 完成后：并发承载能力提升 3x，LLM 费用降低 60%
@@ -131,8 +139,8 @@
 1. ~~先做剩余 P0~~：确保发布阻塞项清零 — **✅ 全部完成**
 2. ~~再做专项复核~~：验证已修项经真实通道调用可用 — **✅ 全部完成**
 3. ~~然后做 P1~~：收口输出净化、stdio 生命周期、错误码与依赖管理 — **✅ 全部完成**
-4. **当前状态**：v0.3.0 Phase 0-5 全部完成 ✅，测试基线 340 passed / 6 skipped / 0 failed
-5. 最后恢复业务迭代：继续 Browser SDK V2-V6（V2 批量上报已完成）
+4. **当前状态**：v0.3.0 Phase 0-6 全部完成 ✅，稳定性与发布前回归已收口；后续增量能力中，Browser SDK V3/V6、指纹知识库、P3-6 削峰队列、向量检索 RAG（in-process + Qdrant 语义召回）、P3-7 L3 缓存预热、RBAC + 多 key 轮换均已落地
+5. **下一步重点**：AI Debug Agent（自动修复，多 Agent 协同；Qdrant 语义召回已就绪）、Browser SDK 端到端联调与压缩传输增强、Docker 容器化复现实验（`STAB-007`）
 
 每步完成后：
 - 运行测试（`python -m pytest tests/ -q`）

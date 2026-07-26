@@ -1,9 +1,13 @@
 """Unit tests for rate-limiting logic in app.state.store."""
 
+import inspect
 import time
 from unittest.mock import MagicMock, patch
 
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.state.store import MemoryStateStore, RedisStateStore
 
 
@@ -172,3 +176,189 @@ class TestRateLimitFailClosed:
         # fail-closed：状态后端不可用时拒绝请求（429），而非降级放行（200）
         assert resp.status_code == 429
         assert "unavailable" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Track C: AuthMiddleware 多 key 轮换 + RBAC 角色注入
+# ---------------------------------------------------------------------------
+
+def _build_auth_app():
+    """构造仅挂载 AuthMiddleware 的 FastAPI app，含一个受保护端点 + 一个角色回显端点。"""
+    import app.middleware as mw
+
+    app = FastAPI()
+
+    @app.get("/api/debug/test")
+    def _test():
+        return {"ok": True}
+
+    @app.get("/api/debug/role-test")
+    def _role_test(request: Request):
+        return {"role": getattr(request.state, "role", None)}
+
+    app.add_middleware(mw.AuthMiddleware)
+    return app
+
+
+class TestAuthMiddlewareMultiKey:
+    """多 key 轮换：api_keys 配置的新旧 key 同时有效，无效 key 被拒。"""
+
+    def test_both_new_and_old_keys_pass(self, monkeypatch):
+        monkeypatch.setattr(settings, "api_keys", "key1,key2")
+        monkeypatch.setattr(settings, "api_key", None)
+        monkeypatch.setattr(settings, "rbac_enabled", False)
+
+        client = TestClient(_build_auth_app())
+        assert client.get("/api/debug/test", headers={"X-API-Key": "key1"}).status_code == 200
+        assert client.get("/api/debug/test", headers={"X-API-Key": "key2"}).status_code == 200
+
+    def test_invalid_key_rejected_401(self, monkeypatch):
+        monkeypatch.setattr(settings, "api_keys", "key1,key2")
+        monkeypatch.setattr(settings, "api_key", None)
+
+        client = TestClient(_build_auth_app())
+        resp = client.get("/api/debug/test", headers={"X-API-Key": "wrong"})
+        assert resp.status_code == 401
+
+    def test_bearer_token_auth_still_works(self, monkeypatch):
+        """Authorization: Bearer <key> 头仍可鉴权（_extract_key 未改）。"""
+        monkeypatch.setattr(settings, "api_keys", "key1,key2")
+        monkeypatch.setattr(settings, "api_key", None)
+
+        client = TestClient(_build_auth_app())
+        resp = client.get("/api/debug/test", headers={"Authorization": "Bearer key1"})
+        assert resp.status_code == 200
+
+
+class TestAuthMiddlewareRoleInjection:
+    """鉴权通过后 request.state.role 应被正确注入。"""
+
+    def test_rbac_disabled_injects_admin(self, monkeypatch):
+        """rbac_enabled=False → role="admin"（向后兼容）。"""
+        monkeypatch.setattr(settings, "api_keys", "key1")
+        monkeypatch.setattr(settings, "api_key", None)
+        monkeypatch.setattr(settings, "rbac_enabled", False)
+        monkeypatch.setattr(settings, "rbac_role_mapping", "")
+
+        client = TestClient(_build_auth_app())
+        resp = client.get("/api/debug/role-test", headers={"X-API-Key": "key1"})
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "admin"
+
+    def test_rbac_enabled_injects_mapped_role(self, monkeypatch):
+        """rbac_enabled=True + key 命中 mapping → 注入映射角色。"""
+        monkeypatch.setattr(settings, "api_keys", "key1,key2")
+        monkeypatch.setattr(settings, "api_key", None)
+        monkeypatch.setattr(settings, "rbac_enabled", True)
+        monkeypatch.setattr(settings, "rbac_role_mapping", "key1:admin,key2:viewer")
+
+        client = TestClient(_build_auth_app())
+        assert client.get(
+            "/api/debug/role-test", headers={"X-API-Key": "key1"}
+        ).json()["role"] == "admin"
+        assert client.get(
+            "/api/debug/role-test", headers={"X-API-Key": "key2"}
+        ).json()["role"] == "viewer"
+
+    def test_rbac_enabled_unmapped_key_gets_viewer(self, monkeypatch):
+        """rbac_enabled=True + key 未在 mapping → 注入 viewer（最小权限）。"""
+        monkeypatch.setattr(settings, "api_keys", "key1,key3")
+        monkeypatch.setattr(settings, "api_key", None)
+        monkeypatch.setattr(settings, "rbac_enabled", True)
+        monkeypatch.setattr(settings, "rbac_role_mapping", "key1:admin")
+
+        client = TestClient(_build_auth_app())
+        resp = client.get("/api/debug/role-test", headers={"X-API-Key": "key3"})
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "viewer"
+
+
+class TestAuthMiddlewareBackwardCompat:
+    """向后兼容：单 api_key（无 api_keys）仍可工作。"""
+
+    def test_single_api_key_works(self, monkeypatch):
+        monkeypatch.setattr(settings, "api_keys", "")
+        monkeypatch.setattr(settings, "api_key", "legacy-secret")
+        monkeypatch.setattr(settings, "rbac_enabled", False)
+
+        client = TestClient(_build_auth_app())
+        assert client.get(
+            "/api/debug/test", headers={"X-API-Key": "legacy-secret"}
+        ).status_code == 200
+
+    def test_single_api_key_wrong_rejected(self, monkeypatch):
+        monkeypatch.setattr(settings, "api_keys", "")
+        monkeypatch.setattr(settings, "api_key", "legacy-secret")
+
+        client = TestClient(_build_auth_app())
+        assert client.get(
+            "/api/debug/test", headers={"X-API-Key": "wrong"}
+        ).status_code == 401
+
+    def test_no_keys_configured_auth_disabled(self, monkeypatch):
+        """无任何 key 配置 → 鉴权关闭，所有请求放行。"""
+        monkeypatch.setattr(settings, "api_keys", "")
+        monkeypatch.setattr(settings, "api_key", None)
+
+        client = TestClient(_build_auth_app())
+        # 不带 key 也能通过（鉴权关闭）
+        assert client.get("/api/debug/test").status_code == 200
+
+
+class TestAuthMiddlewareFailClosed:
+    """fail-closed：空 key / 缺失 key → 401。"""
+
+    def test_empty_key_returns_401(self, monkeypatch):
+        monkeypatch.setattr(settings, "api_keys", "key1")
+        monkeypatch.setattr(settings, "api_key", None)
+
+        client = TestClient(_build_auth_app())
+        # 无任何鉴权头
+        resp = client.get("/api/debug/test")
+        assert resp.status_code == 401
+
+    def test_empty_bearer_returns_401(self, monkeypatch):
+        monkeypatch.setattr(settings, "api_keys", "key1")
+        monkeypatch.setattr(settings, "api_key", None)
+
+        client = TestClient(_build_auth_app())
+        resp = client.get("/api/debug/test", headers={"Authorization": "Bearer "})
+        assert resp.status_code == 401
+
+    def test_public_paths_bypass_auth(self, monkeypatch):
+        """PUBLIC_PATHS 中的路径免鉴权（保持原行为）。"""
+        monkeypatch.setattr(settings, "api_keys", "key1")
+        monkeypatch.setattr(settings, "api_key", None)
+
+        client = TestClient(_build_auth_app())
+        # /health 在 PUBLIC_PATHS 中
+        # 注意：_build_auth_app 未注册 /health，但免鉴权检查发生在路由前，
+        # 故应返回 404（而非 401），证明已绕过鉴权
+        assert client.get("/health").status_code == 404
+
+
+class TestAuthMiddlewareSignatureUnchanged:
+    """Track C 硬约束：dispatch 签名必须保持 (self, request, call_next)，确保与
+    ingest.py（含 L194-205 gzip 解压区）零接触面，不破坏与轨道 A/B 的并行性。"""
+
+    def test_dispatch_signature_parameters(self):
+        from app.middleware import AuthMiddleware
+
+        sig = inspect.signature(AuthMiddleware.dispatch)
+        params = list(sig.parameters.keys())
+        assert params == ["self", "request", "call_next"]
+
+    def test_dispatch_is_coroutine_function(self):
+        import asyncio
+
+        from app.middleware import AuthMiddleware
+
+        assert asyncio.iscoroutinefunction(AuthMiddleware.dispatch)
+
+    def test_init_takes_only_app(self):
+        """__init__ 签名保持 (self, app)，setup_middleware 调用无需改动。"""
+        from app.middleware import AuthMiddleware
+
+        sig = inspect.signature(AuthMiddleware.__init__)
+        params = list(sig.parameters.keys())
+        assert params == ["self", "app"]

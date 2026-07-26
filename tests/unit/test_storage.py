@@ -573,3 +573,191 @@ class TestAsyncPGStore:
         store = self._mod.AsyncPGTraceStore()
         count = await store.cleanup_expired(ttl_seconds=3600)
         assert count == 3
+
+
+# ════════════════════════════════════════════
+#  Phase 5 P3-1：分区工具函数测试（纯函数，无外部依赖）
+# ════════════════════════════════════════════
+
+class TestPartitionUtils:
+    """分区相关工具函数的单元测试（纯函数，无需 DB）。"""
+
+    def test_month_partition_name_format(self):
+        """分区表名格式：traces_YYYY_MM，月份自动补零。"""
+        from app.mcp.core.storage.pg_store import _month_partition_name
+        assert _month_partition_name(2024, 1) == "traces_2024_01"
+        assert _month_partition_name(2024, 12) == "traces_2024_12"
+        assert _month_partition_name(2025, 6) == "traces_2025_06"
+
+    def test_month_partition_name_async_same_format(self):
+        """async 版本分区命名与同步版本一致。"""
+        from app.mcp.core.storage.pg_store import _month_partition_name as sync_name
+        from app.mcp.core.storage.async_pg_store import _month_partition_name as async_name
+        assert sync_name(2024, 3) == async_name(2024, 3)
+        assert sync_name(2025, 11) == async_name(2025, 11)
+
+    def test_month_range_epoch_january(self):
+        """1月分区范围：从 1月1日 00:00 到 2月1日 00:00。"""
+        from app.mcp.core.storage.pg_store import _month_range_epoch
+        from datetime import datetime, timezone
+
+        start_ts, end_ts = _month_range_epoch(2024, 1)
+        start_dt = datetime.fromtimestamp(start_ts, tz=timezone.utc)
+        end_dt = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+
+        assert start_dt.year == 2024 and start_dt.month == 1 and start_dt.day == 1
+        assert start_dt.hour == 0 and start_dt.minute == 0 and start_dt.second == 0
+        assert end_dt.year == 2024 and end_dt.month == 2 and end_dt.day == 1
+        assert end_ts > start_ts
+
+    def test_month_range_epoch_december(self):
+        """12月分区范围：跨年，到次年1月1日。"""
+        from app.mcp.core.storage.pg_store import _month_range_epoch
+        from datetime import datetime, timezone
+
+        start_ts, end_ts = _month_range_epoch(2024, 12)
+        start_dt = datetime.fromtimestamp(start_ts, tz=timezone.utc)
+        end_dt = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+
+        assert start_dt.year == 2024 and start_dt.month == 12
+        assert end_dt.year == 2025 and end_dt.month == 1
+
+    def test_month_range_epoch_async_consistent(self):
+        """sync 与 async 版本的月份范围计算结果一致。"""
+        from app.mcp.core.storage.pg_store import _month_range_epoch as sync_range
+        from app.mcp.core.storage.async_pg_store import _month_range_epoch as async_range
+
+        for y, m in [(2024, 1), (2024, 6), (2024, 12), (2025, 3)]:
+            s1, e1 = sync_range(y, m)
+            s2, e2 = async_range(y, m)
+            assert s1 == s2 and e1 == e2, f"不一致: {y}-{m}"
+
+    def test_month_range_exclusive_upper_bound(self):
+        """区间为 [start, end)，即 end 不属于本月。"""
+        from app.mcp.core.storage.pg_store import _month_range_epoch
+        start_ts, end_ts = _month_range_epoch(2024, 1)
+        # 1月31日 23:59:59 属于本月
+        from datetime import datetime, timezone
+        jan_31_235959 = datetime(2024, 1, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp()
+        feb_1_000000 = datetime(2024, 2, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp()
+        assert start_ts <= jan_31_235959 < end_ts
+        assert feb_1_000000 == end_ts
+
+
+# ════════════════════════════════════════════
+#  Phase 5 P3-1/P3-2：归档与分区 mock 集成测试
+#  使用 fake conn 验证 SQL 正确性，无需真实 PG
+# ════════════════════════════════════════════
+
+class TestArchiveMock:
+    """归档功能 mock 测试（基于 async fake conn，验证 SQL 逻辑）。"""
+
+    def setup_method(self):
+        import app.mcp.core.storage.async_pg_store as mod
+        self._mod = mod
+        self._conn = _FakeConn()
+        self._pool = _FakePool(self._conn)
+        self._orig_get_pool = mod._get_pool
+        self._orig_initialized = mod._initialized
+        mod._initialized = True
+
+        async def _fake_get_pool():
+            return self._pool
+
+        mod._get_pool = _fake_get_pool
+
+    def teardown_method(self):
+        self._mod._get_pool = self._orig_get_pool
+        self._mod._initialized = self._orig_initialized
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_with_archive_enabled(self, monkeypatch):
+        """启用归档时，cleanup_expired 先调用归档再删除。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "pg_archive_enabled", True)
+        monkeypatch.setattr(_settings, "pg_archive_days", 30)
+        monkeypatch.setattr(_settings, "pg_archive_delete_after", True)
+
+        self._conn._execute_status = "DELETE 5"
+        store = self._mod.AsyncPGTraceStore()
+        count = await store.cleanup_expired(ttl_seconds=3600)
+
+        execs = [c for c in self._conn.calls if c[0] == "execute"]
+        # 至少有一次归档相关调用（WITH moved AS ... INSERT INTO traces_archive）
+        archive_calls = [c for c in execs if "traces_archive" in c[1]]
+        assert len(archive_calls) >= 1, "启用归档后应调用归档 SQL"
+        # 有 DELETE FROM traces
+        delete_calls = [c for c in execs if "DELETE FROM traces" in c[1]]
+        assert len(delete_calls) >= 1
+        assert count == 5
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_archive_disabled_no_archive_call(self, monkeypatch):
+        """关闭归档时，cleanup_expired 不调用归档 SQL。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "pg_archive_enabled", False)
+
+        self._conn._execute_status = "DELETE 2"
+        store = self._mod.AsyncPGTraceStore()
+        count = await store.cleanup_expired(ttl_seconds=3600)
+
+        execs = [c for c in self._conn.calls if c[0] == "execute"]
+        archive_calls = [c for c in execs if "traces_archive" in c[1]]
+        assert len(archive_calls) == 0, "关闭归档后不应调用归档 SQL"
+        assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_save_entry_with_partition_enabled_checks_partitions(self, monkeypatch):
+        """启用分区时，save_entry 每 N 次写入后惰性检查分区。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "pg_partition_enabled", True)
+        monkeypatch.setattr(_settings, "pg_partition_precreate_months", 2)
+
+        store = self._mod.AsyncPGTraceStore()
+        store._write_counter = 999  # 手动设置到接近阈值
+
+        # mock _ensure_partitions 函数
+        ensure_calls = []
+
+        async def _fake_ensure_partitions(conn):
+            ensure_calls.append(True)
+            return 0
+
+        monkeypatch.setattr(self._mod, "_ensure_partitions", _fake_ensure_partitions)
+
+        await store.save_entry("rid-1", {"timestamp": 1.0, "step": "s1", "data": None})
+        # 第 1000 次写入，应该触发分区检查
+        assert len(ensure_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_save_entry_partition_disabled_no_check(self, monkeypatch):
+        """关闭分区时，save_entry 不检查分区。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "pg_partition_enabled", False)
+
+        store = self._mod.AsyncPGTraceStore()
+        store._write_counter = 9999
+
+        ensure_calls = []
+
+        async def _fake_ensure_partitions(conn):
+            ensure_calls.append(True)
+            return 0
+
+        monkeypatch.setattr(self._mod, "_ensure_partitions", _fake_ensure_partitions)
+
+        await store.save_entry("rid-1", {"timestamp": 1.0, "step": "s1", "data": None})
+        assert len(ensure_calls) == 0
+
+    def test_should_check_partitions_every_1000_writes(self):
+        """_should_check_partitions 每 1000 次返回 True 一次。"""
+        store = self._mod.AsyncPGTraceStore()
+        results = []
+        for i in range(3001):
+            results.append(store._should_check_partitions())
+        # 第 1000、2000、3000 次返回 True
+        assert results[999] is True
+        assert results[1999] is True
+        assert results[2999] is True
+        # True 的总数应为 3
+        assert sum(1 for r in results if r) == 3

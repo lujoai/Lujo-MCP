@@ -4,10 +4,15 @@
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
 > 版本：v0.3.0｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
+> 功能完成度与默认可交付状态请以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
 > **v0.3.1 更新**：PostgreSQL 集成完成、Dashboard 读取 PG、MCP Tools 读取 PG、LLM 分析端到端验证、集成测试补充（13 用例）
 >
 > **Phase 0-5 更新**：asyncpg 异步存储（feature flag 灰度）、errors/specs 独立表、MemoryStore LRU 容量上限、AsyncOpenAI + 多级缓存 L1+L2、中间件顺序修正（SEC-12）、Redis 滑动窗口限流、复合键名脱敏、Browser SDK V2 批量上报、GitHub Actions CI。测试基线：340 passed / 6 skipped / 0 failed
+>
+> **Phase 6-7 更新**：P3-4 OpenTelemetry 双模式导出、P3-6 异步分析削峰队列、P3-7 L3 缓存预热（只写 L1 不刷新 L2 TTL）、P3-8 熔断器、智能错误分析引擎、指纹知识库、向量检索 RAG（in-process + Qdrant 语义召回）、RBAC + 多 key 轮换。测试基线：520 passed / 6 skipped / 0 failed
+>
+> **AI Debug Agent Phase 1 更新（2026-07-26）**：新增 `app/agent/` 模块（7 文件）——`BaseAgent` ABC + `AgentContext`/`AgentResult`/`AgentTrace` + `AgentStatus` 枚举、`RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + `_validate_repair_plan` 容错 JSON）、`RepairContextAssembler`（并发聚合 `analyze_async` + `retrieve_similar` + `get_recent_diff`，各失败静默降级）、`RepairQueue` + lifespan helper（结构对称 `analysis_queue.py`）、`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）。新增 2 REST 端点 + 2 MCP 工具（工具数 15→17）。9 个 `agent_*` 配置项（`agent_enabled` 默认 False）。Phase 1 = 单 Agent + 多 Agent 协同框架预留，Phase 2 多 Agent DAG 为后续待办。测试基线：583 passed / 6 skipped / 0 failed
 
 ---
 
@@ -177,7 +182,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 | 中间件 | 机制 | 设计要点 |
 | --- | --- | --- |
-| `AuthMiddleware` | Bearer / X-API-Key；`hmac.compare_digest` 恒定时间比较；`PUBLIC_PATHS=(/,/health,/metrics)` | **fail-closed**：无 Key 且 `api_key` 已设 → 401；未设 `api_key` 则整体禁用（启动告警） |
+| `AuthMiddleware` | Bearer / X-API-Key；`hmac.compare_digest` 恒定时间比较；`PUBLIC_PATHS=("/", "/health", "/demo", "/demo/silent-failure", "/ai-debug.js")`（`/metrics` 不在内，需鉴权 — SEC-08） | **fail-closed**：无 Key 且 `api_key` 已设 → 401；未设 `api_key` 则整体禁用（启动告警） |
 | `MaxBodySizeMiddleware` | 先查 `Content-Length` 硬拒；POST/PUT/PATCH **流式分块读取**，超 `max_body_size` 立即 413，避免整 body 进内存 | 防 DoS/OOM |
 | `RateLimitMiddleware` | `state_store.allow("ratelimit:{ip}", per_minute, 60)`；**异常降级返回 429（fail-closed）** | 按客户端 IP；**Redis ZSET 滑动窗口**（替代固定窗口，消除临界点突发）；端点级限流（`/ingest/*` 120/min，`/analyze` 10/min） |
 | `SecurityHeadersMiddleware` | 补 `X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/`X-XSS-Protection` | — |
@@ -236,7 +241,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 - `_retry_call(...)`：重试（`llm_max_retries`）+ 指数退避 + 限流/超时处理；耗尽切换到 `llm_fallback_model`（缩短 prompt 重试 1 次）；仍失败抛 `RuntimeError`。
 - `analyze(context)` / `analyze_stream(context)`：非流式/流式；流式用 SSE 逐块 yield。
 - **✅ 新增 AsyncOpenAI**：`analyze_async` / `analyze_stream_async` 全链路 async/await，不再阻塞事件循环。
-- **✅ 多级缓存**：L1（OrderedDict LRU 进程级，100 条）+ L2（Redis 分布式，TTL 1h），按 `fingerprint` 缓存 LLM 分析结果，同类错误不再重复调用。Dashboard 缓存加 Redis L2 + `invalidate_cache`。
+- **✅ 多级缓存**：L1（OrderedDict LRU 进程级，100 条）+ L2（Redis 分布式，TTL 1h）+ L3 缓存预热（`app/llm/cache_prewarm.py`，从 L2 扫描热门 fingerprint 回填 L1，只写 L1 不刷新 L2 TTL，2026-07-26 落地），按 `fingerprint` 缓存 LLM 分析结果，同类错误不再重复调用。Dashboard 缓存加 Redis L2 + `invalidate_cache`。
 
 #### 3.4.7 全局异常钩子（`app/mcp/hooks/exception_hook.py`）✅
 
@@ -719,11 +724,11 @@ sequenceDiagram
 | 源码行读取 | `collectors/code_locator.py` | 依赖 Python 内置 `linecache` | linecache 自带 |
 | 异常指纹去重 | `core/errors.py:37-75` | `deque(maxlen=200)` + fingerprint 聚合 | 容量淘汰 |
 
-**缺失的关键缓存：**
+**缺失的关键缓存**（2026-07-22 评审时状态，以下均已在后续阶段落地）：
 
-1. **🔴 无 LLM 分析结果缓存**：同一个 `fingerprint` 的错误被反复分析，浪费 token 和时间。企业级场景下同类错误每天出现数百次。
-2. **🔴 Dashboard API 无查询缓存**：`_collect_all_traces`（`dashboard.py:124-143`）每次全量扫描 + 排序，无 TTL 缓存。
-3. **🟡 无 HTTP 响应缓存头**：幂等 GET 请求无 `ETag`/`Cache-Control`。
+1. **🔴 无 LLM 分析结果缓存** → ✅ **已落地（Phase 3）**：L1 OrderedDict LRU（100 条）+ L2 Redis（TTL 1h），按 `fingerprint` 缓存；L3 预热已落地（`app/llm/cache_prewarm.py`，2026-07-26，只写 L1 不刷新 L2 TTL）
+2. **🔴 Dashboard API 无查询缓存** → ✅ **已落地（任务 D）**：Dashboard 查询缓存 TTL 30s + Redis L2 + `invalidate_cache`
+3. **🟡 无 HTTP 响应缓存头**：幂等 GET 请求无 `ETag`/`Cache-Control`。（仍未落地，优先级低）
 
 **改进方向：**
 - P0：LLM 结果按 `fingerprint` 缓存，TTL 1h，LRU 100 条
@@ -736,7 +741,7 @@ sequenceDiagram
 
 | 分流维度 | 位置 | 策略 |
 |----------|------|------|
-| 路径白名单 | `middleware.py:22-23` | `PUBLIC_PATHS` 免鉴权 |
+| 路径白名单 | `middleware.py:20` | `PUBLIC_PATHS` 免鉴权（5 项：`/`、`/health`、`/demo`、`/demo/silent-failure`、`/ai-debug.js`） |
 | MCP 方法路由 | `protocol/server.py:132-137` | `_METHOD_MAP` 分发 |
 | 存储后端 | `core/storage/factory.py:31-42` | 环境变量选择 memory/postgresql |
 | 状态后端 | `state/store.py:121-131` | 环境变量选择 memory/redis |
@@ -905,8 +910,9 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 - **三防机制**：防穿透（布隆过滤器）、防雪崩（随机 TTL）、防击穿（互斥锁）
 
 **ai-debug-mcp 映射：**
-- 当前实现：仅有进程级 dict 缓存（spec/redaction），无 L2 Redis 缓存
-- **落地建议**：
+- ✅ **当前实现（2026-07-26 更新）**：L1 OrderedDict LRU（100 条，进程级）+ L2 Redis（TTL 1h，分布式）+ L3 缓存预热（`app/llm/cache_prewarm.py`，从 L2 扫描热门 fingerprint 回填 L1，只写 L1 不刷新 L2 TTL）；Dashboard 查询缓存 L1+L2；规范/脱敏进程级缓存保留
+- **历史状态（2026-07-22 评审时）**：仅有进程级 dict 缓存（spec/redaction），无 L2 Redis 缓存
+- **落地建议**（历史保留，大部分已实现）：
   ```python
   # L1 + L2 多级缓存（参考巡检平台架构）
   class MultiLevelCache:
@@ -992,3 +998,756 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 
 > 参考来源：《无人机巡检平台高并发与架构优化技术术语手册》（用户提供）
 > 映射日期：2026-07-22
+
+---
+
+## 15. 数据层长期优化设计（Phase 5，2026-07-24）
+
+> 本章记录 Phase 5 数据层长期优化的设计决策，包括 P3-1 表分区和 P3-2 归档策略。
+> 实现位置：`app/mcp/core/storage/pg_store.py`（同步）、`app/mcp/core/storage/async_pg_store.py`（异步）、`app/config.py`
+
+### 15.1 设计背景与目标
+
+**问题**：traces 表随时间增长，单表数据量过大导致：
+1. 查询性能下降（Dashboard 扫描全表）
+2. 索引膨胀，写入变慢
+3. 过期数据清理慢（DELETE 全表扫描）
+4. 历史数据无法低成本保留
+
+**目标**：
+- **P3-1 分区**：traces 表按月 RANGE 分区，冷热数据分离，查询仅扫描相关分区
+- **P3-2 归档**：超过 N 天的数据自动归档到 traces_archive 表，主表保持轻量
+- **向后兼容**：所有功能默认关闭，现有用户零感知
+- **双实现一致**：同步（pg_store）和异步（async_pg_store）两套实现行为一致
+
+### 15.2 P3-1：表分区设计
+
+#### 15.2.1 分区方案选择
+
+| 方案 | 优点 | 缺点 | 选择 |
+|------|------|------|------|
+| pg_partman 扩展 | 自动化程度高，支持自动扩分区 | 需要安装扩展，Docker 镜像需额外配置 | ❌ |
+| PostgreSQL 声明式分区（原生） | 零依赖，内置支持，稳定可靠 | 需手动管理分区创建 | ✅ |
+| 应用层分表（多表名） | 灵活可控 | 业务代码侵入大，查询复杂 | ❌ |
+
+**决策**：使用 PostgreSQL 原生声明式 RANGE 分区，应用层管理分区创建。
+
+#### 15.2.2 分区键选择
+
+- **分区键**：`timestamp`（DOUBLE PRECISION，unix 时间戳秒）
+- **分区类型**：RANGE 分区
+- **分区粒度**：按月（每月一个分区）
+- **主键**：`(id, timestamp)` — 分区表主键必须包含分区键
+
+**为什么选 timestamp 而不是 request_id？**
+- 查询模式：Dashboard 按时间范围查询（最近 N 条），时间分区可裁剪
+- 数据生命周期：过期清理按时间维度，分区可直接 DROP（比 DELETE 快 100x）
+- 写入分布：时间序列数据天然按时间递增，写入集中在最新分区
+
+#### 15.2.3 分区命名与范围
+
+- 命名格式：`traces_YYYY_MM`（如 `traces_2024_07`）
+- 范围计算：每月 1 日 00:00:00 UTC 到下月 1 日 00:00:00 UTC
+- 区间类型：`[start, end)`（左闭右开，PostgreSQL RANGE 分区标准）
+
+#### 15.2.4 自动分区管理
+
+**预创建策略**：
+- 启动时检查并创建当月及未来 N 个月分区（默认 N=2）
+- 运行时惰性检查：每 1000 次写入检查一次，确保新分区存在
+- 配置项：`pg_partition_precreate_months`（默认 2）
+
+**为什么是惰性检查而不是定时任务？**
+- 避免引入后台线程/定时器，保持存储层简单
+- 每月只需创建一次，1000 次写入的检查成本可忽略
+- 与现有 periodic_cleanup 解耦，减少复杂度
+
+#### 15.2.5 初始化流程
+
+```
+_ensure_init()
+  ├─ pg_partition_enabled = False → 普通 CREATE TABLE（向后兼容）
+  └─ pg_partition_enabled = True
+      ├─ 检查 traces 表是否存在
+      │   └─ 不存在 → 创建分区主表（PARTITION BY RANGE）
+      ├─ 创建索引（全局索引，自动继承到所有分区）
+      └─ _ensure_partitions() → 创建当月及未来 N 个月分区
+```
+
+**注意**：仅全新安装支持分区模式。如果 traces 表已存在（普通表），不会自动转换为分区表——历史数据迁移需手动操作（超出本次范围）。
+
+### 15.3 P3-2：归档策略设计
+
+#### 15.3.1 归档表结构
+
+```sql
+CREATE TABLE traces_archive (
+    id          BIGINT,           -- 与主表相同，不使用 BIGSERIAL（归档数据已有 id）
+    request_id  TEXT NOT NULL,
+    timestamp   DOUBLE PRECISION NOT NULL,
+    step        TEXT NOT NULL,
+    data        JSONB,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP  -- 归档时间戳
+);
+```
+
+- 结构与主表基本一致，新增 `archived_at` 字段记录归档时间
+- 有独立的索引（`idx_traces_archive_rid`、`idx_traces_archive_ts`）
+- 不建分区（归档数据查询少，全表扫描可接受）
+
+#### 15.3.2 归档触发时机
+
+**触发点**：`cleanup_expired(ttl_seconds)` 方法开头
+
+```
+cleanup_expired(ttl_seconds)
+  ├─ pg_archive_enabled = True
+  │   ├─ _archive_old_traces(days=pg_archive_days)
+  │   │   ├─ 成功 → commit
+  │   │   └─ 失败 → rollback + log warning（不影响后续删除）
+  │   └─ 继续执行正常的 DELETE 清理
+  └─ pg_archive_enabled = False → 直接 DELETE（原行为）
+```
+
+**为什么在 cleanup_expired 里而不是单独的定时任务？**
+- 复用现有的 periodic_cleanup 调度（每 300s 一次）
+- 归档与清理是同一生命周期的两个阶段，逻辑上应在一起
+- 失败不影响主流程（try/except 包裹）
+
+#### 15.3.3 归档算法
+
+**模式一：移动模式**（`pg_archive_delete_after=True`，默认）
+
+```sql
+WITH moved AS (
+    DELETE FROM traces WHERE timestamp < $1
+    RETURNING id, request_id, timestamp, step, data
+)
+INSERT INTO traces_archive (id, request_id, timestamp, step, data)
+SELECT id, request_id, timestamp, step, data FROM moved
+```
+
+- 使用 CTE `DELETE ... RETURNING` 原子操作
+- 一次扫描同时完成删除和归档，效率最高
+- 数据一致性：要么全部成功，要么全部回滚
+
+**模式二：复制模式**（`pg_archive_delete_after=False`，用于验证）
+
+```sql
+INSERT INTO traces_archive (id, request_id, timestamp, step, data)
+SELECT id, request_id, timestamp, step, data FROM traces
+WHERE timestamp < $1 AND id NOT IN (SELECT id FROM traces_archive)
+```
+
+- 仅复制不删除，用于验证归档正确性
+- `id NOT IN` 防止重复归档（幂等）
+
+### 15.4 配置项设计
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `pg_partition_enabled` | bool | False | 是否启用 traces 表按月分区 |
+| `pg_partition_precreate_months` | int | 2 | 自动预创建未来 N 个月的分区 |
+| `pg_archive_enabled` | bool | False | 是否启用自动归档 |
+| `pg_archive_days` | int | 30 | 归档阈值天数（超过该天数的数据归档） |
+| `pg_archive_delete_after` | bool | True | 归档后是否从主表删除（False=仅复制） |
+
+**设计原则**：
+- 全部默认关闭，零风险向后兼容
+- 命名统一前缀 `pg_`，与其他 PG 配置项一致
+- 布尔开关 + 参数微调，灵活控制
+
+### 15.5 测试策略
+
+**纯函数测试**（无需 DB，6 用例）：
+- `_month_partition_name` 格式正确性
+- `_month_range_epoch` 范围计算（1 月、12 月跨年、上界排他）
+- sync 与 async 实现一致性
+
+**Mock 集成测试**（fake conn，5 用例）：
+- 启用归档时 cleanup_expired 调用归档 SQL
+- 关闭归档时不调用归档 SQL
+- 启用分区时 save_entry 惰性检查分区
+- 关闭分区时不检查分区
+- 惰性检查频率（每 1000 次一次）
+
+**真实 PG 集成测试**（需 PG，手动运行）：
+- 分区表创建与写入
+- 跨月数据路由到正确分区
+- 归档数据正确性
+- cleanup_expired 端到端验证
+
+### 15.6 限制与未来扩展
+
+**当前限制**：
+1. 仅支持全新安装的分区模式，不支持普通表→分区表的在线迁移
+2. 不支持自动 DROP 旧分区（需手动 DROP 或后续开发）
+3. 归档表不分区，查询归档数据可能较慢
+4. 分区键使用 timestamp（double），非 date/timestamptz——与现有 schema 一致
+
+**未来可扩展**：
+- 在线迁移工具（普通表 → 分区表，使用 pg_repack 或触发器双写）
+- 自动 DROP 超过保留期的分区（配置 `pg_partition_retention_months`）
+- 归档表也按月分区（进一步提升归档查询性能）
+- 支持 LIST/HASH 分区（按 request_id 哈希分散写入）
+
+---
+
+## 16. 三轨并行开发：削峰队列 / 向量检索 / RBAC（2026-07-25）
+
+> 本章记录本轮三轨并行开发（Track A/B/C）的架构设计、成交条件与合并纪律。三条轨道在同一代码基上并行推进，依赖"文件物理隔离 + 共享点集中提交"避免互踩。
+> 三轨所落地的能力均默认关闭（feature flag），向后兼容，不破坏现有签名。
+> 关键代码入口：
+> - Track A：[analysis_queue.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analysis_queue.py)、[debug.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/debug.py)、[main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py)
+> - Track B：[vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/vector_store.py)、[analyzer.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py)
+> - Track C：[key_rotation.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/auth/key_rotation.py)、[rbac.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/auth/rbac.py)、[middleware.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/middleware.py)
+
+### 16.1 三轨并行合并纪律
+
+| 纪律 | 具体落点 |
+| --- | --- |
+| **analyzer.py 区域不互踩** | Track A 改 LLM 调用区（实际零侵入 analyzer，仅在外层包队列）、Track B 改知识库挂钩区（仅 KB hook 区域）、Track C 完全不碰 analyzer |
+| **文件物理隔离** | A 在 `app/llm/analysis_queue.py`、B 在 `app/llm/vector_store.py`、C 在 `app/auth/` |
+| **共享改动点集中提交** | 仅 [config.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/config.py) 与 [main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py) 的 lifespan 钩子是共享改动点，本轮集中提交避免冲突 |
+| **零签名变更** | Track C 的 `AuthMiddleware` 公共签名未变（仅 `__init__`/`dispatch` 体内调 key_rotation/rbac），`setup_middleware(app)` 签名未变，[ingest.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/ingest.py) 完全无鉴权改动 |
+| **默认关闭、向后兼容** | 三轨所有新能力均通过 feature flag 控制，默认关闭；`api_keys` 逗号分隔优先，空时回退单 `api_key`；`rbac_enabled=False` 时全 admin |
+
+### 16.2 Track A — P3-6 异步分析队列（消息队列削峰）
+
+#### 16.2.1 削峰语义成交条件
+
+> **关键设计判断**：裸 `BackgroundTasks` **无削峰**——它只是把任务挪到后台，并未限制并发上限。
+> 真正的削峰必须同时满足：
+> 1. **有界队列**：`asyncio.Queue(maxsize=N)`，N=峰容量，满则背压（不能无限堆积）
+> 2. **并发上限对齐外部配额**：`asyncio.Semaphore(K)`，K 对齐 LLM RPM/TPM，防止打爆上游
+> 3. **常驻消费协程**：K 个 worker 协程常驻，从队列取任务执行
+
+三要素缺一不可：仅有界队列无并发上限 → 上游被打爆；仅并发上限无有界队列 → 内存被堆积任务撑爆；无常驻消费协程 → 任务无人执行。
+
+#### 16.2.2 数据流
+
+```
+POST /analyze/async (debug.py)
+   │
+   ▼
+enqueue(context, model)  ──→ asyncio.Queue(maxsize=100)  [满则抛 QueueFullError → 429]
+                                  │
+                                  ▼
+                  K=4 常驻 worker 协程（main.py lifespan 启动）
+                                  │
+                                  ▼
+                  asyncio.Semaphore(K)  [对齐 LLM RPM/TPM]
+                                  │
+                                  ▼
+                  analyze_async(...)（延迟导入，零侵入 analyzer.py）
+                                  │
+                                  ▼
+                          写 job 状态（drain 时统计）
+```
+
+时序图：
+
+```mermaid
+sequenceDiagram
+    participant C as 调用方
+    participant API as POST /analyze/async
+    participant Q as asyncio.Queue(maxsize=100)
+    participant W as Worker 协程 (K=4)
+    participant Sem as asyncio.Semaphore(K)
+    participant LLM as analyze_async
+    participant Job as Job 状态
+
+    C->>API: POST /analyze/async {context, model}
+    API->>Q: enqueue(context, model)
+    alt 队列满
+        Q-->>API: QueueFullError
+        API-->>C: 429 + queue_size
+    else 入队成功
+        Q-->>API: enqueued
+        API-->>C: 202 + job_id
+    end
+    W->>Q: await queue.get()
+    W->>Sem: await sem.acquire()
+    Sem-->>W: granted
+    W->>LLM: analyze_async(context)
+    LLM-->>W: analysis result
+    W->>Job: write status
+    W->>Sem: sem.release()
+```
+
+#### 16.2.3 关键设计要点
+
+| 维度 | 设计 |
+| --- | --- |
+| **背压** | 队列满抛 `QueueFullError`，端点返回 `429 + queue_size`（暴露当前队列深度，调用方可据此退避） |
+| **优雅停机** | `drain(timeout)`：取消 worker → `queue.join(timeout)` 等排空 → 统计 `{drained, unfinished}`，未完成任务在停机时可见 |
+| **隔离性** | 消费协程**延迟导入** `analyze_async`，对 analyzer.py 零侵入；analyzer 仍可被同步 `/analyze` 端点直接调用 |
+| **生命周期** | 在 [main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py) 的 `lifespan` 中启动 K 个 worker，停机时调用 `drain(timeout)` |
+| **配置开关** | `llm_async_analysis_enabled=False` 默认关闭，启用时才挂载 `/analyze/async` 路由并启动 worker |
+
+#### 16.2.4 配置项
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `llm_async_analysis_enabled` | bool | False | 是否启用异步分析队列 |
+| `llm_queue_maxsize` | int | 100 | 队列容量上限（满则 429 背压） |
+| `llm_queue_workers` | int | 4 | 常驻消费协程数 K（对齐 LLM RPM/TPM） |
+| `llm_queue_drain_timeout` | int | 30 | 优雅停机排空超时（秒） |
+
+#### 16.2.5 设计权衡
+
+- **为何不用 Celery？** Celery 需引入 broker（Redis/RabbitMQ）和 worker 进程，部署复杂度上升；而 LLM 分析是 CPU/IO 混合型短任务（2-10s），进程内 `asyncio.Queue` + `Semaphore` 已能覆盖单实例削峰需求，零外部依赖。
+- **为何不用裸 `BackgroundTasks`？** 见 §16.2.1——无削峰语义，无法限制并发，会打爆 LLM 上游配额。
+- **队列容量 100 的依据**：单实例内存可承受 ~100 条上下文（每条平均 10KB），且 4 worker × 10s/任务 = 40 req/min，与典型 LLM RPM 配额对齐。
+- **`Semaphore(K)` 与 worker 数相同**：因 worker 本身即并发上限，`Semaphore` 在此用于显式声明并发约束，并为未来"多 worker 抢同一信号量"的扩展（如多队列共享 LLM 配额）预留扩展点。
+
+### 16.3 Track B — 向量检索 RAG（Phase 7）
+
+#### 16.3.1 可插拔边界成交条件
+
+> **关键设计判断**：抽象必须落在**检索语义**，禁止后端实现细节 leak。
+> - ✅ 抽象接口：`add(docs) / search(query, top_k) -> [(doc, score)]`
+> - ❌ 禁止 leak：Qdrant 的 `collection`/`point`/`vector_id` 等后端专属概念不得出现在 `VectorStore` ABC 中
+
+这样未来切换到 Qdrant/Weaviate/Chroma 任意后端，调用方代码零改动。
+
+#### 16.3.2 类层次
+
+```
+VectorStore (ABC)                       ← 抽象基类，定义 add/search 语义
+    ├── InProcessVectorStore            ← Jaccard 相似度，零依赖，默认实现
+    ├── NullVectorStore                 ← no-op，禁用时返回空结果
+    └── QdrantVectorStore               ← OpenAI/智谱 Embeddings 语义召回；uuid5 幂等 upsert；静默降级
+```
+
+类图：
+
+```mermaid
+classDiagram
+    class VectorStore {
+        <<ABC>>
+        +add(docs: List[Document]) None*
+        +search(query, top_k) List[(Document, score)]*
+    }
+    class InProcessVectorStore {
+        -_docs: List[Document]
+        +add(docs) None
+        +search(query, top_k) List[(Document, score)]
+        -_jaccard(a, b) float
+    }
+    class NullVectorStore {
+        +add(docs) None
+        +search(query, top_k) []
+    }
+    class QdrantVectorStore {
+        +add(docs) None
+        +search(query, top_k) List[(doc, score)]
+        -_embed_texts(texts) Optional[List[vector]]
+    }
+    VectorStore <|-- InProcessVectorStore
+    VectorStore <|-- NullVectorStore
+    VectorStore <|-- QdrantVectorStore
+```
+
+#### 16.3.3 工厂 + 注册表
+
+| 机制 | 实现 |
+| --- | --- |
+| **单例工厂** | `get_vector_store()` 返回全局单例，**双重检查锁**保证线程安全 |
+| **注册表插槽** | `register_vector_backend(name, cls)` 允许第三方注册新后端 |
+| **内置注册** | `_REGISTRY = {"in_process": InProcessVectorStore}` |
+| **未知后端** | `backend` 不在注册表 → 显式 `raise`（fail-closed，禁止静默回退） |
+| **Qdrant 后端** | 已实现（`QdrantVectorStore`）：OpenAI/智谱 Embeddings 语义召回 + `uuid5(fingerprint)` 幂等 upsert + Qdrant 原生 `score_threshold` 过滤；不可用时静默降级（add=no-op / search=空），绝不穿透 LLM 主链路 |
+
+#### 16.3.4 集成位置
+
+在 [analyzer.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py) 中：
+
+```
+analyze(context)
+   │
+   ├─ 精确指纹 hit（L1/L2 缓存命中） → 直接返回缓存结果
+   │
+   └─ 精确指纹 miss
+        │
+        ├─ vector_store_enabled=False → 跳过向量召回
+        │
+        └─ vector_store_enabled=True
+             │
+             ├─ vector_store.search(context.fingerprint, top_k=3)
+             │     ↓ score >= 0.3
+             ├─ 命中相似历史上下文 → 注入到 LLM prompt 作为 KB 参考
+             └─ 返回结果新增字段：
+                  ├─ knowledge_base_hit: bool（是否命中向量召回）
+                  └─ analysis_source: str（"cache" | "vector_kb" | "llm"）
+```
+
+#### 16.3.5 配置项
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `vector_store_enabled` | bool | False | 是否启用向量检索 RAG |
+| `vector_store_backend` | str | "in_process" | 后端名称（注册表 key） |
+| `vector_store_top_k` | int | 3 | 召回条数上限 |
+| `vector_store_min_score` | float | 0.3 | 相似度下限（低于此分数丢弃） |
+
+#### 16.3.6 设计权衡
+
+- **为何用 Jaccard 而非余弦相似度？** InProcessVectorStore 定位为零依赖的默认实现，Jaccard 仅需集合运算，无需嵌入模型；上生产时切换到 Qdrant 等带向量的后端即可获得语义相似度。
+- **为何 `min_score=0.3`？** Jaccard 在 token 集合较小时分布偏低，0.3 是经验阈值过滤明显无关项；切换到余弦相似度后端时该阈值需重新校准。
+- **为何在精确指纹 miss 后才做向量召回？** 精确命中走缓存（O(1) L1/L2），miss 才进入向量召回（O(N) 扫描）——分级降级，最大化缓存命中率。
+- **为何禁止静默回退？** 配置 `backend=qdrant` 但 Qdrant 运行时不可用时，静默回退到 `in_process` 会让用户误以为在用 Qdrant——这是"静默半死"反模式。当前实现采用"静默降级"：后端类型不变（仍是 `QdrantVectorStore`），但 `add` 变 no-op、`search` 返回空，绝不抛异常穿透 LLM 主链路，绝不偷偷换后端。
+
+### 16.4 Track C — RBAC + API_KEY 轮换（AUDIT-2-13/14）
+
+#### 16.4.1 零签名变更成交条件
+
+> **关键设计判断**：RBAC 和 key 轮换必须**零侵入**鉴权公共接口。
+> - `AuthMiddleware` 公共签名未变（仅 `__init__`/`dispatch` 体内调 key_rotation/rbac）
+> - `setup_middleware(app)` 签名未变
+> - [ingest.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/ingest.py) 完全无鉴权改动
+
+这样所有现有路由、客户端 SDK、测试用例零改动即可继续工作。
+
+#### 16.4.2 多 Key 轮换
+
+| 维度 | 设计 |
+| --- | --- |
+| **配置格式** | `api_keys` 逗号分隔优先（如 `key1,key2,key3`），空时回退单 `api_key`（向后兼容） |
+| **恒定时间比较** | `verify_api_key` 遍历所有 key **不短路** + `hmac.compare_digest`，防时序侧信道泄漏"命中第几个 key" |
+| **轮换语义** | 新旧 key 可同时生效，老 key 在客户端切换完成后从 `api_keys` 移除即可——无需停机 |
+| **fail-closed** | `api_keys` 配置但 `api_key` 未配置时，鉴权正常启用；两者皆未配置时整体禁用（启动告警） |
+
+#### 16.4.3 角色分级（RBAC）
+
+```
+角色层级（高 → 低）：admin > developer > viewer
+
+rbac_enabled=False  →  所有有效 key 默认 admin（向后兼容）
+rbac_enabled=True   →  按 key→role 映射查表
+                          ├─ 命中映射 → 返回对应 role
+                          └─ 未命中映射 → 默认 viewer（fail-closed）
+```
+
+#### 16.4.4 FastAPI 依赖集成
+
+```python
+# 工厂模式：require_role(*allowed_roles) 返回 FastAPI 依赖
+@router.post("/admin/operation",
+             dependencies=[Depends(require_role("admin"))])
+async def admin_operation(): ...
+
+@router.post("/dev/debug",
+             dependencies=[Depends(require_role("admin", "developer"))])
+async def dev_debug(): ...
+```
+
+依赖读取 `request.state.role`（由 `AuthMiddleware.dispatch` 在验 key 后注入），无需重复验 key。
+
+#### 16.4.5 中间件集成数据流
+
+```mermaid
+sequenceDiagram
+    participant C as 调用方
+    participant MW as AuthMiddleware.dispatch
+    participant KR as key_rotation.verify_api_key
+    participant RBAC as rbac.resolve_role
+    participant Dep as require_role 依赖
+    participant Route as 路由 handler
+
+    C->>MW: 请求 + X-API-Key
+    MW->>KR: verify_api_key(key)
+    KR-->>MW: True/False（恒定时间，遍历所有 key 不短路）
+    alt key 无效
+        MW-->>C: 401
+    else key 有效
+        MW->>RBAC: resolve_role(key)
+        RBAC-->>MW: role（admin/developer/viewer）
+        MW->>MW: request.state.role = role
+        MW->>Route: 放行
+        Route->>Dep: Depends(require_role(...))
+        Dep->>Dep: 读 request.state.role
+        alt role 不在 allowed_roles
+            Dep-->>C: 403
+        else role 允许
+            Dep->>Route: 继续
+            Route-->>C: 业务结果
+        end
+    end
+```
+
+#### 16.4.6 配置项
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `api_keys` | str | "" | 逗号分隔的多 key 列表（优先于 `api_key`） |
+| `api_key` | str | "" | 单 key（向后兼容，`api_keys` 为空时回退） |
+| `rbac_enabled` | bool | False | 是否启用角色分级（关闭时全 admin） |
+| `rbac_role_map` | dict | {} | key→role 映射（如 `{"admin_key": "admin", "dev_key": "developer"}`） |
+
+#### 16.4.7 设计权衡
+
+- **为何遍历所有 key 不短路？** 短路会在"命中第几个 key"上泄漏时序信息——攻击者据此可推断 key 数量和命中位置。恒定时间遍历 + `compare_digest` 是时序侧信道防御的标准做法。
+- **为何 `rbac_enabled=False` 时全 admin？** 向后兼容——现有用户升级后行为不变，所有 key 仍可访问全部端点；显式开启 `rbac_enabled=True` 才进入分级模式。
+- **为何未命中映射默认 viewer？** fail-closed 原则——配置了 RBAC 但忘记给某个 key 分配角色，应给最低权限而非最高，避免误授权。
+- **为何用 FastAPI `Depends` 而非中间件层做角色检查？** 中间件层无法知道每个路由的角色要求；`Depends` 让路由声明式地表达"我需要什么角色"，职责清晰，且与 FastAPI 生态对齐。
+
+### 16.5 三轨协同效应
+
+三轨并非孤立功能，它们在 LLM 分析链路上形成协同：
+
+```
+Track C (RBAC)        Track A (削峰队列)         Track B (向量检索)
+       │                     │                         │
+       ▼                     ▼                         ▼
+  鉴权 + 角色门控      /analyze/async 削峰        精确 miss 后向量召回
+       │                     │                         │
+       └─────────────────────┼─────────────────────────┘
+                             ▼
+                    LLM 分析链路（高可用 + 可控成本 + 知识增强）
+```
+
+- **Track C** 保证 `/analyze/async` 端点可被角色门控（如仅 `developer` 及以上可触发异步分析）
+- **Track A** 在 LLM 上游削峰，防止突发请求打爆 RPM/TPM 配额
+- **Track B** 在 LLM 调用前做向量召回，命中相似历史上下文时减少重复 LLM 调用（与 §3.4.6 的 L1/L2 缓存互补——L1/L2 走精确指纹，向量召回走语义相似）
+
+### 16.6 测试与验证策略
+
+| 轨道 | 测试要点 |
+| --- | --- |
+| Track A | 队列满时返回 429 + queue_size；K worker 并发上限对齐 Semaphore；`drain(timeout)` 统计 `{drained, unfinished}` 正确；feature flag 关闭时不挂载路由 |
+| Track B | `InProcessVectorStore` Jaccard 相似度计算正确；`NullVectorStore` 返回空；`QdrantVectorStore` 降级矩阵（client/embedding/upsert/search 各失败点）；`knowledge_base_hit`/`analysis_source` 字段正确填充；`min_score` 过滤生效 |
+| Track C | 多 key 恒定时间比较（无短路）；`api_keys` 空时回退 `api_key`；`rbac_enabled=False` 全 admin；未命中映射默认 viewer；`require_role` 工厂正确放行/拒绝 |
+
+### 16.7 限制与未来扩展
+
+**当前限制**：
+1. Track A 的队列是进程内的，多 worker 实例间无共享队列（需 Redis Stream / Celery 才能跨实例削峰）
+2. Track B 的 `InProcessVectorStore` 用 Jaccard，无语义相似度（已通过 `QdrantVectorStore` 提供语义召回后端，2026-07-26 落地）；Jaccard 后端保留作为零依赖默认实现
+3. Track C 的 `rbac_role_map` 是静态配置，无运行时管理接口（增删 key 需改配置重启）
+
+**未来扩展**：
+- Track A：Redis Stream 作为分布式队列，跨实例共享配额
+- Track B：~~实现 `QdrantVectorStore`，引入嵌入模型（如 `text-embedding-3-small`）做语义召回~~ ✅ 已完成（2026-07-26）；后续可扩展 Weaviate / Chroma 等其他向量后端（通过 `register_vector_backend` 注册表插槽）
+- Track C：运行时 key 管理 API（CRUD key + role，写入 PG/Redis），无需重启
+
+---
+
+## 17. AI Debug Agent：自动修复 + 多 Agent 协同（Phase 1，2026-07-26）
+
+> 本章记录 AI Debug Agent Phase 1 的架构设计：单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）。
+> Phase 2 多 Agent DAG（Git Agent + Test Agent + Security Agent）为后续待办，登记在 [TODO.md](./TODO.md) AGENT-002。
+> 关键代码入口：[app/agent/](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/agent/)（7 文件）、[app/api/debug.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/debug.py)（2 REST 端点）、[app/mcp/tools/repair_api.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/mcp/tools/repair_api.py)（2 MCP 工具）。
+
+### 17.1 设计目标与 Phase 1 定位
+
+| 维度 | 设计 |
+| --- | --- |
+| **目标** | 在错误已捕获并完成根因分析后，自动产出可执行的修复计划（`RepairPlan`），把"分析 → 修复"链路从纯人工升级为 Agent 辅助 |
+| **Phase 1 定位** | 单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）。**不**在 Phase 1 实现 Git Agent / Test Agent / Security Agent |
+| **Phase 2 待办** | 在 `BaseAgent` ABC + `Coordinator` 框架上扩展多 Agent DAG 与并行编排（AGENT-002） |
+| **零侵入约束** | 默认 `agent_enabled=False`，路由不挂载，行为与旧版完全一致；启用后通过独立队列与 `Coordinator` 编排，不修改 `analyzer.py` 公共签名 |
+| **向后兼容** | 9 个 `agent_*` 配置项全部默认关闭；`RepairAgent` 复用 `analyzer._get_async_client` 取 LLM 客户端，不重复造客户端管理逻辑 |
+
+### 17.2 模块结构（`app/agent/`，7 文件）
+
+```
+app/agent/
+├── __init__.py              ← 模块导出
+├── base.py                  ← BaseAgent ABC + AgentContext/AgentResult/AgentTrace + AgentStatus
+├── schemas.py               ← Pydantic 模型：RepairRequest/RepairPlan/RepairJob/Sources
+├── context_assembler.py     ← RepairContextAssembler（并发聚合 analyze + retrieve_similar + get_recent_diff）
+├── repair_agent.py          ← RepairAgent（复用 analyzer._get_async_client + 独立重试/fallback）
+├── repair_queue.py          ← RepairQueue + lifespan helper（结构对称 analysis_queue.py）
+└── coordinator.py           ← Coordinator 编排器（装配上下文 → 调度 Agent → 收集 trace）
+```
+
+#### 17.2.1 `BaseAgent` ABC（`base.py`）
+
+| 抽象 | 职责 |
+| --- | --- |
+| `BaseAgent` ABC | 定义 `run(ctx: AgentContext) -> AgentResult` 抽象方法；子类只需实现业务逻辑，trace 收集、状态机、错误兜底由基类统一承担 |
+| `AgentContext` | Agent 执行上下文（request_id / payload / assembled_context / trace 收集器） |
+| `AgentResult` | Agent 执行结果（status / payload / error / trace） |
+| `AgentTrace` | 执行轨迹（步骤名 / 耗时 / 输入摘要 / 输出摘要 / 降级标记），供 `Coordinator` 聚合后回传调用方 |
+| `AgentStatus` | 枚举：`pending` / `running` / `succeeded` / `failed` / `fallback` |
+
+设计意图：Phase 2 多 Agent DAG 时，新增 `GitAgent` / `TestAgent` / `SecurityAgent` 直接继承 `BaseAgent` 并实现 `run()`，编排逻辑由 `Coordinator` 扩展，业务子类零感知框架演进。
+
+#### 17.2.2 `RepairAgent`（`repair_agent.py`）
+
+| 维度 | 设计 |
+| --- | --- |
+| **LLM 客户端** | 复用 `analyzer._get_async_client()` 取 `AsyncOpenAI` 客户端，避免重复造客户端管理逻辑；模型选择优先 `agent_repair_model`，空则继承 `llm_model` |
+| **重试 / Fallback** | 独立实现重试（`agent_repair_max_retries`）+ 指数退避 + 限流/超时处理；耗尽切换 `agent_repair_fallback_model`；与 `analyzer._retry_call` 同构但解耦，互不影响 |
+| **JSON 容错** | `_validate_repair_plan(raw)` 容错解析 LLM 输出（缺字段补默认、超长截断、非法 confidence 归 "low"），与 `analyzer._validate_and_normalize` 风格一致 |
+| **降级** | LLM 不可用时返回结构化 fallback（`status=failed` + 原因），不抛异常穿透到 `Coordinator` |
+
+#### 17.2.3 `RepairContextAssembler`（`context_assembler.py`）
+
+并发聚合三个子采集器，各失败静默降级：
+
+| 子采集器 | 数据源 | 失败降级 |
+| --- | --- | --- |
+| `analyze_async(context)` | `app/llm/analyzer.py` LLM 根因分析 | 失败 → `root_cause=None`，trace 记录降级 |
+| `retrieve_similar(fingerprint)` | `app/llm/vector_store.py` 向量召回 | 失败 → `similar_cases=[]`，trace 记录降级 |
+| `get_recent_diff()` | `app/mcp/core/git.py` 最近 Git diff | 失败 → `recent_diff=None`，trace 记录降级 |
+
+并发执行使用 `asyncio.gather(*tasks, return_exceptions=True)`，任一异常被捕获并转为降级标记，不阻断主链路。
+
+#### 17.2.4 `RepairQueue`（`repair_queue.py`）
+
+结构对称 `app/llm/analysis_queue.py`：
+
+| 维度 | 设计 |
+| --- | --- |
+| **有界队列** | `asyncio.Queue(maxsize=agent_queue_maxsize)`，满载时新请求直接 429（快速失败） |
+| **并发上限** | `asyncio.Semaphore(agent_queue_workers)` 对齐 LLM RPM/TPM |
+| **常驻消费协程** | K 个 worker 协程常驻，从队列取任务执行 |
+| **优雅停机** | `drain(timeout=agent_queue_drain_timeout)`：取消 worker → `queue.join(timeout)` → 统计 `{drained, unfinished}` |
+| **生命周期** | `app/main.py` lifespan 启动期 `start_repair_queue()`，停机期 `drain_repair_queue(timeout)` |
+
+#### 17.2.5 `Coordinator` 编排器（`coordinator.py`）
+
+| 接口 | 职责 |
+| --- | --- |
+| `submit_repair(request)` | 入队修复请求，返回 `job_id`；队列满抛 `QueueFullError` |
+| `get_repair_result(job_id)` | 查询修复结果（含 `RepairPlan` + `AgentTrace`） |
+
+编排流程：
+
+```
+submit_repair(request)
+   │
+   ▼
+RepairQueue.enqueue(request)  ──→ asyncio.Queue(maxsize=N)  [满则 429]
+                                  │
+                                  ▼
+                  K 常驻 worker 协程（main.py lifespan 启动）
+                                  │
+                                  ▼
+                  Coordinator._execute(request)
+                                  │
+                                  ├─ RepairContextAssembler.assemble(request)
+                                  │     ├─ analyze_async(...)        [失败静默降级]
+                                  │     ├─ retrieve_similar(...)     [失败静默降级]
+                                  │     └─ get_recent_diff()         [失败静默降级]
+                                  │
+                                  ├─ RepairAgent.run(ctx) → AgentResult
+                                  │     ├─ LLM 调用（独立重试/fallback）
+                                  │     └─ _validate_repair_plan 容错 JSON
+                                  │
+                                  └─ 收集 AgentTrace → 写 job 状态
+```
+
+设计意图：`Coordinator` 是 Phase 2 多 Agent DAG 的编排入口——Phase 2 时扩展为「`assemble_context` → `schedule_agents([GitAgent, TestAgent, SecurityAgent])` → `aggregate_traces`」，对外接口 `submit_repair` / `get_repair_result` 不变。
+
+### 17.3 数据流（POST /api/debug/repair/async 端到端）
+
+```mermaid
+sequenceDiagram
+    participant C as 调用方
+    participant API as POST /api/debug/repair/async
+    participant Q as RepairQueue
+    participant Coord as Coordinator
+    participant Asm as RepairContextAssembler
+    participant Agent as RepairAgent
+    participant LLM as AsyncOpenAI
+
+    C->>API: POST /api/debug/repair/async {error_id, context}
+    API->>Q: enqueue(request)
+    alt 队列满
+        Q-->>API: QueueFullError
+        API-->>C: 429 + queue_size
+    else 入队成功
+        Q-->>API: enqueued
+        API-->>C: 202 + job_id
+    end
+    Q->>Coord: worker 取任务
+    Coord->>Asm: assemble(request)
+    par 并发聚合
+        Asm->>LLM: analyze_async(context)
+        LLM-->>Asm: root_cause
+    and
+        Asm->>Asm: retrieve_similar(fingerprint)
+        Asm-->>Asm: similar_cases
+    and
+        Asm->>Asm: get_recent_diff()
+        Asm-->>Asm: recent_diff
+    end
+    alt 任一子采集器失败
+        Asm-->>Asm: 静默降级 + trace 记录
+    end
+    Asm-->>Coord: assembled_context
+    Coord->>Agent: run(ctx)
+    Agent->>LLM: chat.completions(repair_prompt)
+    LLM-->>Agent: raw_output
+    Agent->>Agent: _validate_repair_plan(raw)
+    alt LLM 不可用 / JSON 失效
+        Agent-->>Agent: fallback (status=failed, confidence=low)
+    end
+    Agent-->>Coord: AgentResult(plan, trace)
+    Coord->>Coord: 写 job 状态
+    Note over C: 调用方轮询 GET /api/debug/repair/result/{job_id}
+    C->>API: GET /api/debug/repair/result/{job_id}
+    API->>Coord: get_repair_result(job_id)
+    Coord-->>API: RepairPlan + AgentTrace
+    API-->>C: 200 + result
+```
+
+### 17.4 降级矩阵
+
+| 失败点 | 行为 | 调用方可见 |
+| --- | --- | --- |
+| `agent_enabled=False` | 路由不挂载，零行为变更 | `404 Not Found` |
+| `RepairQueue` 满 | 入队抛 `QueueFullError` | `429 Too Many Requests` + `queue_size` |
+| `analyze_async` 失败 | `RepairContextAssembler` 静默降级，`root_cause=None` | `RepairPlan` 中 `root_cause=null`，`AgentTrace` 记录降级 |
+| `retrieve_similar` 失败 | 静默降级，`similar_cases=[]` | `RepairPlan` 中 `similar_cases=[]`，trace 记录 |
+| `get_recent_diff` 失败 | 静默降级，`recent_diff=None` | `RepairPlan` 中 `recent_diff=null`，trace 记录 |
+| LLM 调用失败（重试耗尽） | `RepairAgent` 返回 `status=failed` + 原因 | `RepairPlan.status=failed`，`error` 字段含原因 |
+| LLM 返回非 JSON / 字段缺失 | `_validate_repair_plan` 容错填充默认值 | `RepairPlan.confidence=low`，`raw_truncated` 字段保留前 500 字符 |
+| `RepairQueue.drain` 超时 | 未完成任务在停机时可见 | `get_repair_result` 返回 `status=cancelled` |
+
+### 17.5 配置项（9 个，统一前缀 `agent_`）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `agent_enabled` | bool | False | 是否启用 AI Debug Agent（false=不挂载路由，零行为变更） |
+| `agent_queue_maxsize` | int | 50 | 修复队列容量上限（满则 429 背压） |
+| `agent_queue_workers` | int | 2 | 常驻消费协程数 K |
+| `agent_queue_drain_timeout` | int | 30 | 优雅停机排空超时（秒） |
+| `agent_repair_model` | str | "" | 修复 Agent 使用的 LLM 模型（空则继承 `llm_model`） |
+| `agent_repair_fallback_model` | str | "" | 修复 Agent 的 fallback 模型（空则继承 `llm_fallback_model`） |
+| `agent_repair_max_retries` | int | 见 v1.0 | 修复 Agent LLM 调用重试次数 |
+| `agent_repair_timeout` | int | 见 v1.0 | 修复 Agent LLM 调用超时（秒） |
+| `agent_repair_temperature` | float | 见 v1.0 | 修复 Agent LLM 温度参数 |
+
+### 17.6 测试策略
+
+| 层级 | 测试文件 | 用例数 | 要点 |
+| --- | --- | --- | --- |
+| 单元测试 | `tests/unit/test_agent_base.py` 等 6 文件 | 63 | `BaseAgent` ABC 状态机、`RepairAgent` 重试/fallback/JSON 容错、`RepairContextAssembler` 并发降级、`RepairQueue` 削峰/drain、`Coordinator` 编排、schemas 校验 |
+| 集成测试 | `tests/integration/test_repair_agent_e2e.py` 等 3 文件 | 8 | e2e 端到端（skip-if-no-api-key）、队列满 429、降级矩阵、`agent_enabled=False` 零行为变更 |
+
+测试基线：单元 `583 passed / 6 skipped / 0 failed`（相比基线 520 增加 63 项）；ruff 0 违规。
+
+### 17.7 设计权衡
+
+- **为何 Phase 1 只做单 Agent？** 多 Agent DAG（Git/Test/Security）需要先验证 `BaseAgent` ABC + `Coordinator` 编排框架的可扩展性；Phase 1 用 `RepairAgent` 单 Agent 跑通完整链路（上下文装配 → Agent 执行 → trace 收集 → 结果回传），为 Phase 2 多 Agent 并行编排打地基。
+- **为何 `RepairAgent` 复用 `analyzer._get_async_client`？** 避免重复造 LLM 客户端管理逻辑（连接池、超时、provider 切换）；`analyzer` 已稳定，复用其客户端获取函数零风险。
+- **为何 `RepairQueue` 结构对称 `analysis_queue.py`？** 削峰语义完全一致（有界队列 + Semaphore + K worker + drain），复用同一套模式降低认知负担；未来可抽象为通用 `AgentQueue` 基类。
+- **为何 `RepairContextAssembler` 用 `asyncio.gather(return_exceptions=True)` 而非顺序执行？** 三个子采集器（LLM 分析、向量召回、Git diff）无依赖关系，并发执行可将总延迟从 `sum(latency)` 降到 `max(latency)`；`return_exceptions=True` 保证任一失败不阻断其他。
+- **为何 `_validate_repair_plan` 与 `analyzer._validate_and_normalize` 风格一致？** LLM 输出不可信是普遍问题，统一的容错模式（缺字段补默认、超长截断、非法枚举归低）降低维护成本；Phase 2 多 Agent 时各 Agent 可复用同一套容错工具。
+
+### 17.8 限制与未来扩展
+
+**当前限制**：
+1. Phase 1 仅有 `RepairAgent` 一个具体 Agent 实现，多 Agent DAG 待 Phase 2
+2. `RepairQueue` 是进程内的，多 worker 实例间无共享队列（与 `analysis_queue.py` 同一限制）
+3. `RepairContextAssembler` 的三个子采集器是固定组合，Phase 2 多 Agent 时需要按 Agent 角色动态装配
+
+**未来扩展（Phase 2，AGENT-002）**：
+- 新增 `GitAgent` / `TestAgent` / `SecurityAgent` 继承 `BaseAgent`，实现各自 `run()` 逻辑
+- `Coordinator` 扩展为多 Agent DAG 编排（并行执行 + 依赖关系 + 结果聚合）
+- `RepairContextAssembler` 按 Agent 角色动态装配上下文（如 `GitAgent` 只需 `get_recent_diff` + `get_blame_for_frame`）
+- 引入 Agent 间通信机制（如 `AgentContext.shared_state`）支持 DAG 节点间数据传递

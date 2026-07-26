@@ -6,6 +6,7 @@
 > 最终定位：**AI 时代的软件可观测 + 自动调试基础设施**
 > 核心原则：**先成为"优秀的数据采集系统"，再成为"聪明的 AI Debug 系统"**
 > 没有高质量数据，AI 只是聊天机器人。
+> 功能完成度与默认交付状态请以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准。
 
 ---
 
@@ -45,7 +46,7 @@ Phase 2  分布式链路追踪平台（3 周）
     ↓
 Phase 3  智能错误分析引擎（1 个月）
     ↓
-Phase 4  RAG 知识库系统（1 个月）
+Phase 4  RAG 知识库系统（1 个月，当前已完成指纹知识库基础版）
     ↓
 Phase 5  AI Debug Agent（核心）
     ↓
@@ -478,6 +479,8 @@ permission → config
 
 ## Phase 4：RAG 知识库系统（1 个月）
 
+> 注：当前仓库已先落地“指纹知识库基础版”（按错误指纹命中历史分析结论、LLM 成功后自动沉淀），本节描述的是下一阶段的“向量检索版 RAG”目标形态，而非当前默认交付状态。
+
 > 让 AI 拥有记忆——AI 项目和普通项目的分水岭
 
 ```
@@ -495,9 +498,9 @@ app/knowledge/
 
 | 组件 | 技术 | 用途 | 状态 |
 |------|------|------|------|
-| 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索历史解决方案 | 🔲 待引入 |
-| Python SDK | qdrant-client | 向量数据库操作 | 🔲 待引入 |
-| Embedding 模型 | 智谱 embedding-2 / OpenAI text-embedding-3-small | 将 Bug 描述转为向量 | 🔲 待引入 |
+| 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索历史解决方案 | ✅ 已引入（`app/llm/qdrant_vector_store.py`，2026-07-26） |
+| Python SDK | qdrant-client | 向量数据库操作 | ✅ 已引入（`requirements.txt` 锁定 `>=1.9.0`） |
+| Embedding 模型 | 智谱 embedding-3 / OpenAI text-embedding-3-small | 将 Bug 描述转为向量 | ✅ 已接入（`QdrantVectorStore._get_embedding_client` 独立客户端，与 LLM provider 解耦） |
 
 **Qdrant 选型理由**：
 1. **部署轻量**：单容器即可运行，适合本项目体量
@@ -696,7 +699,7 @@ Security Agent  → 安全审查
 
 ### 远期（Phase 4-6）
 
-1. RAG 知识库系统（Qdrant 向量数据库）
+1. ~~向量检索版 RAG 知识库系统（Qdrant 向量数据库）~~ ✅ 已完成（2026-07-26，`QdrantVectorStore` + OpenAI/智谱 Embeddings 语义召回 + uuid5 幂等 upsert + 静默降级）
 2. AI Debug Agent（自动定位 + 生成修复 + 运行测试）
 3. 自动修复平台（Git Agent + Test Agent + Security Agent）
 
@@ -708,7 +711,7 @@ Security Agent  → 安全审查
 |------|-----------|------|------|------|
 | Phase 1 | 主关系型数据库 | PostgreSQL 16 | trace / session / spec / error 持久化 | ✅ 已部分实现 |
 | Phase 1 | 缓存 / 限流 / 队列 | Redis 7 | 限流计数、会话缓存、异步任务队列 | ✅ 已实现 |
-| Phase 4 | 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索 | 🔲 待引入 |
+| Phase 4 | 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索 | ✅ 已实现（`app/llm/qdrant_vector_store.py`，2026-07-26） |
 | Phase 2+（可选） | 时序分析数据库 | ClickHouse | 高基数 trace 查询、性能指标聚合 | 🔲 待评估（trace > 1000 万/天时）|
 
 **当前差距**：
@@ -777,7 +780,7 @@ Security Agent  → 安全审查
 | 项 | 实现位置 | 说明 |
 |----|---------|------|
 | fail-closed 鉴权 | [middleware.py:19-52](../../app/middleware.py#L19-L52) | 无 API_KEY 且已设 → 401；未设 `api_key` 则整体禁用（启动告警）|
-| 公开路径白名单 | [middleware.py:22](../../app/middleware.py#L22) | `PUBLIC_PATHS=(/,/health,/metrics)` 免鉴权 |
+| 公开路径白名单 | [middleware.py:20](../../app/middleware.py#L20) | `PUBLIC_PATHS=("/", "/health", "/demo", "/demo/silent-failure", "/ai-debug.js")` 免鉴权（5 项，`/metrics` 不在内需鉴权 — SEC-08） |
 | 恒定时间比较 | [middleware.py:49](../../app/middleware.py#L49) | `hmac.compare_digest` 防时序攻击 |
 | 启动校验 | [main.py:33-41](../../app/main.py#L33-L41) | `0.0.0.0` + 无 API_KEY 拒绝启动 |
 | MCP 会话校验 | [mcp_routes.py:54-77](../../app/api/mcp_routes.py#L54-L77) | 未初始化会话访问 `tools/*` 被拒（400）|
@@ -985,14 +988,14 @@ Security Agent  → 安全审查
 
 | 编号 | 改进项 | 具体操作 | 修改文件 | 验证方式 |
 |------|--------|----------|----------|----------|
-| P3-1 | 数据分区 | traces 表按月分区，新增 `CREATE TABLE traces_YYYY_MM PARTITION OF traces` | `migrations/` | 验证分区查询性能 |
-| P3-2 | 归档策略 | 新增 `traces_archive` 表，`cleanup_expired` 改为 `INSERT INTO archive + DELETE` | `app/mcp/core/storage/pg_store.py` | 验证归档数据可查 |
-| P3-3 | 批量写入 | `save_trace` 改为 `executemany` 一次性写入 trace_data + meta + link | `app/mcp/core/trace_repo.py` | 压测：验证吞吐量提升 |
-| P3-4 | 分布式追踪 | 集成 OpenTelemetry，自动注入 span | 新增 `app/tracing.py` | 验证 Jaeger 可视化 |
-| P3-5 | 优雅降级 | PG 不可用时自动降级到内存存储 + 告警通知 | `app/mcp/core/storage/factory.py` | 故障注入测试 |
-| P3-6 | 消息队列削峰 | LLM 分析走 Celery/BackgroundTasks 异步队列，前端轮询结果 | `app/llm/analyzer.py`, `app/api/debug.py` | 压测：验证吞吐量 |
-| P3-7 | 多级缓存 | L1 进程级 LRU + L2 Redis，防穿透/雪崩/击穿 | 新增 `app/cache.py` | 压测：验证缓存命中率 |
-| P3-8 | 熔断器 | LLM 调用加 pybreaker 熔断，5 次失败后熔断 60s | `app/llm/analyzer.py` | 故障注入测试 |
+| P3-1 | 数据分区 | ✅ 已完成（2026-07-24）：traces 表按月 RANGE 分区（PostgreSQL 声明式分区，非 pg_partman），自动预创建当月及未来 N 个月分区，惰性检查（每 1000 次写入），配置项 `pg_partition_enabled` 默认关闭 | `app/mcp/core/storage/pg_store.py`, `app/mcp/core/storage/async_pg_store.py`, `app/config.py` | 单元测试（6 用例）验证分区命名、时间范围计算、sync/async 一致性 |
+| P3-2 | 归档策略 | ✅ 已完成（2026-07-24）：新增 `traces_archive` 表，`cleanup_expired` 先归档再删除（CTE `WITH moved AS DELETE...RETURNING` 原子移动），配置项 `pg_archive_enabled` 默认关闭 | `app/mcp/core/storage/pg_store.py`, `app/mcp/core/storage/async_pg_store.py`, `app/config.py` | 单元测试（5 用例）验证归档 SQL 调用、分区惰性检查频率 |
+| P3-3 | 批量写入 | ✅ 已完成（2026-07-24）：storage ABC 新增 `save_entries` 默认实现 + MemoryTraceStore 覆写（单次锁）+ logs `add_logs_batch` + trace_repo save_trace 复用（META+LINK 批量，DATA 保留提交标记） | `app/mcp/core/trace_repo.py`, `app/mcp/core/storage/*.py` | 单元测试验证批量写入行为 |
+| P3-4 | **OpenTelemetry** | ✅ 已完成（2026-07-24）：双模式设计——保留 `/metrics` Prometheus 文本端点向后兼容，同时引入 OTel SDK 支持 OTLP gRPC 导出；核心指标：`http_requests_total`、`http_errors_total`、`http_request_duration_seconds`；惰性初始化 + 失败降级；优雅关闭 | `app/config.py`, `app/observability.py`, `app/main.py`, `tests/unit/test_otel.py`, `requirements.txt`, `.env.example` | 单元测试（12 用例）验证 OTel 初始化、降级、中间件集成、向后兼容性 |
+| P3-5 | 优雅降级 | ✅ 已完成（2026-07-24）：PG 不可用时自动降级到内存存储，配置项 `storage_fallback_to_memory` 控制，支持 fail-fast 模式 | `app/mcp/core/storage/factory.py`, `app/config.py` | 单元测试验证降级逻辑 |
+| P3-6 | 消息队列削峰 | ✅ 已完成（2026-07-25）：有界 `asyncio.Queue(maxsize=N)` + K 常驻消费协程 + `asyncio.Semaphore(K)` 对齐 LLM RPM/TPM；队列满返回 429；优雅停机 drain；零侵入 analyzer.py | `app/llm/analysis_queue.py`, `app/api/debug.py`, `app/main.py` | 单元测试验证削峰与 drain 行为 |
+| P3-7 | 多级缓存 | ✅ 已完成：L1 进程级 LRU + L2 Redis + L3 缓存预热（`app/llm/cache_prewarm.py`，2026-07-26，只写 L1 不刷新 L2 TTL），防穿透/雪崩/击穿 | `app/cache.py` + `app/llm/cache_prewarm.py` | 压测：验证缓存命中率 |
+| P3-8 | 熔断器 | ✅ 已完成（2026-07-24）：LLM/PG 调用加 pybreaker 熔断，配置项控制熔断参数，熔断时返回结构化 fallback | `app/llm/analyzer.py`, `app/config.py` | 单元测试验证熔断行为 |
 
 ### 适用规模评估
 
