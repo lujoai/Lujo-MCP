@@ -364,7 +364,7 @@ class TestLLMCache:
     def setup_method(self):
         """每个测试前清空缓存，避免互相影响"""
         from app.llm.analyzer import _analysis_cache
-        from app.llm.knowledge_base import clear_knowledge_base
+        from app.rag.knowledge_base import clear_knowledge_base
         _analysis_cache.clear()
         clear_knowledge_base()
 
@@ -522,7 +522,7 @@ class TestLLMCache:
     def test_analyze_returns_knowledge_base_result_before_llm(self, mock_get_client):
         """知识库命中时直接返回结果，并跳过 LLM 调用"""
         from app.llm.analyzer import analyze
-        from app.llm.knowledge_base import upsert_knowledge_entry
+        from app.rag.knowledge_base import upsert_knowledge_entry
 
         upsert_knowledge_entry(
             fingerprint="kb-hit-fp",
@@ -597,7 +597,7 @@ class TestLLMCache:
 class TestKnowledgeBaseAutoPersist:
     def setup_method(self):
         from app.llm.analyzer import _analysis_cache
-        from app.llm.knowledge_base import clear_knowledge_base
+        from app.rag.knowledge_base import clear_knowledge_base
 
         _analysis_cache.clear()
         clear_knowledge_base()
@@ -606,7 +606,7 @@ class TestKnowledgeBaseAutoPersist:
     @patch("app.llm.analyzer._get_client")
     def test_analyze_auto_persists_knowledge_base_entry(self, mock_get_client, _mock_get_redis_cache):
         from app.llm.analyzer import analyze
-        from app.llm.knowledge_base import get_knowledge_entry
+        from app.rag.knowledge_base import get_knowledge_entry
         import json
 
         mock_client = MagicMock()
@@ -696,15 +696,15 @@ class TestVectorRagFallback:
 
     def setup_method(self):
         from app.llm.analyzer import _analysis_cache
-        from app.llm.knowledge_base import clear_knowledge_base
-        from app.llm.vector_store import _reset_vector_store
+        from app.rag.knowledge_base import clear_knowledge_base
+        from app.rag.vector_store import _reset_vector_store
 
         _analysis_cache.clear()
         clear_knowledge_base()
         _reset_vector_store()
 
     def teardown_method(self):
-        from app.llm.vector_store import _reset_vector_store
+        from app.rag.vector_store import _reset_vector_store
 
         _reset_vector_store()
 
@@ -830,7 +830,7 @@ class TestVectorRagFallback:
     ):
         """KB 精确指纹命中优先于向量召回（向量检索不应被调用）"""
         from app.llm.analyzer import analyze
-        from app.llm.knowledge_base import upsert_knowledge_entry
+        from app.rag.knowledge_base import upsert_knowledge_entry
 
         upsert_knowledge_entry(
             fingerprint="exact-fp",

@@ -2,7 +2,7 @@
 import pytest
 
 from app.config import settings
-from app.llm.vector_store import (
+from app.rag.vector_store import (
     InProcessVectorStore,
     NullVectorStore,
     VectorStore,
@@ -102,8 +102,8 @@ class TestFactory:
 
     def test_qdrant_backend_returns_qdrant_store(self, monkeypatch):
         """backend=qdrant 实例化 QdrantVectorStore；client 不可用时降级为 add=no-op / search=空。"""
-        import app.llm.qdrant_vector_store as qdrant_module
-        from app.llm.qdrant_vector_store import QdrantVectorStore
+        import app.rag.qdrant_vector_store as qdrant_module
+        from app.rag.qdrant_vector_store import QdrantVectorStore
 
         monkeypatch.setattr(settings, "vector_store_enabled", True)
         monkeypatch.setattr(settings, "vector_store_backend", "qdrant")

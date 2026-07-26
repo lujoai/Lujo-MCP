@@ -498,7 +498,7 @@ app/knowledge/
 
 | 组件 | 技术 | 用途 | 状态 |
 |------|------|------|------|
-| 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索历史解决方案 | ✅ 已引入（`app/llm/qdrant_vector_store.py`，2026-07-26） |
+| 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索历史解决方案 | ✅ 已引入（`app/rag/qdrant_vector_store.py`，2026-07-26） |
 | Python SDK | qdrant-client | 向量数据库操作 | ✅ 已引入（`requirements.txt` 锁定 `>=1.9.0`） |
 | Embedding 模型 | 智谱 embedding-3 / OpenAI text-embedding-3-small | 将 Bug 描述转为向量 | ✅ 已接入（`QdrantVectorStore._get_embedding_client` 独立客户端，与 LLM provider 解耦） |
 
@@ -711,7 +711,7 @@ Security Agent  → 安全审查
 |------|-----------|------|------|------|
 | Phase 1 | 主关系型数据库 | PostgreSQL 16 | trace / session / spec / error 持久化 | ✅ 已部分实现 |
 | Phase 1 | 缓存 / 限流 / 队列 | Redis 7 | 限流计数、会话缓存、异步任务队列 | ✅ 已实现 |
-| Phase 4 | 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索 | ✅ 已实现（`app/llm/qdrant_vector_store.py`，2026-07-26） |
+| Phase 4 | 向量数据库 | Qdrant | Bug embedding 存储 + 语义检索 | ✅ 已实现（`app/rag/qdrant_vector_store.py`，2026-07-26） |
 | Phase 2+（可选） | 时序分析数据库 | ClickHouse | 高基数 trace 查询、性能指标聚合 | 🔲 待评估（trace > 1000 万/天时）|
 
 **当前差距**：

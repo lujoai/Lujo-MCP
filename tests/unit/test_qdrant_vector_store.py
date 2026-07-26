@@ -17,9 +17,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.config import settings
-from app.llm import qdrant_vector_store as qdrant_module
-from app.llm.qdrant_vector_store import QdrantVectorStore, _embed_texts, _get_qdrant_client
-from app.llm.vector_store import _reset_vector_store
+from app.rag import qdrant_vector_store as qdrant_module
+from app.rag.qdrant_vector_store import QdrantVectorStore, _embed_texts, _get_qdrant_client
+from app.rag.vector_store import _reset_vector_store
 
 
 # ── 测试辅助：构造 fake embedding 响应 ──────────────────────────────

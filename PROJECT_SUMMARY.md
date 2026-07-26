@@ -52,7 +52,7 @@
 | 规范存储 | [app/mcp/verifier/spec_store.py](./app/mcp/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
 | 异常钩子 | [app/mcp/hooks/exception_hook.py](./app/mcp/hooks/exception_hook.py) | sys.excepthook + asyncio |
 | LLM 分析 | [app/llm/analyzer.py](./app/llm/analyzer.py) | 重试/超时/fallback/流式 |
-| 指纹知识库 | [app/llm/knowledge_base.py](./app/llm/knowledge_base.py) | 按错误指纹复用历史分析结论 |
+| 指纹知识库 | [app/rag/knowledge_base.py](./app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论 |
 | 工具注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
 | AI Debug Agent | [app/agent/](./app/agent/) | 自动修复方案生成 + 多 Agent 协同框架（Phase 1） |
 | 浏览器 SDK | [browser-sdk/ai-debug.js](./browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |

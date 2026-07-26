@@ -45,7 +45,7 @@ class TestAssembleSuccess:
         with patch(
             "app.llm.analyzer.analyze_async", return_value=fake_analysis
         ), patch(
-            "app.llm.knowledge_base.retrieve_similar", return_value=fake_vector
+            "app.rag.knowledge_base.retrieve_similar", return_value=fake_vector
         ), patch(
             "app.mcp.core.git.get_recent_diff", return_value=fake_git_entry
         ):
@@ -72,7 +72,7 @@ class TestAnalysisDegradation:
         with patch(
             "app.llm.analyzer.analyze_async", side_effect=RuntimeError("LLM down")
         ), patch(
-            "app.llm.knowledge_base.retrieve_similar", return_value=[]
+            "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
             "app.mcp.core.git.get_recent_diff", return_value=None
         ):
@@ -95,7 +95,7 @@ class TestAnalysisDegradation:
         with patch(
             "app.llm.analyzer.analyze_async", side_effect=AssertionError("should not be called")
         ), patch(
-            "app.llm.knowledge_base.retrieve_similar", return_value=[]
+            "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
             "app.mcp.core.git.get_recent_diff", return_value=None
         ):
@@ -114,7 +114,7 @@ class TestVectorRecallDegradation:
         with patch(
             "app.llm.analyzer.analyze_async", return_value=None
         ), patch(
-            "app.llm.knowledge_base.retrieve_similar", side_effect=RuntimeError("qdrant down")
+            "app.rag.knowledge_base.retrieve_similar", side_effect=RuntimeError("qdrant down")
         ), patch(
             "app.mcp.core.git.get_recent_diff", return_value=None
         ):
@@ -134,7 +134,7 @@ class TestGitContextDegradation:
         with patch(
             "app.llm.analyzer.analyze_async", return_value=None
         ), patch(
-            "app.llm.knowledge_base.retrieve_similar", return_value=[]
+            "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
             "app.mcp.core.git.get_recent_diff", side_effect=RuntimeError("git timeout")
         ):
@@ -164,7 +164,7 @@ class TestGitContextDegradation:
         with patch(
             "app.llm.analyzer.analyze_async", return_value=None
         ), patch(
-            "app.llm.knowledge_base.retrieve_similar", return_value=[]
+            "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
             "app.mcp.core.git.get_recent_diff", side_effect=fake_get_recent_diff
         ):
@@ -184,7 +184,7 @@ class TestEmptyContext:
         with patch(
             "app.llm.analyzer.analyze_async", return_value=None
         ), patch(
-            "app.llm.knowledge_base.retrieve_similar", return_value=[]
+            "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
             "app.mcp.core.git.get_recent_diff", return_value=None
         ):

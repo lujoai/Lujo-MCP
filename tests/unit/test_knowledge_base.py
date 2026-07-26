@@ -1,5 +1,5 @@
 from app.config import settings
-from app.llm.knowledge_base import EVICTION_POLICY, KnowledgeBaseStore
+from app.rag.knowledge_base import EVICTION_POLICY, KnowledgeBaseStore
 
 
 # ---------------------------------------------------------------------------
@@ -92,15 +92,15 @@ def test_evicts_least_recently_used_entry_when_capacity_exceeded():
 
 def test_retrieve_similar_returns_results_when_vector_store_has_docs(monkeypatch):
     """vector_store 有 doc 时 retrieve_similar 返回 doc 列表"""
-    from app.llm.knowledge_base import retrieve_similar
-    from app.llm.vector_store import InProcessVectorStore
+    from app.rag.knowledge_base import retrieve_similar
+    from app.rag.vector_store import InProcessVectorStore
 
     store = InProcessVectorStore()
     store.add([{
         "fingerprint": "fp-1",
         "analysis": {"root_cause": "database timeout problem"},
     }])
-    monkeypatch.setattr("app.llm.knowledge_base.get_vector_store", lambda: store)
+    monkeypatch.setattr("app.rag.knowledge_base.get_vector_store", lambda: store)
 
     results = retrieve_similar("database timeout problem")
     assert len(results) >= 1
@@ -109,17 +109,17 @@ def test_retrieve_similar_returns_results_when_vector_store_has_docs(monkeypatch
 
 def test_retrieve_similar_returns_empty_when_vector_store_disabled(monkeypatch):
     """vector_store 关闭时（NullVectorStore）retrieve_similar 返回 []"""
-    from app.llm.knowledge_base import retrieve_similar
-    from app.llm.vector_store import NullVectorStore
+    from app.rag.knowledge_base import retrieve_similar
+    from app.rag.vector_store import NullVectorStore
 
-    monkeypatch.setattr("app.llm.knowledge_base.get_vector_store", lambda: NullVectorStore())
+    monkeypatch.setattr("app.rag.knowledge_base.get_vector_store", lambda: NullVectorStore())
     assert retrieve_similar("anything") == []
 
 
 def test_retrieve_similar_uses_default_top_k_when_none(monkeypatch):
     """top_k=None 时使用 settings.vector_store_top_k 作为默认值"""
-    from app.llm.knowledge_base import retrieve_similar
-    from app.llm.vector_store import InProcessVectorStore
+    from app.rag.knowledge_base import retrieve_similar
+    from app.rag.vector_store import InProcessVectorStore
 
     store = InProcessVectorStore()
     for i in range(5):
@@ -127,7 +127,7 @@ def test_retrieve_similar_uses_default_top_k_when_none(monkeypatch):
             "fingerprint": f"fp-{i}",
             "analysis": {"root_cause": "database timeout problem"},
         }])
-    monkeypatch.setattr("app.llm.knowledge_base.get_vector_store", lambda: store)
+    monkeypatch.setattr("app.rag.knowledge_base.get_vector_store", lambda: store)
     monkeypatch.setattr(settings, "vector_store_top_k", 2)
 
     results = retrieve_similar("database timeout problem")
@@ -136,8 +136,8 @@ def test_retrieve_similar_uses_default_top_k_when_none(monkeypatch):
 
 def test_retrieve_similar_respects_explicit_top_k(monkeypatch):
     """显式 top_k 参数优先于 settings.vector_store_top_k"""
-    from app.llm.knowledge_base import retrieve_similar
-    from app.llm.vector_store import InProcessVectorStore
+    from app.rag.knowledge_base import retrieve_similar
+    from app.rag.vector_store import InProcessVectorStore
 
     store = InProcessVectorStore()
     for i in range(5):
@@ -145,7 +145,7 @@ def test_retrieve_similar_respects_explicit_top_k(monkeypatch):
             "fingerprint": f"fp-{i}",
             "analysis": {"root_cause": "database timeout problem"},
         }])
-    monkeypatch.setattr("app.llm.knowledge_base.get_vector_store", lambda: store)
+    monkeypatch.setattr("app.rag.knowledge_base.get_vector_store", lambda: store)
     monkeypatch.setattr(settings, "vector_store_top_k", 10)
 
     results = retrieve_similar("database timeout problem", top_k=1)

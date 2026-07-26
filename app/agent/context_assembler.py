@@ -76,7 +76,7 @@ class RepairContextAssembler:
         vector_store 关闭时（NullVectorStore）返回 []，自动降级。
         """
         try:
-            from app.llm.knowledge_base import retrieve_similar
+            from app.rag.knowledge_base import retrieve_similar
 
             query = json.dumps(ctx, ensure_ascii=False, default=str)
             # retrieve_similar 是同步函数，用 to_thread 避免阻塞事件循环

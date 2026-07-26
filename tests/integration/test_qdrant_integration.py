@@ -18,9 +18,9 @@ from urllib.parse import urlparse
 import pytest
 
 from app.config import settings
-from app.llm import qdrant_vector_store as qdrant_module
-from app.llm.qdrant_vector_store import QdrantVectorStore
-from app.llm.vector_store import _reset_vector_store
+from app.rag import qdrant_vector_store as qdrant_module
+from app.rag.qdrant_vector_store import QdrantVectorStore
+from app.rag.vector_store import _reset_vector_store
 
 
 def _port_open(host: str, port: int) -> bool:

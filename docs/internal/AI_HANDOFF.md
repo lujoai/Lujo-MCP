@@ -25,6 +25,24 @@
 
 ### 最近完成事项
 
+- ✅ RAG 模块领域化整理（2026-07-26）：
+  - **迁移目标**：RAG（检索增强生成）从 `app/llm/` 独立为 `app/rag/` 领域模块，与 LLM 编排（analyzer）职责分离
+  - **移动文件**（3 个，内容不变，纯位置迁移）：
+    - `app/llm/vector_store.py` → `app/rag/vector_store.py`（`VectorStore` ABC + `InProcessVectorStore` + `NullVectorStore` + 工厂 + 注册表）
+    - `app/llm/qdrant_vector_store.py` → `app/rag/qdrant_vector_store.py`（`QdrantVectorStore` 语义召回后端）
+    - `app/llm/knowledge_base.py` → `app/rag/knowledge_base.py`（`KnowledgeBaseStore` + `retrieve_similar` 中介）
+  - **新增**：`app/rag/__init__.py`（包标识，含模块 docstring）
+  - **不移动**：`app/llm/analyzer.py`（LLM 分析流程编排，是 RAG 消费方，非 RAG 实现；`_get_knowledge_base_result` / `_try_vector_rag` / `_persist_analysis_to_knowledge_base` 三层 fallback 编排逻辑保留原位）
+  - **import 更新**（纯来源替换，零逻辑变更）：
+    - RAG 内部互引 3 处（`app.rag.vector_store` / `app.rag.qdrant_vector_store`，延迟导入与循环依赖处理保留）
+    - 消费方 2 文件：`app/llm/analyzer.py`（2 处）、`app/agent/context_assembler.py`（1 处函数内延迟导入）
+    - 测试 6 文件：`test_vector_store.py` / `test_qdrant_vector_store.py` / `test_knowledge_base.py` / `test_analyzer.py` / `test_context_assembler.py` / `test_qdrant_integration.py`
+    - `@patch("app.llm.analyzer.xxx")` mock 路径全部保持不变（patch 的是 analyzer 命名空间内已绑定符号，与 import 来源无关）
+  - **文档同步**：8 份 Markdown 同步更新路径引用（handoff / PROJECT_SUMMARY / PRD / DESIGN / CODE_REVIEW / DELIVERY_MATRIX / AI_HANDOFF / claude-audit-consolidated），仅替换 3 个 RAG 文件路径，`analyzer.py` / `analysis_queue.py` / `cache_prewarm.py` 引用全部保留
+  - **验证**：`pytest tests/unit/` 583 passed / 6 skipped / 0 failed / 0 error，与迁移前基线完全一致，零回归
+  - **未变更项**：MCP 协议、Storage 层、数据库结构、错误数据模型、外部接口、功能逻辑——本次仅做模块位置整理
+  - **历史原因**：RAG 最初作为 Phase 7 增量在 `app/llm/` 内实现（与 analyzer 同包便于集成）；随 Agent Phase 1 落地，RAG 消费方增至 2 个（analyzer + context_assembler），领域独立性收益显现，遂独立为 `app/rag/`
+
 - ✅ AI Debug Agent Phase 1 完成档（2026-07-26，AGENT-001）：
   - **Phase 1 定位**：单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）；Phase 2 多 Agent DAG（Git Agent + Test Agent + Security Agent）登记为 `AGENT-002` 待办
   - **新增模块** `app/agent/`（7 文件）：
@@ -47,8 +65,8 @@
   - **后续待办**：Phase 2 多 Agent DAG（`AGENT-002`）——新增 `GitAgent` / `TestAgent` / `SecurityAgent` 继承 `BaseAgent`，`Coordinator` 扩展为多 Agent DAG 并行编排
 
 - ✅ Qdrant 向量检索适配器完成（2026-07-26）：
-  - 新增 `app/llm/qdrant_vector_store.py`：`QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回）+ `uuid5(fingerprint)` 幂等 upsert + 静默降级（add=no-op / search=空）
-  - `app/llm/vector_store.py` 工厂改造：qdrant 分支从 `raise NotImplementedError` 改为函数内 `import QdrantVectorStore` 实例化（破循环 + 可选依赖隔离）
+  - 新增 `app/rag/qdrant_vector_store.py`：`QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回）+ `uuid5(fingerprint)` 幂等 upsert + 静默降级（add=no-op / search=空）
+  - `app/rag/vector_store.py` 工厂改造：qdrant 分支从 `raise NotImplementedError` 改为函数内 `import QdrantVectorStore` 实例化（破循环 + 可选依赖隔离）
   - 配置项：`qdrant_embedding_model`、`qdrant_embedding_dim`、`qdrant_connect_timeout`、`qdrant_request_timeout`
   - 测试：`tests/unit/test_qdrant_vector_store.py`（23 用例）+ `tests/integration/test_qdrant_integration.py`（4 集成测试，skip-if-unavailable）
   - 验证：单元测试 520 passed / 6 skipped / 0 failed；Ruff 0 违反
@@ -68,7 +86,7 @@
     - 测试：`tests/unit/test_analysis_queue.py`
     - 隔离：零侵入 analyzer.py（消费协程延迟导入）
   - **Track B — 向量检索 RAG（Phase 7）**：
-    - 新增 `app/llm/vector_store.py`：`VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂 `get_vector_store()` + 注册表 `register_vector_backend()`
+    - 新增 `app/rag/vector_store.py`：`VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂 `get_vector_store()` + 注册表 `register_vector_backend()`
     - Qdrant 后端插槽本轮留空（配置 `backend=qdrant` 显式 `raise NotImplementedError`）→ **已于 2026-07-26 实现**，见 §一 最近完成事项
     - `app/llm/analyzer.py` KB hook 区集成：精确指纹 miss 后做向量召回 fallback，返回结果新增 `knowledge_base_hit`/`analysis_source` 字段
     - 配置项：`vector_store_enabled=False`、`vector_store_backend="in_process"`、`vector_store_top_k=3`、`vector_store_min_score=0.3`、`qdrant_url`、`qdrant_collection`、`qdrant_api_key`
@@ -80,14 +98,14 @@
     - 配置项：`api_keys`、`api_key_rotation_enabled`、`rbac_enabled`、`rbac_role_mapping`
     - 测试：`tests/unit/test_key_rotation.py`、`tests/unit/test_rbac.py`
     - 零签名变更：`setup_middleware(app)` 签名未变，`ingest.py` 完全无鉴权改动
-  - **三轨物理隔离**：A 在 `app/llm/analysis_queue.py`、B 在 `app/llm/vector_store.py`、C 在 `app/auth/`
+  - **三轨物理隔离**：A 在 `app/llm/analysis_queue.py`、B 在 `app/rag/vector_store.py`、C 在 `app/auth/`
   - **验证结果**：单元测试 **485 passed, 6 skipped, 0 failed**（相比基线 381 增加 104 项新测试）；Ruff 三轨文件 0 违反（3 处预存违反位于 `ui_runner.py` / `test_sdk_v5_enhancements.py` / `test_otel_collector_integration.py`，不在三轨范围）
   - **后续待办**：P3-7 L3 缓存预热（已完成 2026-07-26）；Browser SDK 压缩 e2e 联调（降级为 CI 任务，代码已完成，仅验证）；Qdrant 适配器（已完成 2026-07-26）；下一步为 AI Debug Agent（Qdrant 语义召回已就绪）
 
 - ✅ Browser SDK V3 / V6 + 指纹知识库基础能力（2026-07-25）：
   - `browser-sdk/ai-debug.js` 已补网络错误自动标记静默失败、`reportNetworkError()`、`onSilentFailureReport()`、UI 静默失败自动检测观察器，以及 `autoDetectNetworkErrors` / `autoDetectUISilentFailures` / `uiSilentFailureTimeoutMs` / `uiSilentFailureObserveSelector` 配置项
   - `examples/network_capture_demo.html` 已补 V3 网络错误自动上报演示；`app/web/silent_failure_demo.html` 已补 V6 UI 静默失败自动检测演示
-  - `app/llm/knowledge_base.py` 新增进程内最小知识库实现；`app/llm/analyzer.py` 已接入知识库优先命中、`knowledge_base_hit` / `analysis_source` 标记，以及 LLM 成功后的自动沉淀
+  - `app/rag/knowledge_base.py` 新增进程内最小知识库实现；`app/llm/analyzer.py` 已接入知识库优先命中、`knowledge_base_hit` / `analysis_source` 标记，以及 LLM 成功后的自动沉淀
   - 新增 `tests/unit/test_knowledge_base.py`，并补齐 `tests/unit/test_analyzer.py` 中的知识库命中 / 未命中 / 自动沉淀 / 失败降级覆盖
   - T6 相关验证结果：`tests/unit/test_knowledge_base.py` 与 `tests/unit/test_analyzer.py` 合并验证 **41 passed**
   - 文档已同步更新：`README.md`、`PROJECT_SUMMARY.md`、`DEMO_GUIDE.md`、`AI_HANDOFF.md`、`DEV_PLAN.md`、`ROADMAP.md`、`TODO.md`、`DELIVERY_MATRIX.md`、`RELEASE_NOTES.md`

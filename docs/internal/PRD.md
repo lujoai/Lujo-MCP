@@ -84,7 +84,7 @@
 | **智能错误分析引擎（Phase 7）** | `errors.py` 指纹聚合 + 根因排序 + dashboard API | 运维效率 ✅ |
 | **指纹知识库基础能力** | `knowledge_base.py` + `analyzer.py` | 历史结论复用 ✅ |
 | **异步分析队列（P3-6）** | `app/llm/analysis_queue.py` + `app/main.py` lifespan 钩子 | 限流削峰 ✅ |
-| **向量检索 RAG（Phase 7 增量）** | `app/llm/vector_store.py`（`VectorStore` ABC + `InProcess`/`Null`）+ `app/llm/qdrant_vector_store.py`（`QdrantVectorStore` OpenAI/智谱 Embeddings 语义召回） | 召回增强 ✅ |
+| **向量检索 RAG（Phase 7 增量）** | `app/rag/vector_store.py`（`VectorStore` ABC + `InProcess`/`Null`）+ `app/rag/qdrant_vector_store.py`（`QdrantVectorStore` OpenAI/智谱 Embeddings 语义召回） | 召回增强 ✅ |
 | **RBAC + API Key 轮换（AUDIT-2-13/14）** | `app/auth/key_rotation.py` + `app/auth/rbac.py` | 鉴权增强 ✅ |
 | **AI Debug Agent（Phase 1）** | `app/agent/`（`BaseAgent` ABC + `RepairAgent` + `Coordinator` + `RepairQueue` + `RepairContextAssembler` + `schemas`）+ 2 REST 端点 + 2 MCP 工具 | 自动修复 ✅ |
 
@@ -256,7 +256,7 @@
   - `GET /api/debug/analyze/result/{job_id}`：轮询查询结果。
 - **验收**：并发 N>K 请求时仅 K 个并行执行，其余排队不丢失；停机信号触发后 `drain_timeout` 内未完成任务优雅终止。
 
-#### FR17 向量检索 RAG（Phase 7 增量）（P1）✅ 已实现 —— `app/llm/vector_store.py`
+#### FR17 向量检索 RAG（Phase 7 增量）（P1）✅ 已实现 —— `app/rag/vector_store.py`
 
 - **目标**：在指纹精确命中失效时，通过向量召回补充相似历史结论，提升根因命中率。
 - **抽象层**：`VectorStore` ABC 定义纯检索语义 `add(docs)` / `search(query, top_k) -> [(doc, score)]`，禁止 Qdrant collection/point 概念 leak 到上层。

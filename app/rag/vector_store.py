@@ -162,7 +162,7 @@ def _build_vector_store() -> VectorStore:
     if backend == "qdrant":
         # 函数内导入：破循环（qdrant_vector_store 会 import 本模块的 VectorStore/_serialize_doc）
         # + 可选依赖隔离（未装 qdrant-client 时仅在显式配置 backend=qdrant 才触发降级）
-        from app.llm.qdrant_vector_store import QdrantVectorStore
+        from app.rag.qdrant_vector_store import QdrantVectorStore
         return QdrantVectorStore()
     cls = _REGISTRY.get(backend)
     if cls is None:

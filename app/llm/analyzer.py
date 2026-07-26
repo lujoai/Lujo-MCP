@@ -14,8 +14,8 @@ from typing import Optional, Generator, AsyncGenerator
 from openai import OpenAI, AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 
 from app.config import settings
-from app.llm.knowledge_base import get_knowledge_entry, retrieve_similar, upsert_knowledge_entry
-from app.llm.vector_store import get_vector_store
+from app.rag.knowledge_base import get_knowledge_entry, retrieve_similar, upsert_knowledge_entry
+from app.rag.vector_store import get_vector_store
 from app.mcp.core.redaction import redact
 
 logger = logging.getLogger("ai-debug-mcp.llm")

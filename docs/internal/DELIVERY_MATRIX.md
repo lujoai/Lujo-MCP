@@ -41,8 +41,8 @@
 | `verify` 自动校验 | 已完成 | `app/mcp/tools/verify_api.py` `app/api/debug.py` | 支持规范驱动结果校验 |
 | `verify_ui` UI 校验 | 需依赖环境 | `app/mcp/verifier/ui_runner.py` `app/mcp/tools/verify_ui_api.py` | 代码完整；依赖 Playwright/Chromium 与目标页面环境 |
 | `auto_test` 页面自动遍历 | 需依赖环境 | `app/mcp/tools/auto_test_api.py` | 依赖 Playwright/Chromium 与目标页面环境 |
-| 指纹知识库命中与自动沉淀 | 已完成 | `app/llm/knowledge_base.py` `app/llm/analyzer.py` | 进程内最小知识库已落地；命中时返回 `knowledge_base_hit`/`analysis_source`，LLM 成功后自动沉淀 |
-| 向量检索 RAG（in-process + Qdrant） | 已完成 | `app/llm/vector_store.py` `app/llm/qdrant_vector_store.py` `app/llm/analyzer.py` | `VectorStore` ABC + `InProcessVectorStore`（Jaccard 相似度）+ `QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回）；精确指纹 miss 后做向量召回 fallback；Qdrant 不可用时静默降级 |
+| 指纹知识库命中与自动沉淀 | 已完成 | `app/rag/knowledge_base.py` `app/llm/analyzer.py` | 进程内最小知识库已落地；命中时返回 `knowledge_base_hit`/`analysis_source`，LLM 成功后自动沉淀 |
+| 向量检索 RAG（in-process + Qdrant） | 已完成 | `app/rag/vector_store.py` `app/rag/qdrant_vector_store.py` `app/llm/analyzer.py` | `VectorStore` ABC + `InProcessVectorStore`（Jaccard 相似度）+ `QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回）；精确指纹 miss 后做向量召回 fallback；Qdrant 不可用时静默降级 |
 | AI Debug Agent Phase 1（自动修复） | 需依赖环境 | `app/agent/`（7 文件）`app/api/debug.py` `app/mcp/tools/repair_api.py` | `BaseAgent` ABC + `RepairAgent` + `Coordinator` 编排器 + `RepairQueue` 削峰队列 + `RepairContextAssembler`（并发聚合 analyze + retrieve_similar + get_recent_diff，各失败静默降级）；2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）+ 2 MCP 工具（`repair_async` + `repair_result`）；9 个 `agent_*` 配置项（`agent_enabled` 默认 False）；Phase 1 单 Agent + 多 Agent 协同框架预留，Phase 2 多 Agent DAG 为后续待办；启用依赖外部 LLM 服务 |
 
 ## 三、浏览器 SDK 与采集链路

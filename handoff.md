@@ -50,13 +50,13 @@ AI Debug Agent Phase 1 落地后（测试基线 520→583、MCP 工具 15→17�
 | 5 | 行号+内容 | `middleware.py:22` `PUBLIC_PATHS=("/", "/health")` | `app/middleware.py:20`，5 项：`("/", "/health", "/demo", "/demo/silent-failure", "/ai-debug.js")` | claude-audit-consolidated.md L62 |
 | 6 | 证据补充 | SEC-04 `ingest.py 传入 session_id`（无路径无行号） | `app/api/ingest.py` L62/L80/L134/L171 | claude-audit-consolidated.md L56 |
 | 7 | 证据补充 | SEC-06 `exception_hook.py:29-34 调用 redact()` | 文件在 `app/mcp/hooks/`；L29-35 仅定义 `_redact_exception_data` 辅助函数（文件内未被调用）；实际 redact() 调用在 L49-50/L63-64 | claude-audit-consolidated.md L58 |
-| 8 | 证据补充 | Phase 7 `Qdrant 语义召回 + uuid5 幂等 upsert`（无行号） | `app/llm/qdrant_vector_store.py:254-257`（uuid5 确定性 point id）+ `L271-275`（upsert wait=True） | claude-audit-consolidated.md L181 |
+| 8 | 证据补充 | Phase 7 `Qdrant 语义召回 + uuid5 幂等 upsert`（无行号） | `app/rag/qdrant_vector_store.py:254-257`（uuid5 确定性 point id）+ `L271-275`（upsert wait=True） | claude-audit-consolidated.md L181 |
 | 9 | 行号+内容（扩展发现） | `PUBLIC_PATHS=(/,/health,/metrics)`（误称 /metrics 免鉴权，与 SEC-08 矛盾） | 同 #5 实际内容；`/metrics` 需鉴权 | DESIGN.md L183、CODE_REVIEW.md L783 |
 | 10 | 行号偏差（扩展发现） | `middleware.py:22-23` PUBLIC_PATHS | `middleware.py:20` | DESIGN.md L742 |
 
 ### 核实方法
 
-逐项读取源文件确认：`browser-sdk/package.json`、`app/state/store.py`、`app/config.py`、`app/middleware.py`、`app/api/ingest.py`、`app/mcp/hooks/exception_hook.py`、`app/llm/qdrant_vector_store.py`，记录精确行号与函数名，严禁杜撰。
+逐项读取源文件确认：`browser-sdk/package.json`、`app/state/store.py`、`app/config.py`、`app/middleware.py`、`app/api/ingest.py`、`app/mcp/hooks/exception_hook.py`、`app/rag/qdrant_vector_store.py`，记录精确行号与函数名，严禁杜撰。
 
 ### 保留项（不修改）
 
@@ -161,12 +161,12 @@ Qdrant 向量检索适配器与 P3-7 L3 缓存预热已落地，但全量扫描�
 
 ### 落地清单
 
-- 新增 [qdrant_vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/qdrant_vector_store.py)：
+- 新增 [qdrant_vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/qdrant_vector_store.py)：
   - `QdrantVectorStore(VectorStore)`：`add` 用 `uuid5(fingerprint)` 做确定性 point id 幂等 upsert；`search` 用 Qdrant 原生 `score_threshold` 过滤
   - `_get_qdrant_client()`：惰性初始化 + 双重检查锁 + collection 自动创建 + 维度校验（参照 `analyzer._get_redis_cache` 模式）
   - `_get_embedding_client()`：独立 OpenAI 客户端，模块内复制 `_PROVIDER_BASE_URLS` 避免循环 import
   - `_embed_texts()`：按 2048/批分块调用 embeddings API + 维度校验
-- [vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/vector_store.py) 工厂改造：qdrant 分支从 `raise NotImplementedError` 改为函数内 `import QdrantVectorStore` 实例化（破循环 + 可选依赖隔离）
+- [vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/vector_store.py) 工厂改造：qdrant 分支从 `raise NotImplementedError` 改为函数内 `import QdrantVectorStore` 实例化（破循环 + 可选依赖隔离）
 - [config.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/config.py) 新增：`qdrant_embedding_model`、`qdrant_embedding_dim`、`qdrant_connect_timeout`、`qdrant_request_timeout`
 - [requirements.txt](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/requirements.txt) 追加 `qdrant-client>=1.9.0`
 - 测试：[test_qdrant_vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/tests/unit/test_qdrant_vector_store.py)（23 用例）+ [test_qdrant_integration.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/tests/integration/test_qdrant_integration.py)（4 集成测试，skip-if-unavailable）+ 改造 `test_vector_store.py::test_qdrant_backend_returns_qdrant_store`
@@ -231,7 +231,7 @@ def test_prewarm_does_not_touch_l2_ttl():
 
 ### Track B — 向量检索 RAG（Phase 7）
 
-- 新增 [vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/vector_store.py)：
+- 新增 [vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/vector_store.py)：
   - `VectorStore` ABC，纯检索语义 `add(docs)` / `search(query, top_k) -> [(doc, score)]`
   - `InProcessVectorStore`（Jaccard 相似度，零依赖）
   - `NullVectorStore`（feature 关闭时 no-op）
@@ -270,7 +270,7 @@ def test_prewarm_does_not_touch_l2_ttl():
 - **feature flag 隔离**：`agent_enabled=False` 默认关闭，零行为变更；端点返回 501，MCP 工具返回 error
 - **三轨物理隔离**（更早一轮）：
   - Track A 在 `app/llm/analysis_queue.py`
-  - Track B 在 `app/llm/vector_store.py`
+  - Track B 在 `app/rag/vector_store.py`
   - Track C 在 `app/auth/`
 
 ---

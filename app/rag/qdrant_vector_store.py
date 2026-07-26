@@ -19,7 +19,7 @@ import uuid
 from typing import Any, Optional
 
 from app.config import settings
-from app.llm.vector_store import VectorStore, _serialize_doc
+from app.rag.vector_store import VectorStore, _serialize_doc
 
 logger = logging.getLogger("ai-debug-mcp.qdrant-vector-store")
 

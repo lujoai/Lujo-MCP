@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import settings
-from app.llm.vector_store import get_vector_store
+from app.rag.vector_store import get_vector_store
 
 logger = logging.getLogger("ai-debug-mcp.knowledge-base")
 

@@ -1199,7 +1199,7 @@ WHERE timestamp < $1 AND id NOT IN (SELECT id FROM traces_archive)
 > 三轨所落地的能力均默认关闭（feature flag），向后兼容，不破坏现有签名。
 > 关键代码入口：
 > - Track A：[analysis_queue.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analysis_queue.py)、[debug.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/debug.py)、[main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py)
-> - Track B：[vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/vector_store.py)、[analyzer.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py)
+> - Track B：[vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/vector_store.py)、[analyzer.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py)
 > - Track C：[key_rotation.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/auth/key_rotation.py)、[rbac.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/auth/rbac.py)、[middleware.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/middleware.py)
 
 ### 16.1 三轨并行合并纪律
@@ -1207,7 +1207,7 @@ WHERE timestamp < $1 AND id NOT IN (SELECT id FROM traces_archive)
 | 纪律 | 具体落点 |
 | --- | --- |
 | **analyzer.py 区域不互踩** | Track A 改 LLM 调用区（实际零侵入 analyzer，仅在外层包队列）、Track B 改知识库挂钩区（仅 KB hook 区域）、Track C 完全不碰 analyzer |
-| **文件物理隔离** | A 在 `app/llm/analysis_queue.py`、B 在 `app/llm/vector_store.py`、C 在 `app/auth/` |
+| **文件物理隔离** | A 在 `app/llm/analysis_queue.py`、B 在 `app/rag/vector_store.py`、C 在 `app/auth/` |
 | **共享改动点集中提交** | 仅 [config.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/config.py) 与 [main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py) 的 lifespan 钩子是共享改动点，本轮集中提交避免冲突 |
 | **零签名变更** | Track C 的 `AuthMiddleware` 公共签名未变（仅 `__init__`/`dispatch` 体内调 key_rotation/rbac），`setup_middleware(app)` 签名未变，[ingest.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/ingest.py) 完全无鉴权改动 |
 | **默认关闭、向后兼容** | 三轨所有新能力均通过 feature flag 控制，默认关闭；`api_keys` 逗号分隔优先，空时回退单 `api_key`；`rbac_enabled=False` 时全 admin |
@@ -1590,7 +1590,7 @@ app/agent/
 | 子采集器 | 数据源 | 失败降级 |
 | --- | --- | --- |
 | `analyze_async(context)` | `app/llm/analyzer.py` LLM 根因分析 | 失败 → `root_cause=None`，trace 记录降级 |
-| `retrieve_similar(fingerprint)` | `app/llm/vector_store.py` 向量召回 | 失败 → `similar_cases=[]`，trace 记录降级 |
+| `retrieve_similar(fingerprint)` | `app/rag/vector_store.py` 向量召回 | 失败 → `similar_cases=[]`，trace 记录降级 |
 | `get_recent_diff()` | `app/mcp/core/git.py` 最近 Git diff | 失败 → `recent_diff=None`，trace 记录降级 |
 
 并发执行使用 `asyncio.gather(*tasks, return_exceptions=True)`，任一异常被捕获并转为降级标记，不阻断主链路。
