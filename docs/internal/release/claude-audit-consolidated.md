@@ -235,7 +235,7 @@
 |--------|------|------|------|------|
 | P0 阻断 | 6 | ⚠️ 2已修/3误报/1待议 | ❌ | 2 确认修复 + 3 误报（JWT不存在/CORS已安全/无文件写入）+ 1 待议（SSE URL key 浏览器限制） |
 | P1 必修 | 9 | ✅ 1已修/7误报/1已修 | ⚠️ | P1-02~04/06/07/09 误报；P1-01 已修复；P1-05 误报；P1-08 已随 P0-01 修复 |
-| P2 建议 | 13 | ✅ 2已修/7待议/4误报 | ⚠️ | P2-01/05/06/07 设计问题待议；P2-02/10 误报；P2-08/09 已修复；P2-03/04/11/12/13 低优先 |
+| P2 建议 | 13 | ✅ 7已修/4待议/2误报（2026-07-31 新增 P2-04/05/07/12/13） | ⚠️ | P2-01/03 设计问题待议；P2-02/10 误报；P2-04/05/06/07/08/09/12/13 已修复；P2-11 待修 |
 | 文档脱节 | 5 | ✅ | ⚠️ | PRD 路径过期·保留期不匹配·Phase 2 架构缺失·README 中英不一致 |
 
 ---
@@ -350,12 +350,12 @@
 #### BETA-P2-04：fallback 递归 messages[:3] 截断无效
 - **文件**：`app/agent/test_agent.py:261`
 - **问题**：当前 messages 仅 2 条，[:3] 不截断。未来 prompt 扩展后静默丢弃上下文。
-- **状态**：⚠️ 低风险——当前 2 条消息，[:3] 不截断；未来 prompt 扩展时需审查
+- **状态**：✅ 已修复（2026-07-31）—— 重构后 BaseAgent._call_llm 不截断 messages，fallback 传递完整上下文
 
 #### BETA-P2-05：ctx.repair_context 原地 mutation
 - **文件**：`app/agent/coordinator.py:158`
 - **问题**：同一 ctx 传给并行 Agent，当前仅读安全，但未来扩展易引入竞态。
-- **状态**：⚠️ 设计债——当前并行 Agent 仅读 repair_context，无写操作；未来扩展时需改为不可变传递
+- **状态**：✅ 已修复（2026-07-31）—— 重构后通过 BaseAgent._call_llm 参数化传递，ctx 仅读
 
 #### BETA-P2-06：DAG 注释与实现不一致
 - **文件**：`app/agent/dag.py:11`
@@ -365,7 +365,7 @@
 #### BETA-P2-07：PHASE2_AGENTS 模块级单例从未被使用
 - **文件**：`app/agent/dag.py:37`
 - **问题**：`build_phase2_agents()` 才是实际路径，模块级单例空闲浪费且误导开发者。
-- **状态**：⚠️ 低优先——`PHASE2_AGENTS` 仅用于 `get_phase2_agent_names()` 取 keys，`build_phase2_agents()` 创建隔离实例；单例存在但不影响正确性
+- **状态**：✅ 已修复（2026-07-31）—— PHASE2_AGENTS 单例已移除，get_phase2_agent_names() 改用拓扑常量
 
 #### BETA-P2-08：MCP dispatch 异常返回 400 而非 500
 - **文件**：`app/mcp/routes.py:127`
@@ -391,12 +391,12 @@
 #### BETA-P2-12：TOOL_ROLE_REQUIREMENTS 无程序化覆盖校验
 - **文件**：`app/mcp/tools/__init__.py:47`
 - **问题**：当前 17 个工具已全部列出，但无测试或断言校验覆盖完整性。新增工具若遗漏则静默绕过 RBAC。
-- **状态**：⬜ 待修
+- **状态**：✅ 已修复（2026-07-31）—— 新增 TestToolRoleRequirementsCoverage 测试校验覆盖完整性
 
 #### BETA-P2-13：rbac_enabled=False 分支无测试
 - **文件**：`app/auth/rbac.py:71`
 - **问题**：新增的向后兼容守卫（`role is None + rbac_enabled=False → return "admin"`）无测试覆盖。未来重构反转条件时无回归保护。
-- **状态**：⬜ 待修
+- **状态**：✅ 已修复（2026-07-31）—— 新增 test_missing_role_rbac_disabled_returns_admin + test_missing_role_rbac_enabled_defaults_viewer
 
 ---
 
