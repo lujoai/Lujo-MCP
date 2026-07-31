@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 
@@ -17,13 +17,14 @@ from app.llm.analyzer import analyze, analyze_stream_async
 from app.llm.analysis_queue import get_analysis_queue, QueueFullError
 from app.agent.repair_queue import get_repair_queue, QueueFullError as RepairQueueFullError
 from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse
+from app.auth.rbac import require_role
 
 logger = logging.getLogger("ai-debug-mcp.api")
 
 router = APIRouter(prefix="/api/debug", tags=["debug"])
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(require_role("admin", "developer"))])
 def debug_run(req: DebugRequest) -> DebugResponse:
     """执行调试流程：记录请求 → 处理 → 构建上下文"""
     request_id = create_request_id()
@@ -77,7 +78,7 @@ def debug_run(req: DebugRequest) -> DebugResponse:
     )
 
 
-@router.post("/analyze")
+@router.post("/analyze", dependencies=[Depends(require_role("admin", "developer"))])
 def debug_analyze(req: AnalyzeRequest):
     """对指定请求进行 LLM 分析"""
     try:
@@ -122,7 +123,7 @@ def debug_analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/analyze/stream")
+@router.post("/analyze/stream", dependencies=[Depends(require_role("admin", "developer"))])
 async def debug_analyze_stream(req: AnalyzeRequest):
     """流式 LLM 分析（SSE）"""
     try:
@@ -155,7 +156,7 @@ async def debug_analyze_stream(req: AnalyzeRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.post("/analyze/async")
+@router.post("/analyze/async", dependencies=[Depends(require_role("admin", "developer"))])
 async def debug_analyze_async(req: AnalyzeRequest):
     """异步 LLM 分析（P3-6 削峰队列）。
 
@@ -206,7 +207,7 @@ async def debug_analyze_async(req: AnalyzeRequest):
     return {"job_id": job_id, "status": "queued"}
 
 
-@router.get("/analyze/result/{job_id}")
+@router.get("/analyze/result/{job_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def debug_analyze_result(job_id: str):
     """查询异步分析任务状态/结果。"""
     if not settings.llm_async_analysis_enabled:
@@ -218,7 +219,7 @@ def debug_analyze_result(job_id: str):
     return job
 
 
-@router.post("/repair/async")
+@router.post("/repair/async", dependencies=[Depends(require_role("admin", "developer"))])
 async def debug_repair_async(req: AnalyzeRequest):
     """异步生成可执行修复方案（AI Debug Agent Phase 1）。
 
@@ -270,7 +271,7 @@ async def debug_repair_async(req: AnalyzeRequest):
     return {"job_id": job_id, "status": "queued"}
 
 
-@router.get("/repair/result/{job_id}")
+@router.get("/repair/result/{job_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def debug_repair_result(job_id: str):
     """查询异步修复任务状态/结果。结构对称 /analyze/result/{job_id}。"""
     if not settings.agent_enabled:
@@ -282,7 +283,7 @@ def debug_repair_result(job_id: str):
     return job
 
 
-@router.get("/runtime")
+@router.get("/runtime", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_runtime():
     """获取当前运行时快照"""
     try:
@@ -292,7 +293,7 @@ def get_runtime():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/session")
+@router.get("/session", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def list_sessions():
     """列出活跃的调试会话"""
     try:
@@ -316,7 +317,7 @@ def list_sessions():
     }
 
 
-@router.post("/verify")
+@router.post("/verify", dependencies=[Depends(require_role("admin", "developer"))])
 def debug_verify(body: dict):
     """比对实际结果 vs 期望规范，自动检测静默失败。
 
@@ -335,7 +336,7 @@ def debug_verify(body: dict):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/verify/ui")
+@router.post("/verify/ui", dependencies=[Depends(require_role("admin", "developer"))])
 def debug_verify_ui(body: dict):
     """按 UI 规范启动 Playwright 自动遍历页面并验证交互结果（FR14）。
 
@@ -353,13 +354,13 @@ def debug_verify_ui(body: dict):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/health")
+@router.get("/health", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def debug_health():
     """健康检查接口，供 XHR 测试使用"""
     return {"status": "ok", "timestamp": time.time()}
 
 
-@router.post("/echo")
+@router.post("/echo", dependencies=[Depends(require_role("admin"))])
 def debug_echo(body: dict):
     """回显接口，返回请求体"""
     if not settings.debug_endpoints_enabled:
@@ -367,7 +368,7 @@ def debug_echo(body: dict):
     return {"status": "ok", "received": body}
 
 
-@router.get("/token")
+@router.get("/token", dependencies=[Depends(require_role("admin"))])
 def debug_token():
     """返回带 token 的响应，用于测试响应脱敏"""
     if not settings.debug_endpoints_enabled:

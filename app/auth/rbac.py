@@ -60,11 +60,20 @@ def require_role(*allowed_roles: str):
 
         @app.post("/api/debug/analyze", dependencies=[Depends(require_role("admin", "developer"))])
         async def analyze(): ...
+
+    向后兼容：当鉴权未启用（无 API Key 配置）时，自动放行并视为 admin，
+    保持与历史单 key 行为一致。
     """
     allowed = set(allowed_roles)
 
     async def dependency(request: Request) -> str:
         role = getattr(request.state, "role", None)
+        if role is None:
+            # 鉴权未启用（无 API Key 配置或 PUBLIC_PATHS），向后兼容放行
+            if not settings.rbac_enabled:
+                return "admin"
+            # rbac_enabled=True 但无 key → fail-closed 为 viewer
+            role = "viewer"
         if role not in allowed:
             raise HTTPException(status_code=403, detail="Forbidden: insufficient role")
         return role

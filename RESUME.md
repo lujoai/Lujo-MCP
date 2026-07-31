@@ -23,10 +23,12 @@
 - Docker Compose 一键启动（PostgreSQL + Redis + App），scripts/ + migrations/ 标准化
 - **安全加固**：fail-closed 鉴权、入库前脱敏（locals/message/frames/network/UI/console）、存储工厂 fail-fast、内部错误串全仓收口（17 类已收口）
 - **安全自审 + P0 落地（数据流驱动）**：对自研服务做端到端「数据流通 + 权限控制 + 框架合理性」三维审查，识别并分级 **15 项风险**（含任意文件读取 LFI、Playwright SSRF、鉴权默认关闭、共享 HTTP 会话数据隔离缺失），逐项附 `文件:行` 证据链；并**落地修复 P0 四项**（LFI 路径白名单默认收敛项目根、Playwright SSRF URL 校验、鉴权启动防护移入 lifespan、工具调用 `asyncio.wait_for` 超时），145 项相关单测 + 17 项安全断言通过。结论：核心架构合理、无需重写，定向加固约 2 人周
+- **AI Debug Agent — 多 Agent DAG 协同修复**：`BaseAgent` ABC 抽象 + `RepairAgent`（LLM 根因分析 + 修复方案生成）+ `GitAgent`（纯 git 归因，不调 LLM）+ `TestAgent`（验证策略生成）+ `SecurityAgent`（10 类安全审查归一化）；DAG 拓扑 `RepairAgent`（先行）→ Git/Test/Security（并行审查）；并行节点失败静默降级 + `dag_degraded` 可观测信号；`agent_multi_agent_enabled` 默认 False 走 Phase 1 单 Agent 串行（向后兼容）；`RepairContextAssembler` 并发聚合 LLM 分析 + 向量召回 + Git diff，各失败静默降级
+- **Dashboard 实时 SSE 推送**：`DashboardEventBus` 进程内广播总线（跨线程 `call_soon_threadsafe` 投递，队列满丢旧保最新）+ `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 终止）+ `invalidate_cache` 广播钩子（静默降级）+ 前端 EventSource（去抖 refresh + 轮询兜底 + 断线重连）；`dashboard_sse_enabled` 默认 False 零开销向后兼容
 
 **技术成果**：
 
-- 测试覆盖全部模块，项目长期保持单元/集成双层验证；当前 **583 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项），规范驱动闭环完整可用（定义 → 验证 → Dashboard 可视化）
+- 测试覆盖全部模块，项目长期保持单元/集成双层验证；当前 **654 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 + Phase 2 多 Agent DAG 新增 116 项 + Dashboard SSE 18 项），规范驱动闭环完整可用（定义 → 验证 → Dashboard 可视化）
 - 断言引擎 <1ms 判定静默失败，前端自动遍历 <30s/页
 - 生产部署仅需改 3 行配置（`STORAGE_BACKEND` / `API_KEY` / `LLM_PROVIDER`），业务代码零改动
 - 实战定位并修复 Starlette 1.3 中间件 body 重放失效导致的 422 生产级 bug
@@ -41,4 +43,4 @@
 | 存储 | 工厂模式 memory↔PG | 开发用内存秒启，生产切 PG 一行配置 |
 | 安全 | fail-closed（默认拒绝） | 线上安全第一，不存侥幸 |
 
-**后续路线图**：v0.3.0 Release Audit 收口 ✅ → Browser SDK V3-V6 ✅ → 指纹知识库 ✅ → 向量检索版 RAG（in-process + Qdrant 语义召回）✅ → AI Debug Agent Phase 1（单 Agent + 多 Agent 协同框架预留）✅ → Phase 2 多 Agent DAG（待启动）
+**后续路线图**：v0.3.0 Release Audit 收口 ✅ → Browser SDK V3-V6 ✅ → 指纹知识库 ✅ → 向量检索版 RAG（in-process + Qdrant 语义召回）✅ → AI Debug Agent Phase 1（单 Agent + 多 Agent 协同框架预留）✅ → Phase 2 多 Agent DAG（GitAgent + TestAgent + SecurityAgent 编排）✅ → Dashboard 实时 SSE 推送（`DASH-SSE-001`）✅ → Browser SDK 压缩 e2e 联调 / Docker 容器化复现（待启动）

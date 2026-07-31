@@ -2,7 +2,8 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from app.auth.rbac import require_role
 from app.mcp.verifier import spec_store
 from app.schemas import Spec, SpecListResponse
 
@@ -11,7 +12,7 @@ logger = logging.getLogger("ai-debug-mcp.spec_api")
 router = APIRouter(prefix="/api", tags=["spec"])
 
 
-@router.post("/spec")
+@router.post("/spec", dependencies=[Depends(require_role("admin", "developer"))])
 def create_spec(spec: Spec):
     """创建一条期望规范"""
     try:
@@ -23,7 +24,7 @@ def create_spec(spec: Spec):
         raise HTTPException(status_code=500, detail="创建规范失败")
 
 
-@router.get("/spec")
+@router.get("/spec", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def list_specs(kind: str | None = None, target: str | None = None):
     """列出规范，可选按 kind / target 过滤"""
     try:
@@ -34,7 +35,7 @@ def list_specs(kind: str | None = None, target: str | None = None):
         raise HTTPException(status_code=500, detail="列出规范失败")
 
 
-@router.get("/spec/{spec_id}")
+@router.get("/spec/{spec_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_spec(spec_id: str):
     """取一条规范"""
     spec = spec_store.get(spec_id)
@@ -43,7 +44,7 @@ def get_spec(spec_id: str):
     return spec
 
 
-@router.patch("/spec/{spec_id}")
+@router.patch("/spec/{spec_id}", dependencies=[Depends(require_role("admin", "developer"))])
 def update_spec(spec_id: str, patch: dict):
     """部分更新规范（id 不可修改）"""
     patch.pop("id", None)
@@ -53,7 +54,7 @@ def update_spec(spec_id: str, patch: dict):
     return updated
 
 
-@router.delete("/spec/{spec_id}")
+@router.delete("/spec/{spec_id}", dependencies=[Depends(require_role("admin", "developer"))])
 def delete_spec(spec_id: str):
     """删除一条规范"""
     deleted = spec_store.delete(spec_id)

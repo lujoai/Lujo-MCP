@@ -1,11 +1,120 @@
 # 任务交接快照（handoff.md）
 
 > 本文件为最近一轮任务完成状态的快速快照，详细交接信息见 [docs/internal/AI_HANDOFF.md](./docs/internal/AI_HANDOFF.md)。
-> 最近更新：2026-07-26
+> 最近更新：2026-07-30
+
+## 当前项目状态快照
+
+| 指标 | 状态 |
+|------|------|
+| 测试基线 | 654 passed / 6 skipped / 0 failed |
+| MCP 工具数 | HTTP 17 / stdio 17 |
+| 版本 | v0.3.0（已打 annotated tag，未推送远端） |
+| P0/P1 阻塞项 | 0（全部清零） |
+| Phase 0-8 | 全部完成 ✅ |
+| 剩余待办 | SDK-007（Browser SDK 压缩 e2e，CI 任务）、STAB-007（Docker 容器化验证，待环境） |
+| 技术债务 | pg_store.py 拆分评估已完成（待审批）、N4-FU-3（pg_store 启动期错误外泄，待评估） |
 
 ---
 
-## 本轮完成：根目录 Markdown 文档同步（2026-07-26）
+## 本轮完成：Dashboard 实时 SSE 推送开发与文档同步（2026-07-30）
+
+### 任务背景
+
+Dashboard 实时 SSE 推送（`DASH-SSE-001`）已在代码库落地：新增 `app/api/dashboard_events.py`（`DashboardEventBus` 广播总线）+ `dashboard.py` 新增 `GET /api/dashboard/stream` SSE 端点与 `invalidate_cache` 广播钩子 + `dashboard.html` 前端 EventSource 集成 + `dashboard_sse_enabled=False` 默认关闭（测试基线 636→654 passed）。但 TODO/ROADMAP/DEV_PLAN/DELIVERY_MATRIX/PRD/DESIGN/AI_HANDOFF/handoff/README/PROJECT_SUMMARY 10 份文档中 SSE Dashboard 仍标注为"待开发/下一步"，与代码实际状态不符，需同步更新。
+
+### 落地清单
+
+| 文档 | 修正内容 |
+|------|----------|
+| [TODO.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/docs/internal/TODO.md) | 新增 `DASH-SSE-001` 已完成条目（实现清单 + 配置 + 测试基线 654） |
+| [DELIVERY_MATRIX.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/docs/internal/DELIVERY_MATRIX.md) | §五 稳定性/缓存/观测能力表新增「Dashboard 实时 SSE 推送」行 |
+| [PRD.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/docs/internal/PRD.md) | 版本 v5.4→v5.5 + 修订记录新增 v5.5 + §3.1 能力表新增 SSE 行 + 架构师结论新增实时运维场景 + §7.4 FR 表新增 FR20 + FR20 详细需求小节 |
+| [DESIGN.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/docs/internal/DESIGN.md) | 顶部新增 SSE 设计更新说明 + §3.5 存储层表新增 `dashboard event bus` 行 + 新增 §18 Dashboard 实时 SSE 推送完整设计章节（目标/模块/总线/端点/钩子/前端/降级/测试） |
+| [ROADMAP.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/docs/internal/ROADMAP.md) | 「最近更新」改 SSE 落地 + 新增 Phase 8 实时观测增强 ✅ + 待开发表移除 SSE 行 |
+| [DEV_PLAN.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/docs/internal/DEV_PLAN.md) | 当前进度加 SSE 已落地 + P2 SSE 行标记已完成 + 下一步重点移除 SSE |
+| [AI_HANDOFF.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/docs/internal/AI_HANDOFF.md) | 当前阶段/当前 Sprint 加 SSE + 最近完成事项新增 SSE 完成档 |
+| [README.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/README.md) | 项目状态表测试基线 636→654、当前阶段移除 SSE 待开发、下一步移除 SSE |
+| [PROJECT_SUMMARY.md](file:///c:/Users/ASUS/Dev-Projects-ai-debug-mcp/PROJECT_SUMMARY.md) | 测试基线 636→654、当前优先级表 SSE 行标记已完成 |
+
+### 验证结果
+
+- 全量扫描 "SSE 实时 Dashboard" 在活动文档"待开发/下一步"语境中 0 残留（已完成语境保留）
+- 测试基线一致性：654 passed 在 TODO/ROADMAP/DEV_PLAN/DELIVERY_MATRIX/PRD/DESIGN/AI_HANDOFF/handoff/README/PROJECT_SUMMARY 全部对齐
+- SSE 状态一致性：上述 10 份文档全部标记 `DASH-SSE-001` 已落地（2026-07-30）
+- 代码-文档一致性：`dashboard_events.py` / `dashboard.py` / `dashboard.html` / `config.py` 实现与 DESIGN §18 / PRD FR20 描述对齐
+- `dashboard_sse_enabled=False` 默认关闭在所有文档对齐（向后兼容零开销）
+
+---
+
+## 上一轮完成：AI Debug Agent Phase 2 多 Agent DAG 文档同步（2026-07-30）
+
+### 任务背景
+
+AI Debug Agent Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`）已在代码库落地（`app/agent/` 7→11 文件，`Coordinator` 扩展 DAG 调度，测试基线 583→636 passed）。前序会话已同步 `docs/internal/` 下的 TODO/ROADMAP/DEV_PLAN/DELIVERY_MATRIX/PRD/DESIGN/AI_HANDOFF 7 份内部文档，但根目录面向人类与面试的入口文档（README / PROJECT_SUMMARY / INTERVIEW）仍残留"Phase 2 为后续待办""583 passed""7 文件"等陈旧引用，与代码实际状态不符，需同步更新。
+
+### 落地清单
+
+| 文档 | 修正内容 |
+|------|----------|
+| [README.md](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/README.md) | 核心功能 AI Debug Agent 条目从"Phase 1"扩展为"Phase 1 + Phase 2"，新增 DAG 拓扑/三 Agent 职责/`dag_degraded` 信号描述；真实交付状态摘要"部分完成能力"行新增 Phase 2 已落地；项目状态表测试基线 583→636、当前阶段改为"Phase 2 已落地、下一步 Browser SDK/Docker/SSE"；项目结构 `app/agent/` 注释改为 11 文件 |
+| [PROJECT_SUMMARY.md](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/PROJECT_SUMMARY.md) | §3 核心模块表 AI Debug Agent 行改为"Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件"；§4 AI Debug Agent 小节标题加 Phase 2，新增 7 条 Phase 2 详条（git/test/security/dag/coordinator + 2 配置项 + 53 单测）；§4 工程化测试基线 583→636；§5 当前阶段、已完成清单、测试提示、当前优先级表（P1 改为 Browser SDK）均同步 Phase 2 已落地 |
+| [INTERVIEW.md](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/INTERVIEW.md) | 头部测试覆盖 583→636、路线图追加 Phase 2 ✅；§二 STAR Result 测试数 583→636 + 新增 Phase 2 成果条目（DAG 拓扑/三 Agent/降级/53 单测/零侵入）；§二 路线图表 Phase 7 改为 ✅ 已完成 + 新增"后续"增量能力行；§四 Q&A "583 个测试"→"636 个测试" + 补 Phase 2 DAG 测试维度；§五 30 秒陈述 583→636；新增 §三 Q6「多 Agent DAG 设计 / 为什么不用 LangGraph」完整面试叙事（五部分 + 一句话标准答）|
+
+### 无需更新（已在前序会话对齐）
+
+- `docs/internal/DESIGN.md`：§17.9 Phase 2 多 Agent DAG 实现已完整记录（DAG 拓扑图/模块结构/配置/降级矩阵/测试）
+- `docs/internal/PRD.md`：FR19 已扩展覆盖 Phase 2 模块结构/配置项
+- `docs/internal/DELIVERY_MATRIX.md`：已新增 AI Debug Agent Phase 2 行
+- `docs/internal/TODO.md`：`AGENT-002` 已标记已完成
+- `docs/internal/ROADMAP.md`：Phase 7 已含 Phase 2 完成项
+- `docs/internal/DEV_PLAN.md`：当前状态/下一步重点/P4 行已更新
+- `docs/internal/AI_HANDOFF.md`：最近完成事项已新增 Phase 2 完成档
+- `RESUME.md`：按项目硬约束不修改
+- `SECURITY_REVIEW.md`：已归档，重定向到 claude-audit-consolidated.md
+
+### 验证结果
+
+- 全量扫描 "Phase 2 多 Agent DAG 为后续待办""Phase 2 多 Agent DAG 待启动""583 passed""583 个测试""583 个单元测试" 在活动文档中 0 残留（历史快照保留）
+- 测试基线一致性：636 passed 在 README/PROJECT_SUMMARY/INTERVIEW/handoff/AI_HANDOFF/TODO/ROADMAP/DEV_PLAN/DELIVERY_MATRIX 全部对齐
+- Phase 2 状态一致性：README/PROJECT_SUMMARY/INTERVIEW/handoff/AI_HANDOFF/TODO/ROADMAP/DEV_PLAN/DELIVERY_MATRIX/PRD/DESIGN 全部标记 Phase 2 已落地（2026-07-30，`AGENT-002`）
+- MCP 工具数一致性：HTTP 17 / stdio 17 在所有文档对齐（Phase 2 复用 `repair_async`/`repair_result`，工具数不变）
+
+---
+
+## 上一轮完成：RBAC 文档同步（2026-07-28）
+
+### 任务背景
+
+RBAC 三级角色分级（admin/developer/viewer）+ 多 key 恒定时间比较轮换已在代码库中落地（AUDIT-2-13/14），覆盖 33 条 REST 路由 + 17 个 MCP 工具。但 INTERVIEW.md、PROJECT_SUMMARY.md、CODE_REVIEW.md 等文档中仍残留"无 RBAC""无 API_KEY 轮换""无操作级权限控制"等过期描述，面试叙事与 AI 入口文档未体现最新安全能力，需同步更新。
+
+### 落地清单
+
+| 文档 | 修正内容 |
+|------|----------|
+| [CODE_REVIEW.md](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/docs/internal/CODE_REVIEW.md) | §5 评估总览 ② 权限控制：已完成 6→10，待改进 4→1，状态 🟡→🟢；§② 已完成表新增 4 项（RBAC 角色分级、多 key 恒定时间比较轮换、操作级权限控制、MCP tools/call 工具级门控）；§② 待改进表删除前 3 项（已落地），仅保留 `/debug/echo` `/debug/token`；§P3 长期清单 13/14 标记 ✅ 已完成；§评估结论"弱项"删除"缺乏 RBAC"，新增调试端点处置项 |
+| [INTERVIEW.md](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/INTERVIEW.md) | 头部版本行追加 RBAC 摘要；§0.5 架构取舍表安全行更新为 fail-closed + 多 key + RBAC 三级；§二 STAR 成果段追加纵深防御描述 + 新增 RBAC 成果条目；§Q4 中间件顺序修正为真实顺序 + 追加 RBAC 路由级门控注记 + Q4 取舍表安全行同步更新；新增 RBAC 追问预案完整小节（角色分级/路由门控/工具门控/安全兜底 + 一句话标准答）|
+| [PROJECT_SUMMARY.md](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/PROJECT_SUMMARY.md) | §2 架构示意中间件顺序修正 + 路由层追加 RBAC/TOOL_ROLE_REQUIREMENTS 注记；§4 安全能力新增 RBAC 角色分级 + 多 key 轮换 + LFI/SSRF 防护 3 条；§9 配置速查新增 API_KEYS/API_KEY_ROTATION_ENABLED/RBAC_ENABLED/RBAC_ROLE_MAPPING 4 项；§10 安全审查结论追加新增安全能力引用块 |
+
+### 无需更新（已在前序会话对齐）
+
+- `docs/internal/DESIGN.md`：§9.1 RBAC 权限矩阵 + §16.4 Track C 已完整记录
+- `docs/internal/DELIVERY_MATRIX.md`：§六 RBAC 角色分级已标注 33 条 REST 路由
+- `docs/internal/PRD.md`：§10.1 REST API 表已标注"最低权限要求"列
+- `docs/internal/DEV_PLAN.md`：AUDIT-2-13/14 已标记完成
+- `docs/internal/ROADMAP.md`、`TODO.md`、`AI_HANDOFF.md`：RBAC 条目已完成
+- `README.md`：真实交付状态摘要已包含 RBAC + 33 条 REST 路由
+- `RESUME.md`：按项目硬约束不修改
+- `SECURITY_REVIEW.md`：已归档，重定向到 claude-audit-consolidated.md
+
+### 验证结果
+
+- 全量扫描 "无 RBAC 角色分级"、"无 API_KEY 轮换机制"、"无操作级权限控制" 在活动文档中 0 残留（历史快照保留）
+- 文档版本一致性：RBAC 状态在 CODE_REVIEW/INTERVIEW/PROJECT_SUMMARY/DESIGN/DELIVERY_MATRIX/PRD/DEV_PLAN/AI_HANDOFF 全部对齐
+
+---
+
+## 上一轮完成：根目录 Markdown 文档同步（2026-07-26）
 
 ### 任务背景
 
@@ -277,9 +386,10 @@ def test_prewarm_does_not_touch_l2_ttl():
 
 ## 后续待办（按优先级排序）
 
-1. **AI Debug Agent Phase 2** — 多 Agent DAG（GitAgent / TestAgent / SecurityAgent 继承 `BaseAgent`）；修复方案沉淀到 KB + vector_store；RepairSession 状态机
-2. **Browser SDK 压缩 e2e 联调** — 降级为穿插/CI 任务：代码已完成，仅验证，不占开发轨，挂 CI 跑一次即可。
-3. **Docker 容器化复现实验**（`STAB-007`）— 用户已明确放后面，待本机 Docker daemon 启动。
+1. **Browser SDK 压缩 e2e 联调** — 降级为穿插/CI 任务：代码已完成，仅验证，不占开发轨，挂 CI 跑一次即可。
+2. **Docker 容器化复现实验**（`STAB-007`）— 用户已明确放后面，待本机 Docker daemon 启动。
+
+> ~~3. **SSE 实时 Dashboard**~~ — ✅ 已完成（2026-07-30，`DASH-SSE-001`，见本轮完成节）。
 
 ---
 

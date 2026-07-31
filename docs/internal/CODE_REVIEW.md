@@ -688,7 +688,7 @@ Security Agent  → 安全审查
 ### 近期（Phase 1.x 工程化增强）
 
 1. Browser SDK 自动采集 — 浏览器端错误/网络/UI 事件自动进入 Trace 系统
-2. SSE 实时 Dashboard — Trace 实时推送
+2. ~~SSE 实时 Dashboard~~ — ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + 前端 EventSource）
 3. Docker Compose 完善 — 一键启动完整开发环境
 4. LLM Root Cause Analysis 增强 — 错误类型识别 + 根因分类
 
@@ -733,7 +733,7 @@ Security Agent  → 安全审查
 | 维度 | 已完成项 | 待改进项 | 状态 |
 |------|---------|---------|------|
 | ① 安全性 | 11 | 1 | 🟢 P0/P1 已全部修复，P2 仅 CSRF（低风险）+ HTTPS（前置代理）|
-| ② 权限控制 | 6 | 4 | 🟡 无 RBAC（P3 长期）|
+| ② 权限控制 | 10 | 1 | 🟢 RBAC 已落地（admin/developer/viewer + 多 key 轮换 + 操作级权限，仅剩 `/debug/echo` `/debug/token` 调试端点处置）|
 | ③ 数据流动 | 6 | 2 | 🟢 P1 已修复，P2 仅 2 项 |
 | ④ 多并发处理 | 6 | 3 | 🟢 P1/P2 已修复，P3 连接池调优 |
 | ⑤ 代码逻辑路径 | 5 | 3 | 🟢 P0/P1 已修复，P2 可读性 + 废弃 API 已修 |
@@ -785,14 +785,15 @@ Security Agent  → 安全审查
 | 启动校验 | [main.py:33-41](../../app/main.py#L33-L41) | `0.0.0.0` + 无 API_KEY 拒绝启动 |
 | MCP 会话校验 | [mcp_routes.py:54-77](../../app/api/mcp_routes.py#L54-L77) | 未初始化会话访问 `tools/*` 被拒（400）|
 | /ingest/* 统一鉴权 | [ingest.py](../../app/api/ingest.py) 全文 | 所有上报端点依赖 AuthMiddleware 兜底，不重复实现 |
+| RBAC 角色分级 | [rbac.py](../../app/auth/rbac.py) + [middleware.py](../../app/middleware.py) | admin > developer > viewer 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 33 条 REST 路由（debug 14 + ingest 7 + dashboard 7 + spec 5）|
+| 多 key 恒定时间比较轮换 | [key_rotation.py](../../app/auth/key_rotation.py) | `hmac.compare_digest` 遍历不短路；单 key 向后兼容 |
+| 操作级权限控制 | [debug.py](../../app/api/debug.py) + [mcp_routes.py](../../app/api/mcp_routes.py) | 路由级 `require_role` 门控 + MCP `TOOL_ROLE_REQUIREMENTS` 工具级门控；未命中映射默认 viewer（fail-closed）|
+| MCP tools/call 工具级门控 | [mcp_routes.py](../../app/api/mcp_routes.py) | 17 个 MCP 工具按 `TOOL_ROLE_REQUIREMENTS` 字典门控，与 REST 权限矩阵对齐 |
 
 #### 待改进 🔲
 
 | 优先级 | 问题 | 说明 |
 |--------|------|------|
-| P2 | 无 RBAC 角色分级 | 所有合法 API_KEY 权限相同，无法区分读/写/删除权限 |
-| P2 | 无 API_KEY 轮换机制 | 单一 API_KEY，无多 key 管理/过期/撤销 |
-| P2 | 无操作级权限控制 | 如 `/api/spec DELETE` 与 `GET` 权限相同 |
 | P3 | `/debug/echo` `/debug/token` 调试端点 | [debug.py:230-239](../../app/api/debug.py#L230-L239) 生产环境建议移除或加独立鉴权 |
 
 ---
@@ -898,8 +899,8 @@ Security Agent  → 安全审查
 
 #### P3 — 长期（架构演进）
 
-13. **RBAC 角色分级** — 多 API_KEY + 权限分级
-14. **API_KEY 轮换** — 多 key 管理 + 过期机制
+13. **~~RBAC 角色分级~~** — ✅ 已完成（2026-07-25，AUDIT-2-13）：admin > developer > viewer 三级 + `require_role` FastAPI 依赖工厂，覆盖 33 条 REST 路由 + 17 个 MCP 工具
+14. **~~API_KEY 轮换~~** — ✅ 已完成（2026-07-25，AUDIT-2-14）：多 key 恒定时间比较 + 单 key 向后兼容
 15. **PG 连接池调优** — 按并发量调整 maxconn
 16. **CSRF 防护** — 如未来支持 Cookie 鉴权
 
@@ -915,8 +916,8 @@ Security Agent  → 安全审查
 **弱项**：
 - 1 个 P0 NameError bug 需立即修复（mcp_routes.py `PARSE_ERROR` 未导入）
 - spec_store 持锁做 IO + N+1 查询，高并发下性能瓶颈
-- 缺乏 RBAC，所有合法 API_KEY 权限相同
 - 部分非原子操作（save_trace / spec_store.update）可能数据不一致
+- `/debug/echo` `/debug/token` 调试端点生产环境建议处置
 
 **建议下一步**：
 1. 立即修复 P0（mcp_routes.py 两处）

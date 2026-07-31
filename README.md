@@ -26,7 +26,7 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 - **多级缓存** — L1(LRU) + L2(Redis) 多级缓存，减少重复 LLM 调用
 - **指纹知识库** — 基于错误指纹复用历史分析结论，命中时优先返回，并在 LLM 成功后自动沉淀
 - **向量检索 RAG** — Phase 7 `VectorStore` ABC 纯检索语义（`add(docs)` / `search(query, top_k)`）；InProcessVectorStore（Jaccard 相似度，零依赖）+ QdrantVectorStore（OpenAI/智谱 Embeddings 语义召回）双后端；精确指纹 miss 后做向量召回 fallback；Qdrant 不可用时静默降级
-- **AI Debug Agent（Phase 1）** — 自动修复 + 多 Agent 协同框架；`BaseAgent` ABC + `RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + 容错 JSON）+ `Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）+ `RepairQueue` 削峰队列；`RepairContextAssembler` 并发聚合 LLM 分析 + 向量召回 + Git diff，各失败静默降级；新增 `POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}` REST 端点与 `repair_async` / `repair_result` MCP 工具；`agent_enabled` 默认 False，向后兼容；Phase 2 多 Agent DAG（Git Agent + Test Agent + Security Agent）为后续待办
+- **AI Debug Agent（Phase 1 + Phase 2）** — 自动修复 + 多 Agent DAG 协同；`BaseAgent` ABC + `RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + 容错 JSON）+ `Coordinator` 编排器（Phase 1 单 Agent 串行 / Phase 2 多 Agent DAG 调度）+ `RepairQueue` 削峰队列；`RepairContextAssembler` 并发聚合 LLM 分析 + 向量召回 + Git diff，各失败静默降级；新增 `POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}` REST 端点与 `repair_async` / `repair_result` MCP 工具；`agent_enabled` 默认 False，向后兼容；**Phase 2 多 Agent DAG（`AGENT-002`，2026-07-30 落地）**：`RepairAgent`（先行，产出 `repair_plan`）→ `GitAgent` / `TestAgent` / `SecurityAgent`（并行审查，依赖 `repair_plan`）；`GitAgent` 纯 git 归因（不调 LLM），`TestAgent` 生成验证策略，`SecurityAgent` 做 10 类安全审查；`agent_multi_agent_enabled` 默认 False 走 Phase 1 串行（向后兼容），并行节点失败静默降级 + `dag_degraded` 信号
 - **规范驱动 + verify 自动断言** — 定义期望规范，系统自动比对实际结果，检测"返回正常但不符合规范"的静默失败
 - **UI 自动验收** — auto_test 自动遍历页面所有可交互元素，捕获控制台错误和网络 4xx/5xx
 - **errors 持久化聚合** — 异常自动入库 errors 表，支持指纹去重与聚合统计
@@ -160,7 +160,7 @@ curl http://localhost:8000/
 
 - 默认可用能力：请求追踪、上下文构建、异常捕获、运行时快照、MCP 双传输、规范 CRUD、verify、指纹知识库命中与自动沉淀、向量检索 RAG（in-process）、Browser SDK V2-V6 采集、安全中间件、Prometheus `/metrics`
 - 需依赖环境才能启用：LLM 分析、异步分析削峰队列、AI Debug Agent（自动修复，`agent_enabled` 默认 False）、PostgreSQL / asyncpg、Playwright UI verify / auto_test、Redis L2 缓存、L3 缓存预热、熔断器、OpenTelemetry 导出、Qdrant 向量检索（语义召回）
-- 部分完成能力：MCP HTTP server→client notifications 已具备基础推送闭环，但更丰富的通知类型仍待补充；向量检索 RAG 抽象层与 in-process + Qdrant 双后端已完成；AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）已落地，Phase 2 多 Agent DAG 为后续待办
+- 部分完成能力：MCP HTTP server→client notifications 已具备基础推送闭环，但更丰富的通知类型仍待补充；向量检索 RAG 抽象层与 in-process + Qdrant 双后端已完成；AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`，2026-07-30）均已落地，`agent_multi_agent_enabled` 默认 False 向后兼容
 
 完整条目与代码位置请直接查看 [DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md)。
 
@@ -169,11 +169,11 @@ curl http://localhost:8000/
 | 指标 | 状态 |
 |------|------|
 | MCP 工具数 | HTTP 17 / stdio 17（新增 `repair_async` / `repair_result`，FR19） |
-| 测试基线 | 单元 `583 passed / 6 skipped / 0 failed`（含 AI Debug Agent 63 项 + Qdrant 适配器 23 项 + L3 预热 12 项 + 三轨并行 104 项） |
+| 测试基线 | 单元 `654 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Qdrant 适配器 23 项 + L3 预热 12 项 + 三轨并行 104 项） |
 | 存储后端 | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境 |
 | 稳定性能力 | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证 |
 | 安全能力 | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护 |
-| 当前阶段 | Phase 0-6 全部完成；Phase 7 智能化（指纹知识库 + 向量检索 RAG in-process + Qdrant 语义召回 + AI Debug Agent Phase 1）已落地；AI Debug Agent Phase 2 多 Agent DAG 为后续重点 |
+| 当前阶段 | Phase 0-6 全部完成；Phase 7 智能化（指纹知识库 + 向量检索 RAG in-process + Qdrant 语义召回 + AI Debug Agent Phase 1 单 Agent + Phase 2 多 Agent DAG）+ Phase 8 实时观测增强（Dashboard 实时 SSE 推送 `DASH-SSE-001`）均已落地；下一步为 Browser SDK 压缩 e2e 联调、Docker 容器化复现实验 |
 | 权威口径 | 功能状态见 [DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md)，启用验证见 [STABILITY_REPORT.md](./docs/internal/STABILITY_REPORT.md) |
 | 安全审查 | 安全加固代码已落地，实际启用边界与前提条件以运行环境配置为准，详见 [SECURITY_REVIEW.md](./docs/internal/SECURITY_REVIEW.md) |
 
@@ -188,7 +188,7 @@ ai-debug-mcp/
 ├── app/
 │   ├── main.py               # FastAPI 应用入口
 │   ├── api/                   # REST API 路由
-│   ├── agent/                 # AI Debug Agent 模块（Phase 1：BaseAgent ABC + RepairAgent + Coordinator + RepairQueue）
+│   ├── agent/                 # AI Debug Agent 模块（Phase 1：BaseAgent ABC + RepairAgent + Coordinator + RepairQueue；Phase 2：GitAgent + TestAgent + SecurityAgent + DAG，共 11 文件）
 │   ├── llm/                   # LLM 分析模块
 │   ├── mcp/                   # MCP 核心模块
 │   │   ├── tools/             # MCP 工具（HTTP 17 / stdio 17）

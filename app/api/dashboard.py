@@ -3,9 +3,12 @@
 import logging
 import time
 import json
+import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.auth.rbac import require_role
 from app.mcp.core import errors, logs
 from app.llm.analyzer import _get_redis_cache
 
@@ -19,11 +22,14 @@ _cache: dict = {}  # key -> (timestamp, data)
 _REDIS_CACHE_KEY = "ai-debug:dashboard:all_traces"
 
 
-def invalidate_cache() -> None:
+def invalidate_cache(source: str | None = None) -> None:
     """清除 Dashboard 概览缓存（L1 内存 + L2 Redis），使新写入的 trace 立即可见。
 
     由 trace 写入路径（logs.add_log 的 save_entry 路径、以及 errors.record）
     在持久化新数据后调用，避免 30s TTL 期间 Dashboard 仍展示旧数据。
+
+    DASH-SSE-001：同时广播 SSE 变更信号，订阅了 /api/dashboard/stream 的前端
+    收到后即时 re-fetch（叠加在轮询之上）。无订阅者或功能关闭时为 no-op。
     """
     _cache.pop("all_traces", None)
     redis_client = _get_redis_cache()
@@ -32,6 +38,17 @@ def invalidate_cache() -> None:
             redis_client.delete(_REDIS_CACHE_KEY)
         except Exception:
             logger.warning("Dashboard L2 Redis 缓存清除失败", exc_info=True)
+
+    # SSE 实时推送：通知 Dashboard 客户端数据已变更
+    try:
+        from app.api.dashboard_events import broadcast_dashboard_event
+        broadcast_dashboard_event({
+            "type": "dashboard_changed",
+            "source": source,
+            "ts": time.time(),
+        })
+    except Exception:
+        pass
 
 
 def _safe_int(value, default=0):
@@ -202,7 +219,7 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
     return result[:limit]
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_stats():
     """控制台概览统计"""
     all_traces = _collect_all_traces(limit=100)
@@ -225,7 +242,7 @@ def get_stats():
     }
 
 
-@router.get("/traces")
+@router.get("/traces", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def list_traces(limit: int = 100):
     """列出最近 traces（含 verify 结果摘要），limit 上限 1000"""
     limit = min(max(limit, 1), 1000)
@@ -233,7 +250,7 @@ def list_traces(limit: int = 100):
     return {"traces": result, "total": len(result)}
 
 
-@router.get("/trace/{trace_id}")
+@router.get("/trace/{trace_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_trace_detail(trace_id: str):
     """获取 trace 详情（含 spec_diffs）"""
     from app.mcp.builders.context import build_debug_context
@@ -255,16 +272,63 @@ def get_trace_detail(trace_id: str):
     }
 
 
-@router.get("/specs")
+@router.get("/specs", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def list_specs():
     """列出所有已存规范"""
     from app.mcp.verifier import spec_store
     return {"specs": spec_store.list_specs()}
 
 
+# ── 实时 SSE 推送（DASH-SSE-001）──
+
+@router.get("/stream", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
+async def dashboard_stream(request: Request):
+    """Dashboard 实时 SSE 推送通道。
+
+    客户端用 ``EventSource`` 订阅；服务端在 trace/error 写入时（``invalidate_cache``
+    钩子）广播 ``dashboard_changed`` 信号，客户端收到后即时 re-fetch stats+traces，
+    替代"等下一个 10s 轮询周期"。
+
+    鉴权：``EventSource`` 无法设置自定义 header，复用 ``AuthMiddleware`` 的
+    ``?api_key=`` query 参数降级（与 ``sendBeacon`` 同机制）。
+
+    降级：``dashboard_sse_enabled=False`` 时返回 503（功能未启用）。
+    """
+    from app.api.dashboard_events import dashboard_hub
+    from app.config import settings
+
+    if not settings.dashboard_sse_enabled:
+        return JSONResponse({"detail": "Dashboard SSE 未启用"}, status_code=503)
+
+    q = dashboard_hub.subscribe()
+
+    async def event_stream():
+        try:
+            yield ": connected\n\n"
+            while True:
+                try:
+                    # 15s 无事件则发心跳，防止反向代理超时断开长连接
+                    msg = await asyncio.wait_for(q.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                if dashboard_hub.is_close_event(msg):
+                    break
+                yield dashboard_hub.format_event(msg)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            dashboard_hub.unsubscribe(q)
+
+    resp = StreamingResponse(event_stream(), media_type="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"  # nginx 透传：禁缓冲，保实时性
+    return resp
+
+
 # ── 智能错误分析引擎端点 ──
 
-@router.get("/errors/aggregated")
+@router.get("/errors/aggregated", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_errors_aggregated(session_id: str | None = None):
     """按指纹聚合统计错误（智能分析引擎 Phase 7）"""
     aggregated = errors.aggregate_by_fingerprint(session_id=session_id)
@@ -275,7 +339,7 @@ def get_errors_aggregated(session_id: str | None = None):
     }
 
 
-@router.get("/errors/ranked")
+@router.get("/errors/ranked", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_errors_ranked(
     session_id: str | None = None,
     since_minutes: int = 60,
@@ -297,7 +361,7 @@ def get_errors_ranked(
     }
 
 
-@router.get("/errors/history")
+@router.get("/errors/history", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_errors_history(
     fingerprint: str | None = None,
     session_id: str | None = None,

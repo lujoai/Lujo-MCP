@@ -1,14 +1,20 @@
-"""AI Debug Agent —— 自动修复 + 多 Agent 协同（Phase 1 MVP）。
+"""AI Debug Agent —— 自动修复 + 多 Agent 协同（Phase 1 MVP + Phase 2 DAG）。
 
 模块结构：
 - base.py: BaseAgent ABC + AgentContext/AgentResult/AgentTrace + AgentStatus
 - schemas.py: Pydantic 数据模型（RepairRequest/RepairPlan/RepairJob/Sources）
 - context_assembler.py: 修复上下文装配（复用 analyze_async + retrieve_similar + get_recent_diff）
 - repair_agent.py: RepairAgent（复用 analyzer._get_async_client）
+- git_agent.py: GitAgent（git blame/diff 归因，Phase 2 DAG 节点）
+- test_agent.py: TestAgent（验证策略生成，Phase 2 DAG 节点）
+- security_agent.py: SecurityAgent（修复方案安全审查，Phase 2 DAG 节点）
+- dag.py: 多 Agent DAG 拓扑定义（Phase 2）
 - repair_queue.py: 异步削峰队列 + lifespan helper（对称 analysis_queue.py）
-- coordinator.py: Agent 编排器（Phase 1 单 Agent 串行）
+- coordinator.py: Agent 编排器（Phase 1 单 Agent 串行 / Phase 2 多 Agent DAG）
 
-feature flag: settings.agent_enabled（默认 False，关闭时零行为变更）
+feature flag:
+- settings.agent_enabled（默认 False，关闭时路由不挂载，零行为变更）
+- settings.agent_multi_agent_enabled（默认 False，关闭时走 Phase 1 单 Agent 串行）
 """
 
 from app.agent.base import (
@@ -20,6 +26,14 @@ from app.agent.base import (
 )
 from app.agent.coordinator import Coordinator
 from app.agent.context_assembler import RepairContextAssembler
+from app.agent.dag import (
+    PHASE2_AGENTS,
+    PHASE2_FIRST_NODES,
+    PHASE2_PARALLEL_NODES,
+    build_phase2_agents,
+    get_phase2_agent_names,
+)
+from app.agent.git_agent import GitAgent
 from app.agent.repair_agent import RepairAgent
 from app.agent.repair_queue import (
     QueueFullError,
@@ -29,6 +43,8 @@ from app.agent.repair_queue import (
     start_repair_queue,
 )
 from app.agent.schemas import RepairJob, RepairPlan, RepairRequest, Sources
+from app.agent.security_agent import SecurityAgent
+from app.agent.test_agent import TestAgent
 
 __all__ = [
     "AgentContext",
@@ -37,6 +53,10 @@ __all__ = [
     "AgentTrace",
     "BaseAgent",
     "Coordinator",
+    "GitAgent",
+    "PHASE2_AGENTS",
+    "PHASE2_FIRST_NODES",
+    "PHASE2_PARALLEL_NODES",
     "QueueFullError",
     "RepairAgent",
     "RepairContextAssembler",
@@ -44,8 +64,12 @@ __all__ = [
     "RepairPlan",
     "RepairQueue",
     "RepairRequest",
+    "SecurityAgent",
     "Sources",
+    "TestAgent",
+    "build_phase2_agents",
     "drain_repair_queue",
+    "get_phase2_agent_names",
     "get_repair_queue",
     "start_repair_queue",
 ]

@@ -32,9 +32,18 @@ class TestAgentConfigDefaults:
         assert s.agent_timeout == 90
 
     def test_agent_multi_agent_enabled_default_false(self):
-        """Phase 2 预留 flag 默认关闭。"""
+        """Phase 2 DAG flag 默认关闭。"""
         s = Settings()
         assert s.agent_multi_agent_enabled is False
+
+    def test_agent_dag_parallel_timeout_default_zero(self):
+        """Phase 2 DAG 并行超时默认 0（继承 agent_timeout）。"""
+        s = Settings()
+        assert s.agent_dag_parallel_timeout == 0
+
+    def test_agent_dag_failure_threshold_default_two(self):
+        s = Settings()
+        assert s.agent_dag_failure_threshold == 2
 
 
 class TestAgentConfigEnvInjection:

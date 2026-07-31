@@ -9,8 +9,9 @@ import gzip
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.auth.rbac import require_role
 from app.mcp.tools.network_api import tool_ingest_network, tool_get_network_trace
 from app.mcp.tools.silent_failure_api import tool_ingest_silent_failure
 from app.mcp.tools.ingest_api import tool_ingest_error
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 logger = logging.getLogger("ai-debug-mcp.ingest")
 
 
-@router.post("/network")
+@router.post("/network", dependencies=[Depends(require_role("admin", "developer"))])
 def ingest_network(req: dict):
     """单条网络请求记录上报。"""
     try:
@@ -38,13 +39,13 @@ def ingest_network(req: dict):
         raise HTTPException(status_code=400, detail="Internal server error")
 
 
-@router.get("/network/{trace_id}")
+@router.get("/network/{trace_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_network_trace(trace_id: str):
     """查询某 trace 关联的网络请求记录。"""
     return tool_get_network_trace(trace_id)
 
 
-@router.post("/silent-failure")
+@router.post("/silent-failure", dependencies=[Depends(require_role("admin", "developer"))])
 def ingest_silent_failure(req: dict):
     """浏览器 SDK 上报静默失败。"""
     try:
@@ -66,7 +67,7 @@ def ingest_silent_failure(req: dict):
         raise HTTPException(status_code=400, detail="Internal server error")
 
 
-@router.post("/error")
+@router.post("/error", dependencies=[Depends(require_role("admin", "developer"))])
 def ingest_error(req: dict):
     """外部服务主动上报异常，复用 ingest_error 工具逻辑。"""
     try:
@@ -84,7 +85,7 @@ def ingest_error(req: dict):
         raise HTTPException(status_code=400, detail="Internal server error")
 
 
-@router.post("/console")
+@router.post("/console", dependencies=[Depends(require_role("admin", "developer"))])
 def ingest_console(req: dict):
     """浏览器 SDK 上报控制台日志，复用 ingest_console 工具逻辑。"""
     try:
@@ -101,7 +102,7 @@ def ingest_console(req: dict):
         raise HTTPException(status_code=400, detail="Internal server error")
 
 
-@router.post("/ui-event")
+@router.post("/ui-event", dependencies=[Depends(require_role("admin", "developer"))])
 def ingest_ui_event(req: dict):
     """浏览器 SDK 上报 UI 事件，复用 save_ui_event 落库。"""
     try:
@@ -173,7 +174,7 @@ def _dispatch_single(path: str, payload: dict) -> dict:
     raise ValueError(f"Unknown ingest path: {path}")
 
 
-@router.post("/batch")
+@router.post("/batch", dependencies=[Depends(require_role("admin", "developer"))])
 async def ingest_batch(request: Request):
     """批量上报端点 —— 接收事件数组并分发给各 ingest 处理器。
 

@@ -251,9 +251,23 @@ class Settings(BaseSettings):
     agent_max_retries: int = 2
     # RepairAgent 单次执行总超时（秒，含 LLM 调用 + 重试）
     agent_timeout: int = 90
-    # Phase 2 预留：多 Agent 协同模式开关（Phase 1 不生效，仅占位）
-    # 启用后 Coordinator 按 plan 调度 GitAgent / TestAgent / SecurityAgent
+    # Phase 2 多 Agent DAG（AGENT-002）：启用后 Coordinator 按 DAG 调度
+    # RepairAgent（先行）→ GitAgent / TestAgent / SecurityAgent（并行审查）
+    # 关闭时走 Phase 1 单 Agent 串行（向后兼容）
     agent_multi_agent_enabled: bool = False
+    # Phase 2 DAG 并行节点超时（秒，覆盖 git/test/security 三个并行 Agent 的总执行时长）
+    # 设为 0 表示继承 agent_timeout（向后兼容）
+    agent_dag_parallel_timeout: int = 0
+    # Phase 2 DAG 失败容忍度：parallel 节点失败数 >= 该阈值时在返回结果中标记 dag_degraded=True
+    # 不阻断最终输出聚合（仍静默降级），仅作为调用方可观测信号
+    agent_dag_failure_threshold: int = 2
+
+    # ── Dashboard 实时 SSE 推送（DASH-SSE-001）──
+    # 启用后 /api/dashboard/stream 提供 SSE 通道，trace/error 写入时广播变更信号，
+    # 前端 EventSource 收到后即时 re-fetch（叠加在 10s 轮询之上，轮询仍作兜底）。
+    # 关闭时不挂载广播行为（broadcast_dashboard_event 为 no-op），零开销向后兼容。
+    # 鉴权复用 AuthMiddleware 的 ?api_key= query 降级（EventSource 无法设自定义 header）。
+    dashboard_sse_enabled: bool = False
 
     # ── 服务 ──
     host: str = "0.0.0.0"

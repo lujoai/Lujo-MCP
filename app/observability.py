@@ -11,7 +11,6 @@ import re
 import time
 import threading
 import logging
-import hmac
 from collections import defaultdict
 from typing import Dict, Tuple
 
@@ -207,11 +206,14 @@ def metrics(request: Request):
     SEC-08 独立鉴权 toggle：
     - METRICS_AUTH_ENABLED=False（默认）：不额外鉴权，依赖全局 AuthMiddleware
     - METRICS_AUTH_ENABLED=True：端点层独立校验 API Key（Bearer/X-API-Key），
-      与全局中间件解耦，防止 AuthMiddleware 配置疏漏导致指标泄露
+      与全局中间件解耦，防止 AuthMiddleware 配置疏漏导致指标泄露。
+      支持 API_KEYS 多 key 轮换 + API_KEY 向后兼容（复用 key_rotation.verify_api_key）。
 
     P3-4: 当 OTel 启用时，指标同时通过 OTLP 导出，此端点仍可用（向后兼容）。
     """
     if settings.metrics_auth_enabled:
+        from app.auth.key_rotation import verify_api_key
+
         auth_header = request.headers.get("Authorization", "")
         api_key_header = request.headers.get("X-API-Key", "")
         if auth_header.startswith("Bearer "):
@@ -220,7 +222,7 @@ def metrics(request: Request):
             provided_key = api_key_header
         else:
             provided_key = ""
-        if not hmac.compare_digest(provided_key, settings.api_key or ""):
+        if not verify_api_key(provided_key):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid API key"},

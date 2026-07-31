@@ -2,8 +2,8 @@
 
 > 定位：当前开发执行计划，记录当前 Sprint 目标、近期任务、Bug 列表和开发顺序。
 > 长期路线请见 [CODE_REVIEW.md](./CODE_REVIEW.md)。
-> 最近更新：2026-07-26
-> 当前进度：`真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证` 已完成；Browser SDK V3/V6、指纹知识库、P3-6 削峰队列、向量检索 RAG（in-process + Qdrant 语义召回）、P3-7 L3 缓存预热、RBAC + 多 key 轮换均已落地。功能口径以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准，待开发项统一收敛到 [TODO.md](./TODO.md)，环境验证状态见 [STABILITY_REPORT.md](./STABILITY_REPORT.md)。
+> 最近更新：2026-07-30
+> 当前进度：`真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证` 已完成；Browser SDK V3/V6、指纹知识库、P3-6 削峰队列、向量检索 RAG（in-process + Qdrant 语义召回）、P3-7 L3 缓存预热、RBAC + 多 key 轮换、AI Debug Agent Phase 1 + Phase 2（多 Agent DAG）、Dashboard 实时 SSE 推送（`DASH-SSE-001`）均已落地。功能口径以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准，待开发项统一收敛到 [TODO.md](./TODO.md)，环境验证状态见 [STABILITY_REPORT.md](./STABILITY_REPORT.md)。
 
 ---
 
@@ -75,9 +75,9 @@
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
 | **P1** | Browser SDK 端到端联调与压缩上报增强 | 在现有 V2-V6 基础上补手动联调与压缩传输验证 |
-| **P2** | SSE 实时 Dashboard | 在当前 MCP SSE 闭环稳定后再做 Trace 实时推送 |
+| **P2** | SSE 实时 Dashboard | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
 | **P3** | Docker Compose 完善 | 一键启动完整开发环境 |
-| **P4** | AI Debug Agent | Qdrant 向量检索适配器已完成（Phase 7，2026-07-26，OpenAI/智谱 Embeddings 语义召回）；AI Debug Agent 可启动开发 |
+| **P4** | AI Debug Agent Phase 2 多 Agent DAG | ✅ 已完成（2026-07-30，`GitAgent` + `TestAgent` + `SecurityAgent` DAG 编排；`AGENT-002`）|
 
 ### 高并发与企业级数据预防任务（2026-07-22 高级架构师评审）
 
@@ -139,8 +139,8 @@
 1. ~~先做剩余 P0~~：确保发布阻塞项清零 — **✅ 全部完成**
 2. ~~再做专项复核~~：验证已修项经真实通道调用可用 — **✅ 全部完成**
 3. ~~然后做 P1~~：收口输出净化、stdio 生命周期、错误码与依赖管理 — **✅ 全部完成**
-4. **当前状态**：v0.3.0 Phase 0-6 全部完成 ✅，稳定性与发布前回归已收口；后续增量能力中，Browser SDK V3/V6、指纹知识库、P3-6 削峰队列、向量检索 RAG（in-process + Qdrant 语义召回）、P3-7 L3 缓存预热、RBAC + 多 key 轮换均已落地
-5. **下一步重点**：AI Debug Agent（自动修复，多 Agent 协同；Qdrant 语义召回已就绪）、Browser SDK 端到端联调与压缩传输增强、Docker 容器化复现实验（`STAB-007`）
+4. **当前状态**：v0.3.0 Phase 0-6 全部完成 ✅，稳定性与发布前回归已收口；后续增量能力中，Browser SDK V3/V6、指纹知识库、P3-6 削峰队列、向量检索 RAG（in-process + Qdrant 语义召回）、P3-7 L3 缓存预热、RBAC + 多 key 轮换、AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排，2026-07-30 落地）、Dashboard 实时 SSE 推送（`DASH-SSE-001`，2026-07-30 落地）均已落地
+5. **下一步重点**：Browser SDK 端到端联调与压缩传输增强、Docker 容器化复现实验（`STAB-007`）
 
 每步完成后：
 - 运行测试（`python -m pytest tests/ -q`）

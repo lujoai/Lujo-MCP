@@ -5,12 +5,12 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v5.4（AI Debug Agent Phase 1 版） |
+| 文档版本 | v5.5（Dashboard 实时 SSE 推送版） |
 | 产品名称 | ai-debug-mcp |
 | 当前产品版本 | v0.3.0 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-07-26 |
+| 最后更新 | 2026-07-30 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
@@ -30,6 +30,7 @@
 | v5.2 | 2026-07-25 | 高级架构师 | **三轨并行交付**：P3-6 异步分析队列（有界 `asyncio.Queue` + K 常驻消费协程 + `Semaphore` 对齐 RPM/TPM + lifespan drain）；Phase 7 向量检索 RAG（`VectorStore` ABC + `InProcess`/`Null` 实现 + Qdrant 留空插槽 + 工厂注册表）；AUDIT-2-13/14 RBAC + API Key 轮换（多 key 恒定时间比较 + 角色分级 + `require_role` 依赖门控）。零侵入 `analyzer.py` 与 `AuthMiddleware` 公共签名。 |
 | v5.3 | 2026-07-26 | 高级架构师 | **Qdrant 适配器 + L3 缓存预热交付**：Qdrant 向量检索适配器（`QdrantVectorStore`：OpenAI/智谱 Embeddings 语义召回 + `uuid5(fingerprint)` 幂等 upsert + 静默降级）；P3-7 L3 缓存预热（只写 L1 不刷新 L2 TTL）。向量检索 RAG 双后端（in-process + Qdrant）完整落地，AI Debug Agent 前置依赖就绪。单元测试 520 passed / 6 skipped / 0 failed。 |
 | v5.4 | 2026-07-26 | 高级架构师 | **AI Debug Agent Phase 1 交付**：新增 `app/agent/` 模块（7 文件）——`BaseAgent` ABC + `AgentContext`/`AgentResult`/`AgentTrace` + `AgentStatus` 枚举、`RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + `_validate_repair_plan` 容错 JSON）、`RepairContextAssembler`（并发聚合 `analyze_async` + `retrieve_similar` + `get_recent_diff`，各失败静默降级）、`RepairQueue` + lifespan helper、`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）。新增 2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）+ 2 MCP 工具（`repair_async` + `repair_result`，工具数 15→17）。新增 9 个 `agent_*` 配置项（`agent_enabled` 默认 False）。Phase 1 定位为单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留），Phase 2 多 Agent DAG 为后续待办。单元测试 583 passed / 6 skipped / 0 failed；ruff 0 违规。 |
+| v5.5 | 2026-07-30 | 高级架构师 | **Dashboard 实时 SSE 推送交付（`DASH-SSE-001`）**：新增 `app/api/dashboard_events.py`——`DashboardEventBus` 广播总线（无 session 门槛，跨线程 `call_soon_threadsafe` 投递，队列满丢旧保最新）；`dashboard.py` 新增 `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 事件终止）+ `invalidate_cache` 内挂广播钩子（广播失败静默降级，不影响主写入链路）；`dashboard.html` 前端 EventSource 集成（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（向后兼容零开销）；鉴权复用 `?api_key=` query 降级（EventSource 无法设自定义 header）。新增 FR20 + 18 单测（测试基线 583→654 passed / 6 skipped / 0 failed）；ruff 0 违规。 |
 
 ---
 
@@ -87,8 +88,9 @@
 | **向量检索 RAG（Phase 7 增量）** | `app/rag/vector_store.py`（`VectorStore` ABC + `InProcess`/`Null`）+ `app/rag/qdrant_vector_store.py`（`QdrantVectorStore` OpenAI/智谱 Embeddings 语义召回） | 召回增强 ✅ |
 | **RBAC + API Key 轮换（AUDIT-2-13/14）** | `app/auth/key_rotation.py` + `app/auth/rbac.py` | 鉴权增强 ✅ |
 | **AI Debug Agent（Phase 1）** | `app/agent/`（`BaseAgent` ABC + `RepairAgent` + `Coordinator` + `RepairQueue` + `RepairContextAssembler` + `schemas`）+ 2 REST 端点 + 2 MCP 工具 | 自动修复 ✅ |
+| **Dashboard 实时 SSE 推送** | `app/api/dashboard_events.py`（`DashboardEventBus` 广播总线）+ `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource | 实时运维 ✅ |
 
-> **架构师结论（更新 v5.4）**：P1–P6 全部痛点已可交付解决。产品全面覆盖：
+> **架构师结论（更新 v5.5）**：P1–P6 全部痛点已可交付解决。产品全面覆盖：
 > - 报错场景：自动捕获 → 源码定位 → IDE 跳转（P1/P2/P3）
 > - 静默场景：规范断言 → verify → spec_diffs 诊断（P5/P6）
 > - 前端场景：SDK 上报 + Playwright 自动遍历（P4）
@@ -101,6 +103,7 @@
 > - 鉴权场景：多 API Key 轮换 + RBAC 角色分级（AUDIT-2-13/14，v5.2）
 > - 缓存预热场景：L3 缓存预热（只写 L1 不刷新 L2 TTL，P3-7，v5.3）
 > - 自动修复场景：AI Debug Agent Phase 1 单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留 + `Coordinator` 编排 + `RepairQueue` 削峰（v5.4，Phase 2 多 Agent DAG 为后续待办）
+> - 实时运维场景：Dashboard SSE 实时推送（`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` + 前端 EventSource 去抖刷新 + 轮询兜底，`DASH-SSE-001`，v5.5）
 
 ---
 
@@ -171,7 +174,7 @@
 | FR4 | 运行时快照 | P0 | ✅ | `psutil` 采集，降级 |
 | FR5 | LLM 智能分析 | P0 | ✅ | 重试/超时/fallback/截断/流式 |
 | FR6 | MCP 工具集（HTTP/REST 侧） | P0 | ✅ | `debug`/`context`/`trace`/`stacktrace` |
-| FR6b | MCP 工具集（stdio 侧） | P0 | ✅ | `mcp_server.py` 暴露 15 工具，完整清单见 §10.2 |
+| FR6b | MCP 工具集（stdio 侧） | P0 | ✅ | `mcp_server.py` 暴露 17 工具，完整清单见 §10.2 |
 | FR7 | 双传输 | P0 | ✅ | Streamable HTTP + stdio |
 | FR8 | REST 调试 API | P1 | ✅ | `/api/debug/run` `/analyze` `/analyze/stream` `/runtime` `/session` |
 | FR9 | 可观测性 | P1 | ✅ | `/metrics` `/health` |
@@ -241,6 +244,7 @@
 | FR17 | 向量检索 RAG（Phase 7 增量） | P1 | ✅ | `vector_store.py` ABC + 工厂 + 注册表；Qdrant 后端已实现（`QdrantVectorStore`：OpenAI/智谱 Embeddings 语义召回 + uuid5 幂等 upsert + 静默降级） |
 | FR18 | RBAC + API Key 轮换（AUDIT-2-13/14） | P0 | ✅ | `key_rotation.py` + `rbac.py`；`AuthMiddleware` 公共签名零变更 |
 | FR19 | AI Debug Agent（Phase 1 自动修复） | P1 | ✅ | `app/agent/` 模块（`BaseAgent` ABC + `RepairAgent` + `Coordinator` + `RepairQueue` + `RepairContextAssembler` + `schemas`）；2 REST 端点 + 2 MCP 工具；`agent_enabled` 默认 False |
+| FR20 | Dashboard 实时 SSE 推送（DASH-SSE-001） | P2 | ✅ | `app/api/dashboard_events.py`（`DashboardEventBus` 广播总线）+ `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False |
 
 #### FR16 异步分析队列（消息队列削峰）（P1）✅ 已实现 —— `app/llm/analysis_queue.py`
 
@@ -269,42 +273,67 @@
 - **配置项**：`vector_store_enabled=False` / `vector_store_backend="in_process"` / `vector_store_top_k=3` / `vector_store_min_score=0.3` / `qdrant_url` / `qdrant_collection` / `qdrant_api_key`。
 - **验收**：指纹未命中但知识库存在相似文档时，`analysis_source=vector_recall` 且相似度 ≥ `min_score` 才返回；`vector_store_enabled=False` 时行为与旧版完全一致。
 
-#### FR18 RBAC + API Key 轮换（AUDIT-2-13/14）（P0）✅ 已实现 —— `app/auth/key_rotation.py` + `app/auth/rbac.py`
+#### FR18 RBAC + API Key 轮换（AUDIT-2-13/14）（P0）✅ 已实现 —— `app/auth/key_rotation.py` + `app/auth/rbac.py` + `app/api/debug.py` + `app/api/mcp_routes.py`
 
 - **目标**：支持多 API Key 平滑轮换，并基于 Key 绑定角色实现最小权限；消除单 Key 泄漏与权限越权风险。
 - **实现要点**：
   1. 多 Key 恒定时间比较：`verify_api_key` 遍历所有 key **不短路**，统一用 `hmac.compare_digest` 防时序侧信道。
   2. 角色分级：`admin > developer > viewer`；`rbac_enabled=False` 时全 admin（向后兼容）；未命中映射默认 viewer（fail-closed）。
   3. 零签名变更：`AuthMiddleware` 公共签名未变（仅 `__init__` / `dispatch` 体内调 key_rotation / rbac），`setup_middleware(app)` 签名未变，`ingest.py` 完全无鉴权改动。
-  4. FastAPI 依赖：`require_role(*allowed_roles)` 工厂，路由可通过 `dependencies=[Depends(require_role("admin"))]` 加角色门控。
+  4. FastAPI 依赖：`require_role(*allowed_roles)` 工厂，挂载**全部 33 条 REST 路由**（`debug.py` 14 + `ingest.py` 7 + `dashboard.py` 7 + `spec.py` 5）通过 `dependencies=[Depends(require_role(...))]` 加角色门控；MCP HTTP 传输层在 `tools/call` 分发前通过 `TOOL_ROLE_REQUIREMENTS` 字典做工具级角色门控。
 - **配置项**：`api_keys`（逗号分隔多 key）/ `api_key_rotation_enabled` / `rbac_enabled` / `rbac_role_mapping`（如 `key1:admin,key2:viewer`）。
 - **验收**：旧单 key 配置无需改动即可工作（向后兼容）；多 key 中任一失效 key 仍被恒定时间比较；未授权角色访问受限路由返回 403。
 
-#### FR19 AI Debug Agent Phase 1（自动修复）（P1）✅ 已实现 —— `app/agent/`
+#### FR19 AI Debug Agent Phase 1（自动修复）+ Phase 2（多 Agent DAG）（P1）✅ 已实现 —— `app/agent/`
 
-- **目标**：在错误已捕获并完成根因分析后，自动产出可执行的修复计划（RepairPlan），把"分析 → 修复"链路从纯人工升级为 Agent 辅助；为 Phase 2 多 Agent DAG（Git Agent + Test Agent + Security Agent）预留可扩展的 `BaseAgent` ABC 与 `Coordinator` 编排框架。
-- **Phase 1 定位**：单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）；Phase 2 多 Agent DAG 为后续待办（见 `TODO.md` AGENT-002）。
-- **模块结构**（`app/agent/`，7 文件）：
+- **目标**：在错误已捕获并完成根因分析后，自动产出可执行的修复计划（RepairPlan），把"分析 → 修复"链路从纯人工升级为 Agent 辅助；Phase 2 在此基础上引入多 Agent DAG（Git Agent + Test Agent + Security Agent）并行审查，提升修复方案的可信度与安全性。
+- **Phase 1 定位**：单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）。
+- **Phase 2 定位**（`AGENT-002`，2026-07-30 落地）：多 Agent DAG 编排 —— `RepairAgent`（先行，产出 `repair_plan`）→ `GitAgent` / `TestAgent` / `SecurityAgent`（并行审查，依赖 `repair_plan`）。
+- **模块结构**（`app/agent/`，11 文件）：
   1. `base.py`：`BaseAgent` ABC + `AgentContext` / `AgentResult` / `AgentTrace` + `AgentStatus` 枚举。ABC 定义 `run(ctx) -> AgentResult` 抽象方法，子类只需实现业务逻辑，trace 收集、状态机、错误兜底由基类统一承担。
   2. `schemas.py`：Pydantic 模型 `RepairRequest` / `RepairPlan` / `RepairJob` / `Sources`，约束 Agent I/O 契约。
   3. `context_assembler.py`：`RepairContextAssembler` 并发聚合 `analyze_async`（LLM 根因分析）+ `retrieve_similar`（向量召回）+ `get_recent_diff`（Git diff）；各子采集器独立 `try/except`，任一失败静默降级，不阻断主链路。
   4. `repair_agent.py`：`RepairAgent` 复用 `analyzer._get_async_client` 取 LLM 客户端；独立重试/fallback（与 analyzer.py 同构但解耦）；`_validate_repair_plan` 容错 JSON 解析（缺字段补默认、超长截断、非法 confidence 归 "low"），与 `analyzer._validate_and_normalize` 风格一致。
-  5. `repair_queue.py`：`RepairQueue` + lifespan helper，结构对称 `analysis_queue.py`（有界 `asyncio.Queue` + `Semaphore(K)` + K 常驻消费协程 + `drain(timeout)`）。
-  6. `coordinator.py`：`Coordinator` 编排器，流程为「装配上下文 → 调度 Agent → 收集 trace」，对外暴露 `submit_repair` / `get_repair_result`，是后续 Phase 2 多 Agent DAG 的编排入口。
-  7. `__init__.py`：模块导出。
+  5. `git_agent.py`（Phase 2）：`GitAgent` 纯 git 归因（复用 `get_recent_diff` + 优先复用 `repair_context.git_context`，不调 LLM）；输出 `suspect_commits` / `recent_changes` / `attribution`；无堆栈帧返回 SKIPPED。
+  6. `test_agent.py`（Phase 2）：`TestAgent` 基于修复方案生成验证策略（`test_files` / `test_cases` / `regression_risks` / `validation_steps` / `coverage_note`）；复用 `analyzer._get_async_client`，独立重试/fallback；`repair_plan` 缺失返回 SKIPPED。
+  7. `security_agent.py`（Phase 2）：`SecurityAgent` 对修复方案做安全审查（`risks` 数组 + `recommendations` + `overall_severity` + `summary`）；覆盖 LFI/SSRF/SQLi/CmdInjection/PathTraversal/AuthBypass/InfoLeak/Deserialization/HardcodedSecret/Other 10 类风险；`repair_plan` 缺失返回 SKIPPED。
+  8. `dag.py`（Phase 2）：多 Agent DAG 拓扑定义 —— `PHASE2_FIRST_NODES=["repair"]`（先行）+ `PHASE2_PARALLEL_NODES=["git","test","security"]`（并行）；`build_phase2_agents()` 构造节点注册表。
+  9. `repair_queue.py`：`RepairQueue` + lifespan helper，结构对称 `analysis_queue.py`（有界 `asyncio.Queue` + `Semaphore(K)` + K 常驻消费协程 + `drain(timeout)`）。
+  10. `coordinator.py`：`Coordinator` 编排器，`agent_multi_agent_enabled=False` 走 Phase 1 单 Agent 串行；`True` 走 Phase 2 DAG（`_run_dag` + `_run_parallel_agents`）；并行节点失败静默降级 + `dag_degraded` 信号（失败数 ≥ `agent_dag_failure_threshold`）。
+  11. `__init__.py`：模块导出。
 - **新端点**：
   - `POST /api/debug/repair/async`：入队修复请求，返回 `job_id`；队列满返回 429。
-  - `GET /api/debug/repair/result/{job_id}`：轮询修复结果（含 `RepairPlan` 与 `AgentTrace`）。
+  - `GET /api/debug/repair/result/{job_id}`：轮询修复结果（含 `RepairPlan` 与 `AgentTrace`；Phase 2 额外返回 `git_attribution` / `test_plan` / `security_review` / `multi_agent_mode` / `dag_degraded`）。
 - **新 MCP 工具**（HTTP / stdio 共用注册表，工具数 15→17）：
   - `repair_async`：MCP 侧入队修复请求。
   - `repair_result`：MCP 侧查询修复结果。
-- **配置项**（9 个，统一前缀 `agent_`）：`agent_enabled=False`（默认关闭，向后兼容）/ `agent_queue_maxsize=50` / `agent_queue_workers=2` / `agent_queue_drain_timeout=30` / `agent_repair_model`（空则继承 `llm_model`）/ `agent_repair_fallback_model` / `agent_repair_max_retries` / `agent_repair_timeout` / `agent_repair_temperature`。
+- **配置项**（11 个，统一前缀 `agent_`）：`agent_enabled=False`（默认关闭，路由仍挂载但返回 501）/ `agent_queue_maxsize=50` / `agent_queue_workers=2` / `agent_queue_drain_timeout=60`（实际默认值）/ `agent_model`（空则继承 `llm_model`）/ `agent_max_retries=2` / `agent_timeout=90` / `agent_prior_analysis_enabled=True` / `agent_multi_agent_enabled=False`（Phase 2 DAG 开关）/ `agent_dag_parallel_timeout=0`（0=继承 `agent_timeout`）/ `agent_dag_failure_threshold=2`（并行节点失败数阈值，触发 `dag_degraded`）。
 - **降级矩阵**：
-  - `agent_enabled=False`：路由不挂载，零行为变更。
-  - LLM 不可用：`RepairAgent` 返回结构化 fallback（`status=failed` + 原因），不抛异常穿透。
+  - `agent_enabled=False`：路由仍挂载但调用返回 501 `agent disabled`；MCP 工具仍可 list，调用返回 `{"error":"agent disabled"}`。
+  - `agent_multi_agent_enabled=False`：走 Phase 1 单 Agent 串行（向后兼容，返回 `multi_agent_mode=False`）。
+  - LLM 不可用：`RepairAgent` / `TestAgent` / `SecurityAgent` 返回结构化 fallback（`status=failed` + 原因），不抛异常穿透。
+  - `RepairAgent` 失败：`repair_plan=None`，下游 `TestAgent` / `SecurityAgent` 返回 SKIPPED（依赖 `repair_plan`）；`GitAgent` 仍执行（不依赖 `repair_plan`）。
   - 上下文子采集器失败：`RepairContextAssembler` 静默降级，缺失字段以 `None` / 空集合占位，trace 记录降级原因。
-  - LLM 返回非 JSON / 字段缺失：`_validate_repair_plan` 容错填充默认值并标记 `confidence=low`。
-- **验收**：`agent_enabled=False` 时行为与旧版完全一致；启用后 `POST /api/debug/repair/async` 返回 `job_id`，并发 N>K 时仅 K 个并行执行；`GET /api/debug/repair/result/{job_id}` 返回 `RepairPlan` + `AgentTrace`；任一子采集器失败不阻断主链路。
+  - 并行节点失败数 ≥ `agent_dag_failure_threshold`：返回 `dag_degraded=True`（可观测信号，不阻断聚合）。
+  - LLM 返回非 JSON / 字段缺失：`_validate_repair_plan` / `_validate_test_plan` / `_validate_security_review` 容错填充默认值并标记低置信度/`raw_truncated`。
+- **验收**：`agent_enabled=False` 时行为与旧版完全一致；`agent_multi_agent_enabled=False` 时走 Phase 1 单 Agent 串行；启用 Phase 2 后 `repair_result` 返回 4 个 Agent 的 `agent_trace` + `git_attribution` / `test_plan` / `security_review`；任一 Agent 失败不阻断其他 Agent 与最终聚合；测试基线 636 passed / 6 skipped / 0 failed。
+
+#### FR20 Dashboard 实时 SSE 推送（DASH-SSE-001）（P2）✅ 已实现 —— `app/api/dashboard_events.py` + `app/api/dashboard.py` + `app/web/dashboard.html`
+
+- **目标**：在 Web 控制台 Dashboard 现有 10s 轮询基础上，叠加 SSE 实时推送通道，使 trace/error 写入后前端无需等待下一轮轮询即可刷新，降低运维观测延迟。
+- **实现要点**：
+  1. `DashboardEventBus`（`app/api/dashboard_events.py`）：无 session 门槛的进程内广播总线，`subscribe()` 返回 `asyncio.Queue(maxsize=256)`；`publish()` 用 `loop.call_soon_threadsafe` 跨线程投递（兼容同步写入路径调用）；队列满时丢旧保最新（`get_nowait` + `put_nowait`）；`close_all()` 广播终止事件实现优雅停机。
+  2. `GET /api/dashboard/stream` SSE 端点（`dashboard.py`）：订阅总线 → `StreamingResponse(media_type="text/event-stream")`；15s 心跳（`: ping\n\n`）保活代理连接；收到 close 事件终止迭代；`finally` 块 `unsubscribe` 防泄漏；`Cache-Control: no-cache` + `X-Accel-Buffering: no` 禁用缓冲。
+  3. `invalidate_cache` 钩子（`dashboard.py`）：缓存失效时调用 `broadcast_dashboard_event({"type":"dashboard_changed","source":...,"ts":...})`；广播失败 `try/except` 静默降级（不阻断主写入链路，与 Redis L2 清除失败降级行为一致）。
+  4. 前端 EventSource（`dashboard.html`）：`new EventSource('/api/dashboard/stream?api_key=...')`；`onmessage` 触发去抖 refresh（500ms 合并多次事件）；`onerror` 关闭后 5s 自动重连；与现有 10s `setInterval(refresh, 10000)` 并存，轮询作兜底。
+  5. 鉴权：复用 `AuthMiddleware` 的 `?api_key=` query 参数降级（EventSource 无法设置自定义 header）；`require_role("admin","developer","viewer")` 依赖门控。
+- **配置项**：`dashboard_sse_enabled: bool = False`（默认关闭，关闭时 `dashboard_stream` 返回 503、`broadcast_dashboard_event` 为 no-op，零开销向后兼容）。
+- **降级矩阵**：
+  - `dashboard_sse_enabled=False`：`/stream` 返回 503；`invalidate_cache` 广播钩子为 no-op；前端 EventSource 连接失败后回落到纯轮询。
+  - 广播异常：`try/except` 静默吞没，不影响 trace/error 写入与缓存失效主链路。
+  - 订阅者离线：`call_soon_threadsafe` 抛 `RuntimeError` 时 `safe_remove` 清理失效订阅。
+  - 队列满：丢旧事件保最新，避免慢消费者阻塞广播。
+- **验收**：`dashboard_sse_enabled=False` 时行为与旧版完全一致（纯轮询）；启用后 `invalidate_cache` 触发时订阅客户端收到 `dashboard_changed` 事件并去抖刷新；15s 无事件收到心跳保活；`close_all` 后客户端正常终止；测试基线 654 passed / 6 skipped / 0 failed（新增 18 单测）。
 
 ---
 
@@ -347,7 +376,7 @@ flowchart TB
         Hook["全局异常钩子 ✅<br/>exception_hook"]
         MW["中间件（安全基线）"]
         Router["路由 /api/debug · /mcp · /health · /metrics"]
-        Tools["MCP 工具<br/>HTTP 15 个 (register_all_tools)<br/>stdio 15 个 (mcp_server.py)"]
+        Tools["MCP 工具<br/>HTTP 17 个 (register_all_tools)<br/>stdio 17 个 (mcp_server.py)"]
     end
 
     subgraph Engine["调试引擎"]
@@ -419,29 +448,35 @@ sequenceDiagram
 
 ### 10.1 REST API（当前）
 
-| 方法 | 路径 | 说明 | 状态 |
-| --- | --- | --- | --- |
-| POST | `/api/debug/run` | 调试流程 | ✅ |
-| POST | `/api/debug/analyze` | LLM 分析（非流式） | ✅ |
-| POST | `/api/debug/analyze/stream` | 流式 | ✅ |
-| POST | `/api/debug/analyze/async` | 异步分析入队（返回 job_id，满返 429） | ✅ FR16 |
-| GET | `/api/debug/analyze/result/{job_id}` | 异步分析结果轮询 | ✅ FR16 |
-| POST | `/api/debug/repair/async` | AI Debug Agent 修复入队（返回 job_id，满返 429） | ✅ FR19 |
-| GET | `/api/debug/repair/result/{job_id}` | AI Debug Agent 修复结果轮询（含 RepairPlan + AgentTrace） | ✅ FR19 |
-| GET | `/api/debug/runtime` | 运行时快照 | ✅ |
-| GET | `/api/debug/session` | 活跃会话 | ✅ |
-| POST | `/api/debug/verify` | 按规范校验（静默失败检测） | ✅ |
-| POST | `/api/debug/verify/ui` | 前端自动化验证 | ✅ |
-| GET/POST | `/api/spec` | 规范 CRUD | ✅ |
-| GET/POST | `/api/debug/prompt`（可选增强） | 生成提示词文本 | 🔲 FR12 增强 |
+| 方法 | 路径 | 说明 | 状态 | 最低权限要求 |
+| --- | --- | --- | --- | --- |
+| POST | `/api/debug/run` | 调试流程 | ✅ | admin / developer |
+| POST | `/api/debug/analyze` | LLM 分析（非流式） | ✅ | admin / developer |
+| POST | `/api/debug/analyze/stream` | 流式 | ✅ | admin / developer |
+| POST | `/api/debug/analyze/async` | 异步分析入队（返回 job_id，满返 429） | ✅ FR16 | admin / developer |
+| GET | `/api/debug/analyze/result/{job_id}` | 异步分析结果轮询 | ✅ FR16 | admin / developer / viewer |
+| POST | `/api/debug/repair/async` | AI Debug Agent 修复入队（返回 job_id，满返 429） | ✅ FR19 | admin / developer |
+| GET | `/api/debug/repair/result/{job_id}` | AI Debug Agent 修复结果轮询（含 RepairPlan + AgentTrace） | ✅ FR19 | admin / developer / viewer |
+| GET | `/api/debug/runtime` | 运行时快照 | ✅ | admin / developer / viewer |
+| GET | `/api/debug/session` | 活跃会话 | ✅ | admin / developer / viewer |
+| POST | `/api/debug/verify` | 按规范校验（静默失败检测） | ✅ | admin / developer |
+| POST | `/api/debug/verify/ui` | 前端自动化验证 | ✅ | admin / developer |
+| GET | `/api/debug/health` | debug 路由组健康检查 | ✅ | admin / developer / viewer |
+| GET/POST/PATCH/DELETE | `/api/spec` + `/api/spec/{id}` | 规范 CRUD | ✅ | 写：admin/developer；读：admin/developer/viewer |
+| GET/POST | `/api/debug/prompt`（可选增强） | 生成提示词文本 | 🔲 FR12 增强 | — |
+| POST | `/api/debug/echo` | 回显请求体（诊断端点，默认关闭） | ⚠️ 诊断 | admin |
+| GET | `/api/debug/token` | 返回含 token 的诊断响应（默认关闭） | ⚠️ 诊断 | admin |
+| POST | `/ingest/*`（6 条写） | 错误/网络/控制台/UI 写入 | ✅ | admin / developer |
+| GET | `/ingest/network/{trace_id}` | 网络记录查询 | ✅ | admin / developer / viewer |
+| GET | `/api/dashboard/*`（7 条） | Trace/Spec/Error 只读查询 | ✅ | admin / developer / viewer |
 
 ### 10.2 stdio MCP 工具（**17 个**，已注册）✅
 
-`get_stacktrace` / `get_runtime_snapshot` / `search_logs` / `get_debug_context` / `list_recent_traces` / `analyze_with_llm` / `ingest_network` / `get_network_trace` / `get_blame_for_frame` / `get_recent_diff` / `ingest_silent_failure` / `ingest_error` / `get_related_specs` / `auto_test`。
+HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一注册表，实际各 **17 个工具**，均为短名：
 
-> HTTP 传输侧（`register_all_tools()` 注册表）为 17 个工具（含 `verify` / `verify_ui` / `ingest_console` / `repair_async` / `repair_result`），与 stdio 清单有差异，注册表统一为待办。
+`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result`
 
-> ⚠️ **订正（2026-07-22 代码核实，2026-07-26 v5.4 更新）**：以上 stdio 工具名清单与实际不符。`register_all_tools()`（`tools/__init__.py:26-40`）HTTP 与 stdio **共用同一注册表，实际各 17 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result`。此处列出的 `get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` 是**内部函数名**，对外以 `context/trace/stacktrace` 暴露；`get_runtime_snapshot`、`analyze_with_llm` **未作为独立 MCP 工具注册**。不存在 14/15 差异。新增的 `repair_async` / `repair_result` 由 FR19（v5.4）引入，`agent_enabled=False` 时仍注册但调用返回未启用提示。
+> 说明：此前文档中列出的 `get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` 为**内部 Python 函数名**，非对外 MCP 工具名；`get_runtime_snapshot`、`analyze_with_llm` 未作为独立 MCP 工具注册。新增的 `repair_async` / `repair_result` 由 FR19（v5.4）引入，`agent_enabled=False` 时仍注册但调用返回 501。
 
 ### 10.3 已实现接口（FR13/FR14/FR15）✅
 
@@ -485,6 +520,7 @@ sequenceDiagram
 | 代码定位 | `code_context_lines` | 5 | ✅ 已补全（FR11） |
 | | `SOURCE_PATH_MAP` | 空 | ✅ 已支持（路径映射） |
 | | `IDE_SCHEME` | vscode | ✅ 已支持（可点击链接） |
+| | `WHITELIST_PATH_PREFIX` | 空（=收敛到 CWD） | ✅ 已修复（SEC-01）；空值时默认收敛到进程 CWD 防目录穿越 |
 | 提示词 | `PROMPT_TEMPLATE_PATH` | 内置 | 🔲 FR12 增强 |
 | 规范 | `SPEC_BACKEND` | memory | ✅ FR15 spec_store |
 | 前端验证 | `PLAYWRIGHT_ENABLED` | false | ✅ FR14 ui_runner（可选依赖） |
@@ -497,17 +533,28 @@ sequenceDiagram
 | | `VECTOR_STORE_BACKEND` | in_process | ✅ FR17（支持 `in_process` / `qdrant` 双后端） |
 | | `VECTOR_STORE_TOP_K` | 3 | ✅ FR17 |
 | | `VECTOR_STORE_MIN_SCORE` | 0.3 | ✅ FR17 |
-| | `QDRANT_URL` / `QDRANT_COLLECTION` / `QDRANT_API_KEY` | 空 | ✅ FR17 Qdrant 后端已实现（默认空时降级为 in_process；配置后启用语义召回） |
+| | `QDRANT_URL` / `QDRANT_COLLECTION` / `QDRANT_API_KEY` | 空 / `ai-debug-kb` / 空 | ✅ FR17 Qdrant 后端已实现（`qdrant_url` 为空时降级为 in_process；配置后启用语义召回） |
+| | `QDRANT_EMBEDDING_MODEL` | text-embedding-3-small | ✅ FR17（OpenAI 用 `text-embedding-3-small` 1536 维；智谱用 `embedding-3` 1024 维） |
+| | `QDRANT_EMBEDDING_DIM` | 1536 | ✅ FR17（必须与已建 collection 维度一致） |
+| | `QDRANT_CONNECT_TIMEOUT` | 5 | ✅ FR17（参照 Redis 快速失败） |
+| | `QDRANT_REQUEST_TIMEOUT` | 10 | ✅ FR17（upsert/query 单次超时） |
 | API Key 轮换 | `API_KEYS` | 空（沿用 `API_KEY`） | ✅ FR18 |
 | | `API_KEY_ROTATION_ENABLED` | false | ✅ FR18 |
 | RBAC | `RBAC_ENABLED` | false | ✅ FR18（false=全 admin 向后兼容） |
 | | `RBAC_ROLE_MAPPING` | 空 | ✅ FR18（如 `key1:admin,key2:viewer`） |
-| AI Debug Agent | `AGENT_ENABLED` | false | ✅ FR19（false=不挂载路由，零行为变更） |
+| AI Debug Agent | `AGENT_ENABLED` | false | ✅ FR19（false=路由仍挂载但调用返回 501） |
 | | `AGENT_QUEUE_MAXSIZE` | 50 | ✅ FR19 |
 | | `AGENT_QUEUE_WORKERS` | 2 | ✅ FR19 |
-| | `AGENT_QUEUE_DRAIN_TIMEOUT` | 30 | ✅ FR19 |
-| | `AGENT_REPAIR_MODEL` / `AGENT_REPAIR_FALLBACK_MODEL` | 空 / 空 | ✅ FR19（空则继承 `LLM_MODEL` / `LLM_FALLBACK_MODEL`） |
-| | `AGENT_REPAIR_MAX_RETRIES` / `AGENT_REPAIR_TIMEOUT` / `AGENT_REPAIR_TEMPERATURE` | 见 v1.0 | ✅ FR19 |
+| | `AGENT_QUEUE_DRAIN_TIMEOUT` | **60** | ✅ FR19（实际默认 60s，非 30s） |
+| | `AGENT_PRIOR_ANALYSIS_ENABLED` | true | ✅ FR19（控制 RepairContextAssembler 是否调用 analyze_async） |
+| | `AGENT_MODEL` | 空 | ✅ FR19（空则继承 `LLM_MODEL`） |
+| | `AGENT_MAX_RETRIES` | 2 | ✅ FR19 |
+| | `AGENT_TIMEOUT` | 90 | ✅ FR19 |
+| | `AGENT_MULTI_AGENT_ENABLED` | false | ✅ FR19（Phase 2 预留，当前不生效） |
+| L3 缓存预热（P3-7） | `LLM_CACHE_PREWARM_ENABLED` | false | ✅ Phase 7 |
+| | `LLM_CACHE_PREWARM_TOP_N` | 20 | ✅ Phase 7 |
+| | `LLM_CACHE_PREWARM_INTERVAL_SECONDS` | 3600 | ✅ Phase 7 |
+| 诊断端点 | `DEBUG_ENDPOINTS_ENABLED` | false | ✅ 诊断 `echo/token` 端点开关（默认关闭，生产必须保持 false） |
 | （沿用 v1.0） | LLM/存储/TTL/安全/日志/服务 | 见 v1.0 | ✅ |
 
 ---
@@ -536,7 +583,7 @@ sequenceDiagram
 
 | 编号 | 验收项 |
 | --- | --- |
-| AC1 | 15 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
+| AC1 | 17 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
 | AC2 | `exception_hook` 安装后，未捕获异常自动进入 trace，`list_recent_traces` 可见 |
 | AC3 | LLM 分析返回 `root_cause/impact/fix/confidence` |
 | AC4 | 上下文超长被截断且不报错 |
@@ -549,7 +596,7 @@ sequenceDiagram
 | AC17 | 指纹未命中但向量库存在相似文档时，`analysis_source=vector_recall` 且相似度 ≥ `min_score`；`vector_store_enabled=False` 时行为与旧版完全一致 |
 | AC18 | 多 key 中任一 key 失效仍被恒定时间比较（无时序侧信道）；未授权角色访问受限路由返回 403 |
 | AC19 | `rbac_enabled=False` 时所有请求获得 admin 角色（向后兼容）；`api_key_rotation_enabled=False` 时单 key 配置无需改动 |
-| AC20 | `agent_enabled=False` 时 `/api/debug/repair/*` 路由不挂载（404），行为与旧版完全一致 |
+| AC20 | `agent_enabled=False` 时 `/api/debug/repair/*` 路由仍挂载，但调用返回 HTTP 501 (agent disabled)；MCP 侧 `repair_async` / `repair_result` 工具仍可 list，但调用返回 `{"error":"agent disabled"}` |
 | AC21 | `agent_enabled=True` 时 `POST /api/debug/repair/async` 返回 `job_id`；并发 N>K 时仅 K 个并行执行，其余排队不丢失；队列满返回 429 |
 | AC22 | `GET /api/debug/repair/result/{job_id}` 返回 `RepairPlan` + `AgentTrace`；任一上下文子采集器（analyze/retrieve_similar/get_recent_diff）失败不阻断主链路，trace 记录降级原因 |
 | AC23 | LLM 返回非 JSON 或字段缺失时，`_validate_repair_plan` 容错填充默认值并标记 `confidence=low`，不抛异常 |

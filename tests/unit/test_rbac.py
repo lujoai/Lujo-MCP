@@ -107,8 +107,9 @@ class TestRequireRole:
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_missing_role_raises_403(self):
+    async def test_missing_role_raises_403(self, monkeypatch):
         """request.state 无 role 属性 → 403（fail-closed）。"""
+        monkeypatch.setattr(settings, "rbac_enabled", True)
         dep = require_role("admin")
         request = _FakeRequest()  # state 上不设置 role 属性
         with pytest.raises(HTTPException) as exc_info:

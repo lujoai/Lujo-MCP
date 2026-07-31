@@ -1,7 +1,7 @@
 # 异常排查指南 / Troubleshooting Guide
 
 **适用版本 / Applicable Version**: v0.3.0  
-**最后更新 / Last Updated**: 2026-07-25
+**最后更新 / Last Updated**: 2026-07-30
 
 ---
 
@@ -582,8 +582,8 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-已注册的 15 个工具:
-`debug`, `debug_context`, `trace`, `stacktrace`, `network_ingest`, `network_trace`, `git_blame`, `recent_diff`, `silent_failure`, `ingest_error`, `console_log`, `related_specs`, `verify`, `verify_ui`, `auto_test`
+已注册的 17 个工具:
+`debug`, `debug_context`, `trace`, `stacktrace`, `network_ingest`, `network_trace`, `git_blame`, `recent_diff`, `silent_failure`, `ingest_error`, `console_log`, `related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
 

@@ -44,3 +44,29 @@ def register_all_tools():
     register_tool(**AUTO_TEST_DEF, handler=auto_test_handler)
     register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler)
     register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler)
+
+
+# ── MCP 工具角色需求映射（供 mcp_routes.py 在 tools/call 分发前消费）──
+# 角色体系：viewer（只读）| developer（读+写）| admin（完全控制）
+# 仅 HTTP 传输层强制此门控；stdio 传输依赖进程隔离，不适用
+TOOL_ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    # ── 写类工具（创建 trace / 触发 LLM / 外部副作用）──
+    "debug":                ("admin", "developer"),
+    "ingest_network":       ("admin", "developer"),
+    "ingest_silent_failure": ("admin", "developer"),
+    "ingest_error":         ("admin", "developer"),
+    "ingest_console":       ("admin", "developer"),
+    "verify":               ("admin", "developer"),
+    "verify_ui":            ("admin", "developer"),
+    "auto_test":            ("admin", "developer"),
+    "repair_async":         ("admin", "developer"),
+    # ── 只读类工具 ──
+    "context":              ("admin", "developer", "viewer"),
+    "trace":                ("admin", "developer", "viewer"),
+    "stacktrace":           ("admin", "developer", "viewer"),
+    "get_network_trace":    ("admin", "developer", "viewer"),
+    "get_blame_for_frame":  ("admin", "developer", "viewer"),
+    "get_recent_diff":      ("admin", "developer", "viewer"),
+    "get_related_specs":    ("admin", "developer", "viewer"),
+    "repair_result":        ("admin", "developer", "viewer"),
+}

@@ -20,9 +20,9 @@
     ↓
 传输层（stdio / Streamable HTTP）
     ↓
-中间件层（Auth → MaxBodySize → RateLimit → SecurityHeaders → Trace）
+中间件层（CORS → Trace → SecurityHeaders → RateLimit → MaxBodySize → Auth → NetworkCapture）
     ↓
-路由/分发层（/api/debug/* │ /mcp │ /health /metrics）
+路由/分发层（/api/debug/* + require_role RBAC门控 │ /mcp + TOOL_ROLE_REQUIREMENTS 工具级门控 │ /health /metrics）
     ↓
 调试引擎（logs/context builder/stacktrace/code_locator/runtime/llm/exception_hook）
     ↓
@@ -56,7 +56,7 @@
 | 向量检索抽象 | [app/rag/vector_store.py](./app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
 | Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](./app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
 | 工具注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
-| AI Debug Agent | [app/agent/](./app/agent/) | 自动修复方案生成 + 多 Agent 协同框架（Phase 1） |
+| AI Debug Agent | [app/agent/](./app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
 | 浏览器 SDK | [browser-sdk/ai-debug.js](./browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
 
 ---
@@ -98,7 +98,16 @@
 - ✅ stdio 传输（Claude Desktop 子进程）
 - ✅ SSE 广播中心与会话化长连接
 - ⚠️ MCP HTTP notifications 已具备基础推送闭环，丰富通知类型仍待补齐
+- ✅ **Dashboard 实时 SSE 推送**（`DASH-SSE-001`，2026-07-30）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 10s 轮询兜底 + 断线重连）；`dashboard_sse_enabled=False` 默认关闭
 - ✅ MCP 工具双传输注册（HTTP / stdio 均由统一注册表动态导出，当前各 17 个，含 `repair_async`/`repair_result`）
+
+### 稳定性与观测能力 ✅
+
+- ✅ **L1/L2/L3 多级缓存**：L1 进程 LRU + L2 Redis 分布式 + L3 缓存预热（从 Redis 回填热门 fingerprint 到 L1，只写 L1 不刷新 L2 TTL）
+- ✅ **异步分析削峰队列**（P3-6）：有界 `asyncio.Queue(maxsize=N)` + K 常驻消费协程 + `asyncio.Semaphore(K)` 对齐 LLM RPM/TPM；队列满返回 429；优雅停机 drain
+- ✅ **LLM/PG 熔断器**（P3-8）：pybreaker 包装 LLM 和 PG 调用，熔断时返回结构化 fallback；`open → half-open → close` 恢复链路已验证
+- ✅ **OpenTelemetry 集成**（P3-4）：双模式 OTel SDK + Prometheus `/metrics` 文本端点向后兼容；OTLP gRPC 导出；惰性初始化 + 失败降级
+- ✅ **PG 不可用自动降级 memory**（P3-5）：`storage_fallback_to_memory` 控制，默认开启
 
 ### 安全能力 ✅
 
@@ -109,6 +118,9 @@
 - ✅ 入库前脱敏（复合键名子串匹配 + 白名单）
 - ✅ /metrics 独立鉴权 toggle
 - ✅ CORS 可配置来源
+- ✅ **RBAC 角色分级**（AUDIT-2-13）：admin > developer > viewer 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 **33 条 REST 路由**（debug 14 + ingest 7 + dashboard 7 + spec 5）及 17 个 MCP 工具（`TOOL_ROLE_REQUIREMENTS` 字典门控）；未命中映射默认 viewer（fail-closed）
+- ✅ **API_KEY 多 key 恒定时间比较轮换**（AUDIT-2-14）：`verify_api_key` 遍历所有 key 不短路 + `hmac.compare_digest` 防时序侧信道 + 单 key 向后兼容
+- ✅ **LFI/SSRF 防护**：路径白名单 + SSRF URL 白名单（IP/Localhost/Metadata 端点拒绝）
 
 ### 前端能力 ✅
 
@@ -122,15 +134,23 @@
 - ✅ Playwright 自动遍历（auto_test）
 - ✅ Web 控制台 Dashboard
 
-### AI Debug Agent ✅（Phase 1，2026-07-26）
+### AI Debug Agent ✅（Phase 1，2026-07-26 + Phase 2，2026-07-30）
 
 - ✅ **自动修复方案生成**：从 analyzer 的"给建议"升级为"生成可执行修复方案"（`{patch, affected_files, validation_strategy, risk_assessment, confidence, rationale}`）
-- ✅ **多 Agent 协同框架**：`BaseAgent` ABC + `Coordinator` 编排器，Phase 1 仅 `RepairAgent`，Phase 2 GitAgent/TestAgent/SecurityAgent 继承 `BaseAgent` 即可接入
-- ✅ **零侵入主链路**：新增 `app/agent/` 目录，复用 `analyzer._get_async_client` / `knowledge_base.retrieve_similar` / `git.get_recent_diff` / `analyzer.analyze_async`，不改 analyzer.py 公共签名
+- ✅ **多 Agent 协同框架**：`BaseAgent` ABC + `Coordinator` 编排器，Phase 1 仅 `RepairAgent`，Phase 2 GitAgent/TestAgent/SecurityAgent 继承 `BaseAgent` 接入 DAG
+- ✅ **零侵入主链路**：新增 `app/agent/` 目录（7→11 文件），复用 `analyzer._get_async_client` / `knowledge_base.retrieve_similar` / `git.get_recent_diff` / `analyzer.analyze_async`，不改 analyzer.py 公共签名
 - ✅ **异步削峰队列**：`RepairQueue` 结构对称 `AnalysisQueue`，独立 workers 配额避免抢 LLM RPM
 - ✅ **静默降级**：三层兜底（agent 内 / coordinator / queue），任何失败不穿透主链路
 - ✅ **feature flag 控制**：`agent_enabled=False` 默认关闭，零行为变更
 - ✅ 新增 2 REST 端点 + 2 MCP 工具（`repair_async` + `repair_result`，工具数 15→17）
+- ✅ **Phase 2 多 Agent DAG（`AGENT-002`，2026-07-30）**：`RepairAgent`（先行，产出 `repair_plan`）→ `GitAgent` / `TestAgent` / `SecurityAgent`（并行审查，依赖 `repair_plan`）
+  - `git_agent.py`：`GitAgent` 纯 git 归因（复用 `get_recent_diff` + 优先复用 `repair_context.git_context`，不调 LLM）；输出 `suspect_commits` / `recent_changes` / `attribution`；无堆栈帧返回 SKIPPED
+  - `test_agent.py`：`TestAgent` 基于修复方案生成验证策略（`test_files` / `test_cases` / `regression_risks` / `validation_steps` / `coverage_note`）；复用 `analyzer._get_async_client`，独立重试/fallback；`repair_plan` 缺失返回 SKIPPED
+  - `security_agent.py`：`SecurityAgent` 对修复方案做安全审查（10 类风险：LFI/SSRF/SQLi/CmdInjection/PathTraversal/AuthBypass/InfoLeak/Deserialization/HardcodedSecret/Other）；`_validate_security_review` 容错 JSON + severity/category 合法化
+  - `dag.py`：多 Agent DAG 拓扑定义 —— `PHASE2_FIRST_NODES=["repair"]`（先行）+ `PHASE2_PARALLEL_NODES=["git","test","security"]`（并行）；`build_phase2_agents()` 构造节点注册表
+  - `coordinator.py`：新增 `_run_dag()` + `_run_parallel_agents()`；`agent_multi_agent_enabled=False` 走 Phase 1 单 Agent 串行（向后兼容）；并行节点失败静默降级 + `dag_degraded` 信号（失败数 ≥ `agent_dag_failure_threshold`）
+  - 新增 2 配置项：`agent_dag_parallel_timeout=0`（0=继承 `agent_timeout`）/ `agent_dag_failure_threshold=2`
+  - 新增 53 单测（`test_git_agent.py` 13 / `test_test_agent.py` 13 / `test_security_agent.py` 15 / `test_dag_coordinator.py` 9 + `test_agent_config.py` 增 2）
 
 ### 工程化 ✅
 
@@ -138,7 +158,7 @@
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **583 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **654 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项）
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -159,7 +179,7 @@
 
 ## 5. 当前开发阶段
 
-**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent` + 多 Agent 协同框架预留）均已落地，当前进入 AI Debug Agent Phase 2（多 Agent DAG）与 Docker 容器化复现阶段
+**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）均已落地，当前进入 Browser SDK 压缩 e2e 联调与 Docker 容器化复现阶段
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -176,16 +196,18 @@
 - Phase 7 智能化：智能错误分析引擎 + 向量检索 RAG（in-process + Qdrant 语义召回 + uuid5 幂等 upsert）✅
 - AUDIT-2-13/14：RBAC 角色分级 + API_KEY 多 key 轮换 ✅
 - AI Debug Agent Phase 1：单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留 ✅（2026-07-26）
+- AI Debug Agent Phase 2：多 Agent DAG（`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`）✅（2026-07-30）
+- Dashboard 实时 SSE 推送（`DASH-SSE-001`）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 轮询兜底 + 断线重连）✅（2026-07-30）
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **583 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **654 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项）。
 
 **当前优先级**（详见 [ROADMAP.md](./docs/internal/ROADMAP.md) 与 [DEV_PLAN.md](./docs/internal/DEV_PLAN.md)）：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P1** | AI Debug Agent Phase 2 | 多 Agent DAG（GitAgent / TestAgent / SecurityAgent 继承 `BaseAgent`），落地 AGENT-002 |
+| **P1** | Browser SDK 压缩 e2e 联调 | 对 V3/V6 演示页与上报链路做手工联调收口（CI 交错任务，代码已完成仅验证） |
 | **P2** | Docker 容器化复现实验 | 完成 `STAB-007`，把 Redis / OTel / PG 容器化验证补齐 |
-| **P3** | Browser SDK 端到端联调 | 对 V3/V6 演示页与上报链路做手工联调收口（CI 交错任务） |
+| ~~P3~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
 
 **v0.3.0 收口成果**：
 - 测试基线：340 passed / 6 skipped / 0 failed（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
@@ -245,6 +267,7 @@
 5. **安全优先**：fail-closed 鉴权、Content-Length 硬检查、IP 限流、安全响应头、入库前脱敏
 6. **幂等性**：异常钩子 `install_global_hook()` 幂等安装，PG 建表 `CREATE TABLE IF NOT EXISTS`
 7. **降级策略**：各采集器失败降级不阻断整体，中间件异常降级放行
+8. **实时推送**：Dashboard 使用 SSE（Server-Sent Events）而非 WebSocket——Dashboard 只需服务端→客户端单向推送，SSE 原生支持自动重连、更轻量；`DashboardEventBus` 采用进程内广播总线（`asyncio.Queue` + `call_soon_threadsafe`），队列满时丢弃旧消息保最新
 
 ---
 
@@ -263,7 +286,11 @@
 | `PG_PASSWORD` | — | PostgreSQL 权威密码来源 |
 | `LLM_PROVIDER` | `openai` | `openai` / `zhipu` / `custom` |
 | `OPENAI_API_KEY` | — | LLM API Key |
-| `API_KEY` | — | 鉴权密钥（留空不启用） |
+| `API_KEY` | — | 鉴权密钥（留空不启用，向后兼容单 key 模式） |
+| `API_KEYS` | — | 多 key 模式（逗号分隔，如 `key1,key2,key3`），启用 key rotation |
+| `API_KEY_ROTATION_ENABLED` | `false` | 启用多 key 恒定时间比较轮换（默认 false，单 key 模式） |
+| `RBAC_ENABLED` | `false` | 启用 RBAC 角色分级（默认 false，全 admin 向后兼容） |
+| `RBAC_ROLE_MAPPING` | — | key→role 映射（如 `key1:admin,key2:developer,key3:viewer`），未命中映射默认 viewer（fail-closed） |
 
 > 环境固化约定：应用只读取 `PG_*` 变量；`POSTGRES_PASSWORD` 仅供 Docker 初始化数据库；`DATABASE_URL` 仅作兼容项，应用本身不会读取。
 
@@ -300,6 +327,8 @@ python -m app.mcp_server
 **须订正的既有认知**：① “入库前脱敏”对 `exception_hook→errors` 的自动捕获路径不成立（message/traceback 未脱敏，SEC-06）；② “会话隔离”仅 stdio 成立，共享 HTTP 无 `session_id` 维度（SEC-04）；③ 路径白名单默认放行；④ 中间件真实顺序为 `Trace` 最外、`CORS` 内于 `Auth`（非文档所述）。
 
 **已复核为安全**：SQL 全参数化（无注入）、LLM 发送前递归脱敏、assert_engine 纯函数无 `eval`、PG 连接池双检锁正确。**无支付/资金逻辑**；唯一间接财务风险是 LLM 调用无配额（费用失控）。
+
+> **新增安全能力（2026-07-25，AUDIT-2-13/14）**：RBAC 三级角色分级（admin > developer > viewer）覆盖 33 条 REST 路由 + 17 个 MCP 工具；`require_role(*roles)` FastAPI 依赖工厂路由级门控 + `TOOL_ROLE_REQUIREMENTS` MCP 工具级门控；未命中映射默认 viewer（fail-closed）。多 key 恒定时间比较（`verify_api_key` 遍历不短路 + `hmac.compare_digest`）+ 单 key 向后兼容。LFI 路径白名单 + SSRF URL 白名单已上线。
 
 > 整改追踪见 [release/claude-audit-consolidated.md](./docs/internal/release/claude-audit-consolidated.md)。修任一项须回填状态 + `文件:行` 验证。
 

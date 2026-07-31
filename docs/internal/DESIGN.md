@@ -13,6 +13,8 @@
 > **Phase 6-7 更新**：P3-4 OpenTelemetry 双模式导出、P3-6 异步分析削峰队列、P3-7 L3 缓存预热（只写 L1 不刷新 L2 TTL）、P3-8 熔断器、智能错误分析引擎、指纹知识库、向量检索 RAG（in-process + Qdrant 语义召回）、RBAC + 多 key 轮换。测试基线：520 passed / 6 skipped / 0 failed
 >
 > **AI Debug Agent Phase 1 更新（2026-07-26）**：新增 `app/agent/` 模块（7 文件）——`BaseAgent` ABC + `AgentContext`/`AgentResult`/`AgentTrace` + `AgentStatus` 枚举、`RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + `_validate_repair_plan` 容错 JSON）、`RepairContextAssembler`（并发聚合 `analyze_async` + `retrieve_similar` + `get_recent_diff`，各失败静默降级）、`RepairQueue` + lifespan helper（结构对称 `analysis_queue.py`）、`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）。新增 2 REST 端点 + 2 MCP 工具（工具数 15→17）。9 个 `agent_*` 配置项（`agent_enabled` 默认 False）。Phase 1 = 单 Agent + 多 Agent 协同框架预留，Phase 2 多 Agent DAG 为后续待办。测试基线：583 passed / 6 skipped / 0 failed
+>
+> **Dashboard 实时 SSE 推送更新（2026-07-30，`DASH-SSE-001`）**：新增 `app/api/dashboard_events.py`——`DashboardEventBus` 进程内广播总线（无 session 门槛，`subscribe()` 返回 `asyncio.Queue(maxsize=256)`，`publish()` 用 `loop.call_soon_threadsafe` 跨线程投递，队列满丢旧保最新，`close_all()` 优雅停机）；`dashboard.py` 新增 `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 终止 + `finally` unsubscribe 防泄漏）+ `invalidate_cache` 内挂广播钩子（广播失败静默降级，不影响主写入链路）；`dashboard.html` 前端 EventSource 集成（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（零开销向后兼容）；鉴权复用 `?api_key=` query 降级。测试基线：654 passed / 6 skipped / 0 failed
 
 ---
 
@@ -148,45 +150,47 @@ flowchart TB
 - 注册方式：客户端配置 `{"command":"python","args":["-m","app.mcp_server"],"cwd":"<abs>"}`。
 - stdio 唯一启动命令：`python -m app.mcp_server`。
 
-**MCP 工具总览（HTTP 15 个 / stdio 15 个，业务实现共用）**：
+**MCP 工具总览（HTTP 17 个 / stdio 17 个，业务实现共用）**：
 
-| 工具 | 说明 | 实现 |
+| 工具（短名） | 说明 | 实现 |
 | --- | --- | --- |
-| `debug` | 调试入口 | `debug_api.py` |
-| `get_debug_context` | **核心**：trace+runtime+源码片段 | `context_api.py` |
-| `search_logs` | 按关键字+时间窗搜历史 trace | `trace_api.py` |
-| `list_recent_traces` | 最近错误摘要列表 | `trace_api.py` |
-| `get_stacktrace` | 最近/指定异常堆栈（文件/行/函数） | `stacktrace_api.py` |
-| `get_runtime_snapshot` | CPU/内存/线程/Python 版本 | `runtime.py` |
-| `analyze_with_llm` | 可选：内置 LLM 分析 | `analyzer.py` |
+| `debug` | 调试入口（含 context 组装） | `debug_api.py` |
+| `context` | trace+runtime+源码片段 | `context_api.py` |
+| `trace` | 按关键字+时间窗搜历史 trace / 最近错误摘要 | `trace_api.py` |
+| `stacktrace` | 最近/指定异常堆栈（文件/行/函数） | `stacktrace_api.py` |
 | `ingest_network` / `get_network_trace` | 网络请求采集 | `network_api.py` |
-| `git_blame` / `git_recent_diff` | Git 代码追溯 | `git_api.py` |
-| `silent_failure` | 静默失败检测 | `silent_failure_api.py` |
+| `get_blame_for_frame` / `get_recent_diff` | Git 代码追溯 | `git_api.py` |
+| `ingest_silent_failure` | 静默失败检测 | `silent_failure_api.py` |
 | `ingest_error` | 错误上报 | `ingest_api.py` |
-| `related_specs` | 相关规范查询 | `spec_api.py` |
+| `ingest_console` | 控制台日志采集 | `ingest_api.py` |
+| `get_related_specs` | 相关规范查询 | `spec_api.py` |
 | `verify` | 规范断言验证 | `verify_api.py` |
 | `verify_ui` | 前端 UI 验证 | `verify_ui_api.py` |
 | `auto_test` | 页面自动遍历 | `auto_test_api.py` |
+| `repair_async` | AI Debug Agent 修复入队 | `repair_api.py`（FR19） |
+| `repair_result` | AI Debug Agent 修复结果轮询 | `repair_api.py`（FR19） |
 
 #### 3.1.3 双传输一致性
 
-HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **15 个工具**；stdio 传输（`mcp_server.py`）共用同一注册表，**实际各 15 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test`。
+HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **17 个工具**；stdio 传输（`mcp_server.py`）共用同一注册表，**实际各 17 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result`。
 
 ### 3.2 中间件层（`app/middleware.py`）✅
 
-注册顺序（外→内）：`CORS → Auth → MaxBodySize → RateLimit → SecurityHeaders → Trace`。
+注册顺序（内→外，LIFO 栈）：`NetworkCapture → Auth → MaxBodySize → RateLimit → SecurityHeaders → Trace → CORS`。
 
-> ⚠️ **订正（SEC-12 已修复）**：Starlette `add_middleware` 后注册 = 最外层。**真实执行顺序（外→内）**：
-> `Trace → SecurityHeaders → RateLimit → MaxBodySize → Auth → CORS → NetworkCapture → 路由`。
-> **SEC-12 修复**：CORS 改为最后 `add_middleware`（最外层），`OPTIONS` 预检请求放行，不再被 `Auth` 401 拦截。
+> ✅ **真实执行顺序（外→内）**：
+> `CORS → Trace → SecurityHeaders → RateLimit → MaxBodySize → Auth → NetworkCapture → 路由`。
+> 注：`NetworkCaptureMiddleware` 在 `main.py` 中于 `setup_middleware` 之前注册，因此位于最内层，仅记录已通过鉴权/限流/体积限制的请求。`CORS` 必须最后 `add_middleware`（最外层），`OPTIONS` 预检请求先于 `Auth` 处理，不再被 401 拦截。
 
 | 中间件 | 机制 | 设计要点 |
 | --- | --- | --- |
-| `AuthMiddleware` | Bearer / X-API-Key；`hmac.compare_digest` 恒定时间比较；`PUBLIC_PATHS=("/", "/health", "/demo", "/demo/silent-failure", "/ai-debug.js")`（`/metrics` 不在内，需鉴权 — SEC-08） | **fail-closed**：无 Key 且 `api_key` 已设 → 401；未设 `api_key` 则整体禁用（启动告警） |
-| `MaxBodySizeMiddleware` | 先查 `Content-Length` 硬拒；POST/PUT/PATCH **流式分块读取**，超 `max_body_size` 立即 413，避免整 body 进内存 | 防 DoS/OOM |
-| `RateLimitMiddleware` | `state_store.allow("ratelimit:{ip}", per_minute, 60)`；**异常降级返回 429（fail-closed）** | 按客户端 IP；**Redis ZSET 滑动窗口**（替代固定窗口，消除临界点突发）；端点级限流（`/ingest/*` 120/min，`/analyze` 10/min） |
-| `SecurityHeadersMiddleware` | 补 `X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/`X-XSS-Protection` | — |
+| `CORSMiddleware`（最外层） | 按 `cors_origins` 配置；`*` 时 `allow_credentials=False` | OPTIONS 预检先于 Auth 处理，不再被 401 拦截 |
 | `TraceMiddleware` | 注入 `trace_id` → `X-Trace-Id`/`X-Response-Time`；异常记录 `trace_id` | 请求级可观测 |
+| `SecurityHeadersMiddleware` | 补 `X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/`X-XSS-Protection` | — |
+| `RateLimitMiddleware` | `state_store.allow("ratelimit:{ip}", per_minute, 60)`；**异常降级返回 429（fail-closed）** | 按客户端 IP；**Redis ZSET 滑动窗口**（替代固定窗口，消除临界点突发）；端点级限流（`/ingest/*` 120/min，`/analyze` 10/min） |
+| `MaxBodySizeMiddleware` | 先查 `Content-Length` 硬拒；POST/PUT/PATCH **流式分块读取**，超 `max_body_size` 立即 413，避免整 body 进内存 | 防 DoS/OOM |
+| `AuthMiddleware` | Bearer / X-API-Key；`hmac.compare_digest` 恒定时间比较；`PUBLIC_PATHS=("/", "/health", "/demo", "/demo/silent-failure", "/ai-debug.js")`（`/metrics` 不在内，需鉴权 — SEC-08） | **fail-closed**：无 Key 且 `api_key` 已设 → 401；未设 `api_key` 则整体禁用（启动告警） |
+| `NetworkCaptureMiddleware`（最内层） | 记录已通过鉴权/限流/体积限制的请求到网络捕获存储 | 仅记录合法请求，避免泄漏攻击流量 |
 
 ### 3.3 路由/分发层
 
@@ -262,6 +266,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 | `session registry` | MCP `Mcp-Session-Id` 会话生命周期 | `transports/session.py`，TTL 1800s |
 | `state store` | 限流/计数 | `memory` / `redis`（Redis ZSET 滑动窗口限流） |
 | `sse hub` | 服务端→客户端广播 | `transports/sse.py` |
+| `dashboard event bus` ✅ | Dashboard 实时 SSE 广播（FR20，无 session 门槛） | `app/api/dashboard_events.py`（`DashboardEventBus`，跨线程 `call_soon_threadsafe`，队列满丢旧保最新） |
 | `specs` ✅ | 规范存储（FR15） | `app/mcp/verifier/spec_store.py`，**独立 specs 表**（消除 N+1 查询，不再从 traces 扫描恢复） |
 | `errors` ✅ | 异常持久化聚合 | `app/mcp/core/errors.py`，**独立 errors 表**（fingerprint + occurrence_count 落 PG，重启不丢失） |
 | `MemoryTraceStore` | 内存存储 | **OrderedDict + max_entries 容量上限**（防 OOM） |
@@ -395,7 +400,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 完整上下文 | [app/mcp/builders/context.py](./app/mcp/builders/context.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
 | 规范驱动采集 | `app/mcp/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
 | 指纹去重聚合 | [app/mcp/core/errors.py](./app/mcp/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
-| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP / stdio 均为 15 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
+| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP / stdio 均为 17 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
 | 代码定位 | [app/mcp/collectors/code_locator.py](./app/mcp/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
 | 静默失败检测 | [app/mcp/verifier/assert_engine.py](./app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
@@ -435,6 +440,87 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 - `/metrics`：独立鉴权 toggle（SEC-08）。
 - 密钥：`.env` 不入库，提供 `.env.example` + `.gitignore`。
 - 路径安全：`file://`/`vscode://` 仅限 `WHITELIST_PATH_PREFIX`，白名单为空时默认收敛 CWD，防目录穿越。
+- RBAC 角色分级：三级 `admin > developer > viewer`；`require_role(*roles)` FastAPI 依赖工厂已挂载**全部 33 条 REST 路由**（`debug.py` 14 + `ingest.py` 7 + `dashboard.py` 7 + `spec.py` 5）及 MCP `tools/call` 分发；未命中映射默认 viewer（fail-closed）。
+
+### 9.1 RBAC 权限矩阵 ✅
+
+**覆盖范围**：以下矩阵覆盖全部已挂载 `require_role` 的 33 条 REST 路由 + 17 个 MCP 工具。
+
+**REST API（`debug.py` 14 条路由，全部挂载 `require_role`）**：
+
+| 端点 | admin | developer | viewer | 实现 |
+| --- | --- | --- | --- | --- |
+| `POST /api/debug/run` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /api/debug/analyze` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /api/debug/analyze/stream` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /api/debug/analyze/async` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `GET /api/debug/analyze/result/{job_id}` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `POST /api/debug/repair/async` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `GET /api/debug/repair/result/{job_id}` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/debug/runtime` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/debug/session` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `POST /api/debug/verify` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /api/debug/verify/ui` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `GET /api/debug/health` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `POST /api/debug/echo`（诊断，默认关闭） | ✅ | ❌ | ❌ | `require_role("admin")` |
+| `GET /api/debug/token`（诊断，默认关闭） | ✅ | ❌ | ❌ | `require_role("admin")` |
+
+**`ingest.py`（7 条路由，全部挂载 `require_role`）**：
+
+| 端点 | admin | developer | viewer | 实现 |
+| --- | --- | --- | --- | --- |
+| `POST /ingest/network` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `GET /ingest/network/{trace_id}` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `POST /ingest/silent-failure` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /ingest/error` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /ingest/console` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /ingest/ui-event` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `POST /ingest/batch` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+
+**`dashboard.py`（7 条路由，全部挂载 `require_role`）**：
+
+| 端点 | admin | developer | viewer | 实现 |
+| --- | --- | --- | --- | --- |
+| `GET /api/dashboard/stats` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/traces` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/trace/{trace_id}` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/specs` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/errors/aggregated` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/errors/ranked` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/errors/history` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+
+**`spec.py`（5 条路由，全部挂载 `require_role`）**：
+
+| 端点 | admin | developer | viewer | 实现 |
+| --- | --- | --- | --- | --- |
+| `POST /api/spec` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `GET /api/spec` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/spec/{spec_id}` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `PATCH /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+| `DELETE /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+
+**MCP 工具（17 个，`TOOL_ROLE_REQUIREMENTS` 字典门控）**：
+
+| 工具 | admin | developer | viewer | required_roles |
+| --- | --- | --- | --- | --- |
+| `debug` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `ingest_network` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `ingest_silent_failure` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `ingest_error` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `ingest_console` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `verify` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `verify_ui` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `auto_test` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `repair_async` | ✅ | ✅ | ❌ | `("admin","developer")`；`agent_enabled=False` 时返回 501 |
+| `context` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `trace` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `stacktrace` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `get_network_trace` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `get_blame_for_frame` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `get_recent_diff` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `get_related_specs` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `repair_result` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `analyze_with_llm`（未注册为工具） | — | — | — | 内部函数，通过 `debug` 工具间接调用 |
 
 ---
 
@@ -651,7 +737,7 @@ sequenceDiagram
 
 | 流程 | 入口 | 传递链（文件:行） | 存储落点 | 出口 |
 | --- | --- | --- | --- | --- |
-| **F1 MCP 工具调用** | `POST /mcp` `mcp_routes.py:37` | 预解析 JSON→会话校验 `:54-77`→`dispatch_raw` `server.py:158`→`_handle_tools_call` `server.py:75`→15 工具 handler | 依工具而定 | JSON / SSE `:94-103` |
+| **F1 MCP 工具调用** | `POST /mcp` `mcp_routes.py:37` | 预解析 JSON→会话校验 `:54-77`→`dispatch_raw` `server.py:158`→`_handle_tools_call` `server.py:75`→17 工具 handler | 依工具而定 | JSON / SSE `:94-103` |
 | **F2 错误上报** | `POST /ingest/error` `ingest.py:66` | `tool_ingest_error`→`_parse_frames`（仅 `int(line)`，**不校验 file 路径**）→`save_trace` `trace_repo.py:76`→`redact`+`errors.record`(全局 deque)+`add_log` | `errors._recent`(内存) + `trace_store` | `{error_id}` |
 | **F3 完整上下文构建** | 工具 `context` / `GET /api/dashboard/trace/{id}` `dashboard.py:176` | `build_debug_context` `context.py:44`→`get_trace`→**`code_locator` 读文件** `:110`→`git blame/diff` `:119,125`→network/ui/spec/runtime | 只读 | dict（含 `code_snippets`） |
 | **F4 LLM 分析** | `POST /api/debug/analyze` `debug.py:77` | `get_logs`→`build_context`→`collect_runtime_snapshot`→`analyze` `analyzer.py:342`→`_prepare_context_for_llm`(截断+**递归脱敏** `:107-110`) | 只读 | `{context, analysis}` |
@@ -670,10 +756,10 @@ sequenceDiagram
 
 ### 13.5 工具注册与执行流程（订正工具清单）
 
-`register_all_tools()`（`tools/__init__.py:26-40`）**实际注册 15 个工具**，工具名为短名：
-`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test`。
+`register_all_tools()`（`tools/__init__.py`）**实际注册 17 个工具**，工具名为短名：
+`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result`。
 
-> ⚠️ **订正**：§3.1.2 / §3.1.3 及 PRD §10.2 中出现的 `get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` **不是注册的工具名**——它们是内部处理函数，对外以 `context / trace / stacktrace` 短名暴露；`get_runtime_snapshot`、`analyze_with_llm` 当前**未作为独立 MCP 工具注册**。HTTP 与 stdio 共用同一注册表（`mcp_server.py:45`），因此实际是「HTTP 15 / stdio 15」，不存在 14/15 差异。
+> 说明：`get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` **不是注册的工具名**——它们是内部处理函数，对外以 `context / trace / stacktrace` 短名暴露；`get_runtime_snapshot`、`analyze_with_llm` 当前**未作为独立 MCP 工具注册**。HTTP 与 stdio 共用同一注册表（`mcp_server.py:45`），因此实际是「HTTP 17 / stdio 17」，不存在数量差异。
 
 ### 13.6 执行流程要点
 
@@ -1669,11 +1755,11 @@ Track C (RBAC)        Track A (削峰队列)         Track B (向量检索)
 
 ---
 
-## 17. AI Debug Agent：自动修复 + 多 Agent 协同（Phase 1，2026-07-26）
+## 17. AI Debug Agent：自动修复 + 多 Agent 协同（Phase 1 + Phase 2 DAG）
 
-> 本章记录 AI Debug Agent Phase 1 的架构设计：单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）。
-> Phase 2 多 Agent DAG（Git Agent + Test Agent + Security Agent）为后续待办，登记在 [TODO.md](./TODO.md) AGENT-002。
-> 关键代码入口：[app/agent/](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/agent/)（7 文件）、[app/api/debug.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/debug.py)（2 REST 端点）、[app/mcp/tools/repair_api.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/mcp/tools/repair_api.py)（2 MCP 工具）。
+> 本章记录 AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 框架）与 Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）的架构设计。
+> Phase 2 于 2026-07-30 落地（`AGENT-002`）。
+> 关键代码入口：[app/agent/](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/agent/)（11 文件）、[app/api/debug.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/debug.py)（2 REST 端点）、[app/mcp/tools/repair_api.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/mcp/tools/repair_api.py)（2 MCP 工具）。
 
 ### 17.1 设计目标与 Phase 1 定位
 
@@ -1681,11 +1767,11 @@ Track C (RBAC)        Track A (削峰队列)         Track B (向量检索)
 | --- | --- |
 | **目标** | 在错误已捕获并完成根因分析后，自动产出可执行的修复计划（`RepairPlan`），把"分析 → 修复"链路从纯人工升级为 Agent 辅助 |
 | **Phase 1 定位** | 单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留）。**不**在 Phase 1 实现 Git Agent / Test Agent / Security Agent |
-| **Phase 2 待办** | 在 `BaseAgent` ABC + `Coordinator` 框架上扩展多 Agent DAG 与并行编排（AGENT-002） |
+| **Phase 2 待办** | ✅ 已完成（2026-07-30，`AGENT-002`）：在 `BaseAgent` ABC + `Coordinator` 框架上扩展多 Agent DAG（`GitAgent` + `TestAgent` + `SecurityAgent`）与并行编排 |
 | **零侵入约束** | 默认 `agent_enabled=False`，路由不挂载，行为与旧版完全一致；启用后通过独立队列与 `Coordinator` 编排，不修改 `analyzer.py` 公共签名 |
 | **向后兼容** | 9 个 `agent_*` 配置项全部默认关闭；`RepairAgent` 复用 `analyzer._get_async_client` 取 LLM 客户端，不重复造客户端管理逻辑 |
 
-### 17.2 模块结构（`app/agent/`，7 文件）
+### 17.2 模块结构（`app/agent/`，11 文件）
 
 ```
 app/agent/
@@ -1694,8 +1780,12 @@ app/agent/
 ├── schemas.py               ← Pydantic 模型：RepairRequest/RepairPlan/RepairJob/Sources
 ├── context_assembler.py     ← RepairContextAssembler（并发聚合 analyze + retrieve_similar + get_recent_diff）
 ├── repair_agent.py          ← RepairAgent（复用 analyzer._get_async_client + 独立重试/fallback）
+├── git_agent.py             ← GitAgent（Phase 2，git blame/diff 归因，不调 LLM）
+├── test_agent.py            ← TestAgent（Phase 2，验证策略生成，依赖 repair_plan）
+├── security_agent.py        ← SecurityAgent（Phase 2，修复方案安全审查，依赖 repair_plan）
+├── dag.py                   ← 多 Agent DAG 拓扑定义（Phase 2）
 ├── repair_queue.py          ← RepairQueue + lifespan helper（结构对称 analysis_queue.py）
-└── coordinator.py           ← Coordinator 编排器（装配上下文 → 调度 Agent → 收集 trace）
+└── coordinator.py           ← Coordinator 编排器（Phase 1 单 Agent 串行 / Phase 2 多 Agent DAG）
 ```
 
 #### 17.2.1 `BaseAgent` ABC（`base.py`）
@@ -1844,28 +1934,30 @@ sequenceDiagram
 | LLM 返回非 JSON / 字段缺失 | `_validate_repair_plan` 容错填充默认值 | `RepairPlan.confidence=low`，`raw_truncated` 字段保留前 500 字符 |
 | `RepairQueue.drain` 超时 | 未完成任务在停机时可见 | `get_repair_result` 返回 `status=cancelled` |
 
-### 17.5 配置项（9 个，统一前缀 `agent_`）
+### 17.5 配置项（11 个，统一前缀 `agent_`）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `agent_enabled` | bool | False | 是否启用 AI Debug Agent（false=不挂载路由，零行为变更） |
 | `agent_queue_maxsize` | int | 50 | 修复队列容量上限（满则 429 背压） |
 | `agent_queue_workers` | int | 2 | 常驻消费协程数 K |
-| `agent_queue_drain_timeout` | int | 30 | 优雅停机排空超时（秒） |
-| `agent_repair_model` | str | "" | 修复 Agent 使用的 LLM 模型（空则继承 `llm_model`） |
-| `agent_repair_fallback_model` | str | "" | 修复 Agent 的 fallback 模型（空则继承 `llm_fallback_model`） |
-| `agent_repair_max_retries` | int | 见 v1.0 | 修复 Agent LLM 调用重试次数 |
-| `agent_repair_timeout` | int | 见 v1.0 | 修复 Agent LLM 调用超时（秒） |
-| `agent_repair_temperature` | float | 见 v1.0 | 修复 Agent LLM 温度参数 |
+| `agent_queue_drain_timeout` | int | 60 | 优雅停机排空超时（秒） |
+| `agent_model` | str | "" | 修复 Agent 使用的 LLM 模型（空则继承 `llm_model`） |
+| `agent_max_retries` | int | 2 | 修复 Agent LLM 调用重试次数（独立于 `llm_max_retries`） |
+| `agent_timeout` | int | 90 | 修复 Agent 单次执行总超时（秒，含 LLM 调用 + 重试） |
+| `agent_prior_analysis_enabled` | bool | True | 是否启用上下文装配的 prior_analysis（关闭则仅基于原始 debug_context） |
+| `agent_multi_agent_enabled` | bool | False | Phase 2 多 Agent DAG 开关（false=走 Phase 1 单 Agent 串行） |
+| `agent_dag_parallel_timeout` | int | 0 | Phase 2 DAG 并行节点总超时（秒，0=继承 `agent_timeout`） |
+| `agent_dag_failure_threshold` | int | 2 | 并行节点失败数阈值，触发 `dag_degraded=True`（不阻断聚合） |
 
 ### 17.6 测试策略
 
 | 层级 | 测试文件 | 用例数 | 要点 |
 | --- | --- | --- | --- |
-| 单元测试 | `tests/unit/test_agent_base.py` 等 6 文件 | 63 | `BaseAgent` ABC 状态机、`RepairAgent` 重试/fallback/JSON 容错、`RepairContextAssembler` 并发降级、`RepairQueue` 削峰/drain、`Coordinator` 编排、schemas 校验 |
+| 单元测试 | `tests/unit/test_agent_base.py` 等 10 文件 | 116 | `BaseAgent` ABC 状态机、`RepairAgent` 重试/fallback/JSON 容错、`GitAgent` 归因/SKIPPED/降级、`TestAgent` 验证策略生成、`SecurityAgent` 安全审查/10 类风险归一化、`dag.py` 拓扑、`Coordinator` Phase 1 兼容 + Phase 2 DAG 调度 + `dag_degraded` 信号、`RepairContextAssembler` 并发降级、`RepairQueue` 削峰/drain、schemas 校验 |
 | 集成测试 | `tests/integration/test_repair_agent_e2e.py` 等 3 文件 | 8 | e2e 端到端（skip-if-no-api-key）、队列满 429、降级矩阵、`agent_enabled=False` 零行为变更 |
 
-测试基线：单元 `583 passed / 6 skipped / 0 failed`（相比基线 520 增加 63 项）；ruff 0 违规。
+测试基线：单元 `636 passed / 6 skipped / 0 failed`（Phase 1 基线 520 → 583 → Phase 2 增至 636，新增 53 项）；ruff 0 违规。
 
 ### 17.7 设计权衡
 
@@ -1878,12 +1970,236 @@ sequenceDiagram
 ### 17.8 限制与未来扩展
 
 **当前限制**：
-1. Phase 1 仅有 `RepairAgent` 一个具体 Agent 实现，多 Agent DAG 待 Phase 2
-2. `RepairQueue` 是进程内的，多 worker 实例间无共享队列（与 `analysis_queue.py` 同一限制）
-3. `RepairContextAssembler` 的三个子采集器是固定组合，Phase 2 多 Agent 时需要按 Agent 角色动态装配
+1. `RepairQueue` 是进程内的，多 worker 实例间无共享队列（与 `analysis_queue.py` 同一限制）
+2. `RepairContextAssembler` 的三个子采集器是固定组合
+3. Phase 2 DAG 拓扑是静态两层（先行 + 并行），暂不支持任意 DAG 依赖图（如条件分支、循环）
 
-**未来扩展（Phase 2，AGENT-002）**：
-- 新增 `GitAgent` / `TestAgent` / `SecurityAgent` 继承 `BaseAgent`，实现各自 `run()` 逻辑
-- `Coordinator` 扩展为多 Agent DAG 编排（并行执行 + 依赖关系 + 结果聚合）
-- `RepairContextAssembler` 按 Agent 角色动态装配上下文（如 `GitAgent` 只需 `get_recent_diff` + `get_blame_for_frame`）
-- 引入 Agent 间通信机制（如 `AgentContext.shared_state`）支持 DAG 节点间数据传递
+**未来扩展**：
+- Agent 间通信机制升级（当前通过 `ctx.repair_context` 单向传递 `repair_plan`，未来可引入 `AgentContext.shared_state` 支持更复杂的 DAG 节点间数据传递）
+- DAG 拓扑动态化（按错误类型选择不同 Agent 组合，如前端错误跳过 SecurityAgent）
+- `RepairQueue` 抽象为通用 `AgentQueue` 基类，与 `analysis_queue.py` 复用
+
+### 17.9 Phase 2 多 Agent DAG 实现（`AGENT-002`，2026-07-30）
+
+> Phase 2 在 Phase 1 的 `BaseAgent` ABC + `Coordinator` 框架上扩展多 Agent DAG，零侵入既有接口。
+
+#### 17.9.1 DAG 拓扑
+
+```
+    ┌─────────────┐
+    │ RepairAgent │  (Layer 1: 先行，产出 repair_plan)
+    └──────┬──────┘
+           │  repair_plan 注入 ctx.repair_context
+           ├──────────────┬──────────────┐
+           ▼              ▼              ▼
+     ┌──────────┐  ┌──────────┐  ┌──────────────┐
+     │ GitAgent │  │TestAgent │  │SecurityAgent │  (Layer 2: 并行审查)
+     └──────────┘  └──────────┘  └──────────────┘
+```
+
+- **Layer 1（先行）**：`PHASE2_FIRST_NODES = ["repair"]`，串行执行，产出 `repair_plan`
+- **Layer 2（并行）**：`PHASE2_PARALLEL_NODES = ["git", "test", "security"]`，`asyncio.gather(return_exceptions=True)` 并行执行
+- **依赖关系**：`TestAgent` / `SecurityAgent` 依赖 `repair_plan`（缺失返回 SKIPPED）；`GitAgent` 不依赖 `repair_plan`（纯 git 归因，Layer 1 失败仍执行）
+
+#### 17.9.2 新增 Agent 职责
+
+| Agent | 职责 | LLM 依赖 | 依赖 repair_plan | 输出 |
+| --- | --- | --- | --- | --- |
+| `GitAgent` | git blame/diff 归因，判断错误是否由近期改动引入 | 否（纯 git 数据） | 否 | `suspect_commits` / `recent_changes` / `attribution` |
+| `TestAgent` | 基于修复方案生成验证策略（受影响测试文件、回归风险点、手动验证步骤） | 是（复用 `_get_async_client`） | 是（缺失返回 SKIPPED） | `test_plan`：`test_files` / `test_cases` / `regression_risks` / `validation_steps` / `coverage_note` |
+| `SecurityAgent` | 对修复方案做安全审查（LFI/SSRF/SQLi 等 10 类风险） | 是（复用 `_get_async_client`） | 是（缺失返回 SKIPPED） | `security_review`：`risks[]` / `recommendations` / `overall_severity` / `summary` |
+
+#### 17.9.3 Coordinator DAG 调度
+
+| 模式 | 开关 | 行为 |
+| --- | --- | --- |
+| Phase 1 兼容 | `agent_multi_agent_enabled=False` | `_run_phase1()`：单 `RepairAgent` 串行，返回 `multi_agent_mode=False` |
+| Phase 2 DAG | `agent_multi_agent_enabled=True` | `_run_dag()`：Layer 1 先行 → Layer 2 并行 → 聚合，返回 `multi_agent_mode=True` |
+
+**降级与信号**：
+- 并行节点失败数 ≥ `agent_dag_failure_threshold`（默认 2）→ 返回 `dag_degraded=True`（可观测信号，不阻断聚合）
+- 任一并行 Agent 抛异常 → `_run_parallel_agents` 防御性兜底转为 FAILED（`return_exceptions=True` 保证不影响其他节点）
+- `RepairAgent` 失败 → `repair_plan=None`，下游 `TestAgent` / `SecurityAgent` 返回 SKIPPED，`GitAgent` 仍执行
+
+#### 17.9.4 Phase 2 返回结构
+
+```json
+{
+  "repair_plan": {...} | null,
+  "sources": {"vector_recall": [...], "git_context": [...], "knowledge_base_hit": bool},
+  "agent_trace": [
+    {"agent_name": "repair", "status": "success", ...},
+    {"agent_name": "git", "status": "success", ...},
+    {"agent_name": "test", "status": "success", ...},
+    {"agent_name": "security", "status": "success", ...}
+  ],
+  "git_attribution": {...} | null,
+  "test_plan": {...} | null,
+  "security_review": {...} | null,
+  "multi_agent_mode": true,
+  "dag_degraded": false
+}
+```
+
+---
+
+## 18. Dashboard 实时 SSE 推送（DASH-SSE-001，2026-07-30）
+
+> 对应 PRD FR20。在 Web 控制台 Dashboard 现有 10s 轮询基础上叠加 SSE 实时推送通道，使 trace/error 写入后前端无需等待下一轮轮询即可刷新。
+
+### 18.1 设计目标与定位
+
+| 目标 | 设计落点 |
+| --- | --- |
+| 降低运维观测延迟 | trace/error 写入 → `invalidate_cache` → 广播 → 前端去抖刷新（~500ms），替代最长 10s 轮询等待 |
+| 零侵入主写入链路 | 广播钩子挂在 `invalidate_cache` 内，`try/except` 静默降级，广播失败不影响 trace/error 落库 |
+| 向后兼容 | `dashboard_sse_enabled=False` 默认关闭，关闭时端点返回 503、广播为 no-op，行为与旧版完全一致 |
+| 复用现有鉴权 | EventSource 无法设置自定义 header，复用 `AuthMiddleware` 的 `?api_key=` query 参数降级 |
+
+### 18.2 模块结构
+
+| 文件 | 职责 |
+| --- | --- |
+| `app/api/dashboard_events.py` | `DashboardEventBus` 进程内广播总线 + `broadcast_dashboard_event` 便捷函数 + 模块级 `dashboard_hub` 单例 |
+| `app/api/dashboard.py` | `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 内挂广播钩子 |
+| `app/web/dashboard.html` | 前端 EventSource 客户端（去抖 refresh + 轮询兜底 + 断线重连） |
+| `app/config.py` | `dashboard_sse_enabled: bool = False` feature flag |
+
+### 18.3 DashboardEventBus 广播总线设计
+
+**为何不复用 MCP 的 `SSEHub`（`app/mcp/transports/sse.py`）？**
+MCP `SSEHub` 是 session-scoped 的——订阅需绑定 `Mcp-Session-Id`，专为 MCP 协议的 server→client notifications 设计。Dashboard 是公开 Web 控制台，无 MCP 会话概念，强制复用会引入不必要的 session 门槛与耦合。因此新建独立的 `DashboardEventBus`，职责单一：进程内 pub/sub 广播。
+
+**核心机制**：
+
+```python
+class DashboardEventBus:
+    def __init__(self) -> None:
+        self._subs: list[_DashboardSubscription] = []  # (queue, loop) 元组
+
+    def subscribe(self) -> asyncio.Queue:
+        loop = asyncio.get_running_loop()           # 捕获订阅方所在事件循环
+        q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        self._subs.append(_DashboardSubscription(queue=q, loop=loop))
+        return q
+
+    def publish(self, event: dict) -> int:
+        delivered = 0
+        for sub in list(self._subs):               # 快照遍历，允许迭代中修改
+            try:
+                sub.loop.call_soon_threadsafe(self._put_nowait, sub, event)
+                delivered += 1
+            except RuntimeError:                    # 订阅方 loop 已关闭
+                self._safe_remove(sub)
+        return delivered
+
+    @staticmethod
+    def _put_nowait(sub, event):
+        try:
+            sub.queue.put_nowait(event)
+        except asyncio.QueueFull:                   # 慢消费者：丢旧保最新
+            sub.queue.get_nowait()
+            sub.queue.put_nowait(event)
+```
+
+**设计要点**：
+1. **跨线程投递**：`invalidate_cache` 可能被同步写入路径（非 async 上下文）调用，`publish` 用 `loop.call_soon_threadsafe` 将 `put_nowait` 调度回订阅方的事件循环，避免跨线程直接操作 `asyncio.Queue`。
+2. **队列满策略**：丢旧保最新（`get_nowait` + `put_nowait`）。Dashboard 场景下"最新状态"比"不丢事件"更重要——客户端收到任意一个 `dashboard_changed` 都会全量 re-fetch，丢失中间事件无影响。
+3. **失效订阅清理**：`call_soon_threadsafe` 抛 `RuntimeError`（loop 已关闭）时 `safe_remove` 清理，避免泄漏。
+4. **优雅停机**：`close_all()` 向所有订阅者投递 `{"type":"__close__"}` 终止事件，SSE 端点检测到后 `break` 退出迭代。
+
+### 18.4 SSE 端点设计（`GET /api/dashboard/stream`）
+
+```python
+@router.get("/stream", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
+async def dashboard_stream(request: Request):
+    if not settings.dashboard_sse_enabled:
+        return JSONResponse({"detail": "Dashboard SSE 未启用"}, status_code=503)
+    q = dashboard_hub.subscribe()
+
+    async def event_stream():
+        try:
+            yield ": connected\n\n"
+            while True:
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=15.0)  # 15s 心跳
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                if dashboard_hub.is_close_event(msg):
+                    break
+                yield dashboard_hub.format_event(msg)
+        finally:
+            dashboard_hub.unsubscribe(q)
+
+    resp = StreamingResponse(event_stream(), media_type="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"   # 禁用 Nginx 代理缓冲
+    return resp
+```
+
+**设计要点**：
+1. **15s 心跳**：`asyncio.wait_for(q.get(), timeout=15.0)` 超时后 yield `: ping\n\n`（SSE 注释行，客户端忽略但保活连接），防止代理/浏览器因空闲超时断连。
+2. **`finally` unsubscribe**：无论正常终止、客户端断开还是异常，都从总线注销队列，防泄漏。
+3. **响应头**：`Cache-Control: no-cache` + `X-Accel-Buffering: no` 确保 Nginx/浏览器不缓冲 SSE 流。
+4. **鉴权**：`require_role("admin","developer","viewer")` 依赖门控 + `?api_key=` query 降级（EventSource 无法设自定义 header）。
+
+### 18.5 invalidate_cache 广播钩子
+
+```python
+def invalidate_cache(source: str | None = None) -> None:
+    _cache.pop("all_traces", None)
+    # ... Redis L2 清除 ...
+    try:
+        from app.api.dashboard_events import broadcast_dashboard_event
+        broadcast_dashboard_event({"type": "dashboard_changed", "source": source, "ts": time.time()})
+    except Exception:
+        pass   # 静默降级，不阻断主链路
+```
+
+**设计意图**：广播钩子与 Redis L2 清除同级——都是缓存失效的副作用，均 `try/except` 静默降级。这保证 SSE 广播故障绝不影响 trace/error 写入主链路。
+
+### 18.6 前端 EventSource 集成
+
+```javascript
+let _refreshTimer = null;
+function scheduleRefresh() {                    // 去抖：500ms 内多次事件合并为一次 refresh
+    if (_refreshTimer) return;
+    _refreshTimer = setTimeout(() => { _refreshTimer = null; refresh(); }, 500);
+}
+function initSSE() {
+    try {
+        const apiKey = new URLSearchParams(location.search).get('api_key') || '';
+        const url = '/api/dashboard/stream' + (apiKey ? ('?api_key=' + encodeURIComponent(apiKey)) : '');
+        const es = new EventSource(url);
+        es.onmessage = scheduleRefresh;
+        es.onerror = () => { try { es.close(); } catch (e) {} setTimeout(initSSE, 5000); };
+    } catch (e) { console.error('SSE init failed', e); }
+}
+refresh(); setInterval(refresh, 10000); initSSE();   // 轮询兜底 + SSE 叠加
+```
+
+**设计要点**：
+1. **去抖 refresh**：500ms 合并窗口，避免高频写入触发风暴式 re-fetch。
+2. **轮询兜底**：`setInterval(refresh, 10000)` 保留，SSE 断线期间轮询仍可获取更新。
+3. **断线重连**：`onerror` 关闭连接后 5s 自动 `initSSE()`，应对服务端重启/网络抖动。
+
+### 18.7 降级矩阵
+
+| 场景 | 行为 |
+| --- | --- |
+| `dashboard_sse_enabled=False` | `/stream` 返回 503；`invalidate_cache` 广播为 no-op；前端 EventSource 失败后回落纯轮询 |
+| 广播异常 | `try/except` 静默吞没，不影响主写入链路 |
+| 订阅者 loop 已关闭 | `call_soon_threadsafe` 抛 `RuntimeError` → `safe_remove` 清理 |
+| 队列满（慢消费者） | 丢旧保最新，避免阻塞广播 |
+| 服务端重启 | 前端 `onerror` → 5s 重连 |
+
+### 18.8 测试策略
+
+`tests/unit/test_dashboard_sse.py`（18 用例）覆盖：
+- `DashboardEventBus`：subscribe/unsubscribe/publish/close_all、跨线程投递、队列满丢旧保最新、失效订阅清理
+- `dashboard_stream` 端点：`enabled=False` 返回 503、`enabled=True` 返回 `text/event-stream` + `: connected`、15s 心跳、close 事件终止、`finally` unsubscribe
+- `invalidate_cache` 广播钩子：触发广播、广播失败静默降级
+- 确定性测试：直接迭代 `StreamingResponse.body_iterator`，绕过 HTTP 层避免 async 死锁
+
+测试基线：654 passed / 6 skipped / 0 failed（583 → 654，新增 18 项）；ruff 0 违规。
