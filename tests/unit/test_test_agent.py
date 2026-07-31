@@ -13,9 +13,9 @@ from app.agent.base import AgentContext, AgentStatus
 from app.agent.test_agent import (
     SYSTEM_PROMPT,
     TestAgent,
-    _extract_json,
     _validate_test_plan,
 )
+from app.agent.utils import extract_json
 
 
 def _ctx(repair_plan=None, debug_context=None):
@@ -36,16 +36,16 @@ class TestSystemPrompt:
 
 class TestExtractJson:
     def test_plain_json(self):
-        assert _extract_json('{"a": 1}') == '{"a": 1}'
+        assert extract_json('{"a": 1}') == '{"a": 1}'
 
     def test_markdown_block(self):
         text = '```json\n{"a": 1}\n```'
-        result = _extract_json(text)
+        result = extract_json(text)
         assert result is not None
         assert json.loads(result) == {"a": 1}
 
     def test_no_json(self):
-        assert _extract_json("nothing") is None
+        assert extract_json("nothing") is None
 
 
 class TestValidateTestPlan:

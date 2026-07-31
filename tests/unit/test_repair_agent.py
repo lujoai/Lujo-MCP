@@ -11,9 +11,9 @@ from app.agent.base import AgentContext, AgentStatus
 from app.agent.repair_agent import (
     RepairAgent,
     _validate_repair_plan,
-    _extract_json,
     SYSTEM_PROMPT,
 )
+from app.agent.utils import extract_json
 
 
 class TestSystemPrompt:
@@ -29,31 +29,31 @@ class TestSystemPrompt:
 
 
 class TestExtractJson:
-    """_extract_json 容错提取。"""
+    """extract_json 容错提取。"""
 
     def test_plain_json(self):
         text = '{"patch": "fix"}'
-        assert _extract_json(text) == '{"patch": "fix"}'
+        assert extract_json(text) == '{"patch": "fix"}'
 
     def test_markdown_code_block(self):
         text = '```json\n{"patch": "fix"}\n```'
-        result = _extract_json(text)
+        result = extract_json(text)
         assert result is not None
         assert json.loads(result) == {"patch": "fix"}
 
     def test_markdown_without_lang(self):
         text = '```\n{"patch": "fix"}\n```'
-        result = _extract_json(text)
+        result = extract_json(text)
         assert result is not None
 
     def test_embedded_in_text(self):
         text = 'Here is the plan:\n{"patch": "fix"}\nDone.'
-        result = _extract_json(text)
+        result = extract_json(text)
         assert result is not None
         assert "patch" in result
 
     def test_no_json_returns_none(self):
-        assert _extract_json("no json here") is None
+        assert extract_json("no json here") is None
 
 
 class TestValidateRepairPlan:

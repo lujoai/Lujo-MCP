@@ -159,13 +159,4 @@ class GitAgent(BaseAgent):
         summary = "；".join(parts) + "。"
         return summary[:_MAX_RECENT_CHANGE_CHARS]
 
-    @staticmethod
-    def _skipped(started_at: float, reason: str) -> AgentResult:
-        return AgentResult(
-            agent_name="git",
-            status=AgentStatus.SKIPPED,
-            output={},
-            error=reason,
-            started_at=started_at,
-            finished_at=BaseAgent._now(),
-        )
+    # _skipped 已由 BaseAgent._skipped(cls, started_at, reason) 统一提供
