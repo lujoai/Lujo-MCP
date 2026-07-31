@@ -113,3 +113,31 @@ async def test_delete_session_closes_sse_subscribers():
     close_message = await asyncio.wait_for(q.get(), timeout=1)
     assert hub.is_close_event(close_message) is True
     assert hub.subscriber_count(session_id) == 0
+
+
+# ---------------------------------------------------------------------------
+# TOOL_ROLE_REQUIREMENTS 覆盖校验
+# ---------------------------------------------------------------------------
+
+class TestToolRoleRequirementsCoverage:
+    """确保所有注册工具都在 TOOL_ROLE_REQUIREMENTS 中有条目。"""
+
+    def test_all_registered_tools_have_role_requirement(self):
+        """register_all_tools() 注册的每个工具名都必须出现在 TOOL_ROLE_REQUIREMENTS 中。
+
+        防止新增工具忘记添加角色要求导致 RBAC 静默失效。
+        """
+        from app.mcp.protocol.server import _tool_registry
+        from app.mcp.tools import TOOL_ROLE_REQUIREMENTS, register_all_tools
+
+        # 触发注册（幂等）
+        register_all_tools()
+
+        registered_names = set(_tool_registry.keys())
+        covered_names = set(TOOL_ROLE_REQUIREMENTS.keys())
+
+        missing = registered_names - covered_names
+        assert not missing, (
+            f"以下工具已注册但未在 TOOL_ROLE_REQUIREMENTS 中定义角色要求: {missing}。"
+            f"未定义的工具将默认要求 admin 角色（fail-closed），但应显式声明。"
+        )

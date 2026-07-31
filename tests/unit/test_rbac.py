@@ -108,13 +108,37 @@ class TestRequireRole:
 
     @pytest.mark.asyncio
     async def test_missing_role_raises_403(self, monkeypatch):
-        """request.state 无 role 属性 → 403（fail-closed）。"""
+        """request.state 无 role 属性 + rbac_enabled=True → 403（fail-closed）。"""
         monkeypatch.setattr(settings, "rbac_enabled", True)
         dep = require_role("admin")
         request = _FakeRequest()  # state 上不设置 role 属性
         with pytest.raises(HTTPException) as exc_info:
             await dep(request)
         assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_missing_role_rbac_disabled_returns_admin(self, monkeypatch):
+        """request.state 无 role + rbac_enabled=False → admin（向后兼容放行）。
+
+        对应 rbac.py:71-74 的守卫分支：鉴权未启用时自动放行。
+        """
+        monkeypatch.setattr(settings, "rbac_enabled", False)
+        dep = require_role("admin")
+        request = _FakeRequest()  # state 上不设置 role 属性
+        result = await dep(request)
+        assert result == "admin"
+
+    @pytest.mark.asyncio
+    async def test_missing_role_rbac_enabled_defaults_viewer(self, monkeypatch):
+        """request.state 无 role + rbac_enabled=True → viewer（fail-closed）。
+
+        对应 rbac.py:75-76 的守卫分支。
+        """
+        monkeypatch.setattr(settings, "rbac_enabled", True)
+        dep = require_role("admin", "developer", "viewer")
+        request = _FakeRequest()
+        result = await dep(request)
+        assert result == "viewer"
 
     @pytest.mark.asyncio
     async def test_empty_allowed_roles_rejects_everyone(self):

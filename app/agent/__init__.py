@@ -27,7 +27,6 @@ from app.agent.base import (
 from app.agent.coordinator import Coordinator
 from app.agent.context_assembler import RepairContextAssembler
 from app.agent.dag import (
-    PHASE2_AGENTS,
     PHASE2_FIRST_NODES,
     PHASE2_PARALLEL_NODES,
     build_phase2_agents,
@@ -54,7 +53,6 @@ __all__ = [
     "BaseAgent",
     "Coordinator",
     "GitAgent",
-    "PHASE2_AGENTS",
     "PHASE2_FIRST_NODES",
     "PHASE2_PARALLEL_NODES",
     "QueueFullError",

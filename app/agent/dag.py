@@ -28,15 +28,6 @@ from app.agent.repair_agent import RepairAgent
 from app.agent.security_agent import SecurityAgent
 from app.agent.test_agent import TestAgent
 
-# Phase 2 DAG 节点注册表：name → BaseAgent 实例
-# Coordinator 通过本注册表多态调度，新增 Agent 只需在此注册
-PHASE2_AGENTS: dict[str, BaseAgent] = {
-    "repair": RepairAgent(),
-    "git": GitAgent(),
-    "test": TestAgent(),
-    "security": SecurityAgent(),
-}
-
 # DAG 拓扑：
 # - 先行节点（串行执行，产出 repair_plan）
 # - 并行节点（基于 repair_plan 并行审查）
@@ -57,4 +48,4 @@ def build_phase2_agents() -> dict[str, BaseAgent]:
 
 def get_phase2_agent_names() -> list[str]:
     """返回 Phase 2 DAG 中所有 Agent 名称（用于文档与配置校验）。"""
-    return list(PHASE2_AGENTS.keys())
+    return PHASE2_FIRST_NODES + PHASE2_PARALLEL_NODES

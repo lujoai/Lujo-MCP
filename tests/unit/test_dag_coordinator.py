@@ -19,7 +19,6 @@ from app.agent.base import (
 )
 from app.agent.coordinator import Coordinator
 from app.agent.dag import (
-    PHASE2_AGENTS,
     PHASE2_FIRST_NODES,
     PHASE2_PARALLEL_NODES,
     build_phase2_agents,
@@ -48,7 +47,7 @@ class TestDagTopology:
         assert agents["repair"] is not agents2["repair"]
 
     def test_phase2_agents_all_baseagent(self):
-        for agent in PHASE2_AGENTS.values():
+        for agent in build_phase2_agents().values():
             assert isinstance(agent, BaseAgent)
 
 
