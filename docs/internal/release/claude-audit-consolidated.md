@@ -503,3 +503,97 @@
 ```
 
 </details>
+
+---
+
+## 十二、Claude Code Review — 审查终稿（2026-07-31）
+
+> **审查范围**：beta-release 分支 vs main，29 修改文件 + 10 新增文件，~2500 行 diff
+> **审查维度**：安全·权限 / 数据流 / 阻塞·性能 / 文档一致性 / 代码复用
+> **审查方法**：5 Agent 并行扫描（安全 / 删除行为 / 文档 / 阻断项 / 代码复用）
+> **测试基线**：657 passed / 6 skipped / 0 failed（审查后）
+
+### 审查结论
+
+| 级别 | 原始发现 | 真 bug 已修 | 误报 | 设计债已修 | 剩余低优先 |
+|------|----------|------------|------|-----------|-----------|
+| P0 | 6 | 3 | 3 | — | 0 |
+| P1 | 9 | 2 | 7 | — | 0 |
+| P2 | 13 | 5 | 2 | 5 | 1 |
+| 文档 | 5 | — | 1 | 3 | 1 |
+| **合计** | **33** | **10** | **13** | **8** | **2** |
+
+**结论：代码层面零阻断项，可上线、可开源。** 剩余 2 项为文档收尾（README 中英文一致性 + /metrics 行为变更 release notes 标注）。
+
+### P0 修复摘要
+
+| 编号 | 修复 |
+|------|------|
+| P0-01 | Dashboard fetchJSON 加 Authorization header（`dashboard.html:82`） |
+| P0-04 | MCP RBAC 未注册工具默认 admin（`mcp_routes.py:91`） |
+| P0-08 | MCP dispatch 400→500（`mcp_routes.py:112`） |
+| P0-02/03/06 | ❌ 误报（无 JWT / CORS 已安全 / 无文件写入） |
+
+### P1 修复摘要
+
+| 编号 | 修复 |
+|------|------|
+| P1-01 | SSE close_all 改用 _put_nowait（`dashboard_events.py:96`） |
+| P1-08 | 随 P0-01 修复 |
+| P1-02~07/09 | ❌ 误报（无 JWT / 只返回类名 / reason 正确 / 403 正确 / 已有限流） |
+
+### P2 修复摘要
+
+| 编号 | 修复 |
+|------|------|
+| P2-01 | 代码重复 → BaseAgent/utils 重构（净减 252 行） |
+| P2-04 | messages[:3] → BaseAgent._call_llm 不截断 |
+| P2-05 | ctx mutation → 参数化传递 |
+| P2-07 | PHASE2_AGENTS 单例移除 |
+| P2-08 | dispatch 400→500 |
+| P2-09 | 贪婪正则 → 非贪婪 .*?（3 文件） |
+| P2-12 | TOOL_ROLE_REQUIREMENTS 覆盖测试 |
+| P2-13 | rbac_enabled=False 分支测试 |
+| P2-02/10 | ❌ 误报 |
+
+### 文档修复摘要
+
+| 编号 | 修复 |
+|------|------|
+| DOC-01 | PRD 路径 app/llm/rag_* → app/rag/* |
+| DOC-03 | ROADMAP Phase 4.5 标记 ✅ |
+| DOC-04 | DESIGN §17 已有 Phase 2 架构 |
+| DOC-02 | ❌ 误报 |
+| DOC-05 | ⚠️ 低优先（README 重写） |
+
+### 代码复用重构
+
+| 文件 | 重构前 | 重构后 | 变化 |
+|------|--------|--------|------|
+| repair_agent.py | 280 | 143 | -137 |
+| test_agent.py | 280 | 153 | -127 |
+| security_agent.py | 319 | 193 | -126 |
+| git_agent.py | 172 | 162 | -10 |
+| base.py | 104 | 196 | +92 |
+| utils.py | — | 51 | +51 |
+| **净减** | | | **-257** |
+
+### 审查后健康度
+
+| 维度 | 审查前 | 审查后 | 说明 |
+|------|--------|--------|------|
+| 安全性 | 5.0 | 8.5 | P0 全清，RBAC fail-closed，鉴权补全 |
+| 代码质量 | 7.0 | 8.5 | 重复代码消除，正则修复，状态码修正 |
+| 架构 | 8.0 | 8.5 | BaseAgent 基类方法抽取，utils 公共模块 |
+| 文档 | 6.0 | 8.0 | 8 份文档同步，路径修正，状态更新 |
+| **综合** | **6.5** | **8.5** | 从"不能上线"到"可上线可开源" |
+
+### Git 提交记录
+
+```
+6f1df2f docs: 同步审计文档 P2 状态更新
+26d6c1d fix(p2): 清理 PHASE2_AGENTS 单例 + 补齐测试 + 审查报告
+f770bbf refactor(agent): 提取公共方法到 BaseAgent/utils
+c75420f feat: Phase 2 多 Agent DAG + Dashboard SSE + RBAC
+13ade06 fix(security): beta-release 全量审查 P0/P1/P2 修复
+```
