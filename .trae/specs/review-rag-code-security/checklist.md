@@ -1,0 +1,8 @@
+- [x] INTERVIEW.md 已从 git 索引移除（`git ls-files --error-unmatch INTERVIEW.md` 返回失败）
+- [x] INTERVIEW.md 本地文件仍存在（`Test-Path INTERVIEW.md` 返回 True）
+- [x] `.gitignore` 包含 `INTERVIEW.md` 条目
+- [x] `git status` 不再显示 INTERVIEW.md 为 modified（显示为 D = staged deletion，不再是 M = modified）
+- [x] TRAE-code-review 审查报告已产出（结论：无问题发现）
+- [x] TRAE-security-review 审查报告已产出（结论：无可利用问题发现）
+- [x] 审查范围仅覆盖 RAG 模块 Python 代码，未审查 .md 文件
+- [x] 审查发现的问题均附有 `file:line` 代码链接（N/A — 无问题发现）
