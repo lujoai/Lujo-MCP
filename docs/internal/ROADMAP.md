@@ -2,7 +2,7 @@
 
 > 定位：项目长期演进路线图，汇总已完成阶段与待开发阶段的技术方向。
 > 当前开发执行计划见 [DEV_PLAN.md](./DEV_PLAN.md)，技术架构设计见 [DESIGN.md](./DESIGN.md)，企业级架构综合评审见 [CODE_REVIEW.md](./CODE_REVIEW.md)。
-> 最近更新：2026-07-26（AI Debug Agent Phase 1 落地）
+> 最近更新：2026-07-27（beta-release 全量审查：P0×6 + P1×9 + P2×12 阻断上线/开源，健康度 6.5/10）
 > 功能完成度请以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准；本文件只描述长期演进方向，不直接代表默认可交付状态。
 
 ---
@@ -76,25 +76,22 @@
 - ✅ 向量检索 RAG 抽象层（`VectorStore` ABC + `add(docs)`/`search(query, top_k)` 检索语义；`InProcessVectorStore` Jaccard 实现；工厂 + 注册表插槽；analyzer.py KB hook 区集成作为精确指纹 miss 后的二级 fallback）
 - ✅ Qdrant 适配器（`QdrantVectorStore`：OpenAI/智谱 Embeddings 语义召回；uuid5 幂等 upsert；静默降级；2026-07-26 完成）
 - ✅ AI Debug Agent Phase 1（单 Agent `RepairAgent` + 多 Agent 协同框架 `BaseAgent` ABC 预留；2026-07-26 完成）
+- ✅ AI Debug Agent Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排；`RepairAgent` 先行 → 三 Agent 并行审查；2026-07-30 完成）
+
+### Phase 8：实时观测增强 ✅
+
+- ✅ Dashboard 实时 SSE 推送（`DASH-SSE-001`，2026-07-30）：`DashboardEventBus` 进程内广播总线（跨线程 `call_soon_threadsafe`，队列满丢旧保最新）+ `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 终止）+ `invalidate_cache` 广播钩子（静默降级）+ 前端 EventSource（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（零开销向后兼容）；鉴权复用 `?api_key=` query 降级
 
 ---
 
 ## 待开发阶段
 
-### Phase 8：AI Debug Agent Phase 2（多 Agent DAG）
+### 后续增量能力
 
 | 方向 | 说明 | 依赖 |
 |------|------|------|
-| 多 Agent DAG 编排 | 在 Phase 1 已预留的 `BaseAgent` ABC 与 `Coordinator` 编排框架基础上扩展多 Agent DAG（Git Agent + Test Agent + Security Agent）与并行编排 | Phase 1 AI Debug Agent 已落地（`app/agent/` 模块） |
 | Browser SDK 压缩 e2e 联调 | V5 压缩传输增强验证 | 代码已完成，仅 CI 验证 |
-
-### Phase 7：智能化续作（剩余项）
-
-| 方向 | 说明 | 依赖 |
-|------|------|------|
-| Qdrant 向量检索适配器 | ✅ 已完成（2026-07-26）：OpenAI/智谱 Embeddings 语义召回；不可用时静默降级 | 已落地 |
-| AI Debug Agent Phase 1 | ✅ 已完成（2026-07-26）：单 Agent `RepairAgent` + `BaseAgent` ABC 预留 + `Coordinator` 编排 + `RepairQueue` 削峰 + 2 REST 端点 + 2 MCP 工具 | Qdrant 语义召回已就绪 |
-| P3-7 L3 缓存预热 | ✅ 已完成（2026-07-26）：只写 L1 不刷新 L2 TTL | 已落地 |
+| Docker Compose 完善 | 一键启动完整开发环境 | 本机 Docker daemon（STAB-007） |
 
 ### Browser SDK 续作
 

@@ -1,8 +1,14 @@
-"""RepairAgent —— 生成结构化可执行修复方案。
+"""TestAgent —— 验证策略生成（Phase 2 多 Agent DAG 节点）。
 
-复用 analyzer._get_async_client() 获取 AsyncOpenAI 客户端（零侵入 analyzer.py）。
-重试/fallback 模式参照 analyzer._retry_call_async，独立一份以避免改 analyzer 公共签名。
-_validate_repair_plan 参照 analyzer._validate_and_normalize 的容错 JSON 提取模式。
+职责：基于 RepairPlan（若 RepairAgent 已成功）+ 调试上下文，生成可执行的验证策略，
+包括：推荐测试用例、受影响测试文件、回归风险点。供 Coordinator 聚合到最终修复方案。
+
+设计要点：
+- 依赖 RepairAgent 的输出（repair_plan）；RepairAgent 失败时返回 SKIPPED（非 FAILED）
+- 复用 analyzer._get_async_client() 取 LLM 客户端（零侵入 analyzer.py）
+- 重试/fallback 模式参照 repair_agent.py（独立一份避免跨模块私有函数耦合）
+- LLM 输出容错：_validate_test_plan 缺字段补默认、超长截断
+- 输出 AgentResult.output = {"test_plan": {...}}
 """
 
 from __future__ import annotations
@@ -18,39 +24,33 @@ from openai import APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.agent.repair")
+logger = logging.getLogger("ai-debug-mcp.agent.test")
 
-
-SYSTEM_PROMPT = """你是一位资深的代码修复工程师。基于以下调试上下文、历史相似修复、git 近期改动，
-生成可执行的修复方案。输出 JSON：
+SYSTEM_PROMPT = """你是一位资深的测试工程师。基于以下修复方案与调试上下文，生成可执行的验证策略。输出 JSON：
 
 {
-  "patch": "具体的代码修改方案 —— 包含文件路径、修改位置、修改前/后代码片段、修改动作",
-  "affected_files": ["受影响的文件列表（绝对/相对路径）"],
-  "validation_strategy": "验证策略 —— 如何验证修复有效（单测/集成测/手动验证步骤）",
-  "risk_assessment": "风险评估 —— 可能引入的副作用、回归风险、影响范围",
-  "confidence": "high/medium/low",
-  "rationale": "修复思路的推理过程"
+  "test_files": ["受影响的测试文件列表（绝对/相对路径）"],
+  "test_cases": ["推荐新增或修改的测试用例描述"],
+  "regression_risks": ["回归风险点列表"],
+  "validation_steps": ["手动验证步骤（若自动化测试不足）"],
+  "coverage_note": "覆盖度说明：当前测试是否充分覆盖修复点"
 }
 
 只输出 JSON，不要包含其他文字。"""
 
 REQUIRED_FIELDS = (
-    "patch",
-    "affected_files",
-    "validation_strategy",
-    "risk_assessment",
+    "test_files",
+    "test_cases",
+    "regression_risks",
+    "validation_steps",
 )
-VALID_CONFIDENCE = {"high", "medium", "low"}
 MAX_FIELD_CHARS = 4000
 MAX_RAW_TRUNCATED = 800
+MAX_LIST_ITEMS = 30
 
 
 def _extract_json(content: str) -> Optional[str]:
-    """从 LLM 输出中提取 JSON 字符串，支持 markdown code block。
-
-    与 analyzer._extract_json 同模式，独立一份避免跨模块私有函数耦合。
-    """
+    """从 LLM 输出中提取 JSON 字符串（与 repair_agent._extract_json 同模式）。"""
     stripped = content.strip()
     if stripped.startswith("```"):
         match = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
@@ -63,21 +63,13 @@ def _extract_json(content: str) -> Optional[str]:
 
 
 def _truncate_field(value: str, max_chars: int) -> str:
-    """截断字符串到指定长度。"""
     if not isinstance(value, str):
         value = str(value)
     return value[:max_chars] if len(value) > max_chars else value
 
 
-def _validate_repair_plan(raw_output: str) -> dict[str, Any]:
-    """校验并净化 RepairAgent 的 LLM 输出。
-
-    步骤（与 analyzer._validate_and_normalize 对称）：
-      1. 容错 JSON 提取（支持 markdown code block、嵌套文本）
-      2. Schema 校验（必填字段齐全 + confidence 合法）
-      3. 字段长度截断
-      4. 仍失败返回结构化 fallback（patch 标记无法解析）
-    """
+def _validate_test_plan(raw_output: str) -> dict[str, Any]:
+    """校验并净化 TestAgent 的 LLM 输出（与 _validate_repair_plan 同模式）。"""
     parsed: Optional[dict[str, Any]] = None
     parse_succeeded = False
     try:
@@ -98,23 +90,16 @@ def _validate_repair_plan(raw_output: str) -> dict[str, Any]:
 
     result: dict[str, Any] = {}
     for field_name in REQUIRED_FIELDS:
-        val = parsed.get(field_name, "")
-        if field_name == "affected_files":
-            # affected_files 必须是 list[str]
-            if isinstance(val, list):
-                result[field_name] = [str(item) for item in val][:50]
-            else:
-                result[field_name] = []
+        val = parsed.get(field_name, [])
+        if isinstance(val, list):
+            result[field_name] = [str(item) for item in val][:MAX_LIST_ITEMS]
         else:
-            result[field_name] = _truncate_field(val, MAX_FIELD_CHARS) if val else ""
+            result[field_name] = []
 
-    confidence = parsed.get("confidence")
-    if not confidence or confidence not in VALID_CONFIDENCE:
-        confidence = "low"
-    result["confidence"] = confidence
-
-    rationale = parsed.get("rationale", "")
-    result["rationale"] = _truncate_field(rationale, MAX_FIELD_CHARS) if rationale else ""
+    coverage_note = parsed.get("coverage_note", "")
+    result["coverage_note"] = (
+        _truncate_field(coverage_note, MAX_FIELD_CHARS) if coverage_note else ""
+    )
 
     if not parse_succeeded:
         result["raw_truncated"] = _truncate_field(raw_output, MAX_RAW_TRUNCATED)
@@ -122,25 +107,31 @@ def _validate_repair_plan(raw_output: str) -> dict[str, Any]:
     return result
 
 
-class RepairAgent(BaseAgent):
-    """生成结构化修复方案的 Agent（Phase 1 实现）。
+class TestAgent(BaseAgent):
+    """验证策略生成 Agent（Phase 2 DAG 节点）。
 
-    复用 analyzer._get_async_client() 获取 AsyncOpenAI 客户端，
-    熔断器自动覆盖（analyzer._get_llm_circuit_breaker）。
+    依赖 RepairAgent 输出（repair_plan）；RepairPlan 缺失时返回 SKIPPED。
+    LLM 不可用时返回 FAILED（含原因），由 Coordinator 静默降级。
     """
 
-    name = "repair"
+    name = "test"
 
     async def run(self, ctx: AgentContext) -> AgentResult:
-        """执行修复方案生成。失败返回 FAILED 状态，由 Coordinator 静默降级。"""
+        """执行验证策略生成。"""
         started_at = self._now()
         try:
-            # 延迟导入避免循环依赖
+            # 依赖 RepairAgent 的输出（由 Coordinator 注入 ctx.repair_context.repair_plan）
+            repair_plan = (ctx.repair_context or {}).get("repair_plan")
+            if not repair_plan:
+                return self._skipped(
+                    started_at, "repair_plan unavailable, skip test plan generation"
+                )
+
             from app.llm.analyzer import _get_async_client
 
             client = _get_async_client()
             model = ctx.model or settings.agent_model or settings.llm_model
-            messages = self._build_messages(ctx)
+            messages = self._build_messages(ctx, repair_plan)
 
             result = await asyncio.wait_for(
                 self._call_llm_with_retry(
@@ -153,17 +144,17 @@ class RepairAgent(BaseAgent):
                 timeout=settings.agent_timeout,
             )
 
-            repair_plan = result["analysis"]
+            test_plan = result["analysis"]
             return AgentResult(
                 agent_name=self.name,
                 status=AgentStatus.SUCCESS,
-                output={"repair_plan": repair_plan},
+                output={"test_plan": test_plan},
                 started_at=started_at,
                 finished_at=self._now(),
                 usage=result["usage"],
             )
         except Exception as e:
-            logger.warning("RepairAgent failed: %s", e, exc_info=True)
+            logger.warning("TestAgent failed: %s", e, exc_info=True)
             return AgentResult(
                 agent_name=self.name,
                 status=AgentStatus.FAILED,
@@ -173,15 +164,21 @@ class RepairAgent(BaseAgent):
                 finished_at=self._now(),
             )
 
-    def _build_messages(self, ctx: AgentContext) -> list[dict[str, str]]:
-        """构建 LLM messages：SYSTEM_PROMPT + 装配后的修复上下文 JSON。"""
-        repair_ctx = ctx.repair_context
-        # 组装用户消息：debug_context + prior_analysis + vector_recall + git_context
+    def _build_messages(
+        self, ctx: AgentContext, repair_plan: dict[str, Any]
+    ) -> list[dict[str, str]]:
+        """构建 LLM messages：SYSTEM_PROMPT + repair_plan + 调试上下文摘要。"""
+        debug_ctx = ctx.debug_context or {}
+        exception = debug_ctx.get("exception") or {}
         user_payload = {
-            "debug_context": repair_ctx.get("debug_context", {}),
-            "prior_analysis": repair_ctx.get("prior_analysis"),
-            "vector_recall": repair_ctx.get("vector_recall", []),
-            "git_context": repair_ctx.get("git_context", []),
+            "repair_plan": repair_plan,
+            "error_type": exception.get("type", ""),
+            "error_message": exception.get("message", ""),
+            "stack_files": [
+                f.get("file", "")
+                for f in (exception.get("frames") or [])[:5]
+                if f.get("file")
+            ],
         }
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
         return [
@@ -197,11 +194,7 @@ class RepairAgent(BaseAgent):
         temperature: float,
         max_retries: int,
     ) -> dict[str, Any]:
-        """带重试的异步 LLM 调用。参照 analyzer._retry_call_async 模式。
-
-        重试 RateLimitError / APITimeoutError / APIError；耗尽抛 RuntimeError。
-        fallback 模型逻辑与 analyzer 一致。
-        """
+        """带重试的异步 LLM 调用（与 RepairAgent._call_llm_with_retry 同构）。"""
         last_error: Optional[Exception] = None
 
         for attempt in range(max_retries + 1):
@@ -214,7 +207,7 @@ class RepairAgent(BaseAgent):
                 )
                 choice = response.choices[0]
                 content = choice.message.content or "{}"
-                analysis = _validate_repair_plan(content)
+                analysis = _validate_test_plan(content)
                 return {
                     "analysis": analysis,
                     "model": response.model,
@@ -235,7 +228,7 @@ class RepairAgent(BaseAgent):
                 last_error = e
                 wait = min(2 ** attempt, 30)
                 logger.warning(
-                    "RepairAgent rate limit, retrying in %ds (attempt %d/%d)",
+                    "TestAgent rate limit, retrying in %ds (attempt %d/%d)",
                     wait, attempt + 1, max_retries,
                 )
                 if attempt < max_retries:
@@ -243,7 +236,7 @@ class RepairAgent(BaseAgent):
             except APITimeoutError as e:
                 last_error = e
                 logger.warning(
-                    "RepairAgent timeout, retrying (attempt %d/%d)",
+                    "TestAgent timeout, retrying (attempt %d/%d)",
                     attempt + 1, max_retries,
                 )
                 if attempt < max_retries:
@@ -251,29 +244,36 @@ class RepairAgent(BaseAgent):
             except APIError as e:
                 last_error = e
                 logger.error(
-                    "RepairAgent API error on attempt %d: %s",
-                    attempt + 1, e,
+                    "TestAgent API error on attempt %d: %s", attempt + 1, e
                 )
                 if attempt < max_retries:
                     await asyncio.sleep(1)
 
-        # 所有重试失败，尝试 fallback 模型
-        if (
-            model != settings.llm_fallback_model
-            and settings.llm_fallback_model
-        ):
+        # fallback 模型
+        if model != settings.llm_fallback_model and settings.llm_fallback_model:
             logger.warning(
-                "主模型 %s 不可用，切换到 fallback: %s",
+                "TestAgent 主模型 %s 不可用，切换 fallback: %s",
                 model, settings.llm_fallback_model,
             )
             return await self._call_llm_with_retry(
                 client,
                 settings.llm_fallback_model,
-                messages[:3],  # fallback 时缩短 prompt
+                messages[:3],
                 temperature,
-                1,  # 只重试 1 次
+                1,
             )
 
         raise RuntimeError(
-            f"RepairAgent LLM 调用失败（已重试 {max_retries} 次）: {last_error}"
+            f"TestAgent LLM 调用失败（已重试 {max_retries} 次）: {last_error}"
+        )
+
+    @staticmethod
+    def _skipped(started_at: float, reason: str) -> AgentResult:
+        return AgentResult(
+            agent_name="test",
+            status=AgentStatus.SKIPPED,
+            output={},
+            error=reason,
+            started_at=started_at,
+            finished_at=BaseAgent._now(),
         )

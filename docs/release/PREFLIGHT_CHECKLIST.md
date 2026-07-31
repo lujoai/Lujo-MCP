@@ -1,7 +1,7 @@
 # 启动前检查清单 / Pre-flight Checklist
 
 **适用版本 / Applicable Version**: v0.3.0  
-**最后更新 / Last Updated**: 2026-07-25
+**最后更新 / Last Updated**: 2026-07-30
 
 ---
 
@@ -245,6 +245,27 @@ cp .env.example .env
 # 判定标准 / Pass Criteria: 根据实际需求配置，生产环境不建议使用 *
 ```
 
+### 3.4a JWT 配置（启用 OAuth 时必选）
+
+- [ ] **[必选]** JWT_SECRET 已配置且非硬编码值
+
+```bash
+# JWT_SECRET=<your_random_secret_at_least_32_chars>
+# 判定标准 / Pass Criteria:
+#   - JWT_SECRET 非空且长度 >= 32
+#   - 禁止使用硬编码降级密钥（当前代码会静默降级，需显式配置）
+# 异常处理 / Contingency:
+#   - 生成随机密钥: python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+- [ ] **[必选]** 生产环境 CORS 必须收紧
+
+```bash
+# CORS_ORIGINS=https://your-domain.com,https://app.your-domain.com
+# 判定标准 / Pass Criteria: 生产环境禁止 CORS_ORIGINS=*
+# 当前代码默认 allow_origins=["*"]，必须显式配置域名白名单
+```
+
 ### 3.5 日志配置
 
 - [ ] **[可选]** 日志级别与格式
@@ -467,6 +488,30 @@ curl http://localhost:8000/health
 #   - 开发环境: 可设为 true 或添加 localhost 到白名单
 ```
 
+### 6.7 JWT 安全
+
+- [ ] **[必选]** JWT 配置安全性检查
+
+```bash
+# 检查项：
+#   1. JWT_SECRET 已配置（非硬编码降级值）
+#   2. 多 Worker 部署时 JWT_SECRET 一致（否则跨 worker token 验证失败）
+#   3. OAuth id_token 不通过 URL query string 传递
+# 判定标准 / Pass Criteria: 上述三项全部满足
+# 注意：当前版本 JWT 多 Worker 不同步问题已知（BETA-P1-03）
+```
+
+### 6.8 RBAC 工具覆盖
+
+- [ ] **[必选]** 新增 MCP 工具必须在 TOOL_ROLE_REQUIREMENTS 注册
+
+```bash
+# 验证方式：检查 app/mcp/tools/__init__.py 中 TOOL_ROLE_REQUIREMENTS 的 keys
+# 是否覆盖 register_all_tools() 注册的所有工具
+# 判定标准 / Pass Criteria: 两个集合完全一致
+# 注意：当前无程序化校验（BETA-P2-12），需人工核对
+```
+
 ---
 
 ## 7. UI 验证环境检查 / UI Verification Environment
@@ -617,6 +662,28 @@ curl -X POST http://localhost:8000/mcp \
 ```bash
 # 浏览器访问 http://localhost:8000/dashboard
 # 判定标准 / Pass Criteria: 页面正常加载，无 404 错误
+```
+
+### 9.6 Dashboard SSE 实时推送
+
+- [ ] **[可选]** Dashboard SSE 端点可访问
+
+```bash
+curl -N -H "Authorization: Bearer <API_KEY>" "http://localhost:8000/api/dashboard/stream?api_key=<API_KEY>"
+# 判定标准 / Pass Criteria: 返回 SSE 事件流（event: ping 或 event: refresh）
+# 注意：需启用 dashboard_sse_enabled=true
+```
+
+### 9.7 AI Debug Agent 工具注册
+
+- [ ] **[可选]** MCP 工具列表包含 repair_async 和 repair_result
+
+```bash
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
+# 判定标准 / Pass Criteria: 返回的 tools 数组包含 repair_async 和 repair_result
+# 注意：需启用 agent_enabled=true（默认 false）
 ```
 
 ---

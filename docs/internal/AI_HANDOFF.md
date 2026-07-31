@@ -16,14 +16,22 @@
 |------|------|
 | 项目版本 | v0.3.0 |
 | MCP 工具数 | HTTP 17 / stdio 17（新增 `repair_async` / `repair_result`，FR19） |
-| 测试覆盖 | 保留单元、集成与环境依赖型 skip 测试；实际可交付状态需结合 `DELIVERY_MATRIX.md` 与 `STABILITY_REPORT.md` 判断 |
+| 测试覆盖 | 654 passed / 6 skipped / 0 failed（单元 654 + 集成按需）；实际可交付状态需结合 `DELIVERY_MATRIX.md` 与 `STABILITY_REPORT.md` 判断 |
 | 存储后端 | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境 |
 | 数据层优化 | 分区、归档、批量写入、优雅降级、熔断器均有真实代码；默认启用范围以配置和运行环境为准 |
 | LLM Provider | openai / zhipu / custom（真实代码已落地；启用依赖外部 LLM 服务） |
-| 当前阶段 | 真实完成度收口、MCP HTTP 流式闭环与稳定性验证已完成，现已进入 AI Debug Agent Phase 1 落地后的多 Agent 协同演进阶段 |
-| 当前 Sprint | AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）+ Qdrant 适配器 + L3 缓存预热 + 三轨并行均已完成；下一步为 AI Debug Agent Phase 2（多 Agent DAG，AGENT-002）、Browser SDK 压缩 e2e 联调降级为 CI 任务 |
+| 当前阶段 | 真实完成度收口已完成；beta-release Phase 2 全量审查发现 P0×6 + P1×9 + P2×12 阻断上线和开源（健康度 6.5/10）；需先清 P0 阻断项再推进后续功能 |
+| 当前 Sprint | ❌ beta-release 全量审查（2026-07-27）：P0×6 阻断项（Dashboard 鉴权缺失 / JWT 硬编码降级 / CORS 通配 / RBAC 旁路 / URL 泄露 key / 路径注入）必须先修；详见 claude-audit-consolidated.md §十一 |
 
 ### 最近完成事项
+
+- ✅ Dashboard 实时 SSE 推送（`DASH-SSE-001`，2026-07-30）：
+  - **目标**：在 Dashboard 现有 10s 轮询基础上叠加 SSE 实时推送，trace/error 写入后前端 ~500ms 内去抖刷新
+  - **新增文件**：`app/api/dashboard_events.py`（`DashboardEventBus` 进程内广播总线——`subscribe()` 返回 `asyncio.Queue(maxsize=256)`，`publish()` 用 `loop.call_soon_threadsafe` 跨线程投递，队列满丢旧保最新，`close_all()` 优雅停机）
+  - **修改文件**：`app/api/dashboard.py`（新增 `GET /api/dashboard/stream` SSE 端点：15s 心跳 + close 终止 + `finally` unsubscribe 防泄漏；`invalidate_cache` 内挂广播钩子，广播失败 `try/except` 静默降级）、`app/web/dashboard.html`（前端 EventSource：去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）、`app/config.py`（`dashboard_sse_enabled=False` 默认关闭）
+  - **设计决策**：不复用 MCP `SSEHub`（session-scoped），新建独立 `DashboardEventBus`（无 session 门槛）；鉴权复用 `?api_key=` query 降级（EventSource 无法设自定义 header）
+  - **测试**：`tests/unit/test_dashboard_sse.py` 18 用例（总线线程安全 + 端点 + 广播降级 + 确定性测试直接迭代 `body_iterator`）；测试基线 636 → 654 passed / 6 skipped / 0 failed；ruff 0 违规
+  - **文档同步**：TODO/ROADMAP/DEV_PLAN/DELIVERY_MATRIX/PRD/DESIGN/AI_HANDOFF/handoff/README/PROJECT_SUMMARY 10 份文档已同步
 
 - ✅ RAG 模块领域化整理（2026-07-26）：
   - **迁移目标**：RAG（检索增强生成）从 `app/llm/` 独立为 `app/rag/` 领域模块，与 LLM 编排（analyzer）职责分离
@@ -62,7 +70,22 @@
   - **测试**：6 单元测试文件（63 用例）+ 3 集成测试文件（8 用例，e2e skip-if-no-api-key）
   - **测试基线**：583 passed / 6 skipped / 0 failed（从 520 增加 63）；Ruff 0 违规
   - **降级矩阵**：`agent_enabled=False` 路由不挂载；LLM 不可用返回结构化 fallback；上下文子采集器失败静默降级；LLM 返回非 JSON 由 `_validate_repair_plan` 容错填充默认值并标记 `confidence=low`
-  - **后续待办**：Phase 2 多 Agent DAG（`AGENT-002`）——新增 `GitAgent` / `TestAgent` / `SecurityAgent` 继承 `BaseAgent`，`Coordinator` 扩展为多 Agent DAG 并行编排
+  - **后续待办**：✅ Phase 2 多 Agent DAG 已完成（`AGENT-002`，2026-07-30，见下）
+
+- ✅ AI Debug Agent Phase 2 多 Agent DAG 完成档（2026-07-30，AGENT-002）：
+  - **Phase 2 定位**：多 Agent DAG 编排 —— `RepairAgent`（先行，产出 `repair_plan`）→ `GitAgent` / `TestAgent` / `SecurityAgent`（并行审查）
+  - **新增模块** `app/agent/`（7→11 文件）：
+    - `git_agent.py`：`GitAgent` 纯 git 归因（复用 `get_recent_diff` + 优先复用 `repair_context.git_context`，不调 LLM）；输出 `suspect_commits` / `recent_changes` / `attribution`；无堆栈帧返回 SKIPPED
+    - `test_agent.py`：`TestAgent` 基于修复方案生成验证策略（`test_files` / `test_cases` / `regression_risks` / `validation_steps` / `coverage_note`）；复用 `analyzer._get_async_client`，独立重试/fallback；`repair_plan` 缺失返回 SKIPPED
+    - `security_agent.py`：`SecurityAgent` 对修复方案做安全审查（10 类风险：LFI/SSRF/SQLi/CmdInjection/PathTraversal/AuthBypass/InfoLeak/Deserialization/HardcodedSecret/Other）；`_validate_security_review` 容错 JSON + severity/category 合法化；`repair_plan` 缺失返回 SKIPPED
+    - `dag.py`：多 Agent DAG 拓扑定义 —— `PHASE2_FIRST_NODES=["repair"]` + `PHASE2_PARALLEL_NODES=["git","test","security"]`；`build_phase2_agents()` 构造节点注册表
+  - **修改文件**：
+    - `app/agent/coordinator.py`：新增 `_run_dag()` + `_run_parallel_agents()`；`agent_multi_agent_enabled=False` 走 Phase 1 `_run_phase1()` 兼容路径；并行节点失败静默降级 + `dag_degraded` 信号（失败数 ≥ `agent_dag_failure_threshold`）
+    - `app/agent/__init__.py`：导出新 Agent + DAG 拓扑常量
+    - `app/config.py`：新增 2 个配置项 `agent_dag_parallel_timeout=0` / `agent_dag_failure_threshold=2`（`agent_multi_agent_enabled` 已在 Phase 1 预留）
+  - **测试**：新增 4 单测文件（`test_git_agent.py` 13 用例 / `test_test_agent.py` 13 用例 / `test_security_agent.py` 15 用例 / `test_dag_coordinator.py` 9 用例）+ `test_agent_config.py` 增 2 用例 = 53 新增单测
+  - **验证**：单元测试 583 → 636 passed / 6 skipped / 0 failed；ruff 0 违规
+  - **降级矩阵**：`agent_multi_agent_enabled=False` 走 Phase 1 单 Agent 串行（向后兼容）；`RepairAgent` 失败 → 下游 Test/Security SKIPPED，Git 仍执行；并行节点失败数达阈值返回 `dag_degraded=True`（不阻断聚合）
 
 - ✅ Qdrant 向量检索适配器完成（2026-07-26）：
   - 新增 `app/rag/qdrant_vector_store.py`：`QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回）+ `uuid5(fingerprint)` 幂等 upsert + 静默降级（add=no-op / search=空）
@@ -281,7 +304,7 @@
 
 ### 当前阻塞问题
 
-- ✅ Release Audit 全部收口：P0/P1/P2/P3 清零 + C5/C4/H7 核实（详见 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md)），已打 `v0.3.0` tag（未推送，待用户确认）。
+- ❌ **beta-release 全量审查（2026-07-27）**：5 维度 × 5 Agent 并行扫描，发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项。**结论：不能上线，不能开源。** 健康度从 8.5/10 下调至 6.5/10。详见 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md) §十一。
 - 🟡 Docker 容器化验证仍未完成：当前机器仅有 Docker CLI，daemon 未启动
 - 🟡 测试状态基线：以仓库内最新 `pytest` 实际执行结果为准；当前已完成稳定性专项回归与 T6 知识库专项验证（41 passed）
 - ✅ Phase 0-5 全部完成：asyncpg 异步存储、AsyncOpenAI、多级缓存 L1+L2、errors 表持久化、spec_store 独立表、Browser SDK V2、GitHub Actions CI；后续增量中 Browser SDK V3/V6 与指纹知识库基础能力也已落地
@@ -646,7 +669,7 @@
 | **发布** | GitHub Actions CI 已完成 ✅ | 自动化测试与发布保障 |
 | **P2** | Browser SDK V3-V6 | ✅ 基础版已完成；Browser SDK 压缩 e2e 联调已降级为 CI 任务（代码已完成，仅验证） |
 | **P3** | 数据层长期优化 + 可观测性 | traces 分区/归档 ✅、OpenTelemetry ✅、熔断器 ✅、P3-6 异步分析队列 ✅、P3-7 L3 缓存预热 ✅（2026-07-26，只写 L1 不刷新 L2 TTL） |
-| **P4** | 智能化 | 指纹知识库基础版 ✅、向量检索 RAG 双后端（in_process + Qdrant 语义召回）✅（2026-07-26）、AI Debug Agent Phase 1 ✅（2026-07-26，单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）；下一步 AI Debug Agent Phase 2 多 Agent DAG（`AGENT-002`） |
+| **P4** | 智能化 | 指纹知识库基础版 ✅、向量检索 RAG 双后端（in_process + Qdrant 语义召回）✅（2026-07-26）、AI Debug Agent Phase 1 ✅（2026-07-26，单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）；❌ beta-release 审查 P0×6 阻断，需先清阻断项 |
 | **AUDIT-2** | 安全加固 | AUDIT-2-13/14 RBAC + API_KEY 轮换 ✅；多 key 恒定时间比较 + 角色分级（admin > developer > viewer）已落地 |
 
 ---

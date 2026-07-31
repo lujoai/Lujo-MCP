@@ -3,6 +3,11 @@
 > Post-release branch updates / 发布后主干增量：
 > - Browser SDK 已继续补齐 V3 网络错误自动标记、V6 UI 静默失败自动检测
 > - 调试分析链路已新增指纹知识库基础能力（命中优先 + 自动沉淀）
+> - Dashboard 实时 SSE 推送（DASH-SSE-001，2026-07-30）：`DashboardEventBus` 广播总线 + SSE 端点 + 前端 EventSource
+> - AI Debug Agent Phase 2 多 Agent DAG（AGENT-002，2026-07-30）：`RepairAgent` + `GitAgent`/`TestAgent`/`SecurityAgent` 并行审查
+> - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
+> - 测试基线：654 passed / 6 skipped / 0 failed
+> - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见 `docs/internal/release/claude-audit-consolidated.md` §十一
 > - 上述增量属于 `v0.3.0` 之后的主干演进，正式版本号以后续发版说明为准
 
 **Version / 版本**: v0.3.0  
@@ -118,7 +123,7 @@ v0.3.0 是 ai-debug-mcp 项目的稳定性与生产就绪版本。本次发布�
 
 4. **Docker 容器化**
    - Docker Compose 配置已提供
-   - 容器化验证待环境支持
+   - 容器化验证待环境支持（`STAB-007`）
 
 ### 🔄 兼容性说明
 

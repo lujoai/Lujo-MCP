@@ -80,7 +80,10 @@
 
 <script>
 async function fetchJSON(url) {
-  const res = await fetch(url);
+  const apiKey = new URLSearchParams(location.search).get('api_key') || '';
+  const headers = {};
+  if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+  const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(res.statusText);
   return res.json();
 }
@@ -206,8 +209,34 @@ async function refresh() {
   document.getElementById('refresh').textContent = 'Updated ' + new Date().toLocaleTimeString('zh-CN');
 }
 
+// ── SSE 实时推送（叠加在 10s 轮询之上，轮询仍作兜底）──
+// 服务端在 trace/error 写入时广播变更信号，前端收到后即时 re-fetch，
+// 替代"等下一个 10s 轮询周期"。SSE 断开自动重连，期间轮询照常工作。
+let _refreshTimer = null;
+function scheduleRefresh() {
+  // 去抖：写入爆发期（如批量 ingest）合并为一次 refresh，避免抖动
+  if (_refreshTimer) return;
+  _refreshTimer = setTimeout(() => { _refreshTimer = null; refresh(); }, 500);
+}
+
+function initSSE() {
+  try {
+    // EventSource 无法设置自定义 header，复用 ?api_key= query 降级（与 sendBeacon 同机制）
+    const apiKey = new URLSearchParams(location.search).get('api_key') || '';
+    const url = '/api/dashboard/stream' + (apiKey ? ('?api_key=' + encodeURIComponent(apiKey)) : '');
+    const es = new EventSource(url);
+    es.onmessage = scheduleRefresh;
+    es.onerror = () => {
+      try { es.close(); } catch (e) {}
+      // 轮询仍兜底；5s 后尝试重连 SSE（服务端可能重启或临时不可用）
+      setTimeout(initSSE, 5000);
+    };
+  } catch (e) { console.error('SSE init failed', e); }
+}
+
 refresh();
 setInterval(refresh, 10000);
+initSSE();
 </script>
 </body>
 </html>

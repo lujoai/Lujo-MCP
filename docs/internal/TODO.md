@@ -35,8 +35,24 @@
 | AUDIT-2-14 | 安全审查 P3 | API_KEY 多 key 轮换 + 恒定时间比较（`hmac.compare_digest` 遍历不短路） | 已完成 | `claude-audit-consolidated.md` | `app/auth/key_rotation.py`；单 key 向后兼容 |
 | DOC-004 | 文档同步 | 全量 Markdown 文档同步：清理 Qdrant 留空插槽 / 待实现 / 待引入等陈旧引用 | 已完成 | `handoff.md` | 2026-07-26 完成；修正 PRD/AI_HANDOFF/DESIGN/CODE_REVIEW/ROADMAP/INTERVIEW/PROJECT_SUMMARY 7 份文档；历史修订记录与 RESUME.md 保留 |
 | AGENT-001 | Phase 7 智能化续作 | AI Debug Agent Phase 1（单 Agent `RepairAgent` + 多 Agent 协同框架 `BaseAgent` ABC 预留） | 已完成 | `DEV_PLAN.md`、`ROADMAP.md`、`DELIVERY_MATRIX.md` | 2026-07-26 落地：新增 `app/agent/` 模块（7 文件）+ 2 REST 端点 + 2 MCP 工具（工具数 15→17）；6 单测文件 63 用例 + 3 集成测试 8 用例；测试基线 583 passed / 6 skipped / 0 failed；ruff 0 违规；`agent_enabled` 默认 False 向后兼容 |
-| AGENT-002 | Phase 2 多 Agent DAG | AI Debug Agent Phase 2（多 Agent DAG：Git Agent + Test Agent + Security Agent 编排） | 已录入 | `DEV_PLAN.md`、`ROADMAP.md` | Phase 1 已预留 `BaseAgent` ABC 与 Coordinator 编排框架；Phase 2 在此基础上扩展多 Agent DAG 与并行编排 |
+| AGENT-002 | Phase 2 多 Agent DAG | AI Debug Agent Phase 2（多 Agent DAG：Git Agent + Test Agent + Security Agent 编排） | 已完成 | `DEV_PLAN.md`、`ROADMAP.md`、`DELIVERY_MATRIX.md` | 2026-07-30 落地：新增 `app/agent/git_agent.py` / `test_agent.py` / `security_agent.py` / `dag.py`（模块 7→11 文件）；`Coordinator` 扩展 DAG 调度（RepairAgent 先行 → Git/Test/Security 并行审查）；2 个新配置项 `agent_dag_parallel_timeout` / `agent_dag_failure_threshold`；新增 53 单测（当时 636 passed / 6 skipped / 0 failed；DASH-SSE-001 落地后达 654）；ruff 0 违规；`agent_multi_agent_enabled` 默认 False 向后兼容 |
+| DASH-SSE-001 | Dashboard 实时 SSE 推送 | Dashboard 实时推送：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 钩子广播 + 前端 EventSource（去抖 refresh + 轮询兜底 + 断线重连） | 已完成 | `DEV_PLAN.md`、`ROADMAP.md`、`DELIVERY_MATRIX.md`、`PRD.md`、`DESIGN.md` | 2026-07-30 落地：新增 `app/api/dashboard_events.py`（无 session 门槛广播总线，跨线程 `call_soon_threadsafe`，队列满丢旧保最新）；`dashboard.py` 新增 `/stream` 端点（15s 心跳 + close 终止）+ `invalidate_cache` 内挂广播钩子；`dashboard.html` EventSource 集成；`dashboard_sse_enabled=False` 默认关闭（向后兼容）；鉴权复用 `?api_key=` query 降级（EventSource 无法设自定义 header）；新增 18 单测（654 passed / 6 skipped / 0 failed）；ruff 0 违规 |
 | SDK-007 | Browser SDK 续作 | Browser SDK 压缩 e2e 联调（V5 压缩传输增强验证） | 已录入 | `DEV_PLAN.md` | 代码已完成，仅验证；降级为 CI 任务，不占开发轨 |
+| BETA-P0-01 | beta-release 全量审查 | Dashboard 前端鉴权缺失：所有 fetch 不携带 API Key | 已录入 | `claude-audit-consolidated.md` §十一 | 上线阻断 |
+| BETA-P0-02 | beta-release 全量审查 | JWT HS256 硬编码降级密钥 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线阻断 |
+| BETA-P0-03 | beta-release 全量审查 | CORS 通配符 allow_origins=["*"] | 已录入 | `claude-audit-consolidated.md` §十一 | 上线阻断 |
+| BETA-P0-04 | beta-release 全量审查 | TOOL_ROLE_REQUIREMENTS 缺 fallback，新工具跳过 RBAC | 已录入 | `claude-audit-consolidated.md` §十一 | 上线阻断 |
+| BETA-P0-05 | beta-release 全量审查 | API Key 通过 URL 查询参数传递（SSE 端点） | 已录入 | `claude-audit-consolidated.md` §十一 | 上线阻断 |
+| BETA-P0-06 | beta-release 全量审查 | save_result 文件名未校验 trace_id，路径遍历 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线阻断 |
+| BETA-P1-01 | beta-release 全量审查 | Dashboard SSE 队列满时 close 事件丢弃，流永不终止 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-02 | beta-release 全量审查 | JWT 无 token blacklist，无法主动失效 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-03 | beta-release 全量审查 | 多 Worker 下 JWT Key 不同步 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-04 | beta-release 全量审查 | id_token 返回到前端 URL query string | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-05 | beta-release 全量审查 | 全局 ExceptionHandler 非 DEBUG 模式泄露 traceback | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-06 | beta-release 全量审查 | Agent _skipped() 报 "未配置" 常量误导运维 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-07 | beta-release 全量审查 | RBAC 认证失败返回 403 而非 401 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-08 | beta-release 全量审查 | Dashboard 无独立鉴权中间件 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
+| BETA-P1-09 | beta-release 全量审查 | 写操作 ingest/traces 无速率限制 | 已录入 | `claude-audit-consolidated.md` §十一 | 上线必修 |
 
 ## 二、已确认的来源与映射
 
@@ -54,3 +70,11 @@
 1. 所有新增待开发项必须先录入本台账，再进入 `DEV_PLAN.md` 排期。
 2. 任何文档若声明“已完成”，必须可在 `DELIVERY_MATRIX.md` 中找到对应条目。
 3. 涉及真实环境验证的事项，完成后必须同时更新 `STABILITY_REPORT.md`。
+
+## 四、beta-release 全量审查来源
+
+| 来源位置 | 发现内容 | 已同步任务 |
+| --- | --- | --- |
+| `claude-audit-consolidated.md` §十一 | beta-release Phase 2 全量审查：P0×6 + P1×9 + P2×12 + 文档×5 | `BETA-P0-01`~`BETA-P1-09` + `BETA-P2-*` + `BETA-DOC-*` |
+| `docs/internal/PRD.md` | 路径过期、保留期不匹配 | `BETA-DOC-01` `BETA-DOC-02` |
+| `docs/internal/DESIGN.md` | Phase 2 多 Agent DAG 架构缺失 | `BETA-DOC-04` |

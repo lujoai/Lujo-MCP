@@ -19,6 +19,7 @@ from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, I
 from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES
 from app.mcp.transports.session import registry
 from app.mcp.transports.sse import hub
+from app.mcp.tools import TOOL_ROLE_REQUIREMENTS
 
 logger = logging.getLogger("ai-debug-mcp.api.mcp")
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -87,12 +88,28 @@ async def mcp_post(request: Request):
                 status_code=400,
             )
 
+    # ── RBAC：tools/call 工具级角色门控 ──
+    if method == "tools/call":
+        tool_name = parsed.get("params", {}).get("name", "")
+        required_roles = TOOL_ROLE_REQUIREMENTS.get(tool_name)
+        if required_roles is None:
+            # 未在 TOOL_ROLE_REQUIREMENTS 注册的工具默认需要 admin 角色（fail-closed）
+            required_roles = ("admin",)
+            logger.warning("工具 '%s' 未在 TOOL_ROLE_REQUIREMENTS 注册，默认要求 admin 角色", tool_name)
+        role = getattr(request.state, "role", "admin")
+        if role not in required_roles:
+            return JSONResponse(
+                make_error(req_id, INVALID_REQUEST,
+                           f"权限不足：工具 '{tool_name}' 需要 {required_roles} 角色，当前为 '{role}'"),
+                status_code=403,
+            )
+
     # ── 分发 ──
     try:
         result = await dispatch_raw(raw)
     except Exception:
         logger.exception("MCP dispatch 异常")
-        return JSONResponse(make_error(req_id, INTERNAL_ERROR, "内部错误，详情见服务端日志"), status_code=400)
+        return JSONResponse(make_error(req_id, INTERNAL_ERROR, "内部错误，详情见服务端日志"), status_code=500)
 
     # 通知类消息无 id，不返回响应体
     if req_id is None:

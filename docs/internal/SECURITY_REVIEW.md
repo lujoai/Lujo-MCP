@@ -1,6 +1,8 @@
 # ai-debug-mcp 安全审查报告
 
 > ⚠️ **已归档（2026-07-23）**：本报告为原始安全审查文档，包含 C1~C10 合规分析与 SEC-01~15 风险证据链。**审计追踪与待办状态以 [claude-audit-consolidated.md](./release/claude-audit-consolidated.md) 为准**，本文件不再更新。
+>
+> ⚠️ **beta-release 全量审查追加（2026-07-27）**：Phase 2 多 Agent DAG + Dashboard SSE + RBAC 工具级门控代码审查发现 6 个 P0 安全阻断项（Dashboard 鉴权缺失 / JWT 硬编码降级 / CORS 通配 / RBAC 旁路 / URL 泄露 key / 路径注入），详见 [claude-audit-consolidated.md §十一](./release/claude-audit-consolidated.md#十一beta-release-phase-2-全量审查2026-07-27)。
 
 > 定位：基于项目《AI Debug Assistant (Production)》角色规范的安全合规审查，逐条核验硬约束与边界场景在代码中的实现情况。
 > 注意：本报告为静态代码取证，未做动态运行时验证；未修改任何代码。

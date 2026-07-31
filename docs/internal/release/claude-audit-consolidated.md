@@ -1,9 +1,9 @@
 # ai-debug-mcp 审查待办清单（最终版）
 
-> 来源：整合 v0.3.0 和 v0.3.1 两次审查待办清单。
+> 来源：整合 v0.3.0 和 v0.3.1 两次审查待办清单 + beta-release Phase 2 全量审查。
 > 目的：统一管理所有待处理项，避免重复，明确优先级。
-> 更新时间：2026-07-26（AI Debug Agent Phase 1 落地，测试基线 520→583）
-> 状态：P0/P1/P2/P3 全部完成 ✅；未确认项 C5/C4/H7 全部核实 ✅；Phase 1 短期优化完成。Release Audit 收口完毕，已打正式 `v0.3.0` tag；Phase 5 P3-1/P3-2/P3-3/P3-5/P3-8 + Phase 6 P3-4/P3-6/P3-7 + Phase 7 智能错误分析/指纹知识库/向量检索 RAG（in-process + Qdrant 语义召回）+ AUDIT-2-13/14 RBAC & 多 key 轮换 + AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留）均已完成
+> 更新时间：2026-07-27（beta-release Phase 2 全量审查：5 维度 × 5 Agent 并行扫描）
+> 状态：v0.3.x P0/P1/P2/P3 全部完成 ✅；beta-release 审查发现 P0×6 + P1×9 + P2×12 + 文档×5，阻断上线和开源。
 > 说明：本文件只代表 Release Audit 清单收口结果，不再作为当前项目功能完成度的权威来源；默认交付状态请查看 [../DELIVERY_MATRIX.md](../DELIVERY_MATRIX.md)。
 
 ---
@@ -197,14 +197,15 @@
 ## 九、当前状态
 
 - **测试基线**：单元 `583 passed / 6 skipped / 0 failed`（基线 520 + AI Debug Agent Phase 1 新增 63 项：6 单测文件覆盖 `BaseAgent` ABC / `RepairAgent` 重试 fallback / `RepairContextAssembler` 并发降级 / `RepairQueue` 削峰 drain / `Coordinator` 编排 / schemas 校验；3 集成测试 8 用例 e2e skip-if-no-api-key）；集成 `49 passed / 19 skipped / 0 failed`（test_api.py 8 个鉴权 401 基线已修复：conftest `os.environ["API_KEY"]=""` env var 优先于 .env → M7 归一化关鉴权 + `HOST=127.0.0.1` 避开 SEC-03）；ruff AI Debug Agent 文件 0 违规（3 处预存违反位于 ui_runner.py / test_sdk_v5_enhancements.py / test_otel_collector_integration.py，不在本轮范围）
-- **健康度评分**：8.5/10（工程质量 9.0，安全性 8.5，架构可维护性 8.0，文档可信度 8.5）
+- **健康度评分**：6.5/10（↓2.0）——工程质量 8.0，安全性 5.0（P0×6 严重），架构可维护性 7.0（代码重复严重），文档可信度 6.0（Phase 2 架构缺失）
+- **beta-release 全量审查**（2026-07-27）：5 维度 × 5 Agent 并行扫描，发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项。**结论：不能上线，不能开源。**
 - **技术债清理**（2026-07-23）：`test_full_flow.py` 硬编码 PG 密码已修复（`ad6f8dd`，改由 `.env` 经 `settings` 读取）；`pg_store.py` 拆分评估完成（有条件值得，方案 C，详见 [ROADMAP.md](../ROADMAP.md) 技术债务）
 - **Phase 5-7 完成项**（2026-07-24）：P3-1 分区（PostgreSQL 声明式 RANGE 分区）、P3-2 归档（traces_archive 表）、P3-3 批量写入、P3-4 OpenTelemetry、P3-5 优雅降级、P3-8 熔断器、Phase 7 智能错误分析引擎
 - **三轨并行完成项**（2026-07-25）：P3-6 消息队列削峰（有界 asyncio.Queue + Semaphore(K) + K 常驻消费协程）、Phase 7 向量检索 RAG 抽象层（in-process Jaccard + 工厂/注册表插槽）、AUDIT-2-13 RBAC 角色分级、AUDIT-2-14 API_KEY 多 key 轮换
 - **Qdrant 适配器 + L3 预热完成项**（2026-07-26）：Qdrant 向量检索适配器（OpenAI/智谱 Embeddings 语义召回 + uuid5 幂等 upsert + 静默降级）、P3-7 L3 缓存预热（只写 L1 不刷新 L2 TTL）
 - **AI Debug Agent Phase 1 完成项**（2026-07-26）：`app/agent/` 模块（7 文件）——`BaseAgent` ABC + `RepairAgent` + `Coordinator` 编排器 + `RepairQueue` 削峰队列 + `RepairContextAssembler`（并发聚合 analyze + retrieve_similar + get_recent_diff，各失败静默降级）；2 REST 端点 + 2 MCP 工具（工具数 15→17）；9 个 `agent_*` 配置项（`agent_enabled` 默认 False）；Phase 1 单 Agent + 多 Agent 协同框架预留
-- **下一目标**：AI Debug Agent Phase 2 多 Agent DAG（Git Agent + Test Agent + Security Agent，`AGENT-002`）、Browser SDK 端到端联调与压缩传输增强、Docker 容器化验证（STAB-007）
-- **代码审查**：code-review skill 已执行，发现 3 个 Bug + 4 个 Issue，全部已修复或已补充测试
+- **下一目标**：❌ **先清 P0×6 阻断项**，再考虑 Phase 2 多 Agent DAG（AGENT-002）、Browser SDK 端到端联调、Docker 容器化验证
+- **代码审查**：beta-release 全量审查已完成（见 §十一），32 项发现待处理
 
 ---
 
@@ -219,3 +220,286 @@
 | 禁止硬编码密钥 | ✅ | 未修改 |
 | 禁止绕过中间件安全栈 | ✅ | 未修改 |
 | 最小修改原则 | ✅ | 每项只改必要文件 |
+
+---
+
+## 十一、beta-release Phase 2 全量审查（2026-07-27）
+
+> **审查范围**：beta-release 分支 vs main，29 个修改文件 + 10 个新增文件，~2500 行 diff。
+> **审查维度**：5 个 Agent 并行扫描——A 安全/权限、B 删除行为审计、C 文档一致性、D 阻断项、E 代码复用。
+> **审查结论**：❌ **不能上线，不能开源。** P0×6 阻断项任一可被利用导致安全事故。
+
+### 状态总览
+
+| 优先级 | 数量 | 上线 | 开源 | 说明 |
+|--------|------|------|------|------|
+| P0 阻断 | 6 | ⚠️ 2已修/3误报/1待议 | ❌ | 2 确认修复 + 3 误报（JWT不存在/CORS已安全/无文件写入）+ 1 待议（SSE URL key 浏览器限制） |
+| P1 必修 | 9 | ✅ 1已修/7误报/1已修 | ⚠️ | P1-02~04/06/07/09 误报；P1-01 已修复；P1-05 误报；P1-08 已随 P0-01 修复 |
+| P2 建议 | 13 | ✅ 2已修/7待议/4误报 | ⚠️ | P2-01/05/06/07 设计问题待议；P2-02/10 误报；P2-08/09 已修复；P2-03/04/11/12/13 低优先 |
+| 文档脱节 | 5 | ✅ | ⚠️ | PRD 路径过期·保留期不匹配·Phase 2 架构缺失·README 中英不一致 |
+
+---
+
+### P0 — 阻断上线·开源（6 项）
+
+#### BETA-P0-01：Dashboard 前端鉴权完全缺失
+- **文件**：`app/web/dashboard.html:131`
+- **问题**：所有 `fetch()` 调用不携带 API Key。启用 `API_KEY` 后 Dashboard 全部 401，页面空白不可用。
+- **影响**：生产部署标配 `API_KEY`，此问题直接导致 Dashboard 零功能。
+- **状态**：✅ 已修复（2026-07-31）—— `fetchJSON` 从 URL query param 读取 `api_key` 并通过 `Authorization: Bearer` header 传递
+
+#### BETA-P0-02：JWT HS256 硬编码降级密钥
+- **文件**：`app/auth/jwt_auth.py:58`
+- **问题**：`JWT_SECRET` 未配置时降级为硬编码字符串。任何部署者忘记配置 = 所有 token 可伪造。
+- **影响**：应启动时 fail-fast 而非静默降级。
+- **状态**：❌ 误报——`app/auth/jwt_auth.py` 不存在，项目无 JWT 实现，鉴权基于 API Key
+
+#### BETA-P0-03：CORS 通配符
+- **文件**：`app/main.py:78`
+- **问题**：`allow_origins=["*"]`，任意域名可跨域调用所有 API。
+- **影响**：生产必须收紧为显式域名列表。
+- **状态**：❌ 误报——`middleware.py:229` 默认 `cors_origins=""`（不下发 CORS 头），`"*"` 需显式 `CORS_ORIGINS=*` opt-in，已有安全默认值
+
+#### BETA-P0-04：TOOL_ROLE_REQUIREMENTS 缺 fallback
+- **文件**：`app/mcp/tools/__init__.py:37`
+- **问题**：新增 MCP 工具若未在此 dict 注册，RBAC 门控直接跳过，viewer 可调用写类工具。
+- **影响**：安全回归静默发生，无任何警告。
+- **状态**：✅ 已修复（2026-07-31）—— 未注册工具默认要求 `admin` 角色（fail-closed）+ warning 日志
+
+#### BETA-P0-05：API Key 通过 URL 查询参数传递
+- **文件**：`app/api/dashboard.py:216`
+- **问题**：SSE 用 `?api_key=xxx`，浏览器历史/服务器日志/代理日志全部记录明文 key。
+- **影响**：标准做法应为 Authorization header 或短期 token。
+- **状态**：⬜ 待修
+
+#### BETA-P0-06：save_result 文件名注入
+- **文件**：`app/agent/security_agent.py:135`，同模式在 `test_agent.py:261`
+- **问题**：`f"security_review_{trace_id}.json"` 未校验 trace_id，路径遍历可写任意文件。
+- **影响**：需 `re.sub(r'[^a-zA-Z0-9_-]', '', trace_id)` 白名单过滤。
+- **状态**：❌ 误报——Agent 代码无 `open()`/`write()` 文件操作，结果通过内存 job 系统返回，无磁盘写入
+
+---
+
+### P1 — 上线前必须修（9 项）
+
+#### BETA-P1-01：Dashboard SSE 永不终止
+- **文件**：`app/api/dashboard_events.py:44`
+- **问题**：队列满时 close 事件被静默丢弃，SSE 流永不终止，连接泄漏。
+- **状态**：✅ 已修复（2026-07-31）—— `close_all` 改用 `_put_nowait`（队列满时丢旧保最新，确保 close 事件送达）
+
+#### BETA-P1-02：JWT 无法主动失效
+- **文件**：`app/auth/jwt_auth.py`
+- **问题**：无 token blacklist / 版本号机制。用户被降权后旧 token 仍然有效直到过期。
+- **状态**：❌ 误报——项目无 JWT 实现
+
+#### BETA-P1-03：多 Worker 下 JWT Key 不同步
+- **文件**：`app/auth/jwt_auth.py:67`
+- **问题**：`_CURRENT_KEY` 是进程级变量，多 Gunicorn worker 各自生成不同 key，互相无法验证签名。
+- **状态**：❌ 误报——项目无 JWT 实现
+
+#### BETA-P1-04：id_token 返回到前端
+- **文件**：`app/auth/jwt_auth.py:127`
+- **问题**：Google OAuth 的 id_token 直接塞进 redirect URL query string，浏览器历史/日志可见。
+- **状态**：❌ 误报——项目无 JWT/OAuth 实现
+
+#### BETA-P1-05：全局 ExceptionHandler 泄露堆栈
+- **文件**：`app/main.py:122`
+- **问题**：非 DEBUG 模式下异常响应仍含完整 traceback，暴露内部实现细节。
+- **状态**：❌ 误报——`error_handlers.py:28` 只返回 `{type(exc).__name__}` 类名（如 "RuntimeError"），不含堆栈或消息，traceback 仅写服务端日志
+
+#### BETA-P1-06：Agent _skipped() 报 "未配置" 但实际可能是 API 失败
+- **文件**：`app/agent/git_agent.py:163`, `test_agent.py:271`, `security_agent.py:310`
+- **问题**：`error="xxx agent not configured"` 常量误导运维，实际原因可能是 API key 过期或模型超时。
+- **状态**：❌ 误报——实际 reason 为描述性文本（"no stack frames to attribute"、"repair_plan unavailable, skip security review" 等），非 "not configured" 常量
+
+#### BETA-P1-07：RBAC 认证失败返回 403 而非 401
+- **文件**：`app/auth/rbac.py:67`
+- **问题**：凭证无效/过期返回 403 Forbidden 而非 401 Unauthorized，客户端无法区分"未认证"和"无权限"。
+- **状态**：❌ 误报——`require_role` 做授权（403 正确），鉴权由 `AuthMiddleware` 做（返回 401），职责分离正确
+
+#### BETA-P1-08：Dashboard 无独立鉴权中间件
+- **文件**：`app/api/dashboard.py`
+- **问题**：依赖 query 参数而非标准 Authorization header，与 API 端点鉴权方式不一致。
+- **状态**：✅ 已随 P0-01 修复——`fetchJSON` 现通过 `Authorization: Bearer` header 传递 key
+
+#### BETA-P1-09：写操作无速率限制
+- **文件**：`app/api/ingest.py`, `app/api/debug.py`
+- **问题**：无 auth + 无 rate limit = 任何人都可灌垃圾数据耗尽内存。
+- **状态**：❌ 误报——`middleware.py:134` `ENDPOINT_LIMITS` 已对 `/ingest/*` 设置 120/min、`/api/debug/analyze` 设置 10/min 端点级限流
+
+---
+
+### P2 — 开源前建议修（13 项）
+
+#### BETA-P2-01：三个 Agent 文件 ~300 行逐字复制
+- **文件**：`repair_agent.py` / `test_agent.py` / `security_agent.py`
+- **问题**：`_extract_json`、`_truncate_field`、`_call_llm_with_retry`、`_skipped` 全部 copy-paste。修一处需改四处，遗漏即静默回归。
+- **状态**：⚠️ 设计债——已部分缓解（P2-09 正则修复已同步 3 文件），完整重构需提 `BaseAgent` 公共方法
+- **影响**：不阻塞上线/开源，建议后续迭代抽取公共基类方法
+
+#### BETA-P2-02：Dashboard L1 缓存无驱逐无锁
+- **文件**：`app/api/dashboard.py:19`
+- **问题**：plain dict 无 TTL 驱逐，长时间运行内存无限增长。`analyzer.py` 已有成熟 LRU 实现可复用。
+- **状态**：❌ 误报——`_cache` 仅存一个 key（`"all_traces"`），TTL 30s 由调用方检查，单 key 场景无需 LRU；`invalidate_cache` 的 `pop` + 后续 `set` 受 GIL 保护
+
+#### BETA-P2-03：SSE 端点默认 maxSizeKb=256 偏小
+- **文件**：`app/config.py:60`
+- **问题**：256KB 拦截大型 trace，512KB 更安全。文档未说明此限制。
+- **状态**：⬜ 待修
+
+#### BETA-P2-04：fallback 递归 messages[:3] 截断无效
+- **文件**：`app/agent/test_agent.py:261`
+- **问题**：当前 messages 仅 2 条，[:3] 不截断。未来 prompt 扩展后静默丢弃上下文。
+- **状态**：⚠️ 低风险——当前 2 条消息，[:3] 不截断；未来 prompt 扩展时需审查
+
+#### BETA-P2-05：ctx.repair_context 原地 mutation
+- **文件**：`app/agent/coordinator.py:158`
+- **问题**：同一 ctx 传给并行 Agent，当前仅读安全，但未来扩展易引入竞态。
+- **状态**：⚠️ 设计债——当前并行 Agent 仅读 repair_context，无写操作；未来扩展时需改为不可变传递
+
+#### BETA-P2-06：DAG 注释与实现不一致
+- **文件**：`app/agent/dag.py:11`
+- **问题**：注释称 GitAgent 不依赖 repair_plan 可并行，实际强制串行等待 RepairAgent 完成。
+- **状态**：✅ 已修正注释（dag.py:15-16 已说明"为简化 DAG 拓扑与 trace 顺序，统一在 RepairAgent 之后并行执行"）
+
+#### BETA-P2-07：PHASE2_AGENTS 模块级单例从未被使用
+- **文件**：`app/agent/dag.py:37`
+- **问题**：`build_phase2_agents()` 才是实际路径，模块级单例空闲浪费且误导开发者。
+- **状态**：⚠️ 低优先——`PHASE2_AGENTS` 仅用于 `get_phase2_agent_names()` 取 keys，`build_phase2_agents()` 创建隔离实例；单例存在但不影响正确性
+
+#### BETA-P2-08：MCP dispatch 异常返回 400 而非 500
+- **文件**：`app/mcp/routes.py:127`
+- **问题**：内部 bug 被掩盖为客户端错误，问题定位延迟。
+- **状态**：✅ 已修复（2026-07-31）—— `status_code=400` 改为 `status_code=500`
+
+#### BETA-P2-09：_extract_json 正则贪婪匹配
+- **文件**：`app/agent/security_agent.py:60`
+- **问题**：`(\{.*\})` + DOTALL 贪婪匹配，LLM 返回多段 JSON 时捕获超大字符串导致 `json.loads` 失败。
+- **状态**：✅ 已修复（2026-07-31）—— 3 个 Agent 文件（security/test/repair）统一改为非贪婪 `.*?`
+
+#### BETA-P2-10：Dashboard API 返回已移除的 _cached 字段
+- **文件**：`app/api/dashboard.py:400`
+- **问题**：`build_context()` 返回 `_cached` 字段，文档和代码均未说明用途，前端未使用。
+- **状态**：❌ 误报——`dashboard.py` 中无 `_cached` 字段，grep 确认不存在
+
+#### BETA-P2-11：/metrics 鉴权行为变更未文档化
+- **文件**：`app/observability.py:225`
+- **问题**：旧代码在 `METRICS_AUTH_ENABLED=true` 但未配置 `API_KEY` 时允许访问。新代码改用 `verify_api_key()` 后该场景返回 401。监控系统可能静默中断。
+- **说明**：安全加固方向正确，但属行为变更，需在 release notes 中标注。
+- **状态**：⬜ 待修
+
+#### BETA-P2-12：TOOL_ROLE_REQUIREMENTS 无程序化覆盖校验
+- **文件**：`app/mcp/tools/__init__.py:47`
+- **问题**：当前 17 个工具已全部列出，但无测试或断言校验覆盖完整性。新增工具若遗漏则静默绕过 RBAC。
+- **状态**：⬜ 待修
+
+#### BETA-P2-13：rbac_enabled=False 分支无测试
+- **文件**：`app/auth/rbac.py:71`
+- **问题**：新增的向后兼容守卫（`role is None + rbac_enabled=False → return "admin"`）无测试覆盖。未来重构反转条件时无回归保护。
+- **状态**：⬜ 待修
+
+---
+
+### 文档脱节（5 项）
+
+#### BETA-DOC-01：PRD/ROADMAP 引用已迁移路径
+- **文件**：`docs/internal/PRD.md:223`, `docs/internal/ROADMAP.md:114`
+- **问题**：`app/llm/rag_index.py` → 实际已迁移到 `app/rag/index.py`。
+- **状态**：⬜ 待修
+
+#### BETA-DOC-02：PRD 数据保留期与配置默认值不匹配
+- **文件**：`docs/internal/PRD.md:296` vs `app/config.py:43`
+- **问题**：PRD 写 7 天，默认值 3 天。
+- **状态**：⬜ 待修
+
+#### BETA-DOC-03：ROADMAP Phase 4.5 行未标记完成
+- **文件**：`docs/internal/ROADMAP.md:122`
+- **问题**：Phase 4.5 实际已完成，文档未勾选。
+- **状态**：⬜ 待修
+
+#### BETA-DOC-04：DESIGN.md 缺 Phase 2 架构
+- **文件**：`docs/internal/DESIGN.md`
+- **问题**：多 Agent DAG 协调、Dashboard SSE 实时推送均无架构描述。与代码实现严重脱节。
+- **状态**：⬜ 待修
+
+#### BETA-DOC-05：README 中英文不一致
+- **文件**：`README.md`
+- **问题**：项目定位为中文优先，README 英文部分远多于中文，影响开源形象。
+- **状态**：⬜ 待修
+
+---
+
+### 被删除行为审计（Agent B，4 项）
+
+> 以下为 beta-release diff 中被删除/替换的不变量，检查新代码是否重新建立。
+
+| 编号 | 文件 | 行为变更 | 风险 |
+|------|------|----------|------|
+| BETA-DEL-01 | `app/observability.py:225` | `/metrics` 鉴权从 `hmac.compare_digest(key, settings.api_key or "")` 改为 `verify_api_key(key)`。旧代码在无 API_KEY 时允许访问，新代码返回 401 | P2 — 安全加固方向正确，需文档化 |
+| BETA-DEL-02 | `app/api/mcp_routes.py:91` | 新增 `TOOL_ROLE_REQUIREMENTS.get(tool_name)` 检查，未列出工具直接跳过 RBAC | P0 — 已收录为 BETA-P0-04 |
+| BETA-DEL-03 | `app/auth/rbac.py:71` | 新增 `rbac_enabled=False` 时 `role=None → "admin"` 向后兼容守卫，但无测试覆盖 | P2 — 已收录为 BETA-P2-13 |
+| BETA-DEL-04 | `app/agent/coordinator.py:105` | 三重兜底注释被删除，代码逻辑未变但设计意图文档丢失 | P2 — 维护者可能误删防御层 |
+
+---
+
+### 代码复用审计（Agent E，8 项）
+
+> 以下为 beta-release 新增/修改文件中的高重复度代码段。
+
+| 编号 | 重复位置 | 重复行数 | 说明 |
+|------|----------|----------|------|
+| BETA-DUP-01 | `_extract_json()` × 3 Agent + analyzer.py | 13行×4处 | regex 略有差异（贪婪 vs 非贪婪），修一处需改四处 |
+| BETA-DUP-02 | `_truncate_field()` × 3 Agent + analyzer.py | 5行×4处 | 逻辑完全一致 |
+| BETA-DUP-03 | `_call_llm_with_retry()` × 3 Agent | ~80行×3处 | 仅 logger 名和 validate 函数不同 |
+| BETA-DUP-04 | `_validate_*()` JSON 解析前导块 × 3 Agent | 15行×3处 | try→except→_extract_json→retry 模式逐字复制 |
+| BETA-DUP-05 | `_skipped()` × git/test/security Agent | 8行×3处 | 仅 agent_name 不同，未提取到 BaseAgent |
+| BETA-DUP-06 | 上下文聚合 20 行块 × debug.py 3 端点 | 20行×3处 | get_logs→build_context→promote→collect 模式 |
+| BETA-DUP-07 | Dashboard L1 缓存 vs analyzer.py LRU | 功能重复 | Dashboard 用 plain dict（无驱逐无锁），analyzer 已有成熟实现 |
+| BETA-DUP-08 | 代码注释残留中文 TODO | 多处 | `test_plan.py:191`、`coordinator.py:109` 等 |
+
+---
+
+### 附：完整发现清单（JSON，供自动化消费）
+
+<details>
+<summary>点击展开 32 项发现的 JSON 格式</summary>
+
+```json
+[
+  {"id":"BETA-P0-01","file":"app/web/dashboard.html","line":131,"severity":"P0","category":"security","summary":"Dashboard 前端所有 fetch 请求不携带 API Key，启用鉴权后全部 401"},
+  {"id":"BETA-P0-02","file":"app/auth/jwt_auth.py","line":58,"severity":"P0","category":"security","summary":"JWT HS256 硬编码降级密钥，未配置时所有 token 可伪造"},
+  {"id":"BETA-P0-03","file":"app/main.py","line":78,"severity":"P0","category":"security","summary":"CORS 通配符 allow_origins=['*']"},
+  {"id":"BETA-P0-04","file":"app/mcp/tools/__init__.py","line":37,"severity":"P0","category":"rbac","summary":"TOOL_ROLE_REQUIREMENTS 缺 fallback，未注册工具跳过 RBAC"},
+  {"id":"BETA-P0-05","file":"app/api/dashboard.py","line":216,"severity":"P0","category":"security","summary":"API Key 通过 URL 查询参数传递，日志/历史记录泄露"},
+  {"id":"BETA-P0-06","file":"app/agent/security_agent.py","line":135,"severity":"P0","category":"security","summary":"save_result 文件名未校验 trace_id，路径遍历可写任意文件"},
+  {"id":"BETA-P1-01","file":"app/api/dashboard_events.py","line":44,"severity":"P1","category":"blocking","summary":"队列满时 close 事件被丢弃，SSE 流永不终止"},
+  {"id":"BETA-P1-02","file":"app/auth/jwt_auth.py","line":0,"severity":"P1","category":"security","summary":"JWT 无 token blacklist，无法主动失效"},
+  {"id":"BETA-P1-03","file":"app/auth/jwt_auth.py","line":67,"severity":"P1","category":"security","summary":"多 Worker 下 _CURRENT_KEY 不同步"},
+  {"id":"BETA-P1-04","file":"app/auth/jwt_auth.py","line":127,"severity":"P1","category":"security","summary":"id_token 返回到前端 URL query string"},
+  {"id":"BETA-P1-05","file":"app/main.py","line":122,"severity":"P1","category":"security","summary":"全局 ExceptionHandler 非 DEBUG 模式泄露完整 traceback"},
+  {"id":"BETA-P1-06","file":"app/agent/git_agent.py","line":163,"severity":"P1","category":"observability","summary":"_skipped() 报 '未配置' 常量误导运维"},
+  {"id":"BETA-P1-07","file":"app/auth/rbac.py","line":67,"severity":"P1","category":"rbac","summary":"认证失败返回 403 而非 401"},
+  {"id":"BETA-P1-08","file":"app/api/dashboard.py","line":0,"severity":"P1","category":"security","summary":"Dashboard 无独立鉴权中间件"},
+  {"id":"BETA-P1-09","file":"app/api/ingest.py","line":0,"severity":"P1","category":"security","summary":"写操作 ingest/traces/{id}/tags 无速率限制"},
+  {"id":"BETA-P2-01","file":"app/agent/repair_agent.py","line":49,"severity":"P2","category":"maintainability","summary":"3 个 Agent 文件 ~300 行逐字复制"},
+  {"id":"BETA-P2-02","file":"app/api/dashboard.py","line":19,"severity":"P2","category":"performance","summary":"Dashboard L1 缓存无驱逐无锁"},
+  {"id":"BETA-P2-03","file":"app/config.py","line":60,"severity":"P2","category":"config","summary":"SSE 端点默认 maxSizeKb=256 偏小"},
+  {"id":"BETA-P2-04","file":"app/agent/test_agent.py","line":261,"severity":"P2","category":"correctness","summary":"fallback 递归 messages[:3] 截断无效"},
+  {"id":"BETA-P2-05","file":"app/agent/coordinator.py","line":158,"severity":"P2","category":"concurrency","summary":"ctx.repair_context 原地 mutation，未来扩展易引入竞态"},
+  {"id":"BETA-P2-06","file":"app/agent/dag.py","line":11,"severity":"P2","category":"documentation","summary":"DAG 注释称可并行但代码强制串行"},
+  {"id":"BETA-P2-07","file":"app/agent/dag.py","line":37,"severity":"P2","category":"maintainability","summary":"PHASE2_AGENTS 模块级单例从未被使用"},
+  {"id":"BETA-P2-08","file":"app/mcp/routes.py","line":127,"severity":"P2","category":"error-handling","summary":"MCP dispatch 异常返回 400 而非 500"},
+  {"id":"BETA-P2-09","file":"app/agent/security_agent.py","line":60,"severity":"P2","category":"correctness","summary":"_extract_json 正则贪婪匹配，多段 JSON 时 parse 失败"},
+  {"id":"BETA-P2-10","file":"app/api/dashboard.py","line":400,"severity":"P2","category":"dead-code","summary":"Dashboard API 返回未使用的 _cached 字段"},
+  {"id":"BETA-P2-11","file":"app/observability.py","line":225,"severity":"P2","category":"documentation","summary":"/metrics 鉴权行为变更未文档化"},
+  {"id":"BETA-P2-12","file":"app/mcp/tools/__init__.py","line":47,"severity":"P2","category":"rbac","summary":"TOOL_ROLE_REQUIREMENTS 无程序化覆盖校验"},
+  {"id":"BETA-P2-13","file":"app/auth/rbac.py","line":71,"severity":"P2","category":"test-coverage","summary":"rbac_enabled=False 向后兼容分支无测试"},
+  {"id":"BETA-DOC-01","file":"docs/internal/PRD.md","line":223,"severity":"DOC","category":"documentation","summary":"PRD/ROADMAP 引用已迁移路径 app/llm/rag_index.py"},
+  {"id":"BETA-DOC-02","file":"docs/internal/PRD.md","line":296,"severity":"DOC","category":"documentation","summary":"PRD 数据保留期 7 天 vs 配置默认值 3 天"},
+  {"id":"BETA-DOC-03","file":"docs/internal/ROADMAP.md","line":122,"severity":"DOC","category":"documentation","summary":"ROADMAP Phase 4.5 实际已完成但未标记"},
+  {"id":"BETA-DOC-04","file":"docs/internal/DESIGN.md","line":0,"severity":"DOC","category":"documentation","summary":"DESIGN.md 缺 Phase 2 多 Agent DAG 架构描述"},
+  {"id":"BETA-DOC-05","file":"README.md","line":0,"severity":"DOC","category":"documentation","summary":"README 中英文不一致，影响开源形象"}
+]
+```
+
+</details>

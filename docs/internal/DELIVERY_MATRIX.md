@@ -43,7 +43,8 @@
 | `auto_test` 页面自动遍历 | 需依赖环境 | `app/mcp/tools/auto_test_api.py` | 依赖 Playwright/Chromium 与目标页面环境 |
 | 指纹知识库命中与自动沉淀 | 已完成 | `app/rag/knowledge_base.py` `app/llm/analyzer.py` | 进程内最小知识库已落地；命中时返回 `knowledge_base_hit`/`analysis_source`，LLM 成功后自动沉淀 |
 | 向量检索 RAG（in-process + Qdrant） | 已完成 | `app/rag/vector_store.py` `app/rag/qdrant_vector_store.py` `app/llm/analyzer.py` | `VectorStore` ABC + `InProcessVectorStore`（Jaccard 相似度）+ `QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回）；精确指纹 miss 后做向量召回 fallback；Qdrant 不可用时静默降级 |
-| AI Debug Agent Phase 1（自动修复） | 需依赖环境 | `app/agent/`（7 文件）`app/api/debug.py` `app/mcp/tools/repair_api.py` | `BaseAgent` ABC + `RepairAgent` + `Coordinator` 编排器 + `RepairQueue` 削峰队列 + `RepairContextAssembler`（并发聚合 analyze + retrieve_similar + get_recent_diff，各失败静默降级）；2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）+ 2 MCP 工具（`repair_async` + `repair_result`）；9 个 `agent_*` 配置项（`agent_enabled` 默认 False）；Phase 1 单 Agent + 多 Agent 协同框架预留，Phase 2 多 Agent DAG 为后续待办；启用依赖外部 LLM 服务 |
+| AI Debug Agent Phase 1（自动修复） | 需依赖环境 | `app/agent/`（11 文件）`app/api/debug.py` `app/mcp/tools/repair_api.py` | `BaseAgent` ABC + `RepairAgent` + `Coordinator` 编排器（Phase 1 单 Agent 串行 / Phase 2 多 Agent DAG）+ `RepairQueue` 削峰队列 + `RepairContextAssembler`（并发聚合 analyze + retrieve_similar + get_recent_diff，各失败静默降级）；2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）+ 2 MCP 工具（`repair_async` + `repair_result`）；11 个 `agent_*` 配置项（`agent_enabled` / `agent_multi_agent_enabled` 默认 False）；启用依赖外部 LLM 服务 |
+| AI Debug Agent Phase 2（多 Agent DAG） | 需依赖环境 | `app/agent/git_agent.py` `app/agent/test_agent.py` `app/agent/security_agent.py` `app/agent/dag.py` `app/agent/coordinator.py` | `AGENT-002`（2026-07-30）：多 Agent DAG 编排 —— `RepairAgent`（先行，产出 repair_plan）→ `GitAgent` / `TestAgent` / `SecurityAgent`（并行审查，依赖 repair_plan）；`GitAgent` 纯 git 归因（复用 `get_recent_diff`，不调 LLM），`TestAgent` 生成验证策略，`SecurityAgent` 做安全审查；`agent_multi_agent_enabled=False` 时走 Phase 1 单 Agent 串行（向后兼容）；并行节点失败静默降级 + `dag_degraded` 信号；新增 53 单测 |
 
 ## 三、浏览器 SDK 与采集链路
 
@@ -82,6 +83,7 @@
 | L2 Redis 分析缓存 | 需依赖环境 | `app/llm/analyzer.py` | 需 Redis 环境 |
 | L3 缓存预热（P3-7） | 需依赖环境 | `app/llm/cache_prewarm.py` `app/llm/analyzer.py` | 从 L2 Redis 扫描热门 fingerprint 回填 L1；只写 L1 不刷新 L2 TTL；lifespan 启动/停机钩子；需 Redis 环境 |
 | Dashboard 缓存 | 已完成 | `app/api/dashboard.py` | L1 默认可用，L2 可选 |
+| Dashboard 实时 SSE 推送 | 已完成 | `app/api/dashboard_events.py` `app/api/dashboard.py` `app/web/dashboard.html` | `DASH-SSE-001`（2026-07-30）：`DashboardEventBus` 广播总线（跨线程 `call_soon_threadsafe`，队列满丢旧保最新）+ `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 终止）+ `invalidate_cache` 内挂广播钩子 + 前端 EventSource（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（向后兼容零开销）；鉴权复用 `?api_key=` query 降级（EventSource 无法设自定义 header）；广播失败静默降级不影响主写入链路 |
 | Redis 状态后端 / 限流共享计数 | 需依赖环境 | `app/state/store.py` | 多实例部署需 Redis |
 | LLM 熔断器 | 需依赖环境 | `app/llm/analyzer.py` | 代码已实现；需启用开关并依赖真实 LLM 服务验证 |
 | PG 熔断器 | 需依赖环境 | `app/mcp/core/storage/pg_store.py` | 代码已实现；需启用开关并依赖真实 PG 故障场景验证 |
@@ -94,7 +96,7 @@
 | --- | --- | --- | --- |
 | fail-closed 鉴权 | 已完成 | `app/middleware.py` `app/auth/key_rotation.py` | 支持 Bearer / X-API-Key；多 key 恒定时间比较（`hmac.compare_digest` 遍历不短路）+ 单 key 向后兼容 |
 | API_KEY 多 key 轮换 | 已完成 | `app/auth/key_rotation.py` `app/config.py` | `api_keys` 逗号分隔优先，空时回退单 `api_key`；零签名变更（`AuthMiddleware` 公共签名未变） |
-| RBAC 角色分级 | 已完成 | `app/auth/rbac.py` `app/middleware.py` | admin > developer > viewer 三级；未启用时全 admin（向后兼容）；`require_role(*roles)` FastAPI 依赖工厂；未命中映射默认 viewer（fail-closed） |
+| RBAC 角色分级 | 已完成 | `app/auth/rbac.py` `app/middleware.py` `app/api/debug.py` `app/api/mcp_routes.py` `app/api/ingest.py` `app/api/dashboard.py` `app/api/spec.py` | admin > developer > viewer 三级；未启用时全 admin（向后兼容）；`require_role(*roles)` FastAPI 依赖工厂挂载**全部 33 条 REST 路由**（`debug.py` 14 + `ingest.py` 7 + `dashboard.py` 7 + `spec.py` 5）及 MCP `tools/call` 分发（`mcp_routes.py` 工具级门控）；未命中映射默认 viewer（fail-closed）；⚠️ beta-release 审查发现 TOOL_ROLE_REQUIREMENTS 未覆盖新工具时 RBAC 静默失效（BETA-P0-04） |
 | 请求体大小限制 | 已完成 | `app/middleware.py` | 覆盖 Content-Length 与 chunked 流 |
 | IP / 端点级限流 | 已完成 | `app/middleware.py` | memory 默认可用，Redis 可增强 |
 | 安全响应头 | 已完成 | `app/middleware.py` | 默认启用 |
@@ -108,7 +110,8 @@
 
 1. 更丰富的 MCP server->client notifications 事件类型
 2. Docker 容器化复现实验（`STAB-007`，受本机 Docker daemon 状态影响）
-3. AI Debug Agent Phase 2（多 Agent DAG：Git Agent + Test Agent + Security Agent 编排）；Phase 1 单 Agent `RepairAgent` + `BaseAgent` ABC 框架预留已落地（`AGENT-001`），Phase 2 待办（`AGENT-002`）
-4. Browser SDK 压缩 e2e 联调（代码已完成，待 CI 验证）
+3. Browser SDK 压缩 e2e 联调（代码已完成，待 CI 验证）
+
+> AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）均已落地（`AGENT-001` / `AGENT-002`），`agent_multi_agent_enabled` 默认 False，启用依赖外部 LLM 服务。
 
 > 上述事项已同步纳入 [TODO.md](./TODO.md) 与 [STABILITY_REPORT.md](./STABILITY_REPORT.md) 跟踪。
