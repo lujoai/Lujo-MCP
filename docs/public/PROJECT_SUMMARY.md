@@ -1,9 +1,9 @@
-# ai-debug-mcp 项目摘要
+# Lujo-MCP 项目摘要
 
 > AI Agent 第一入口文件。任何 AI 进入项目请先读本文件，3 分钟理解项目全貌。
 
-> 当前项目功能完成度以 [docs/internal/DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md) 为唯一权威口径。  
-> 待开发项见 [docs/internal/TODO.md](./docs/internal/TODO.md)，稳定性验证状态见 [docs/internal/STABILITY_REPORT.md](./docs/internal/STABILITY_REPORT.md)。
+> 当前项目功能完成度以 [docs/internal/DELIVERY_MATRIX.md](../internal/DELIVERY_MATRIX.md) 为唯一权威口径。  
+> 待开发项见 [docs/internal/TODO.md](../internal/TODO.md)，稳定性验证状态见 [docs/internal/STABILITY_REPORT.md](../internal/STABILITY_REPORT.md)。
 
 ---
 
@@ -37,27 +37,27 @@
 
 | 模块 | 关键文件 | 职责 |
 |------|----------|------|
-| 入口 | [app/main.py](./app/main.py) | FastAPI 实例、路由注册、lifespan |
-| 配置 | [app/config.py](./app/config.py) | pydantic-settings 全局单例 |
-| 中间件 | [app/middleware.py](./app/middleware.py) | 7 个中间件（CORS、Auth、MaxBodySize、RateLimit、SecurityHeaders、Trace + NetworkCapture，fail-closed 鉴权） |
-| 调试 API | [app/api/debug.py](./app/api/debug.py) | /api/debug/* 路由 |
-| Dashboard API | [app/api/dashboard.py](./app/api/dashboard.py) | 从 PostgreSQL 读取 |
-| MCP HTTP | [app/api/mcp_routes.py](./app/api/mcp_routes.py) | Streamable HTTP 传输 |
-| MCP stdio | [app/mcp_server.py](./app/mcp_server.py) | stdio 子进程传输 |
-| 日志核心 | [app/mcp/core/logs.py](./app/mcp/core/logs.py) | add_log/get_logs/list_request_ids |
-| 存储工厂 | [app/mcp/core/storage/factory.py](./app/mcp/core/storage/factory.py) | memory/pg 一键切换 |
-| PG 存储 | [app/mcp/core/storage/pg_store.py](./app/mcp/core/storage/pg_store.py) | 连接池+自动建表（修改需审批） |
-| 上下文构建 | [app/mcp/builders/context.py](./app/mcp/builders/context.py) | build_debug_context |
-| 断言引擎 | [app/mcp/verifier/assert_engine.py](./app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数 |
-| 规范存储 | [app/mcp/verifier/spec_store.py](./app/mcp/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
-| 异常钩子 | [app/mcp/hooks/exception_hook.py](./app/mcp/hooks/exception_hook.py) | sys.excepthook + asyncio |
-| LLM 分析 | [app/llm/analyzer.py](./app/llm/analyzer.py) | 重试/超时/fallback/流式 |
-| 指纹知识库 | [app/rag/knowledge_base.py](./app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀） |
-| 向量检索抽象 | [app/rag/vector_store.py](./app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
-| Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](./app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
-| 工具注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
-| AI Debug Agent | [app/agent/](./app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
-| 浏览器 SDK | [browser-sdk/ai-debug.js](./browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
+| 入口 | [app/main.py](../app/main.py) | FastAPI 实例、路由注册、lifespan |
+| 配置 | [app/config.py](../app/config.py) | pydantic-settings 全局单例 |
+| 中间件 | [app/middleware.py](../app/middleware.py) | 7 个中间件（CORS、Auth、MaxBodySize、RateLimit、SecurityHeaders、Trace + NetworkCapture，fail-closed 鉴权） |
+| 调试 API | [app/api/debug.py](../app/api/debug.py) | /api/debug/* 路由 |
+| Dashboard API | [app/api/dashboard.py](../app/api/dashboard.py) | 从 PostgreSQL 读取 |
+| MCP HTTP | [app/api/mcp_routes.py](../app/api/mcp_routes.py) | Streamable HTTP 传输 |
+| MCP stdio | [app/mcp_server.py](../app/mcp_server.py) | stdio 子进程传输 |
+| 日志核心 | [app/mcp/core/logs.py](../app/mcp/core/logs.py) | add_log/get_logs/list_request_ids |
+| 存储工厂 | [app/mcp/core/storage/factory.py](../app/mcp/core/storage/factory.py) | memory/pg 一键切换 |
+| PG 存储 | [app/mcp/core/storage/pg_store.py](../app/mcp/core/storage/pg_store.py) | 连接池+自动建表（修改需审批） |
+| 上下文构建 | [app/mcp/builders/context.py](../app/mcp/builders/context.py) | build_debug_context |
+| 断言引擎 | [app/mcp/verifier/assert_engine.py](../app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数 |
+| 规范存储 | [app/mcp/verifier/spec_store.py](../app/mcp/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
+| 异常钩子 | [app/mcp/hooks/exception_hook.py](../app/mcp/hooks/exception_hook.py) | sys.excepthook + asyncio |
+| LLM 分析 | [app/llm/analyzer.py](../app/llm/analyzer.py) | 重试/超时/fallback/流式 |
+| 指纹知识库 | [app/rag/knowledge_base.py](../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀） |
+| 向量检索抽象 | [app/rag/vector_store.py](../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
+| Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](../app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
+| 工具注册 | [app/mcp/tools/__init__.py](../app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
+| AI Debug Agent | [app/agent/](../app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
+| 浏览器 SDK | [browser-sdk/ai-debug.js](../browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
 
 ---
 
@@ -118,7 +118,7 @@
 - ✅ 入库前脱敏（复合键名子串匹配 + 白名单）
 - ✅ /metrics 独立鉴权 toggle
 - ✅ CORS 可配置来源
-- ✅ **RBAC 角色分级**（AUDIT-2-13）：admin > developer > viewer 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 **33 条 REST 路由**（debug 14 + ingest 7 + dashboard 7 + spec 5）及 17 个 MCP 工具（`TOOL_ROLE_REQUIREMENTS` 字典门控）；未命中映射默认 viewer（fail-closed）
+- ✅ **RBAC 角色分级**（AUDIT-2-13）：admin > developer > er 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 **33 条 REST 路由**（debug 14 + ingest 7 + dashboard 7 + spec 5）及 17 个 MCP 工具（`TOOL_ROLE_REQUIREMENTS` 字典门控）；未命中映射默认 viewer（fail-closed）
 - ✅ **API_KEY 多 key 恒定时间比较轮换**（AUDIT-2-14）：`verify_api_key` 遍历所有 key 不短路 + `hmac.compare_digest` 防时序侧信道 + 单 key 向后兼容
 - ✅ **LFI/SSRF 防护**：路径白名单 + SSRF URL 白名单（IP/Localhost/Metadata 端点拒绝）
 
@@ -201,7 +201,7 @@
 
 **测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **654 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项）。
 
-**当前优先级**（详见 [ROADMAP.md](./docs/internal/ROADMAP.md) 与 [DEV_PLAN.md](./docs/internal/DEV_PLAN.md)）：
+**当前优先级**（详见 [ROADMAP.md](../internal/ROADMAP.md) 与 [DEV_PLAN.md](../internal/DEV_PLAN.md)）：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
@@ -223,12 +223,12 @@
 
 | 模块 | 文件 | 原因 |
 |------|------|------|
-| PGStore | [app/mcp/core/storage/pg_store.py](./app/mcp/core/storage/pg_store.py) | 已验证，如需修改须先输出问题分析+影响范围+测试方案 |
-| 存储抽象层 | [app/mcp/core/storage/base.py](./app/mcp/core/storage/base.py) | 工厂模式基础 |
-| 存储工厂 | [app/mcp/core/storage/factory.py](./app/mcp/core/storage/factory.py) | 一行切换核心 |
-| 安全中间件 | [app/middleware.py](./app/middleware.py) | fail-closed 安全栈 |
-| 全局异常处理 | [app/error_handlers.py](./app/error_handlers.py) | 异常兜底 |
-| 可观测性 | [app/observability.py](./app/observability.py) | 监控指标 |
+| PGStore | [app/mcp/core/storage/pg_store.py](../app/mcp/core/storage/pg_store.py) | 已验证，如需修改须先输出问题分析+影响范围+测试方案 |
+| 存储抽象层 | [app/mcp/core/storage/base.py](../app/mcp/core/storage/base.py) | 工厂模式基础 |
+| 存储工厂 | [app/mcp/core/storage/factory.py](../app/mcp/core/storage/factory.py) | 一行切换核心 |
+| 安全中间件 | [app/middleware.py](../app/middleware.py) | fail-closed 安全栈 |
+| 全局异常处理 | [app/error_handlers.py](../app/error_handlers.py) | 异常兜底 |
+| 可观测性 | [app/observability.py](../app/observability.py) | 监控指标 |
 
 ### 禁止事项
 
@@ -311,7 +311,7 @@ python -m app.mcp_server
 
 ## 10. 安全审查结论（2026-07-23，AI 阅读须知）
 
-> AI 进入本项目做任何安全相关判断前，请先读本节与 [docs/internal/SECURITY_REVIEW.md](./docs/internal/SECURITY_REVIEW.md) SEC-01~15、[DESIGN.md](./docs/internal/DESIGN.md) §13。
+> AI 进入本项目做任何安全相关判断前，请先读本节与 [docs/internal/SECURITY_REVIEW.md](../internal/SECURITY_REVIEW.md) SEC-01~15、[DESIGN.md](../internal/DESIGN.md) §13。
 
 **整体健康度：8.5 / 10**（工程质量 8.5 / 安全性 8.0 / 架构可维护性 8.5 / 文档可信度 9.0）。核心数据流架构**合理、无需重写**；安全基线扎实，部分长期项（如 C7 source-map）未完成。
 
@@ -330,6 +330,6 @@ python -m app.mcp_server
 
 > **新增安全能力（2026-07-25，AUDIT-2-13/14）**：RBAC 三级角色分级（admin > developer > viewer）覆盖 33 条 REST 路由 + 17 个 MCP 工具；`require_role(*roles)` FastAPI 依赖工厂路由级门控 + `TOOL_ROLE_REQUIREMENTS` MCP 工具级门控；未命中映射默认 viewer（fail-closed）。多 key 恒定时间比较（`verify_api_key` 遍历不短路 + `hmac.compare_digest`）+ 单 key 向后兼容。LFI 路径白名单 + SSRF URL 白名单已上线。
 
-> 整改追踪见 [release/claude-audit-consolidated.md](./docs/internal/release/claude-audit-consolidated.md)。修任一项须回填状态 + `文件:行` 验证。
+> 整改追踪见 [release/claude-audit-consolidated.md](../internal/release/claude-audit-consolidated.md)。修任一项须回填状态 + `文件:行` 验证。
 
 **P0 修复后的行为变更（AI 须知）**：① 0.0.0.0+空 `API_KEY` 现会拒绝启动（本地免鉴权用 `HOST=127.0.0.1`）；② 代码/Git 定位默认仅限进程 CWD，读 CWD 外源码需配 `WHITELIST_PATH_PREFIX`/`GIT_PATH_WHITELIST`；③ `verify_ui`/`auto_test` 默认拒私网/元数据/`file://`，本地联调设 `UI_URL_ALLOW_PRIVATE=true`；④ 工具调用受 `TOOL_TIMEOUT_SECONDS`（默认 60s）约束。P1（SEC-04/06/07/08/09）与 P2（SEC-13/M7）已修复。

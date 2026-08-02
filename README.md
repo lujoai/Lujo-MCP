@@ -1,10 +1,10 @@
-# ai-debug-mcp
+# Lujo-MCP
 
 基于 MCP（Model Context Protocol）协议的 AI 智能调试服务 —— 规范驱动 + 静默失败检测 + AI Debug Agent 自动修复 + UI 自动验收 + 浏览器网络请求捕获 + 指纹知识库复用。
 
 ## 项目介绍
 
-ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以下痛点：
+Lujo-MCP 是一款面向开发者的智能调试平台，致力于解决以下痛点：
 
 1. **静默失败检测** — 接口返回 200、无异常日志，但功能实际不对（如按钮没反应、字段缺失），传统监控完全查不出来
 2. **多 Agent 协同调试** — 代码报错后需要手动查日志、翻代码、拼提示词再丢给 AI，每次耗时 5–15 分钟
@@ -12,7 +12,7 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 
 > 当前项目的功能完成度以 [真实交付功能矩阵](./docs/internal/DELIVERY_MATRIX.md) 为准。  
 > 待开发项统一收敛在 [TODO 台账](./docs/internal/TODO.md)，稳定性启用状态见 [稳定性验证报告](./docs/internal/STABILITY_REPORT.md)。
-> 需要启用 PG/asyncpg、Redis、Playwright、熔断器、OTel 时，请按 [环境部署与功能启用指南](./docs/internal/ENABLEMENT_GUIDE.md) 操作。
+> 需要启用 PG/asyncpg、Redis、Playwright、熔断器、OTel 时，请按 [环境部署与功能启用指南](./docs/public/ENABLEMENT_GUIDE.md) 操作。
 
 ## 核心功能
 
@@ -69,7 +69,7 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> 详细架构设计（含架构图、模块关系、数据流）请查看 [DESIGN.md](./docs/internal/DESIGN.md)。
+> 详细架构设计（含架构图、模块关系、数据流）请查看 [DESIGN.md](./docs/public/DESIGN.md)。
 
 > 📌 **SSE / Notifications**：当前 MCP Streamable HTTP 已支持 `GET /mcp` 长连接订阅、`POST` 单次 SSE 响应，以及 `POST Accept: text/event-stream` 到 `GET /mcp` 队列的结果桥接。当前已落地的 server→client 推送主要是 `session ready` 和请求结果下发，更丰富的 notifications 事件类型仍在后续迭代中。
 
@@ -80,8 +80,8 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 一键拉起 PostgreSQL、Redis 和 App：
 
 ```bash
-git clone https://github.com/your-username/ai-debug-mcp.git
-cd ai-debug-mcp
+git clone https://github.com/your-username/Lujo-MCP.git
+cd Lujo-MCP
 
 # 复制环境变量模板
 cp .env.example .env
@@ -145,7 +145,7 @@ LLM_PROVIDER=zhipu           # openai | zhipu | custom（智谱免 VPN）
 
 ```bash
 curl http://localhost:8000/
-# → {"status":"ok","service":"ai-debug-mcp","version":"0.3.0"}
+# → {"status":"ok","service":"Lujo-MCP","version":"0.3.0"}
 ```
 
 ## Demo 演示流程
@@ -184,7 +184,7 @@ curl http://localhost:8000/
 ## 项目结构
 
 ```
-ai-debug-mcp/
+Lujo-MCP/
 ├── app/
 │   ├── main.py               # FastAPI 应用入口
 │   ├── api/                   # REST API 路由
@@ -220,12 +220,12 @@ ai-debug-mcp/
 
 | 文档 | 用途 |
 |------|------|
-| [DEMO_GUIDE.md](./DEMO_GUIDE.md) | Demo 演示指南 |
-| [PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md) | AI 上下文入口（AI 第一阅读文件） |
+| [DEMO_GUIDE.md](./docs/public/DEMO_GUIDE.md) | Demo 演示指南 |
+| [PROJECT_SUMMARY.md](./docs/public/PROJECT_SUMMARY.md) | AI 上下文入口（AI 第一阅读文件） |
 | [AI_RULES.md](./docs/internal/AI_RULES.md) | AI 开发规则 |
 | [AI_HANDOFF.md](./docs/internal/AI_HANDOFF.md) | AI 交接状态 |
-| [PRD.md](./docs/internal/PRD.md) | 产品需求 |
-| [DESIGN.md](./docs/internal/DESIGN.md) | 技术架构设计 |
+| [PRD.md](./docs/public/PRD.md) | 产品需求 |
+| [DESIGN.md](./docs/public/DESIGN.md) | 技术架构设计 |
 | [DEV_PLAN.md](./docs/internal/DEV_PLAN.md) | 当前开发计划 |
 | [ROADMAP.md](./docs/internal/ROADMAP.md) | 长期路线图 |
 | [CODE_REVIEW.md](./docs/internal/CODE_REVIEW.md) | 长期技术路线 |

@@ -609,7 +609,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | ai-debug-mcp v0.3.0 | ..."
+#   - 日志输出 "服务启动 | Lujo-MCP v0.3.0 | ..."
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -628,7 +628,7 @@ curl http://localhost:8000/health
 # 判定标准 / Pass Criteria:
 #   {
 #     "status": "ok",              ← 或 "degraded"（LLM 未配置时）
-#     "service": "ai-debug-mcp",
+#     "service": "Lujo-MCP",
 #     "version": "0.3.0",
 #     "storage": "memory",         ← 或 "postgresql (connected)"
 #     "llm_configured": true       ← false 表示 LLM 未配置
@@ -749,7 +749,7 @@ docker compose ps
 
 ```bash
 #!/bin/bash
-echo "=== ai-debug-mcp Pre-flight Check ==="
+echo "=== Lujo-MCP Pre-flight Check ==="
 
 # Python 版本
 echo -n "Python: "
@@ -777,7 +777,7 @@ echo "=== Check Complete ==="
 ### Windows PowerShell
 
 ```powershell
-Write-Host "=== ai-debug-mcp Pre-flight Check ==="
+Write-Host "=== Lujo-MCP Pre-flight Check ==="
 
 # Python 版本
 Write-Host "Python: $(python --version 2>&1)"

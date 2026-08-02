@@ -51,13 +51,8 @@ reference/
 INTERVIEW.md
 RESUME.md
 
-# AI 交接/内部审计文档（不推 GitHub）
-docs/internal/AI_HANDOFF.md
-docs/internal/AI_RULES.md
-docs/internal/CODE_REVIEW.md
-docs/internal/SECURITY_REVIEW.md
-docs/internal/PG_STORE_REFACTOR_EVAL.md
-docs/internal/release/claude-audit-consolidated.md
+# 内部开发文档（整个目录不推 GitHub）
+docs/internal/
 
 # 本地测试产物/脚本（不推 GitHub）
 handoff.md

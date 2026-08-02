@@ -20,7 +20,7 @@
 
 ### 📋 版本概述
 
-v0.3.0 是 ai-debug-mcp 项目的稳定性与生产就绪版本。本次发布重点完成了 MCP HTTP 流式通信闭环、稳定性验证收口、以及业务级 UI 验证能力增强，使项目从"代码已开发"阶段正式进入"可交付启用"状态。
+v0.3.0 是 Lujo-MCP 项目的稳定性与生产就绪版本。本次发布重点完成了 MCP HTTP 流式通信闭环、稳定性验证收口、以及业务级 UI 验证能力增强，使项目从"代码已开发"阶段正式进入"可交付启用"状态。
 
 ### ✨ 新增功能
 
@@ -211,7 +211,7 @@ ruff>=0.8.0
 
 ### 📋 Release Overview
 
-v0.3.0 is the Stability & Production Ready release of ai-debug-mcp. This release focuses on completing the MCP HTTP streaming loop, stability verification convergence, and business-level UI verification capabilities, transitioning the project from "code developed" to "delivery-ready" status.
+v0.3.0 is the Stability & Production Ready release of Lujo-MCP. This release focuses on completing the MCP HTTP streaming loop, stability verification convergence, and business-level UI verification capabilities, transitioning the project from "code developed" to "delivery-ready" status.
 
 ### ✨ New Features
 

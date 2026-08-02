@@ -1,10 +1,10 @@
-# ai-debug-mcp 技术设计文档（DESIGN）
+# Lujo-MCP 技术设计文档（DESIGN）
 
-> 本文档描述 ai-debug-mcp 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
+> 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
 > 版本：v0.3.0｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
-> 功能完成度与默认可交付状态请以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
+> 功能完成度与默认可交付状态请以 [DELIVERY_MATRIX.md](../internal/DELIVERY_MATRIX.md) 为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
 > **v0.3.1 更新**：PostgreSQL 集成完成、Dashboard 读取 PG、MCP Tools 读取 PG、LLM 分析端到端验证、集成测试补充（13 用例）
 >
@@ -389,22 +389,22 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 | 能力 | 组件 | 说明 |
 | --- | --- | --- |
-| 脱敏 | [app/mcp/core/redaction.py](./app/mcp/core/redaction.py) | 存储边界统一脱敏，默认开启；**复合键名子串匹配 + 白名单** |
-| 统一存取 | [app/mcp/core/trace_repo.py](./app/mcp/core/trace_repo.py) | 在 TraceStorage + errors 之上实现 save_trace/get_trace/save_network_record/save_ui_event |
+| 脱敏 | [app/mcp/core/redaction.py](../app/mcp/core/redaction.py) | 存储边界统一脱敏，默认开启；**复合键名子串匹配 + 白名单** |
+| 统一存取 | [app/mcp/core/trace_repo.py](../app/mcp/core/trace_repo.py) | 在 TraceStorage + errors 之上实现 save_trace/get_trace/save_network_record/save_ui_event |
 | 网络采集 | `app/mcp/collectors/network.py` + `tools/network_api.py` | 解析/截断 + ingest_network/get_network_trace |
 | UI 采集 | `app/mcp/collectors/ui_event.py` | 解析/截断 |
-| Git 归因 | [app/mcp/core/git.py](./app/mcp/core/git.py) + `tools/git_api.py` | blame/diff，带超时+路径白名单 |
-| 静默失败 | `app/mcp/tools/silent_failure_api.py` + [api/ingest.py](./app/api/ingest.py) | 编排 ui/network + trace_kind |
+| Git 归因 | [app/mcp/core/git.py](../app/mcp/core/git.py) + `tools/git_api.py` | blame/diff，带超时+路径白名单 |
+| 静默失败 | `app/mcp/tools/silent_failure_api.py` + [api/ingest.py](../app/api/ingest.py) | 编排 ui/network + trace_kind |
 | 跨语言上报 | `app/mcp/tools/ingest_api.py` + `api/ingest.py` | ingest_error |
-| inbound 采集 | [app/middleware_network.py](./app/middleware_network.py) | 独立中间件，默认关闭，安全栈内层 |
-| 完整上下文 | [app/mcp/builders/context.py](./app/mcp/builders/context.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
+| inbound 采集 | [app/middleware_network.py](../app/middleware_network.py) | 独立中间件，默认关闭，安全栈内层 |
+| 完整上下文 | [app/mcp/builders/context.py](../app/mcp/builders/context.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
 | 规范驱动采集 | `app/mcp/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
-| 指纹去重聚合 | [app/mcp/core/errors.py](./app/mcp/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
-| 双传输注册 | [app/mcp/tools/__init__.py](./app/mcp/tools/__init__.py) + [app/mcp_server.py](./app/mcp_server.py) | HTTP / stdio 均为 17 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
-| 代码定位 | [app/mcp/collectors/code_locator.py](./app/mcp/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
-| 静默失败检测 | [app/mcp/verifier/assert_engine.py](./app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
+| 指纹去重聚合 | [app/mcp/core/errors.py](../app/mcp/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
+| 双传输注册 | [app/mcp/tools/__init__.py](../app/mcp/tools/__init__.py) + [app/mcp_server.py](../app/mcp_server.py) | HTTP / stdio 均为 17 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
+| 代码定位 | [app/mcp/collectors/code_locator.py](../app/mcp/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
+| 静默失败检测 | [app/mcp/verifier/assert_engine.py](../app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
-| 规范驱动闭环 | [app/mcp/verifier/spec_store.py](./app/mcp/verifier/spec_store.py) | spec CRUD + verify 工具 + spec_diffs 注入 |
+| 规范驱动闭环 | [app/mcp/verifier/spec_store.py](../app/mcp/verifier/spec_store.py) | spec CRUD + verify 工具 + spec_diffs 注入 |
 
 ---
 
@@ -723,8 +723,8 @@ sequenceDiagram
 ## 13. 数据流通与执行流程复核（2026-07-22 静态取证）
 
 > 本节为「数据从入口到出口」的端到端复核，与 §2/§4 的设计图互为印证；所有结论附 `文件:行`。
-> 配套安全结论见 [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) 的「SEC-01~15」补充章。
-> ✅ 其中 **P0 四项（LFI/SSRF/默认鉴权/工具超时）已于 2026-07-22 修复**，详见 [v0.3.1 清单](./release/claude-audit-consolidated.md)；下文描述的是修复前的原始数据流与风险面。
+> 配套安全结论见 [SECURITY_REVIEW.md](../internal/SECURITY_REVIEW.md) 的「SEC-01~15」补充章。
+> ✅ 其中 **P0 四项（LFI/SSRF/默认鉴权/工具超时）已于 2026-07-22 修复**，详见 [v0.3.1 清单](../internal/release/claude-audit-consolidated.md)；下文描述的是修复前的原始数据流与风险面。
 
 ### 13.1 两条入口（Ingress）
 
@@ -772,8 +772,8 @@ sequenceDiagram
 ## 14. 高并发设计评审（2026-07-22 高级架构师审查）
 
 > 本节为高级架构师逐行代码审查后的高并发专项评估，聚焦异步处理、缓存机制、限流策略和数据预防。
-> 完整评分与优化路线图见 [CODE_REVIEW.md](./CODE_REVIEW.md) §企业级架构综合评审。
-> 参考架构映射见 §14.6（无人机巡检平台思路 → ai-debug-mcp 落地）。
+> 完整评分与优化路线图见 [CODE_REVIEW.md](../internal/CODE_REVIEW.md) §企业级架构综合评审。
+> 参考架构映射见 §14.6（无人机巡检平台思路 → Lujo-MCP 落地）。
 
 ### 14.1 异步处理现状
 
@@ -908,9 +908,9 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 - 无查询缓存
 - `_extract_trace_summary` 对每个 request_id 调用 `get_logs`（N+1 查询）
 
-### 14.6 参考架构映射：无人机巡检平台思路 → ai-debug-mcp 落地
+### 14.6 参考架构映射：无人机巡检平台思路 → Lujo-MCP 落地
 
-> 本节参考《无人机巡检平台高并发与架构优化技术术语手册》的核心架构思想，映射到 ai-debug-mcp 的优化场景。
+> 本节参考《无人机巡检平台高并发与架构优化技术术语手册》的核心架构思想，映射到 Lujo-MCP 的优化场景。
 
 #### 14.6.1 高并发限流算法升级
 
@@ -919,7 +919,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 - **漏桶**：强制平滑速率，保护下游 DB
 - **滑动窗口**：避免固定窗口临界点流量翻倍
 
-**ai-debug-mcp 映射：**
+**Lujo-MCP 映射：**
 - 当前实现：`state/store.py:50-58` 使用**固定窗口**（60s 窗口，60 次请求）
 - 问题：窗口临界点（59s 和 61s 各 60 次 = 2s 内 120 次）
 - **落地建议**：
@@ -943,7 +943,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 - **消息队列削峰填谷**：生产者发送后立即返回，消费者异步处理
 - **线程池隔离**：非核心链路独立线程池，防止拖垮主业务
 
-**ai-debug-mcp 映射：**
+**Lujo-MCP 映射：**
 - 当前问题：`/api/debug/analyze` 同步调用 LLM（2-10s），阻塞 FastAPI 线程池
 - **落地建议**：
   ```python
@@ -995,7 +995,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 - **旁路缓存模式**：先更新 DB，再删缓存，MQ 补偿一致性
 - **三防机制**：防穿透（布隆过滤器）、防雪崩（随机 TTL）、防击穿（互斥锁）
 
-**ai-debug-mcp 映射：**
+**Lujo-MCP 映射：**
 - ✅ **当前实现（2026-07-26 更新）**：L1 OrderedDict LRU（100 条，进程级）+ L2 Redis（TTL 1h，分布式）+ L3 缓存预热（`app/llm/cache_prewarm.py`，从 L2 扫描热门 fingerprint 回填 L1，只写 L1 不刷新 L2 TTL）；Dashboard 查询缓存 L1+L2；规范/脱敏进程级缓存保留
 - **历史状态（2026-07-22 评审时）**：仅有进程级 dict 缓存（spec/redaction），无 L2 Redis 缓存
 - **落地建议**（历史保留，大部分已实现）：
@@ -1043,7 +1043,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 - **链路追踪**：SkyWalking/Prometheus，分布式 Trace ID
 - **资源诊断**：CPU/内存/GC/线程池
 
-**ai-debug-mcp 映射：**
+**Lujo-MCP 映射：**
 - 已实现：`observability.py` Prometheus 指标、`trace_id` 贯穿请求
 - **落地建议**：
   ```python
@@ -1073,7 +1073,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 
 #### 14.6.5 关键映射总结
 
-| 巡检平台概念 | ai-debug-mcp 对应场景 | 落地优先级 |
+| 巡检平台概念 | Lujo-MCP 对应场景 | 落地优先级 |
 |--------------|----------------------|------------|
 | 令牌桶限流 | 替换固定窗口限流，防临界点突发 | P1 |
 | 消息队列削峰 | LLM 分析异步化，Celery/BackgroundTasks | P0 |
@@ -1284,9 +1284,9 @@ WHERE timestamp < $1 AND id NOT IN (SELECT id FROM traces_archive)
 > 本章记录本轮三轨并行开发（Track A/B/C）的架构设计、成交条件与合并纪律。三条轨道在同一代码基上并行推进，依赖"文件物理隔离 + 共享点集中提交"避免互踩。
 > 三轨所落地的能力均默认关闭（feature flag），向后兼容，不破坏现有签名。
 > 关键代码入口：
-> - Track A：[analysis_queue.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analysis_queue.py)、[debug.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/debug.py)、[main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py)
-> - Track B：[vector_store.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/vector_store.py)、[analyzer.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py)
-> - Track C：[key_rotation.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/auth/key_rotation.py)、[rbac.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/auth/rbac.py)、[middleware.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/middleware.py)
+> - Track A：[analysis_queue.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/llm/analysis_queue.py)、[debug.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/api/debug.py)、[main.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/main.py)
+> - Track B：[vector_store.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/rag/vector_store.py)、[analyzer.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/llm/analyzer.py)
+> - Track C：[key_rotation.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/auth/key_rotation.py)、[rbac.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/auth/rbac.py)、[middleware.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/middleware.py)
 
 ### 16.1 三轨并行合并纪律
 
@@ -1294,8 +1294,8 @@ WHERE timestamp < $1 AND id NOT IN (SELECT id FROM traces_archive)
 | --- | --- |
 | **analyzer.py 区域不互踩** | Track A 改 LLM 调用区（实际零侵入 analyzer，仅在外层包队列）、Track B 改知识库挂钩区（仅 KB hook 区域）、Track C 完全不碰 analyzer |
 | **文件物理隔离** | A 在 `app/llm/analysis_queue.py`、B 在 `app/rag/vector_store.py`、C 在 `app/auth/` |
-| **共享改动点集中提交** | 仅 [config.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/config.py) 与 [main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py) 的 lifespan 钩子是共享改动点，本轮集中提交避免冲突 |
-| **零签名变更** | Track C 的 `AuthMiddleware` 公共签名未变（仅 `__init__`/`dispatch` 体内调 key_rotation/rbac），`setup_middleware(app)` 签名未变，[ingest.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/ingest.py) 完全无鉴权改动 |
+| **共享改动点集中提交** | 仅 [config.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/config.py) 与 [main.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/main.py) 的 lifespan 钩子是共享改动点，本轮集中提交避免冲突 |
+| **零签名变更** | Track C 的 `AuthMiddleware` 公共签名未变（仅 `__init__`/`dispatch` 体内调 key_rotation/rbac），`setup_middleware(app)` 签名未变，[ingest.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/api/ingest.py) 完全无鉴权改动 |
 | **默认关闭、向后兼容** | 三轨所有新能力均通过 feature flag 控制，默认关闭；`api_keys` 逗号分隔优先，空时回退单 `api_key`；`rbac_enabled=False` 时全 admin |
 
 ### 16.2 Track A — P3-6 异步分析队列（消息队列削峰）
@@ -1368,7 +1368,7 @@ sequenceDiagram
 | **背压** | 队列满抛 `QueueFullError`，端点返回 `429 + queue_size`（暴露当前队列深度，调用方可据此退避） |
 | **优雅停机** | `drain(timeout)`：取消 worker → `queue.join(timeout)` 等排空 → 统计 `{drained, unfinished}`，未完成任务在停机时可见 |
 | **隔离性** | 消费协程**延迟导入** `analyze_async`，对 analyzer.py 零侵入；analyzer 仍可被同步 `/analyze` 端点直接调用 |
-| **生命周期** | 在 [main.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/main.py) 的 `lifespan` 中启动 K 个 worker，停机时调用 `drain(timeout)` |
+| **生命周期** | 在 [main.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/main.py) 的 `lifespan` 中启动 K 个 worker，停机时调用 `drain(timeout)` |
 | **配置开关** | `llm_async_analysis_enabled=False` 默认关闭，启用时才挂载 `/analyze/async` 路由并启动 worker |
 
 #### 16.2.4 配置项
@@ -1447,7 +1447,7 @@ classDiagram
 
 #### 16.3.4 集成位置
 
-在 [analyzer.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py) 中：
+在 [analyzer.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/llm/analyzer.py) 中：
 
 ```
 analyze(context)
@@ -1490,7 +1490,7 @@ analyze(context)
 
 > **关键设计判断**：本项目的 RAG 不是传统"文档切片 RAG"，而是**"运行时分析结果 RAG"**。原始数据不是静态文件（Markdown/PDF），而是 LLM 实时分析产生的结构化 JSON。
 
-**唯一写入源头**：`analyzer._persist_analysis_to_knowledge_base()`（[analyzer.py:610-645](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py#L610-L645)）
+**唯一写入源头**：`analyzer._persist_analysis_to_knowledge_base()`（[analyzer.py:610-645](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/llm/analyzer.py#L610-L645)）
 
 ```
 用户 POST /api/debug/analyze
@@ -1599,7 +1599,7 @@ analyze(context)
 
 ##### 知识库 LRU 淘汰机制
 
-`KnowledgeBaseStore` 用 `OrderedDict` 实现 LRU（[knowledge_base.py:42-114](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/knowledge_base.py#L42-L114)）：
+`KnowledgeBaseStore` 用 `OrderedDict` 实现 LRU（[knowledge_base.py:42-114](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/rag/knowledge_base.py#L42-L114)）：
 
 - 容量上限：100 条（`DEFAULT_MAX_ENTRIES = 100`）
 - 每次 `get`/`upsert` 后 `move_to_end(fingerprint)` 标记为最近使用
@@ -1610,15 +1610,15 @@ analyze(context)
 
 | 故障场景 | 行为 | 代码位置 |
 |----------|------|----------|
-| `vector_store_enabled=False` | 返回 `NullVectorStore`，add=no-op，search=[] | [vector_store.py:157-158](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/vector_store.py#L157-L158) |
-| qdrant-client 未安装 | 静默降级为 no-op，warning 日志 | [qdrant_vector_store.py:70-76](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/qdrant_vector_store.py#L70-L76) |
-| Qdrant 连接失败 | `_qdrant_collection_ready=True` 后不再重试 | [qdrant_vector_store.py:126-134](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/qdrant_vector_store.py#L126-L134) |
-| Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op | [qdrant_vector_store.py:214-216](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/rag/qdrant_vector_store.py#L214-L216) |
-| 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM | [analyzer.py:582-584](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/llm/analyzer.py#L582-L584) |
+| `vector_store_enabled=False` | 返回 `NullVectorStore`，add=no-op，search=[] | [vector_store.py:157-158](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/rag/vector_store.py#L157-L158) |
+| qdrant-client 未安装 | 静默降级为 no-op，warning 日志 | [qdrant_vector_store.py:70-76](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/rag/qdrant_vector_store.py#L70-L76) |
+| Qdrant 连接失败 | `_qdrant_collection_ready=True` 后不再重试 | [qdrant_vector_store.py:126-134](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/rag/qdrant_vector_store.py#L126-L134) |
+| Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op | [qdrant_vector_store.py:214-216](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/rag/qdrant_vector_store.py#L214-L216) |
+| 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM | [analyzer.py:582-584](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/llm/analyzer.py#L582-L584) |
 
 ##### Agent 侧 RAG 消费
 
-`RepairContextAssembler._safe_vector_recall()`（[context_assembler.py:71-86](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/agent/context_assembler.py#L71-L86)）独立调用 `retrieve_similar()`，将召回结果注入 `repair_context.vector_recall`，供 `RepairAgent` 生成修复方案时参考历史相似案例。这是 RAG 的第二个消费方（第一个是 `analyzer._get_knowledge_base_result()`）。
+`RepairContextAssembler._safe_vector_recall()`（[context_assembler.py:71-86](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/agent/context_assembler.py#L71-L86)）独立调用 `retrieve_similar()`，将召回结果注入 `repair_context.vector_recall`，供 `RepairAgent` 生成修复方案时参考历史相似案例。这是 RAG 的第二个消费方（第一个是 `analyzer._get_knowledge_base_result()`）。
 
 ### 16.4 Track C — RBAC + API_KEY 轮换（AUDIT-2-13/14）
 
@@ -1627,7 +1627,7 @@ analyze(context)
 > **关键设计判断**：RBAC 和 key 轮换必须**零侵入**鉴权公共接口。
 > - `AuthMiddleware` 公共签名未变（仅 `__init__`/`dispatch` 体内调 key_rotation/rbac）
 > - `setup_middleware(app)` 签名未变
-> - [ingest.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/ingest.py) 完全无鉴权改动
+> - [ingest.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/api/ingest.py) 完全无鉴权改动
 
 这样所有现有路由、客户端 SDK、测试用例零改动即可继续工作。
 
@@ -1759,7 +1759,7 @@ Track C (RBAC)        Track A (削峰队列)         Track B (向量检索)
 
 > 本章记录 AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 框架）与 Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）的架构设计。
 > Phase 2 于 2026-07-30 落地（`AGENT-002`）。
-> 关键代码入口：[app/agent/](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/agent/)（11 文件）、[app/api/debug.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/api/debug.py)（2 REST 端点）、[app/mcp/tools/repair_api.py](file:///c:/Users/ASUS/Dev/Projects/ai-debug-mcp/app/mcp/tools/repair_api.py)（2 MCP 工具）。
+> 关键代码入口：[app/agent/](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/agent/)（11 文件）、[app/api/debug.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/api/debug.py)（2 REST 端点）、[app/mcp/tools/repair_api.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/mcp/tools/repair_api.py)（2 MCP 工具）。
 
 ### 17.1 设计目标与 Phase 1 定位
 

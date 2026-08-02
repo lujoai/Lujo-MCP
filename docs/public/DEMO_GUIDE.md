@@ -2,7 +2,7 @@
 
 本文档介绍如何启动项目并展示核心功能。
 
-> 演示能力不等同于默认交付状态；功能完成度与环境前提请以 [docs/internal/DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md) 和 [docs/internal/STABILITY_REPORT.md](./docs/internal/STABILITY_REPORT.md) 为准。
+> 演示能力不等同于默认交付状态；功能完成度与环境前提请以 [docs/internal/DELIVERY_MATRIX.md](../internal/DELIVERY_MATRIX.md) 和 [docs/internal/STABILITY_REPORT.md](../internal/STABILITY_REPORT.md) 为准。
 
 ## 一、启动项目
 
@@ -10,7 +10,7 @@
 
 ```bash
 # 进入项目目录
-cd ai-debug-mcp
+cd Lujo-MCP
 
 # 复制环境变量模板
 cp .env.example .env
@@ -43,7 +43,7 @@ python -m app.main
 
 ```bash
 curl http://localhost:8000/
-# 预期输出：{"status":"ok","service":"ai-debug-mcp","version":"0.3.0"}
+# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.3.0"}
 ```
 
 ## 二、验证 Browser SDK
@@ -241,7 +241,7 @@ curl http://localhost:8000/
 检查：
 1. `.env` 中 API Key 是否配置正确
 2. 网络是否能访问 LLM Provider（智谱无需 VPN）
-3. 查看后端日志：`docker logs ai-debug-mcp`
+3. 查看后端日志：`docker logs Lujo-MCP`
 
 ## 六、展示 Checklist
 

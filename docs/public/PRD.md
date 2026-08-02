@@ -1,4 +1,4 @@
-# ai-debug-mcp 产品需求文档（PRD）
+# Lujo-MCP 产品需求文档（PRD）
 
 > 基于 MCP（Model Context Protocol）协议的 AI 智能调试服务
 > 核心目标：**把开发者从「查日志 → 翻代码 → 手写规范提示词 → 丢给 AI → 反复排查」的繁琐链路中解放，并解决「无报错但功能不对」的静默失败问题。**
@@ -6,7 +6,7 @@
 | 项目 | 说明 |
 | --- | --- |
 | 文档版本 | v5.5（Dashboard 实时 SSE 推送版） |
-| 产品名称 | ai-debug-mcp |
+| 产品名称 | Lujo-MCP |
 | 当前产品版本 | v0.3.0 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
@@ -24,7 +24,7 @@
 | v2.0 | 2026-07-07 | 团队 | 以真实痛点重构，新增 FR11–FR15 |
 | v3.0 | 2026-07-07 | 高级架构师 | **代码核实后修正实现状态**：标注自动捕获/宿主AI推理已落地；代码定位标记为"模块已实现但未接线+配置缺失"；静默失败/前端自动化确认为待开发；补充架构师痛点覆盖度矩阵与落地缺口 |
 | v4.0 | 2026-07-08 | 高级后端架构师 | **参考项目迁移完成（M1–M8）**：redaction/trace_repo/network/ui_event/git/silent_failure/ingest_error/build_debug_context 全部落地；6 个新工具双传输注册；FR13 采集链就绪（自动检测仍待建）；FR14/FR15 未纳入本次优先级 |
-| v4.2 | 2026-07-08 | 高级后端架构师 | **全量交付**：FR13 assert_engine+verify ✅、FR14 Playwright UI 遍历+verify_ui ✅、FR15 spec_store+闭环 ✅、浏览器 SDK TS ✅、多 LLM provider ✅、Web 控制台 Dashboard ✅。全量交付（测试状态以 [README.md](../../README.md) 项目状态表为准）。 |
+| v4.2 | 2026-07-08 | 高级后端架构师 | **全量交付**：FR13 assert_engine+verify ✅、FR14 Playwright UI 遍历+verify_ui ✅、FR15 spec_store+闭环 ✅、浏览器 SDK TS ✅、多 LLM provider ✅、Web 控制台 Dashboard ✅。全量交付（测试状态以 [README.md](../README.md) 项目状态表为准）。 |
 | v5.0 | 2026-07-24 | 高级架构师 | **Phase 5 数据层长期优化交付**：P3-1 数据分区（traces 表按月 RANGE 分区）、P3-2 归档策略（>N 天自动归档到 traces_archive）、P3-3 批量写入、P3-5 优雅降级、P3-8 熔断器、Phase 7 智能错误分析引擎。单元测试 369 passed / 6 skipped / 0 failed；ruff 0 违规。 |
 | v5.1 | 2026-07-25 | 高级架构师 | **增量能力同步**：Browser SDK V3/V6（网络错误自动标记、UI 静默失败自动检测）与指纹知识库基础能力（命中优先 + 自动沉淀）已落地；向量检索版 RAG 与 AI Debug Agent 仍为后续阶段。 |
 | v5.2 | 2026-07-25 | 高级架构师 | **三轨并行交付**：P3-6 异步分析队列（有界 `asyncio.Queue` + K 常驻消费协程 + `Semaphore` 对齐 RPM/TPM + lifespan drain）；Phase 7 向量检索 RAG（`VectorStore` ABC + `InProcess`/`Null` 实现 + Qdrant 留空插槽 + 工厂注册表）；AUDIT-2-13/14 RBAC + API Key 轮换（多 key 恒定时间比较 + 角色分级 + `require_role` 依赖门控）。零侵入 `analyzer.py` 与 `AuthMiddleware` 公共签名。 |
@@ -123,7 +123,7 @@
 
 ### 4.3 价值对比
 
-| 维度 | 传统 | ai-debug-mcp（v0.3.0） |
+| 维度 | 传统 | Lujo-MCP（v0.3.0） |
 | --- | --- | --- |
 | 查日志 | 手动翻 | ✅ 自动捕获 |
 | 找代码 | 手动翻 | ✅ 内联源码片段+IDE 可跳转链接 |
@@ -159,7 +159,7 @@
 
 ## 7. 功能需求（含真实实现状态）
 
-> 说明：本节描述产品需求与阶段性实现状态；若与仓库中其他文档冲突，功能完成度以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 的代码实情判定为准。
+> 说明：本节描述产品需求与阶段性实现状态；若与仓库中其他文档冲突，功能完成度以 [DELIVERY_MATRIX.md](../internal/DELIVERY_MATRIX.md) 的代码实情判定为准。
 
 > 状态：✅ 已实现 / ⚠️ 已实现模块但未接线或配置缺失 / 🔲 待开发。优先级 P0/P1/P2。
 
@@ -414,7 +414,7 @@ flowchart TB
 sequenceDiagram
     participant Code as 用户代码
     participant Hook as exception_hook ✅
-    participant S as ai-debug-mcp
+    participant S as Lujo-MCP
     participant AI as 宿主 AI
 
     Code->>Hook: 未捕获异常
@@ -429,7 +429,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Spec as 规范
-    participant S as ai-debug-mcp
+    participant S as Lujo-MCP
     participant E as 引擎
     participant UI as 前端自动化(Playwright)
 
