@@ -10,8 +10,7 @@ ai-debug-mcp 是一款面向开发者的智能调试平台，致力于解决以�
 2. **多 Agent 协同调试** — 代码报错后需要手动查日志、翻代码、拼提示词再丢给 AI，每次耗时 5–15 分钟
 3. **前端网络盲区** — 前端请求细节（请求体、响应体、耗时）难以追踪，问题定位困难
 
-> 当前项目的功能完成度以 [真实交付功能矩阵](./docs/internal/DELIVERY_MATRIX.md) 为准。  
-> 待开发项统一收敛在 [TODO 台账](./docs/internal/TODO.md)，稳定性启用状态见 [稳定性验证报告](./docs/internal/STABILITY_REPORT.md)。
+> 功能完成度以代码仓库的实际实现状态为准。
 > 需要启用 PG/asyncpg、Redis、Playwright、熔断器、OTel 时，请按 [环境部署与功能启用指南](./docs/internal/ENABLEMENT_GUIDE.md) 操作。
 
 ## 核心功能
@@ -162,7 +161,7 @@ curl http://localhost:8000/
 - 需依赖环境才能启用：LLM 分析、异步分析削峰队列、AI Debug Agent（自动修复，`agent_enabled` 默认 False）、PostgreSQL / asyncpg、Playwright UI verify / auto_test、Redis L2 缓存、L3 缓存预热、熔断器、OpenTelemetry 导出、Qdrant 向量检索（语义召回）
 - 部分完成能力：MCP HTTP server→client notifications 已具备基础推送闭环，但更丰富的通知类型仍待补充；向量检索 RAG 抽象层与 in-process + Qdrant 双后端已完成；AI Debug Agent Phase 1（单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`，2026-07-30）均已落地，`agent_multi_agent_enabled` 默认 False 向后兼容
 
-完整条目与代码位置请直接查看 [DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md)。
+完整条目与代码位置请直接查看各模块源码目录。
 
 ## 项目状态
 
@@ -174,12 +173,10 @@ curl http://localhost:8000/
 | 稳定性能力 | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证 |
 | 安全能力 | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护 |
 | 当前阶段 | Phase 0-6 全部完成；Phase 7 智能化（指纹知识库 + 向量检索 RAG in-process + Qdrant 语义召回 + AI Debug Agent Phase 1 单 Agent + Phase 2 多 Agent DAG）+ Phase 8 实时观测增强（Dashboard 实时 SSE 推送 `DASH-SSE-001`）均已落地；下一步为 Browser SDK 压缩 e2e 联调、Docker 容器化复现实验 |
-| 权威口径 | 功能状态见 [DELIVERY_MATRIX.md](./docs/internal/DELIVERY_MATRIX.md)，启用验证见 [STABILITY_REPORT.md](./docs/internal/STABILITY_REPORT.md) |
-| 安全审查 | 安全加固代码已落地，实际启用边界与前提条件以运行环境配置为准，详见 [SECURITY_REVIEW.md](./docs/internal/SECURITY_REVIEW.md) |
+| 权威口径 | 功能状态以代码仓库的实际实现为准 |
+| 安全审查 | 安全加固代码已落地，实际启用边界与前提条件以运行环境配置为准 |
 
 > ⚠️ **安全提示（v0.3.0 P0+P1+P2+P3 加固后）**：默认更安全——`0.0.0.0`+空 `API_KEY` 会拒绝启动、代码/Git 定位默认仅限项目根、Playwright 默认拒私网/云元数据/`file://`。因此：**本地免鉴权**运行请用 `HOST=127.0.0.1`；**本地联调 Playwright** 设 `UI_URL_ALLOW_PRIVATE=true`（或 `UI_URL_ALLOWLIST`）；读项目根外源码配 `WHITELIST_PATH_PREFIX`/`GIT_PATH_WHITELIST`。新增配置：`TOOL_TIMEOUT_SECONDS`（默认 60）/`UI_URL_ALLOW_PRIVATE`/`UI_URL_ALLOWLIST`/`DEBUG_ENDPOINTS_ENABLED`（默认 false）。Release Audit 全部收口：P0+P1+P2+P3 已全部修复。
-
-> 详细路线图见 [ROADMAP](./docs/internal/ROADMAP.md)
 
 ## 项目结构
 
@@ -222,13 +219,8 @@ ai-debug-mcp/
 |------|------|
 | [DEMO_GUIDE.md](./DEMO_GUIDE.md) | Demo 演示指南 |
 | [PROJECT_SUMMARY.md](./PROJECT_SUMMARY.md) | AI 上下文入口（AI 第一阅读文件） |
-| [AI_RULES.md](./docs/internal/AI_RULES.md) | AI 开发规则 |
-| [AI_HANDOFF.md](./docs/internal/AI_HANDOFF.md) | AI 交接状态 |
 | [PRD.md](./docs/internal/PRD.md) | 产品需求 |
 | [DESIGN.md](./docs/internal/DESIGN.md) | 技术架构设计 |
-| [DEV_PLAN.md](./docs/internal/DEV_PLAN.md) | 当前开发计划 |
-| [ROADMAP.md](./docs/internal/ROADMAP.md) | 长期路线图 |
-| [CODE_REVIEW.md](./docs/internal/CODE_REVIEW.md) | 长期技术路线 |
 
 ## 测试
 
