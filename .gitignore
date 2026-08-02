@@ -34,8 +34,8 @@ t.txt
 .codebuddy/
 .reasonix/
 
-# Trae IDE 生成产物（specs/ 由开发者主动跟踪，documents/ 为生成产物忽略）
-.trae/documents/
+# Trae IDE 协作产物（不推 GitHub）
+.trae/
 
 # 临时测试/审查报告（根目录生成产物）
 /cr_*.xml
@@ -49,3 +49,23 @@ reference/
 
 # 面试/个人资料文档（不纳入版本控制）
 INTERVIEW.md
+
+# AI 交接/内部审计文档（不推 GitHub）
+docs/internal/AI_HANDOFF.md
+docs/internal/AI_RULES.md
+docs/internal/CODE_REVIEW.md
+docs/internal/SECURITY_REVIEW.md
+docs/internal/PG_STORE_REFACTOR_EVAL.md
+docs/internal/release/claude-audit-consolidated.md
+
+# 本地测试产物/脚本（不推 GitHub）
+handoff.md
+_pytest_full.txt
+_pytest_out.txt
+_pytest_summary.txt
+_ruff.txt
+_verify.txt
+auto_test_demo.py
+demo.py
+test_full_flow.py
+test_output.txt
