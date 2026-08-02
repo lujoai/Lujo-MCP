@@ -400,8 +400,5 @@ ruff>=0.8.0
 
 ## 相关链接 / Related Links
 
-- [完整功能交付矩阵 / Full Delivery Matrix](../internal/DELIVERY_MATRIX.md)
-- [稳定性验证报告 / Stability Report](../internal/STABILITY_REPORT.md)
 - [启动前检查清单 / Pre-flight Checklist](./PREFLIGHT_CHECKLIST.md)
 - [异常排查指南 / Troubleshooting Guide](./TROUBLESHOOTING.md)
-- [开发计划 / Development Plan](../internal/DEV_PLAN.md)

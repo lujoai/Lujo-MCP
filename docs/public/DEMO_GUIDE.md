@@ -2,7 +2,7 @@
 
 本文档介绍如何启动项目并展示核心功能。
 
-> 演示能力不等同于默认交付状态；功能完成度与环境前提请以 [docs/internal/DELIVERY_MATRIX.md](../internal/DELIVERY_MATRIX.md) 和 [docs/internal/STABILITY_REPORT.md](../internal/STABILITY_REPORT.md) 为准。
+> 演示能力不等同于默认交付状态；功能完成度与环境前提请以内部交付矩阵（DELIVERY_MATRIX.md）和内部稳定性验证报告（STABILITY_REPORT.md）为准（均为内部文档）。
 
 ## 一、启动项目
 
