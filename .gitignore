@@ -49,6 +49,7 @@ reference/
 
 # 面试/个人资料文档（不纳入版本控制）
 INTERVIEW.md
+RESUME.md
 
 # AI 交接/内部审计文档（不推 GitHub）
 docs/internal/AI_HANDOFF.md
