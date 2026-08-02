@@ -1,7 +1,7 @@
 # ai-debug-mcp 长期路线图
 
 > 定位：项目长期演进路线图，汇总已完成阶段与待开发阶段的技术方向。
-> 当前开发执行计划见 [DEV_PLAN.md](./DEV_PLAN.md)，技术架构设计见 [DESIGN.md](../public/DESIGN.md)，企业级架构综合评审见 [CODE_REVIEW.md](./CODE_REVIEW.md)。
+> 当前开发执行计划见 [DEV_PLAN.md](./DEV_PLAN.md)，技术架构设计见技术设计文档（DESIGN.md，公开文档），企业级架构综合评审见 [CODE_REVIEW.md](./CODE_REVIEW.md)。
 > 最近更新：2026-07-27（beta-release 全量审查：P0×6 + P1×9 + P2×12 阻断上线/开源，健康度 6.5/10）
 > 功能完成度请以 [DELIVERY_MATRIX.md](./DELIVERY_MATRIX.md) 为准；本文件只描述长期演进方向，不直接代表默认可交付状态。
 
