@@ -55,6 +55,8 @@ def _llm_fallback_result() -> dict:
             "impact": "分析功能降级，返回默认分析结果",
             "fix": "请稍后重试，或联系管理员检查 LLM 服务状态",
             "confidence": "low",
+            "reasoning_chain": [],
+            "evidence_items": [],
         },
         "model": "__circuit_breaker_fallback__",
         "usage": {
@@ -318,7 +320,19 @@ SYSTEM_PROMPT = """你是一位资深的后端排障专家。用户会提供程�
   "root_cause": "问题根因 —— 问题出在哪一步、为什么会发生",
   "impact": "影响面 —— 是否会导致数据不一致/服务中断/安全风险等",
   "fix": "修复建议 —— 具体的代码修改方案",
-  "confidence": "置信度 high/medium/low"
+  "confidence": "置信度 high/medium/low",
+  "reasoning_chain": [
+    "推理步骤 1：从堆栈帧中发现异常类型为 X，发生在文件 Y 的第 Z 行",
+    "推理步骤 2：结合上下文判断，该异常的触发条件为...",
+    "推理步骤 3：综合以上分析，得出根因结论..."
+  ],
+  "evidence_items": [
+    {
+      "type": "证据类型（stack_trace/code_snippet/git_blame/runtime_state/network_capture）",
+      "description": "从上下文中提取到的关键证据描述",
+      "relevance": "high/medium/low"
+    }
+  ]
 }
 
 只输出 JSON，不要包含其他文字。"""
@@ -465,13 +479,14 @@ def _truncate_field(value: str, max_chars: int) -> str:
 
 def _validate_and_normalize(raw_output: str) -> dict:
     """
-    校验并净化 LLM 输出，确保符合 {root_cause, impact, fix, confidence} 契约。
+    校验并净化 LLM 输出，确保符合 {root_cause, impact, fix, confidence, reasoning_chain, evidence_items} 契约。
 
     步骤：
       1. 容错 JSON 提取（支持 markdown code block、嵌套文本）
       2. Schema 校验（字段齐全 + confidence 合法）
       3. 字段长度截断
-      4. 仍失败返回结构化 fallback
+      4. v0.4.0 新增 reasoning_chain / evidence_items（缺失时默认空列表，向后兼容）
+      5. 仍失败返回结构化 fallback
     """
     # Step 1: 尝试解析 JSON
     parsed = None
@@ -504,6 +519,35 @@ def _validate_and_normalize(raw_output: str) -> dict:
     if not confidence or confidence not in VALID_CONFIDENCE:
         confidence = "low"
     result["confidence"] = confidence
+
+    # v0.4.0: reasoning_chain —— 推理步骤链（缺失时默认空列表，向后兼容旧输出）
+    reasoning_chain = parsed.get("reasoning_chain")
+    if isinstance(reasoning_chain, list):
+        result["reasoning_chain"] = [
+            _truncate_field(str(s), MAX_FIELD_CHARS) for s in reasoning_chain
+        ]
+    else:
+        result["reasoning_chain"] = []
+
+    # v0.4.0: evidence_items —— LLM 提取的证据条目（缺失时默认空列表，向后兼容）
+    evidence_items = parsed.get("evidence_items")
+    if isinstance(evidence_items, list):
+        valid_items = []
+        for item in evidence_items:
+            if isinstance(item, dict):
+                item_type = item.get("type", "")
+                desc = _truncate_field(str(item.get("description", "")), MAX_FIELD_CHARS)
+                relevance = item.get("relevance", "medium")
+                if relevance not in ("high", "medium", "low"):
+                    relevance = "medium"
+                valid_items.append({
+                    "type": _truncate_field(str(item_type), 100),
+                    "description": desc,
+                    "relevance": relevance,
+                })
+        result["evidence_items"] = valid_items[:10]  # 最多 10 条
+    else:
+        result["evidence_items"] = []
 
     # Step 3: 解析失败时添加 raw_truncated
     if not parse_succeeded:

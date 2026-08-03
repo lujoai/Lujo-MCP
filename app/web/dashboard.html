@@ -48,6 +48,30 @@
   .no-data { color: #484f58; font-style: italic; font-size: 12px; }
   .code-snippet { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 8px; font-family: monospace; font-size: 12px; overflow-x: auto; white-space: pre; }
   .loading { text-align: center; padding: 20px; color: #8b949e; }
+  /* v0.4.0: Quality 卡片样式 */
+  .quality-card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-top: 8px; }
+  .quality-score-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .quality-score-row .big { font-size: 24px; font-weight: bold; }
+  .quality-score-bar { flex: 1; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+  .quality-score-bar .fill { height: 100%; border-radius: 4px; transition: width .3s; }
+  .quality-score-high { color: #3fb950; } .quality-score-high .fill { background: #3fb950; }
+  .quality-score-mid { color: #d2991d; } .quality-score-mid .fill { background: #d2991d; }
+  .quality-score-low { color: #f85149; } .quality-score-low .fill { background: #f85149; }
+  .quality-formula { font-size: 11px; color: #8b949e; margin-left: 8px; }
+  .quality-dim-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 8px; }
+  .quality-dim { display: flex; justify-content: space-between; font-size: 11px; padding: 4px 8px; background: #161b22; border-radius: 4px; }
+  .quality-dim .name { color: #c9d1d9; }
+  .quality-dim .score { font-weight: bold; }
+  .quality-dim.missing { opacity: 0.5; }
+  .quality-dim.missing .score { color: #f85149; }
+  .quality-evidence-list { font-size: 11px; margin-top: 6px; }
+  .quality-evidence-item { padding: 4px 8px; background: #161b22; border-radius: 4px; margin-bottom: 4px; display: flex; gap: 6px; }
+  .quality-evidence-item .rel { font-size: 10px; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+  .quality-evidence-item .rel-high { background: #f8514940; color: #f85149; }
+  .quality-evidence-item .rel-medium { background: #d2991d40; color: #d2991d; }
+  .quality-evidence-item .rel-low { background: #3fb95040; color: #3fb950; }
+  .quality-suggestions { font-size: 11px; margin-top: 8px; }
+  .quality-suggestion { padding: 4px 8px; background: #d2991d20; border-left: 2px solid #d2991d; margin-bottom: 4px; color: #d2991d; }
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: #0d1117; }
   ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
@@ -138,6 +162,11 @@ async function selectTrace(tid) {
     const t = await fetchJSON('/api/dashboard/trace/' + tid);
     let html = '';
 
+    // v0.4.0: Quality Report（综合评分卡片，放在最前面）
+    if (t.quality_report) {
+      html += renderQualityCard(t.quality_report);
+    }
+
     // Exception
     if (t.exception) {
       html += '<div class="detail-section"><div class="label">Exception</div>';
@@ -201,6 +230,85 @@ async function selectTrace(tid) {
 function esc(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── v0.4.0: Quality Report 渲染 ──
+const DIM_LABELS = {
+  trace: '异常堆栈', runtime: '运行时', code_snippet: '源码片段',
+  git_context: 'Git 归因', network: '网络', ui_event: 'UI 事件',
+  spec: '规范', knowledge_base: '知识库', llm_analysis: 'LLM 分析'
+};
+
+function scoreClass(s) {
+  if (s >= 0.7) return 'quality-score-high';
+  if (s >= 0.3) return 'quality-score-mid';
+  return 'quality-score-low';
+}
+
+function renderQualityCard(qr) {
+  const comp = qr.context_completeness || {};
+  const conf = qr.analysis_confidence || {};
+  const overall = qr.overall_score || 0;
+  const compScore = comp.overall_score || 0;
+  const confScore = conf.overall_score || 0;
+  const cls = scoreClass(overall);
+  const dims = comp.dimensions || {};
+  const evidence = qr.evidence_items || [];
+  const suggestions = qr.suggestions || [];
+
+  let html = '<div class="detail-section"><div class="label">Quality Report (v0.4.0)</div>';
+  html += '<div class="quality-card">';
+
+  // 综合评分
+  html += `<div class="quality-score-row ${cls}">`;
+  html += `<div class="big">${overall.toFixed(2)}</div>`;
+  html += `<div class="quality-score-bar"><div class="fill" style="width:${(overall*100).toFixed(0)}%"></div></div>`;
+  html += `<div class="quality-formula">= ${compScore.toFixed(2)} × ${confScore.toFixed(2)}</div>`;
+  html += '</div>';
+
+  // 维度评分网格
+  if (Object.keys(dims).length) {
+    html += '<div class="quality-dim-grid">';
+    for (const [key, ds] of Object.entries(dims)) {
+      const label = DIM_LABELS[key] || key;
+      const missing = !ds.present;
+      const colorCls = ds.score >= 0.7 ? 'quality-score-high' : (ds.score >= 0.3 ? 'quality-score-mid' : 'quality-score-low');
+      html += `<div class="quality-dim ${missing ? 'missing' : ''}">`;
+      html += `<span class="name">${esc(label)}</span>`;
+      html += `<span class="score ${colorCls}" style="color:inherit">${ds.score.toFixed(2)}</span>`;
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  // 证据摘要（最多 5 条）
+  if (evidence.length) {
+    html += `<div class="quality-evidence-list">`;
+    html += `<div style="color:#8b949e;margin-bottom:4px">证据 ${evidence.length} 条（高相关 ${conf.high_relevance_count || 0}）</div>`;
+    evidence.slice(0, 5).forEach(e => {
+      const relCls = e.relevance === 'high' ? 'rel-high' : (e.relevance === 'medium' ? 'rel-medium' : 'rel-low');
+      html += `<div class="quality-evidence-item">`;
+      html += `<span class="rel ${relCls}">${esc(e.relevance)}</span>`;
+      html += `<span>[${esc(e.type)}] ${esc((e.description||'').substring(0, 80))}</span>`;
+      html += `</div>`;
+    });
+    if (evidence.length > 5) {
+      html += `<div style="color:#484f58;font-style:italic;padding:2px 8px">... 还有 ${evidence.length - 5} 条</div>`;
+    }
+    html += '</div>';
+  }
+
+  // 改进建议
+  if (suggestions.length) {
+    html += '<div class="quality-suggestions">';
+    suggestions.forEach(s => {
+      html += `<div class="quality-suggestion">💡 ${esc(s)}</div>`;
+    });
+    html += '</div>';
+  }
+
+  html += '</div></div>';
+  return html;
 }
 
 async function refresh() {

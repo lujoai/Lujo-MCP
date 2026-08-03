@@ -1,10 +1,11 @@
-"""修复上下文装配器 —— 并发聚合 debug context + 历史修复 + git diff + 先验分析。
+"""修复上下文装配器 —— 并发聚合 debug context + 历史修复 + git diff + 先验分析 + 质量评分。
 
 设计要点（与 build_debug_context 各 collector 的 fail-safe 模式一致）：
 - 三个子装配并发执行（asyncio.gather + asyncio.to_thread），缩短延迟
 - 各子装配独立 try/except，失败静默降级，不阻断整体
 - 复用 analyzer.analyze_async / knowledge_base.retrieve_similar / git.get_recent_diff
   零侵入主链路
+- v0.4.0: 装配完成后调用 QualityScorer 评分，注入 quality_report 字段
 """
 
 from __future__ import annotations
@@ -20,14 +21,18 @@ logger = logging.getLogger("ai-debug-mcp.agent.assembler")
 
 
 class RepairContextAssembler:
-    """装配修复上下文：debug_context + 向量召回 + git diff + 基础 LLM 分析。
+    """装配修复上下文：debug_context + 向量召回 + git diff + 基础 LLM 分析 + 质量评分。
 
     所有子装配失败静默降级，RepairAgent 仍可基于原始 debug_context 生成方案
     （虽质量略降，但保证可用性）。
     """
 
     async def assemble(self, debug_context: dict[str, Any]) -> dict[str, Any]:
-        """并发执行三个独立子装配，返回聚合后的修复上下文。"""
+        """并发执行三个独立子装配，返回聚合后的修复上下文。
+
+        返回 dict 包含 quality_report 字段（v0.4.0 新增），
+        评分失败时 quality_report 为 QualityReport.null_score()。
+        """
         # 并发执行：prior_analysis / vector_recall / git_context
         # 各 _safe_* 方法内部吞异常，永不抛出（return_exceptions=False 安全）
         analysis, vector_recall, git_context = await asyncio.gather(
@@ -36,7 +41,7 @@ class RepairContextAssembler:
             self._safe_get_git_context(debug_context),
         )
 
-        return {
+        repair_context = {
             "debug_context": debug_context,
             "prior_analysis": analysis,
             "vector_recall": vector_recall,
@@ -49,6 +54,41 @@ class RepairContextAssembler:
                 ),
             },
         }
+
+        # v0.4.0: 质量评分注入（纯函数，feature flag 控制，失败静默降级）
+        repair_context["quality_report"] = self._safe_score_quality(
+            debug_context, repair_context
+        )
+
+        return repair_context
+
+    def _safe_score_quality(
+        self, debug_context: dict[str, Any], repair_context: dict[str, Any]
+    ) -> Any:
+        """调用 QualityScorer 评分，返回 QualityReport 或 null_score。
+
+        通过 settings.quality_scoring_enabled 控制，关闭时返回 None。
+        评分失败静默降级为 null_score()，不抛异常。
+        """
+        try:
+            from app.quality.scorer import evaluate, is_enabled
+
+            if not is_enabled():
+                return None
+
+            agent_ctx = {
+                "debug_context": debug_context,
+                "repair_context": repair_context,
+            }
+            return evaluate(agent_ctx)
+        except Exception:
+            logger.warning("QualityScorer 评分失败，降级为 null_score", exc_info=True)
+            try:
+                from app.quality.schemas import QualityReport
+
+                return QualityReport.null_score()
+            except Exception:
+                return None
 
     async def _safe_get_analysis(
         self, ctx: dict[str, Any]

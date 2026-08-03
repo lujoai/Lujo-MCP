@@ -269,6 +269,18 @@ class Settings(BaseSettings):
     # 鉴权复用 AuthMiddleware 的 ?api_key= query 降级（EventSource 无法设自定义 header）。
     dashboard_sse_enabled: bool = False
 
+    # ── Quality System（v0.4.0）──
+    # 全局开关：开启后 QualityScorer 在 build_debug_context() 返回前评分并注入 QualityReport
+    # 关闭时 scorer 不执行，零行为变更（向后兼容）
+    quality_scoring_enabled: bool = True
+
+    # ── Agent Verify Loop（v0.4.0 M4）──
+    # 迭代修复模式开关：开启后 Coordinator 按 DAG 迭代修复（修复→审查→验证→重试，最多 N 轮）
+    # 关闭时走 Phase 2 单次 DAG（向后兼容）
+    agent_iterative_repair_enabled: bool = False
+    # 最大迭代轮数（每次迭代经过完整 DAG：修复→并行审查→验证）
+    agent_max_iterations: int = 3
+
     # ── 服务 ──
     host: str = "0.0.0.0"
     port: int = 8000

@@ -252,12 +252,15 @@ def list_traces(limit: int = 100):
 
 @router.get("/trace/{trace_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_trace_detail(trace_id: str):
-    """获取 trace 详情（含 spec_diffs）"""
+    """获取 trace 详情（含 spec_diffs + quality_report，v0.4.0）"""
     from app.mcp.builders.context import build_debug_context
 
     ctx = build_debug_context(trace_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail=f"找不到 trace {trace_id}")
+
+    # v0.4.0: 注入质量报告（纯函数评分，不触发 LLM 调用）
+    quality_report = _safe_build_quality_report(ctx)
 
     # 精简返回（去掉 runtime/network_trace 等大字段）
     return {
@@ -269,7 +272,53 @@ def get_trace_detail(trace_id: str):
         "code_snippets": ctx.get("code_snippets"),
         "source": ctx.get("source"),
         "extra": ctx.get("extra"),
+        "quality_report": quality_report,
     }
+
+
+def _safe_build_quality_report(debug_context: dict) -> dict | None:
+    """对 build_debug_context 的结果进行质量评分（v0.4.0）。
+
+    Dashboard 场景不调用 RepairContextAssembler（避免触发 LLM/向量召回等重负载），
+    直接用 QualityScorer 纯函数对 debug_context 评分。
+    评分失败或 feature flag 关闭时返回 None，向后兼容。
+    """
+    try:
+        from app.quality.scorer import evaluate, is_enabled
+
+        if not is_enabled():
+            return None
+
+        # Dashboard 无 repair_context，传入空 dict（scorer 内部各维度评分函数均做兜底）
+        agent_ctx = {
+            "debug_context": debug_context,
+            "repair_context": {},
+        }
+        report = evaluate(agent_ctx)
+        return report.model_dump()
+    except Exception:
+        logger.warning("Dashboard 质量评分失败", exc_info=True)
+        return None
+
+
+@router.get("/trace/{trace_id}/quality", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
+def get_trace_quality(trace_id: str):
+    """单独获取 trace 的质量报告（v0.4.0）。
+
+    复用 get_trace_detail 的评分逻辑，但只返回 quality_report 字段，
+    供前端单独轮询或刷新质量评分（避免拉取完整 trace 详情）。
+    """
+    from app.mcp.builders.context import build_debug_context
+
+    ctx = build_debug_context(trace_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail=f"找不到 trace {trace_id}")
+
+    quality_report = _safe_build_quality_report(ctx)
+    if quality_report is None:
+        return {"trace_id": trace_id, "quality_report": None}
+
+    return {"trace_id": trace_id, "quality_report": quality_report}
 
 
 @router.get("/specs", dependencies=[Depends(require_role("admin", "developer", "viewer"))])

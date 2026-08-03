@@ -1,4 +1,4 @@
-# Lujo-MCP 技术设计文档（DESIGN）
+﻿# Lujo-MCP 技术设计文档（DESIGN）
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
@@ -221,7 +221,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 `build_context(request_id, logs)` → `{request_id, flow, input, output, errors}`。单条格式异常 `try/except` 标记为 `<malformed>` 并跳过，**不阻断整体**。
 
-> ⚠️ 注意：此构建器现已含 `code_snippets`（FR11 已接线）。详见 §6.1。
+> ⚠️ 注意：此构建器现已含 `code_snippets`（FR11 已接线）。详见 §6。
 
 #### 3.4.3 Stacktrace Collector（`app/mcp/collectors/stacktrace.py`）✅
 
@@ -425,7 +425,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 - 启动：HTTP 使用 `python -m app.main`；stdio 使用 `python -m app.mcp_server`。
 - 依赖：`requirements.txt`（fastapi、uvicorn、openai、psutil、psycopg2、asyncpg、redis、mcp、pydantic-settings）。
-- 关键配置：见 `PRD.md` §11.3；**务必生产设 `API_KEY` 与 `CORS_ORIGINS`**；`code_context_lines` 待补（§6.1）。
+- 关键配置：见 `PRD.md` §11.3；**务必生产设 `API_KEY` 与 `CORS_ORIGINS`**；`code_context_lines` 待补（§6）。
 - 容器化：`Dockerfile` + `docker-compose.yaml` 已提供。
 
 ---
@@ -528,7 +528,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 | 项 | 说明 | 处置 |
 | --- | --- | --- |
-| ~~代码定位未接线~~ | ~~`get_debug_context` 不含片段~~ | §6.1 ✅ 已修复 |
+| ~~代码定位未接线~~ | ~~`get_debug_context` 不含片段~~ | §6 ✅ 已修复 |
 | ~~静默失败/前端自动化~~ | ~~FR13/FR14/FR15 待建~~ | ✅ 已实现 |
 | 厂商锁定 | 仅 OpenAI | 多 LLM provider 已支持（openai/zhipu/custom）|
 | memory 后端 | 重启即丢 | 生产用 postgresql 或 async_pg |
@@ -2203,3 +2203,176 @@ refresh(); setInterval(refresh, 10000); initSSE();   // 轮询兜底 + SSE 叠�
 - 确定性测试：直接迭代 `StreamingResponse.body_iterator`，绕过 HTTP 层避免 async 死锁
 
 测试基线：654 passed / 6 skipped / 0 failed（583 → 654，新增 18 项）；ruff 0 违规。
+
+---
+
+## 19. v0.4.0 架构评审决策（2026-08-03 架构委员会）
+
+> 本节记录架构委员会对 v0.4.0 开发路线的最终决策，包括项目状态评估、Quality System 评分模型设计、评分基线建立、M2-M4 改进逻辑与评分推演。
+> 配套文档：PRD.md §12.2（v0.4.0 路线图）。
+
+### 19.1 项目当前状态评估
+
+| 维度 | 判定 | 依据 |
+| --- | --- | --- |
+| 代码完整度 | Beta | 8 个 Phase 全部落地，654 单元测试通过 |
+| 价值可证明性 | Demo | Debug Context 质量无法量化，无法回答「用了比不用好多少」 |
+| 部署就绪度 | Beta | Docker Compose 一键部署，但大量功能需外部依赖 |
+| 综合判定 | **Beta 偏 Demo** | 代码完整度达 Beta 标准，但核心价值停留在 Demo 级别 |
+
+**v0.4.0 的核心任务：把「代码上的 Beta」变成「价值上的 Beta」。**
+
+### 19.2 Quality System 评分模型设计
+
+#### 19.2.1 设计目标
+
+Quality System 的核心问题是：**如何量化 Debug Context 的质量，让「用了比不用好多少」可度量。**
+
+评分模型需要回答两个问题：
+1. **上下文完整度（ContextCompleteness）**：采集到的调试上下文各维度是否齐全？→ 衡量「有没有」
+2. **分析可信度（AnalysisConfidence）**：已有证据对根因推断的支持强度如何？→ 衡量「靠不靠谱」
+
+综合评分公式：`overall_score = completeness × confidence`（乘法而非平均，隐含「数据再全，证据不相关也白搭」的语义）。
+
+#### 19.2.2 9 维度加权评分
+
+ContextCompleteness 将 Debug Context 拆分为 9 个维度，各维度独立评分（0.0~1.0），加权平均得到整体完整度：
+
+| 维度 | 权重 | 评分逻辑 | 数据来源 |
+| --- |:---:| --- | --- |
+| Trace（异常堆栈） | 0.20 | ≥5帧=1.0，2-4帧=0.7，1帧=0.4，无=0.0 | `debug_context.exception` |
+| CodeSnippet（源码片段） | 0.20 | 全部找到=1.0，部分=0.6，全无=0.0 | `debug_context.code_snippets` |
+| Runtime（运行时快照） | 0.10 | 有 pid=1.0，无=0.0 | `debug_context.runtime` |
+| GitContext（Git 归因） | 0.10 | blame+diff=1.0，仅一项=0.6，无=0.0 | `debug_context.git_blame + recent_diffs` |
+| Network（网络请求） | 0.08 | 有=1.0，无=0.0 | `debug_context.network_trace` |
+| UIEvent（前端事件） | 0.05 | 有=1.0，无=0.0 | `debug_context.ui_events` |
+| Spec（规范校验） | 0.07 | spec_diffs=1.0，仅related_specs=0.5，无=0.0 | `debug_context.spec_diffs + related_specs` |
+| KnowledgeBase（知识库） | 0.10 | 精确命中=1.0，向量召回=0.6，无=0.0 | `repair_context.sources.knowledge_base_hit + vector_recall` |
+| LLMAnalysis（LLM 分析） | 0.10 | high=1.0，medium=0.8，low=0.5，无=0.0 | `repair_context.prior_analysis.confidence` |
+
+权重设计原则：Trace + CodeSnippet 各 20%（报错场景核心），Runtime/Git/KB/LLM 各 10%（辅助分析），Network/UI/Spec 各 5-8%（场景相关）。
+
+#### 19.2.3 模块结构
+
+| 文件 | 职责 |
+| --- | --- |
+| `app/quality/schemas.py` | Pydantic 数据模型：`QualityReport` / `ContextCompleteness` / `AnalysisConfidence` / `EvidenceItem` / `DimensionScore` |
+| `app/quality/scorer.py` | 规则引擎：`evaluate()` 纯函数入口 + 9 个 `_score_*()` 维度评分器 + `_extract_evidence()` 证据提取 + `_score_confidence()` 可信度评分 + `_generate_suggestions()` 改进建议 |
+| `app/quality/__init__.py` | 包导出 |
+| `app/config.py` | `quality_scoring_enabled: bool = True` feature flag |
+| `app/agent/context_assembler.py` | `assemble()` 返回新增 `quality_report` 字段 |
+| `app/llm/analyzer.py` | SYSTEM_PROMPT 增加 `reasoning_chain` + `evidence_items`；`_validate_and_normalize` 向后兼容 |
+| `app/api/dashboard.py` | `get_trace_detail` 注入 `quality_report`；新增 `GET /trace/{tid}/quality` 独立端点 |
+| `app/web/dashboard.html` | Quality 卡片渲染：综合评分进度条 + 9 维度网格 + 证据列表 + 改进建议 |
+
+#### 19.2.4 设计约束
+
+1. **纯函数**：`evaluate()` 不依赖 I/O，内部异常 `try/except` 吞掉返回 `null_score()`
+2. **静默降级**：feature flag 关闭时返回 `None`，评分失败返回 `null_score()`，不阻断主流程
+3. **向后兼容**：旧格式数据（缺字段）不抛异常，各 `_score_*()` 函数做兜底
+4. **零侵入**：QualityScorer 在 `context_assembler.assemble()` 末尾调用，不改已有 collector/builder 逻辑
+
+### 19.3 M1 评分基线（5 场景对比）
+
+用 5 个模拟真实场景的 debug_context 跑 QualityScorer，建立 v0.4.0 的量化基线：
+
+| 场景 | 完整度 | 可信度 | 综合 | 证据数 | 场景说明 |
+| --- |:---:|:---:|:---:|:---:| --- |
+| A-完整上下文 | 0.95 | 0.82 | 0.78 | 13 | 所有采集维度齐备 + LLM 高置信度 + 向量召回 |
+| B-典型后端报错 | 0.61 | 0.82 | 0.50 | 5 | 堆栈+源码+git blame，缺少前端/网络/规范/知识库 |
+| C-最简报错 | 0.18 | 0.43 | 0.08 | 2 | 仅堆栈（1帧）+运行时，其他 7 个维度全缺 |
+| D-静默失败 | 0.38 | 0.80 | 0.30 | 6 | 200 OK 但 spec_diffs 偏离，无异常堆栈，KB 命中 |
+| E-知识库命中 | 0.61 | 0.94 | 0.57 | 5 | 知识库精确命中，复用历史修复，跳过 LLM |
+| **平均** | **0.55** | **0.76** | **0.45** | **6.2** | — |
+
+**基线分析要点**：
+1. 场景 A 完整度 0.95（Spec 仅 0.5 + KB 仅 0.6），上下限拉开说明评分器有区分度
+2. 场景 C 综合 0.08，触发「完整度严重不足」警告 + 7 条缺失维度建议，能直接指导排查
+3. 场景 D 无异常堆栈但 KB+spec_diffs+LLM 撑起可信度 0.80，评分器对非异常场景有合理评估
+4. 场景 E 可信度 0.94 最高——5 条证据 4 条高相关，知识库复用场景确实更可信
+5. 乘法公式天然区分「数据全但分析弱」（B: 0.61×0.82）和「数据少但分析强」（D: 0.38×0.80）
+
+### 19.4 M2-M4 改进逻辑与评分推演
+
+#### 19.4.1 M2: Debug Case Schema → KnowledgeBase 维度提升
+
+**改进逻辑**：M2 落地 30 条种子知识覆盖高频异常模式（ValueError/TypeError/KeyError/AttributeError/ConnectionError 等）。当异常指纹精确命中知识库时，KnowledgeBase 维度从 0.0→1.0，同时 LLMAnalysis 置信度因知识库辅助从 medium→high。
+
+**各场景维度变化**：
+
+| 场景 | KnowledgeBase | LLMAnalysis | 完整度变化 | 可信度变化 |
+| --- |:---:|:---:|:---:|:---:|
+| A | 0.6→1.0（向量召回→精确命中） | 维持 1.0 | +0.04 | +0.02 |
+| B | 0.0→1.0（KeyError 种子覆盖） | 0.8→1.0 | +0.10 | +0.04 |
+| C | 0.0→1.0（NoneType 种子覆盖） | 0.0→1.0（有堆栈即可调 LLM） | +0.20 | +0.15 |
+| D | 维持 1.0 | 0.8→1.0 | +0.02 | +0.03 |
+| E | 维持 1.0 | 维持 1.0 | 0 | 0 |
+
+#### 19.4.2 M3: Fault Localization 2.0 → CodeSnippet + GitContext 维度提升
+
+**改进逻辑**：StaticAnalyzer（基于 Python `ast` 标准库，零外部依赖）在 Task 12 已落地，能从堆栈帧自动提取函数签名、参数、类型注解、复杂度、可疑输入。Task 13 将其集成到 `context_assembler`，并在无异常堆栈场景下基于网络请求 URL → handler 函数 → 源码片段的路径自动定位代码。
+
+**各场景维度变化**：
+
+| 场景 | CodeSnippet | GitContext | 完整度变化 |
+| --- |:---:|:---:|:---:|
+| A | 维持 1.0 | 维持 1.0 | 0 |
+| B | 维持 1.0 | 0.6→1.0（自动采集 diff） | +0.04 |
+| C | 0.0→1.0（code_locator 自动提取） | 0.0→0.6（自动采集 blame） | +0.26 |
+| D | 0.0→1.0（URL→handler→源码定位） | 0.0→0.6（自动采集 blame） | +0.26 |
+| E | 维持 1.0 | 0.0→0.6（自动采集 blame） | +0.06 |
+
+#### 19.4.3 M4: Agent Verify Loop → LLMAnalysis 置信度 + 长期 KB 积累
+
+**改进逻辑**：Agent Verify Loop 形成「修复→验证→记忆」闭环，每次成功修复的案例自动写入 DebugCase。短期效果是 LLMAnalysis 置信度因 VerifyAgent 验证反馈而从 medium→high；长期效果是知识库随系统运行持续积累，KnowledgeBase 精确命中率不断提升。
+
+**短期效果**（首次运行 M4 后）：
+
+| 场景 | LLMAnalysis | 可信度变化 |
+| --- |:---:|:---:|
+| A | 维持 1.0 | 0 |
+| B | 已在 M2 提升 | 0 |
+| C | 已在 M2 提升 | 0 |
+| D | 已在 M2 提升 | 0 |
+| E | 维持 1.0 | 0 |
+
+**长期效果**（系统运行 N 周后，KB 积累 100+ 条）：
+- 场景 B/C 的 KnowledgeBase 命中率从 60%→90%+
+- 平均可信度从 0.76→0.88+
+- M4 的长期价值无法在单次评分推演中体现，需通过 M5 全量回归持续观测
+
+#### 19.4.4 综合评分推演汇总
+
+| 场景 | M1 基线 | M2 后 | M3 后 | M4 后 | 总提升 |
+| --- |:---:|:---:|:---:|:---:|:---:|
+| A-完整上下文 | 0.78 | 0.82 | 0.82 | 0.90 | +0.12 |
+| B-典型后端报错 | 0.50 | 0.60 | 0.65 | 0.65 | +0.15 |
+| C-最简报错 | 0.08 | 0.32 | 0.46 | 0.46 | +0.38 |
+| D-静默失败 | 0.30 | 0.35 | 0.61 | 0.61 | +0.31 |
+| E-知识库命中 | 0.57 | 0.57 | 0.65 | 0.65 | +0.08 |
+| **平均** | **0.45** | **0.53** | **0.64** | **0.65** | **+0.20** |
+
+> 注：M4 列的数值含 M2+M3 的累积效果。M4 自身的短期增量约 +0.02，长期增量随 KB 积累持续放大。
+
+### 19.5 架构稳定性约束
+
+以下模块在 v0.4.0 期间禁止大改（只新增不修改）：
+
+| 模块 | 路径 | 禁止原因 |
+| --- | --- | --- |
+| MCP 协议层 | `app/mcp/protocol/` | 基础协议层，变更影响所有下游 |
+| Storage 抽象层 | `app/mcp/core/storage/` | 接口稳定。PG 同步/异步双轨延后至 v0.5.0 |
+| Browser SDK 采集链 | `browser-sdk/ai-debug.js` | 2000+ 行原生 JS，V2-V6 迭代积累。任何改动可能引入采集覆盖率退化 |
+| Agent 框架 | `app/agent/base.py` | BaseAgent ABC 是多 Agent 契约基础。v0.4.0 只增加新 Agent 实现，不修改契约 |
+| 安全中间件 | `app/middleware.py` | 中间件栈顺序错误可能导致安全漏洞 |
+| 配置系统 | `app/config.py` | 70+ 配置项。v0.4.0 只新增配置项，不修改已有配置项签名和默认值 |
+
+### 19.6 v0.4.0 明确不做
+
+- ❌ 新增 MCP 工具（17 个已够用，先做深不做广）
+- ❌ 合并 PG 同步/异步双轨（风险太高，留给 v0.5.0）
+- ❌ 多语言 StaticAnalyzer（先用 Python 验证价值）
+- ❌ Dashboard 重写/美化
+- ❌ 告警/通知系统
+- ❌ SaaS 托管平台
+- ❌ 多项目采集隔离（v0.5.0 团队协作的前置条件）

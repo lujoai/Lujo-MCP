@@ -31,6 +31,7 @@
 | v5.3 | 2026-07-26 | 高级架构师 | **Qdrant 适配器 + L3 缓存预热交付**：Qdrant 向量检索适配器（`QdrantVectorStore`：OpenAI/智谱 Embeddings 语义召回 + `uuid5(fingerprint)` 幂等 upsert + 静默降级）；P3-7 L3 缓存预热（只写 L1 不刷新 L2 TTL）。向量检索 RAG 双后端（in-process + Qdrant）完整落地，AI Debug Agent 前置依赖就绪。单元测试 520 passed / 6 skipped / 0 failed。 |
 | v5.4 | 2026-07-26 | 高级架构师 | **AI Debug Agent Phase 1 交付**：新增 `app/agent/` 模块（7 文件）——`BaseAgent` ABC + `AgentContext`/`AgentResult`/`AgentTrace` + `AgentStatus` 枚举、`RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + `_validate_repair_plan` 容错 JSON）、`RepairContextAssembler`（并发聚合 `analyze_async` + `retrieve_similar` + `get_recent_diff`，各失败静默降级）、`RepairQueue` + lifespan helper、`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）。新增 2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）+ 2 MCP 工具（`repair_async` + `repair_result`，工具数 15→17）。新增 9 个 `agent_*` 配置项（`agent_enabled` 默认 False）。Phase 1 定位为单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留），Phase 2 多 Agent DAG 为后续待办。单元测试 583 passed / 6 skipped / 0 failed；ruff 0 违规。 |
 | v5.5 | 2026-07-30 | 高级架构师 | **Dashboard 实时 SSE 推送交付（`DASH-SSE-001`）**：新增 `app/api/dashboard_events.py`——`DashboardEventBus` 广播总线（无 session 门槛，跨线程 `call_soon_threadsafe` 投递，队列满丢旧保最新）；`dashboard.py` 新增 `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 事件终止）+ `invalidate_cache` 内挂广播钩子（广播失败静默降级，不影响主写入链路）；`dashboard.html` 前端 EventSource 集成（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（向后兼容零开销）；鉴权复用 `?api_key=` query 降级（EventSource 无法设自定义 header）。新增 FR20 + 18 单测（测试基线 583→654 passed / 6 skipped / 0 failed）；ruff 0 违规。 |
+| v5.6 | 2026-08-03 | 架构委员会 | **v0.4.0 开发路线制定 + M1 Quality Foundation 交付**：(1) 架构委员会四轮评审（代码审计 / 技术架构 / 产品战略 / 开发路线），判定项目当前为「Beta 偏 Demo」，v0.4.0 唯一核心目标为「让 Debug Context 价值可量化、可证明」；(2) 制定 17 个任务、5 个 Milestone 的执行计划（M1 Quality System → M2 Debug Case Schema → M3 Fault Localization 2.0 → M4 Agent Verify Loop → M5 全量回归）；(3) M1 全部 6 个 Task 落地——`app/quality/` 模块（schemas + scorer 规则引擎，9 维度加权评分 + 证据提取 + 改进建议）、`context_assembler.py` 质量注入、`analyzer.py` LLM 增强（reasoning_chain + evidence_items）、Dashboard 质量报告卡片 + `/api/dashboard/trace/{tid}/quality` 独立端点；M3 Task 12（StaticAnalyzer，基于 `ast` 标准库函数级静态分析）同步落地；(4) 5 场景评分基线建立（平均综合 0.45），M2-M4 评分提升预期推演完成（平均 0.45→0.65）。详见 §12.2、DESIGN.md §19。测试基线 764 passed / 6 skipped / 0 failed。 |
 
 ---
 
@@ -574,6 +575,58 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | P1 | FR12 增强 | `/api/debug/prompt` 文本端点 | P2（非 MCP 场景） |
 | P2 | AI Debug Agent Phase 2（多 Agent DAG） | 在 `BaseAgent` ABC + `Coordinator` 框架上扩展 Git Agent / Test Agent / Security Agent 并行编排 | 自动修复增强 |
 | P2 | 多 LLM 厂商 / OpenTelemetry / Web 控制台 / 多租户 | 见 v1.0 | — |
+
+### 12.2 v0.4.0 路线图：让 Debug Context 价值可量化、可证明
+
+> 2026-08-03 架构委员会批准。完整架构决策见 DESIGN.md §19。
+
+**核心目标**：不做新功能堆砌，不重构已有模块。通过 Quality System 量化 Debug Context 的完整度和可信度，通过 Debug Case Schema 沉淀调试知识，通过 Fault Localization 2.0 提升定位精度，通过 Agent Verify Loop 形成「修复→验证→记忆」闭环，最终让项目从「代码上的 Beta」变成「价值上的 Beta」。
+
+#### Milestone 概览
+
+| Milestone | 核心任务 | 预计工期 | 状态 |
+| --- | --- | --- | --- |
+| M1-quality-foundation | Quality System 核心框架 + LLM 分析增强 + Dashboard 质量报告 | 4-6 周 | ✅ 已完成（2026-08-03） |
+| M2-debug-case-schema | Debug Case 标准 Schema + 30 条种子知识 + 知识库导入/导出 | 3-4 周 | 待启动 |
+| M3-fault-localization | 函数级静态分析（基于 Python `ast` 标准库，零依赖） | 3-4 周 | Task 12 已完成，Task 13 待启动 |
+| M4-agent-verify-loop | Agent Verify Loop（迭代修复 + 验证 + 记忆沉淀） | 3-4 周 | 待启动 |
+| M5-full-regression | 全量回归测试 + 文档更新 | 2 周 | 待启动 |
+
+#### M1 评分基线（5 场景对比）
+
+QualityScorer 对 5 个模拟场景的评分结果，作为 v0.4.0 的量化基线：
+
+| 场景 | 完整度 | 可信度 | 综合 | 证据数 | 场景说明 |
+| --- |:---:|:---:|:---:|:---:| --- |
+| A-完整上下文 | 0.95 | 0.82 | 0.78 | 13 | 所有采集维度齐备 + LLM 高置信度 |
+| B-典型后端报错 | 0.61 | 0.82 | 0.50 | 5 | 堆栈+源码+git，缺少前端/网络/规范 |
+| C-最简报错 | 0.18 | 0.43 | 0.08 | 2 | 仅堆栈+运行时，其他全缺 |
+| D-静默失败 | 0.38 | 0.80 | 0.30 | 6 | 200 OK 但 spec_diffs 偏离，无异常 |
+| E-知识库命中 | 0.61 | 0.94 | 0.57 | 5 | 知识库精确命中，复用历史修复 |
+| **平均** | **0.55** | **0.76** | **0.45** | **6.2** | — |
+
+#### M2-M4 评分提升预期
+
+基于 9 维度权重精确推演，各 Milestone 落地后的评分提升预期：
+
+| 场景 | M1 基线 | M2-M4后预期 | 提升 | 主要贡献维度 |
+| --- |:---:|:---:|:---:| --- |
+| A-完整上下文 | 0.78 | **0.90** | +0.12 | Spec 0.5→1.0 + KnowledgeBase 0.6→1.0 |
+| B-典型后端报错 | 0.50 | **0.65** | +0.15 | KnowledgeBase 0→1.0 + GitContext 0.6→1.0 |
+| C-最简报错 | 0.08 | **0.46** | +0.38 | CodeSnippet 0→1.0 + KnowledgeBase 0→1.0 + LLMAnalysis 0→1.0 |
+| D-静默失败 | 0.30 | **0.61** | +0.31 | CodeSnippet 0→1.0（M3 StaticAnalyzer 基于 URL 反查 handler） |
+| E-知识库命中 | 0.57 | **0.65** | +0.08 | GitContext 0→0.6 |
+| **平均** | **0.45** | **0.65** | **+0.20** | — |
+
+#### 各 Milestone 贡献分解
+
+| Milestone | 贡献维度 | 受益场景 | 平均综合提升 |
+| --- | --- | --- |:---:|
+| M2 Debug Case Schema | KnowledgeBase 维度 0→1.0 | A/B/C/D/E | **+0.10** |
+| M3 Fault Localization 2.0 | CodeSnippet + GitContext 维度补全 | B/C/D/E | **+0.08** |
+| M4 Agent Verify Loop | LLMAnalysis 置信度提升 + 长期 KB 积累 | A/B/C/D | **+0.02** |
+
+M2 贡献最大（+0.10），因为知识库命中同时提升完整度和可信度；M3 次之（+0.08），主要补源码和 git 维度；M4 短期效果最小（+0.02），但长期效果随知识库积累持续放大。
 
 ---
 

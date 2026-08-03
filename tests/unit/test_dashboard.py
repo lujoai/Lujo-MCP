@@ -120,6 +120,93 @@ class TestDashboardTraceDetail:
         assert body["spec_diffs"][0]["silent_failure"] is True
 
 
+class TestDashboardQualityReport:
+    """v0.4.0: trace 详情端点注入 quality_report 字段"""
+
+    def test_trace_detail_contains_quality_report(self, client):
+        """trace detail 返回 quality_report 字段（默认开启 quality_scoring）"""
+        tid = trace_repo.save_trace("ValueError", "test error", [
+            {"file": "app/config.py", "line": 9, "function": "Settings"}
+        ], source="test")
+
+        resp = client.get(f"/api/dashboard/trace/{tid}")
+        assert resp.status_code == 200
+        body = resp.json()
+        # quality_report 字段存在（非 None，因为默认 quality_scoring_enabled=True）
+        assert "quality_report" in body
+        qr = body["quality_report"]
+        assert qr is not None
+        # 核心字段齐全
+        assert "overall_score" in qr
+        assert "context_completeness" in qr
+        assert "analysis_confidence" in qr
+        assert "evidence_items" in qr
+        assert "suggestions" in qr
+        assert "scored_at" in qr
+        assert qr["scorer_version"] == "1.0.0"
+
+    def test_quality_report_dimensions_full(self, client):
+        """quality_report 包含 9 个维度的评分"""
+        tid = trace_repo.save_trace("ValueError", "test error", [
+            {"file": "app/config.py", "line": 9, "function": "Settings"}
+        ], source="test")
+
+        resp = client.get(f"/api/dashboard/trace/{tid}")
+        body = resp.json()
+        qr = body["quality_report"]
+        dims = qr["context_completeness"]["dimensions"]
+        # 9 个维度全部存在
+        assert len(dims) == 9
+        expected = {"trace", "runtime", "code_snippet", "git_context",
+                    "network", "ui_event", "spec", "knowledge_base", "llm_analysis"}
+        assert set(dims.keys()) == expected
+
+    def test_quality_report_formula(self, client):
+        """overall_score = completeness × confidence"""
+        tid = trace_repo.save_trace("ValueError", "test", [
+            {"file": "a.py", "line": 1, "function": "f"}
+        ], source="test")
+
+        resp = client.get(f"/api/dashboard/trace/{tid}")
+        body = resp.json()
+        qr = body["quality_report"]
+        comp = qr["context_completeness"]["overall_score"]
+        conf = qr["analysis_confidence"]["overall_score"]
+        expected = round(comp * conf, 4)
+        assert abs(qr["overall_score"] - expected) < 0.001
+
+    def test_quality_report_disabled_when_flag_off(self, client, monkeypatch):
+        """quality_scoring_enabled=False → quality_report 为 None"""
+        from app.config import settings
+        monkeypatch.setattr(settings, "quality_scoring_enabled", False)
+
+        tid = trace_repo.save_trace("ValueError", "test", [
+            {"file": "a.py", "line": 1, "function": "f"}
+        ], source="test")
+
+        resp = client.get(f"/api/dashboard/trace/{tid}")
+        body = resp.json()
+        assert body["quality_report"] is None
+
+    def test_quality_only_endpoint(self, client):
+        """独立质量端点 /api/dashboard/trace/{tid}/quality"""
+        tid = trace_repo.save_trace("ValueError", "test", [
+            {"file": "a.py", "line": 1, "function": "f"}
+        ], source="test")
+
+        resp = client.get(f"/api/dashboard/trace/{tid}/quality")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["trace_id"] == tid
+        assert body["quality_report"] is not None
+        assert "overall_score" in body["quality_report"]
+
+    def test_quality_only_endpoint_not_found(self, client):
+        """质量端点 404"""
+        resp = client.get("/api/dashboard/trace/no-such-trace/quality")
+        assert resp.status_code == 404
+
+
 class TestDashboardLimitCap:
     """limit 参数上限测试"""
 
