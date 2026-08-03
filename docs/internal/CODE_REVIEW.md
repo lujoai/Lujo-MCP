@@ -127,11 +127,11 @@ app/config/
 └── constants.py
 ```
 
-**已有 .env.example**：项目根目录已提供 [.env.example](./.env.example)，新用户只需复制为 `.env` 并填入 API Key 即可运行。
+**已有 .env.example**：项目根目录已提供 [.env.example](../../.env.example)，新用户只需复制为 `.env` 并填入 API Key 即可运行。
 
 ### Module 3：日志系统
 
-> **战略决策**：不引入 loguru，继续使用标准 logging 模块 + JSON formatter。项目已有 [app/utils/logging.py](./app/utils/logging.py)，引入 loguru 是替换而非新增，收益有限。
+> **战略决策**：不引入 loguru，继续使用标准 logging 模块 + JSON formatter。项目已有 [app/utils/logging.py](../../app/utils/logging.py)，引入 loguru 是替换而非新增，收益有限。
 
 **增量替换策略**：
 - 创建 lint 规则禁止新代码用 `print()`
@@ -181,7 +181,7 @@ app/storage/
 
 **migrations/ 目录管理策略**：
 
-> **战略决策**：当前 DDL 硬编码在 [pg_store.py](./app/mcp/core/storage/pg_store.py#L62-L82) 的 `_ensure_init()` 里（`CREATE TABLE IF NOT EXISTS`），不可追溯、不可版本化。拆出来用 SQL 文件管理，零学习成本、版本控制清晰，未来 Alembic 可直接 import 这些 SQL 作为 baseline。
+> **战略决策**：当前 DDL 硬编码在 [pg_store.py](../../app/mcp/core/storage/pg_store.py#L62-L82) 的 `_ensure_init()` 里（`CREATE TABLE IF NOT EXISTS`），不可追溯、不可版本化。拆出来用 SQL 文件管理，零学习成本、版本控制清晰，未来 Alembic 可直接 import 这些 SQL 作为 baseline。
 
 **migrations/ 目录结构**：
 
@@ -271,7 +271,7 @@ ui_events (id BIGSERIAL, trace_id TEXT, action TEXT, selector TEXT,
 
 ### Module 2：Repository 层
 
-> **战略决策**：当前 [pg_store.py](./app/mcp/core/storage/pg_store.py) 同时承担连接池管理（`_get_pool`）和数据操作（`PGTraceStore`/`PGSessionStore`），职责混合。拆分为 `database.py`（连接池）+ `trace_repository.py` + `session_repository.py`，业务逻辑与 SQL 解耦。
+> **战略决策**：当前 [pg_store.py](../../app/mcp/core/storage/pg_store.py) 同时承担连接池管理（`_get_pool`）和数据操作（`PGTraceStore`/`PGSessionStore`），职责混合。拆分为 `database.py`（连接池）+ `trace_repository.py` + `session_repository.py`，业务逻辑与 SQL 解耦。
 >
 > 📌 **评估更新（2026-07-23，只读分析）**：598 行非"上帝文件"，单纯减行数不值得拆；核心是 `errors`/`specs` 无 ABC 的设计债（三后端契约不对齐、`spec_store` 靠 try/except 降级）。推荐方案调整为 `pg_pool.py`/`pg_schema.py`/`pg_store.py`/`pg_errors.py`/`pg_specs.py` 五模块 + 补 `ErrorStorage`/`SpecStorage` ABC + `async_pg_store.py` 同步拆（方案 C，2-2.5 人日，需 AI_RULES 审批）。发现隐藏缺陷：`_execute_with_retry` 读取路径覆盖不一致（无重连重试）。详见 [ROADMAP.md](./ROADMAP.md) 技术债务。
 
