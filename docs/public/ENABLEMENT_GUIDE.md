@@ -1,7 +1,7 @@
 # Lujo-MCP 环境部署与功能启用指南
 
 > 目标：把“代码已存在的能力”转换成“团队可复现启用、可验证交付的能力”。  
-> 功能完成度请以内部交付矩阵文档（DELIVERY_MATRIX.md）为准，当前验证状态见内部稳定性验证报告（STABILITY_REPORT.md）（均为内部文档）。
+> 功能完成度与当前验证状态以内部文档为准。
 
 ## 一、适用范围
 
@@ -187,7 +187,7 @@ python -m pytest tests/integration/test_otel_collector_integration.py -q
 2. 再核对 `.env` 中的权威变量是否正确，尤其是 `PG_PASSWORD`
 3. 先跑对应模块的单元测试
 4. 再跑环境集成测试
-5. 最后更新内部稳定性验证报告（STABILITY_REPORT.md）
+5. 最后更新内部稳定性验证报告
 
 ## 五、当前已知环境问题
 
@@ -218,6 +218,6 @@ failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
 
 完成任一环境能力验证后，至少要同步三处：
 
-1. 更新内部稳定性验证报告（STABILITY_REPORT.md）的结论
+1. 更新内部稳定性验证报告的结论
 2. 如出现新问题，补录到内部 TODO 台账
-3. 如完成度发生变化，更新内部交付矩阵（DELIVERY_MATRIX.md）
+3. 如完成度发生变化，更新内部交付矩阵

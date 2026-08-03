@@ -82,7 +82,7 @@
 ### 高并发与企业级数据预防任务（2026-07-22 高级架构师评审）
 
 > 来源：[CODE_REVIEW.md](./CODE_REVIEW.md) §企业级架构综合评审
-> 设计详情：技术设计文档（DESIGN.md，公开文档）§14 高并发设计评审
+> 设计详情：技术设计文档（公开文档）§14 高并发设计评审
 > 参考架构：无人机巡检平台思路（令牌桶/消息队列/多级缓存/熔断器）
 
 #### Phase 1：短期优化（1-2 周，低风险高收益）
@@ -194,6 +194,6 @@
 2. **跑测试基线**：`python -m pytest tests/unit/ -q`（必须 0 failed）+ `python -m pytest tests/integration/ -q`（确认无新增回归；`test_api.py` 鉴权基线失败属已知 .env `API_KEY` 污染，不计入回归）。
 3. **打 annotated tag**：`git tag -a v<x.y.z> -m "<版本摘要>"`（如 `git tag -a v0.3.0 -m "v0.3.0 正式发布：P0/P1 全部清零，Phase 0-5 完成"`）。
 4. **推送 tag**（外向操作，需用户确认）：`git push origin v<x.y.z>`。
-5. **同步文档**：更新 README.md 项目状态表、AI_HANDOFF.md §一、claude-audit-consolidated.md 状态总览与测试基线。
+5. **同步文档**：更新项目 README 状态表、AI_HANDOFF.md §一、claude-audit-consolidated.md 状态总览与测试基线。
 
 > 历史 tag：`v0.3.0-beta`（beta 阶段）、`v0.3.0-contest`（参赛版本）、`v0.3.0`（正式发布，2026-07-23）。

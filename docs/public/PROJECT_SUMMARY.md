@@ -2,8 +2,7 @@
 
 > AI Agent 第一入口文件。任何 AI 进入项目请先读本文件，3 分钟理解项目全貌。
 
-> 当前项目功能完成度以内部交付矩阵文档（DELIVERY_MATRIX.md）为唯一权威口径（内部文档，不对外公开）。  
-> 待开发项见内部 TODO 台账，稳定性验证状态见内部稳定性验证报告（均为内部文档）。
+> 项目功能完成度、待开发项、稳定性验证状态以内部文档为准（不对外公开）。
 
 ---
 
@@ -199,9 +198,9 @@
 - AI Debug Agent Phase 2：多 Agent DAG（`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`）✅（2026-07-30）
 - Dashboard 实时 SSE 推送（`DASH-SSE-001`）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 轮询兜底 + 断线重连）✅（2026-07-30）
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **654 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **672 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + 安全加固 18 项）。
 
-**当前优先级**（详见内部路线图 ROADMAP.md 与开发计划 DEV_PLAN.md，均为内部文档）：
+**当前优先级**：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
@@ -249,12 +248,10 @@
 | 序号 | 文件 | 作用 |
 |------|------|------|
 | 1 | PROJECT_SUMMARY.md | 快速理解项目（本文件）|
-| 2 | docs/internal/AI_RULES.md | 了解开发规则 |
-| 3 | docs/internal/AI_HANDOFF.md | 了解当前状态，避免重复开发 |
-| 4 | docs/internal/DESIGN.md | 理解技术设计 |
-| 5 | docs/internal/DEV_PLAN.md | 了解当前任务 |
-| 6 | docs/internal/CODE_REVIEW.md | 理解长期方向 |
-| 7 | docs/internal/PRD.md | 理解产品需求（最后阅读）|
+| 2 | DESIGN.md | 理解技术设计 |
+| 3 | PRD.md | 理解产品需求 |
+
+> 开发规则、当前状态、开发计划、长期路线图等内部文档不对外公开，AI Agent 可通过本地文件系统访问 `docs/internal/` 目录。
 
 ---
 
@@ -311,7 +308,7 @@ python -m app.mcp_server
 
 ## 10. 安全审查结论（2026-07-23，AI 阅读须知）
 
-> AI 进入本项目做任何安全相关判断前，请先读本节与内部安全审查文档（SECURITY_REVIEW.md）SEC-01~15、[DESIGN.md](../public/DESIGN.md) §13。
+> AI 进入本项目做任何安全相关判断前，请先读本节与 [DESIGN.md](./DESIGN.md) §13。安全审查详情见内部安全审查文档。
 
 **整体健康度：8.5 / 10**（工程质量 8.5 / 安全性 8.0 / 架构可维护性 8.5 / 文档可信度 9.0）。核心数据流架构**合理、无需重写**；安全基线扎实，部分长期项（如 C7 source-map）未完成。
 
@@ -330,6 +327,6 @@ python -m app.mcp_server
 
 > **新增安全能力（2026-07-25，AUDIT-2-13/14）**：RBAC 三级角色分级（admin > developer > viewer）覆盖 33 条 REST 路由 + 17 个 MCP 工具；`require_role(*roles)` FastAPI 依赖工厂路由级门控 + `TOOL_ROLE_REQUIREMENTS` MCP 工具级门控；未命中映射默认 viewer（fail-closed）。多 key 恒定时间比较（`verify_api_key` 遍历不短路 + `hmac.compare_digest`）+ 单 key 向后兼容。LFI 路径白名单 + SSRF URL 白名单已上线。
 
-> 整改追踪见内部审计报告（claude-audit-consolidated.md，内部文档）。修任一项须回填状态 + `文件:行` 验证。
+> 整改追踪见内部审计报告。修任一项须回填状态 + `文件:行` 验证。
 
 **P0 修复后的行为变更（AI 须知）**：① 0.0.0.0+空 `API_KEY` 现会拒绝启动（本地免鉴权用 `HOST=127.0.0.1`）；② 代码/Git 定位默认仅限进程 CWD，读 CWD 外源码需配 `WHITELIST_PATH_PREFIX`/`GIT_PATH_WHITELIST`；③ `verify_ui`/`auto_test` 默认拒私网/元数据/`file://`，本地联调设 `UI_URL_ALLOW_PRIVATE=true`；④ 工具调用受 `TOOL_TIMEOUT_SECONDS`（默认 60s）约束。P1（SEC-04/06/07/08/09）与 P2（SEC-13/M7）已修复。
