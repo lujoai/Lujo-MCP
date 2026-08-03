@@ -26,13 +26,11 @@ jobs:
         continue-on-error: true
         run: ruff check .
 
-      # 文档链接检查：扫描所有 Markdown 文件的 [text](url) 链接，
-      # 验证相对路径文件是否存在、是否误用 file:// 绝对路径等。
-      # 现存历史债务（指向 docs/internal/ 的链接、绝对路径等），
-      # 先以 advisory 模式运行（问题仍会输出到日志 + Annotations，
-      # 但不禁行），待链接清理后移除 continue-on-error 转为硬门禁。
-      - name: Check doc links (advisory)
-        continue-on-error: true
+      # 文档链接检查（硬门禁）：扫描 git 跟踪的 Markdown 文件中的
+      # [text](url) 链接，验证相对路径文件是否存在、是否误用 file://
+      # 绝对路径等。只检查 git ls-files 列出的文件，确保 CI 与本地一致。
+      # 失败时在 GitHub Actions 的 Annotations 面板逐条标注错误位置。
+      - name: Check doc links
         run: python scripts/check_doc_links.py
 
       - name: Run unit tests

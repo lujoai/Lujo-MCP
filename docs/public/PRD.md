@@ -24,7 +24,7 @@
 | v2.0 | 2026-07-07 | 团队 | 以真实痛点重构，新增 FR11–FR15 |
 | v3.0 | 2026-07-07 | 高级架构师 | **代码核实后修正实现状态**：标注自动捕获/宿主AI推理已落地；代码定位标记为"模块已实现但未接线+配置缺失"；静默失败/前端自动化确认为待开发；补充架构师痛点覆盖度矩阵与落地缺口 |
 | v4.0 | 2026-07-08 | 高级后端架构师 | **参考项目迁移完成（M1–M8）**：redaction/trace_repo/network/ui_event/git/silent_failure/ingest_error/build_debug_context 全部落地；6 个新工具双传输注册；FR13 采集链就绪（自动检测仍待建）；FR14/FR15 未纳入本次优先级 |
-| v4.2 | 2026-07-08 | 高级后端架构师 | **全量交付**：FR13 assert_engine+verify ✅、FR14 Playwright UI 遍历+verify_ui ✅、FR15 spec_store+闭环 ✅、浏览器 SDK TS ✅、多 LLM provider ✅、Web 控制台 Dashboard ✅。全量交付（测试状态以 [README.md](../README.md) 项目状态表为准）。 |
+| v4.2 | 2026-07-08 | 高级后端架构师 | **全量交付**：FR13 assert_engine+verify ✅、FR14 Playwright UI 遍历+verify_ui ✅、FR15 spec_store+闭环 ✅、浏览器 SDK TS ✅、多 LLM provider ✅、Web 控制台 Dashboard ✅。全量交付（测试状态以 [README.md](../../README.md) 项目状态表为准）。 |
 | v5.0 | 2026-07-24 | 高级架构师 | **Phase 5 数据层长期优化交付**：P3-1 数据分区（traces 表按月 RANGE 分区）、P3-2 归档策略（>N 天自动归档到 traces_archive）、P3-3 批量写入、P3-5 优雅降级、P3-8 熔断器、Phase 7 智能错误分析引擎。单元测试 369 passed / 6 skipped / 0 failed；ruff 0 违规。 |
 | v5.1 | 2026-07-25 | 高级架构师 | **增量能力同步**：Browser SDK V3/V6（网络错误自动标记、UI 静默失败自动检测）与指纹知识库基础能力（命中优先 + 自动沉淀）已落地；向量检索版 RAG 与 AI Debug Agent 仍为后续阶段。 |
 | v5.2 | 2026-07-25 | 高级架构师 | **三轨并行交付**：P3-6 异步分析队列（有界 `asyncio.Queue` + K 常驻消费协程 + `Semaphore` 对齐 RPM/TPM + lifespan drain）；Phase 7 向量检索 RAG（`VectorStore` ABC + `InProcess`/`Null` 实现 + Qdrant 留空插槽 + 工厂注册表）；AUDIT-2-13/14 RBAC + API Key 轮换（多 key 恒定时间比较 + 角色分级 + `require_role` 依赖门控）。零侵入 `analyzer.py` 与 `AuthMiddleware` 公共签名。 |

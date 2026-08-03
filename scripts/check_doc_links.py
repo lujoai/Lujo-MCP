@@ -9,6 +9,9 @@
 3. 相对路径 ../xxx — 验证文件是否存在
 4. 锚点 #xxx — 验证锚点是否存在
 
+只扫描 git 跟踪的 Markdown 文件，确保 CI 与本地行为一致，
+避免 .gitignore 排除的个人/内部文档产生干扰。
+
 用法：python scripts/check_doc_links.py
 """
 
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote
@@ -37,13 +41,34 @@ def emit_annotation(level: str, file_path: Path, line: int, message: str) -> Non
     one_line = message.replace("\n", " ").replace("\r", "")
     print(f"::{level} file={rel},line={line}::{one_line}")
 
-EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", "site-packages",
-                 ".venv", "venv", ".cache", ".pytest_cache", ".trae"}
 
-DOCS = sorted(
-    p for p in ROOT.rglob("*.md")
-    if not any(part in EXCLUDE_DIRS for part in p.parts)
-)
+def get_tracked_md_files() -> list[Path]:
+    """获取 git 跟踪的 Markdown 文件列表。
+
+    只检查 git ls-files 列出的 .md 文件，确保 CI（仅检出跟踪文件）
+    与本地运行行为一致。git 不可用时退回到扫描全部 .md 文件。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            capture_output=True, text=True, check=True, cwd=ROOT,
+        )
+        return sorted(
+            ROOT / line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip().endswith(".md")
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # git 不可用时退回到扫描全部 .md 文件（保留原有行为）
+        exclude = {".git", "node_modules", "__pycache__", "site-packages",
+                   ".venv", "venv", ".cache", ".pytest_cache", ".trae"}
+        return sorted(
+            p for p in ROOT.rglob("*.md")
+            if not any(part in exclude for part in p.parts)
+        )
+
+
+DOCS = get_tracked_md_files()
 
 MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 

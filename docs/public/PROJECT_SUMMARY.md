@@ -36,27 +36,27 @@
 
 | 模块 | 关键文件 | 职责 |
 |------|----------|------|
-| 入口 | [app/main.py](../app/main.py) | FastAPI 实例、路由注册、lifespan |
-| 配置 | [app/config.py](../app/config.py) | pydantic-settings 全局单例 |
-| 中间件 | [app/middleware.py](../app/middleware.py) | 7 个中间件（CORS、Auth、MaxBodySize、RateLimit、SecurityHeaders、Trace + NetworkCapture，fail-closed 鉴权） |
-| 调试 API | [app/api/debug.py](../app/api/debug.py) | /api/debug/* 路由 |
-| Dashboard API | [app/api/dashboard.py](../app/api/dashboard.py) | 从 PostgreSQL 读取 |
-| MCP HTTP | [app/api/mcp_routes.py](../app/api/mcp_routes.py) | Streamable HTTP 传输 |
-| MCP stdio | [app/mcp_server.py](../app/mcp_server.py) | stdio 子进程传输 |
-| 日志核心 | [app/mcp/core/logs.py](../app/mcp/core/logs.py) | add_log/get_logs/list_request_ids |
-| 存储工厂 | [app/mcp/core/storage/factory.py](../app/mcp/core/storage/factory.py) | memory/pg 一键切换 |
-| PG 存储 | [app/mcp/core/storage/pg_store.py](../app/mcp/core/storage/pg_store.py) | 连接池+自动建表（修改需审批） |
-| 上下文构建 | [app/mcp/builders/context.py](../app/mcp/builders/context.py) | build_debug_context |
-| 断言引擎 | [app/mcp/verifier/assert_engine.py](../app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数 |
-| 规范存储 | [app/mcp/verifier/spec_store.py](../app/mcp/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
-| 异常钩子 | [app/mcp/hooks/exception_hook.py](../app/mcp/hooks/exception_hook.py) | sys.excepthook + asyncio |
-| LLM 分析 | [app/llm/analyzer.py](../app/llm/analyzer.py) | 重试/超时/fallback/流式 |
-| 指纹知识库 | [app/rag/knowledge_base.py](../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀） |
-| 向量检索抽象 | [app/rag/vector_store.py](../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
-| Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](../app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
-| 工具注册 | [app/mcp/tools/__init__.py](../app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
-| AI Debug Agent | [app/agent/](../app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
-| 浏览器 SDK | [browser-sdk/ai-debug.js](../browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
+| 入口 | [app/main.py](../../app/main.py) | FastAPI 实例、路由注册、lifespan |
+| 配置 | [app/config.py](../../app/config.py) | pydantic-settings 全局单例 |
+| 中间件 | [app/middleware.py](../../app/middleware.py) | 7 个中间件（CORS、Auth、MaxBodySize、RateLimit、SecurityHeaders、Trace + NetworkCapture，fail-closed 鉴权） |
+| 调试 API | [app/api/debug.py](../../app/api/debug.py) | /api/debug/* 路由 |
+| Dashboard API | [app/api/dashboard.py](../../app/api/dashboard.py) | 从 PostgreSQL 读取 |
+| MCP HTTP | [app/api/mcp_routes.py](../../app/api/mcp_routes.py) | Streamable HTTP 传输 |
+| MCP stdio | [app/mcp_server.py](../../app/mcp_server.py) | stdio 子进程传输 |
+| 日志核心 | [app/mcp/core/logs.py](../../app/mcp/core/logs.py) | add_log/get_logs/list_request_ids |
+| 存储工厂 | [app/mcp/core/storage/factory.py](../../app/mcp/core/storage/factory.py) | memory/pg 一键切换 |
+| PG 存储 | [app/mcp/core/storage/pg_store.py](../../app/mcp/core/storage/pg_store.py) | 连接池+自动建表（修改需审批） |
+| 上下文构建 | [app/mcp/builders/context.py](../../app/mcp/builders/context.py) | build_debug_context |
+| 断言引擎 | [app/mcp/verifier/assert_engine.py](../../app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数 |
+| 规范存储 | [app/mcp/verifier/spec_store.py](../../app/mcp/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
+| 异常钩子 | [app/mcp/hooks/exception_hook.py](../../app/mcp/hooks/exception_hook.py) | sys.excepthook + asyncio |
+| LLM 分析 | [app/llm/analyzer.py](../../app/llm/analyzer.py) | 重试/超时/fallback/流式 |
+| 指纹知识库 | [app/rag/knowledge_base.py](../../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀） |
+| 向量检索抽象 | [app/rag/vector_store.py](../../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
+| Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](../../app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
+| 工具注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
+| AI Debug Agent | [app/agent/](../../app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
+| 浏览器 SDK | [browser-sdk/ai-debug.js](../../browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
 
 ---
 
@@ -222,12 +222,12 @@
 
 | 模块 | 文件 | 原因 |
 |------|------|------|
-| PGStore | [app/mcp/core/storage/pg_store.py](../app/mcp/core/storage/pg_store.py) | 已验证，如需修改须先输出问题分析+影响范围+测试方案 |
-| 存储抽象层 | [app/mcp/core/storage/base.py](../app/mcp/core/storage/base.py) | 工厂模式基础 |
-| 存储工厂 | [app/mcp/core/storage/factory.py](../app/mcp/core/storage/factory.py) | 一行切换核心 |
-| 安全中间件 | [app/middleware.py](../app/middleware.py) | fail-closed 安全栈 |
-| 全局异常处理 | [app/error_handlers.py](../app/error_handlers.py) | 异常兜底 |
-| 可观测性 | [app/observability.py](../app/observability.py) | 监控指标 |
+| PGStore | [app/mcp/core/storage/pg_store.py](../../app/mcp/core/storage/pg_store.py) | 已验证，如需修改须先输出问题分析+影响范围+测试方案 |
+| 存储抽象层 | [app/mcp/core/storage/base.py](../../app/mcp/core/storage/base.py) | 工厂模式基础 |
+| 存储工厂 | [app/mcp/core/storage/factory.py](../../app/mcp/core/storage/factory.py) | 一行切换核心 |
+| 安全中间件 | [app/middleware.py](../../app/middleware.py) | fail-closed 安全栈 |
+| 全局异常处理 | [app/error_handlers.py](../../app/error_handlers.py) | 异常兜底 |
+| 可观测性 | [app/observability.py](../../app/observability.py) | 监控指标 |
 
 ### 禁止事项
 
