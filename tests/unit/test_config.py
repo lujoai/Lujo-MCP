@@ -91,7 +91,7 @@ class TestSettingsExtraEnvKeys:
                 from dotenv import dotenv_values
 
                 dotenv_values_map = dotenv_values(str(env_file))
-                known_lower = {k.lower() for k in self.model_fields.keys()}
+                known_lower = {k.lower() for k in type(self).model_fields.keys()}
                 extra_keys = {k for k in dotenv_values_map.keys() if k.lower() not in known_lower}
                 if extra_keys:
                     logger.warning("Ignored extra .env keys: %s", sorted(extra_keys))
@@ -130,7 +130,7 @@ class TestSettingsExtraEnvKeys:
                 from dotenv import dotenv_values
 
                 dotenv_values_map = dotenv_values(str(env_file))
-                known_lower = {k.lower() for k in self.model_fields.keys()}
+                known_lower = {k.lower() for k in type(self).model_fields.keys()}
                 extra_keys = {k for k in dotenv_values_map.keys() if k.lower() not in known_lower}
                 if extra_keys:
                     logger.warning("Ignored extra .env keys: %s", sorted(extra_keys))
@@ -164,7 +164,7 @@ class TestSettingsExtraEnvKeys:
 
                 # dotenv_values 对不存在的文件返回 {}，不会崩
                 dotenv_values_map = dotenv_values(str(env_file))
-                known_lower = {k.lower() for k in self.model_fields.keys()}
+                known_lower = {k.lower() for k in type(self).model_fields.keys()}
                 extra_keys = {k for k in dotenv_values_map.keys() if k.lower() not in known_lower}
                 if extra_keys:
                     logger.warning("Ignored extra .env keys: %s", sorted(extra_keys))
@@ -201,7 +201,7 @@ class TestApiKeyNormalization:
                 from dotenv import dotenv_values
 
                 dotenv_values_map = dotenv_values(str(env_file))
-                known_lower = {k.lower() for k in self.model_fields.keys()}
+                known_lower = {k.lower() for k in type(self).model_fields.keys()}
                 extra_keys = {k for k in dotenv_values_map.keys() if k.lower() not in known_lower}
                 if extra_keys:
                     logger.warning("Ignored extra .env keys: %s", sorted(extra_keys))
