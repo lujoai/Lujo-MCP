@@ -1,22 +1,163 @@
 # Release Notes / 发布说明
 
-> Post-release branch updates / 发布后主干增量：
+> 最新版本：**v0.4.0（2026-08-04，Debug Context Quality）**。M1 Quality System、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归。
+> 测试基线：单元 792 passed / 6 skipped / 0 failed（不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
+>
+> 历史 v0.3.0 之后的主干演进（已并入 v0.4.0）：
 > - Browser SDK 已继续补齐 V3 网络错误自动标记、V6 UI 静默失败自动检测
 > - 调试分析链路已新增指纹知识库基础能力（命中优先 + 自动沉淀）
 > - Dashboard 实时 SSE 推送（DASH-SSE-001，2026-07-30）：`DashboardEventBus` 广播总线 + SSE 端点 + 前端 EventSource
 > - AI Debug Agent Phase 2 多 Agent DAG（AGENT-002，2026-07-30）：`RepairAgent` + `GitAgent`/`TestAgent`/`SecurityAgent` 并行审查
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
-> - 测试基线：672 passed / 6 skipped / 0 failed
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
-> - 上述增量属于 `v0.3.0` 之后的主干演进，正式版本号以后续发版说明为准
 
-**Version / 版本**: v0.3.0  
-**Release Date / 发布日期**: 2026-07-25  
-**Codename / 代号**: Stability & Production Ready
+**Version / 版本**: v0.4.0  
+**Release Date / 发布日期**: 2026-08-04  
+**Codename / 代号**: Debug Context Quality — 让 Debug Context 价值可量化、可证明
 
 ---
 
 ## 中文版本
+
+### 📋 版本概述
+
+v0.4.0 是 Lujo-MCP 的「调试上下文质量」里程碑版本。核心目标是将 Debug Context 从"有数据"提升为"可量化、可证明、可沉淀"。通过质量评分系统（M1）、知识库三级 fallback（M2）、无堆栈故障定位（M3）与 Agent Verify Loop（M4）四层能力，将调试上下文质量基线从 0.45 提升至 0.65，并完成全量回归（M5）。
+
+### ✨ 新增功能
+
+#### M1 Quality System（质量评分系统）
+- **QualityScorer 规则引擎**（`app/quality/scorer.py`）：9 维度加权评分 + 证据提取 + 承载度评分 + 改进建议，纯函数 + 静默降级
+- **质量注入**：`context_assembler.py` 返回 `quality_report` 字段（feature flag 控制）
+- **LLM 分析增强**：`analyzer.py` 输出 `reasoning_chain` + `evidence_items`
+- **Dashboard 质量报告**：`GET /api/dashboard/trace/{tid}/quality` 独立端点 + Quality 卡片（综合评分 + 9 维度网格 + 证据 + 建议）
+
+#### M2 Knowledge Base 三级 fallback（知识库）
+- **DebugCase 标准 Schema**（`app/rag/debug_case.py`）：异常调试案例结构化记录 + 三级指纹计算（归一化消息 / 类型指纹）
+- **知识库三级 fallback 匹配**（`app/rag/knowledge_base.py`）：L1 精确指纹 → L1.5 归一化指纹 → L2 类型级 Jaccard；向量索引双写同步
+- **种子知识库**（`app/rag/seed_data.py`）：30 条覆盖常见异常的种子案例，启动时加载
+
+#### M3 Fault Localization 2.0（无堆栈定位）
+- **URL Resolver**（`app/mcp/collectors/url_resolver.py`）：无堆栈场景下按 HTTP 方法+路径反查 FastAPI 路由表定位 handler
+- **无堆栈静态分析**（`app/mcp/builders/context.py`）：静默失败无异常堆栈时，基于网络请求反查 handler 并做函数级静态分析（`ast` 标准库），注入 `static_analysis` 字段
+
+#### M4 Agent Verify Loop（验证闭环）
+- **Verify Loop**（`app/agent/verify_loop.py`）：迭代修复闭环——三层开关（agent→multi→verify）+ 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回
+- **KB 验证写回**：`record_verification()` 递增 `verify_count` / 提升 `case_confidence`，写入后同步向量库
+
+### 🔧 功能优化
+
+- **知识库召回率提升**：三级 fallback 显著提升相似错误模式的命中率（归一化指纹消除路径/UUID/数字噪声，类型级 Jaccard 处理跨类型相似）
+- **静默失败定位**：无堆栈场景不再无法定位，通过 URL Resolver + 函数级静态分析推断故障函数
+- **长期经验沉淀**：Agent Verify Loop 使调试经验随系统运行持续积累，`verify_count` / `case_confidence` 反哺知识库质量
+
+### 🐛 问题修复
+
+#### 合入 main 后测试回归（M5）
+- **`test_static_analyzer.py`**：移除已删除的 `analyze_source_code` / 旧版 `analyze_handler(module_path=...)` API 用例，仅保留当前 `analyze()` 用例（无堆栈入口由 `test_url_resolver.py` 覆盖）
+  - **根因**：main 分支的测试文件对应旧版 StaticAnalyzer API，与 M3 合入的新 API 不兼容
+  - **验证**：修复后该文件 7 用例全部通过
+- **`test_security_agent_severity.py`**：`VALID_SEVERITY` 不含 `unknown`（其为哨兵值），改为断言无效值映射为 `unknown`
+  - **根因**：测试断言 `VALID_SEVERITY` 含 `unknown`，与实现中「`unknown` 为无效值哨兵、不在规范集合内」的设计相悖
+  - **验证**：修复后该文件 6 用例全部通过
+
+### ⚠️ 已知限制
+
+1. **LLM 依赖用例**：`test_coordinator.py`、`test_agent_repair_e2e.py` 依赖真实 LLM API Key，无有效 Key 时自动 skip（本地需配置有效 `OPENAI_API_KEY`）
+2. **e2e 测试需实时服务器**：Browser SDK 端到端用例需先启动 uvicorn（`python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`）
+3. **本地 `.env` 覆盖默认值**：若本地 `.env` 设置了 `AGENT_ENABLED=true` / `LLM_PROVIDER=deepseek`，会覆盖默认值（CI 无此配置，使用默认值）
+4. **M4 长期价值需持续观测**：Verify Loop 的长期收益依赖知识库积累，需通过后续运行持续验证
+
+### 🔄 兼容性说明
+
+- **向后兼容**: v0.4.0 完全兼容 v0.3.x 的 API 与配置
+- **配置迁移**: 新增配置项均有合理默认值（`kb_*`、`agent_verify_loop_*` 等），无需强制迁移
+- **数据格式**: 存储格式无破坏性变更；知识库新增三级指纹索引与验证统计字段，历史数据自动补全默认值
+
+### 📖 升级指引
+
+1. **拉取新版本**
+   ```bash
+   git pull origin main
+   ```
+2. **安装依赖**
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **检查配置（可选）**
+   - 新增 `kb_vector_index_autosync`（默认 True）、`kb_type_level_fallback`（默认 True）、`agent_verify_loop_enabled`（默认 False）等
+   - 如需启用 Agent Verify Loop，在 `.env` 设 `AGENT_VERIFY_LOOP_ENABLED=true`
+4. **启动服务**
+   ```bash
+   python -m app.main
+   ```
+5. **验证**
+   ```bash
+   pytest tests/unit/ -q   # 单元 792 passed / 6 skipped / 0 failed
+   python -m uvicorn app.main:app --host 127.0.0.1 --port 8000  # 启动后跑 e2e
+   ```
+
+---
+
+## English Version
+
+### 📋 Release Overview
+
+v0.4.0 is the **Debug Context Quality** milestone of Lujo-MCP. Its core objective is to elevate the Debug Context from "has data" to "quantifiable, provable, and accumulative". Through the Quality System (M1), knowledge base three-level fallback (M2), stackless fault localization (M3), and Agent Verify Loop (M4), the average debug context quality baseline improved from 0.45 to 0.65, followed by full regression (M5).
+
+### ✨ New Features
+
+#### M1 Quality System
+- **QualityScorer rule engine** (`app/quality/scorer.py`): 9-dimension weighted scoring + evidence extraction + confidence scoring + improvement suggestions; pure functions + silent degradation
+- **Quality injection**: `context_assembler.py` returns `quality_report` field (feature-flag controlled)
+- **LLM analysis enhancement**: `analyzer.py` outputs `reasoning_chain` + `evidence_items`
+- **Dashboard quality report**: `GET /api/dashboard/trace/{tid}/quality` endpoint + Quality card
+
+#### M2 Knowledge Base Three-level Fallback
+- **DebugCase standard schema** (`app/rag/debug_case.py`): structured exception debugging cases + three-level fingerprint computation
+- **Three-level fallback matching** (`app/rag/knowledge_base.py`): L1 exact fingerprint → L1.5 normalized fingerprint → L2 type-level Jaccard; vector index dual-write sync
+- **Seed knowledge base** (`app/rag/seed_data.py`): 30 seed cases, loaded at startup
+
+#### M3 Fault Localization 2.0
+- **URL Resolver** (`app/mcp/collectors/url_resolver.py`): reverse-lookup FastAPI route table by HTTP method + path for stackless scenarios
+- **Stackless static analysis** (`app/mcp/builders/context.py`): inject `static_analysis` field via function-level static analysis (`ast` stdlib)
+
+#### M4 Agent Verify Loop
+- **Verify Loop** (`app/agent/verify_loop.py`): iterative repair closed-loop — three-level switches (agent→multi→verify) + four-level verdict (high_confidence/passed/partial/failed) + KB writeback after verification
+- **KB verification writeback**: `record_verification()` increments `verify_count` / improves `case_confidence`
+
+### 🐛 Bug Fixes
+
+- **`test_static_analyzer.py`**: removed stale `analyze_source_code` / legacy `analyze_handler(module_path=...)` cases; kept current `analyze()` cases (stackless entry covered by `test_url_resolver.py`)
+- **`test_security_agent_severity.py`**: `VALID_SEVERITY` does not include `unknown` (it is a sentinel); assertions updated to verify invalid values map to `unknown`
+
+### ⚠️ Known Limitations
+
+1. LLM-dependent tests (`test_coordinator.py`, `test_agent_repair_e2e.py`) require a valid `OPENAI_API_KEY`; they auto-skip otherwise
+2. Browser SDK e2e tests require a live server (`uvicorn app.main:app --port 8000`)
+3. Local `.env` overrides (`AGENT_ENABLED=true`, `LLM_PROVIDER=deepseek`) affect default-value tests; CI uses defaults
+4. M4 long-term value depends on ongoing knowledge base accumulation
+
+### 🔄 Compatibility
+
+- **Backward compatible** with v0.3.x APIs and configurations
+- **Configuration migration**: new config items have sensible defaults; no mandatory migration
+- **Data format**: no breaking changes; KB adds new index fields with default backfill
+
+### 📖 Upgrade Guide
+
+1. `git pull origin main`
+2. `pip install -r requirements.txt`
+3. Optional: enable `AGENT_VERIFY_LOOP_ENABLED=true` in `.env`
+4. `python -m app.main`
+5. Verify: `pytest tests/unit/ -q` (792 passed / 6 skipped / 0 failed)
+
+---
+
+## 中文版本
+
+**Version / 版本**: v0.3.0  
+**Release Date / 发布日期**: 2026-07-25  
+**Codename / 代号**: Stability & Production Ready
 
 ### 📋 版本概述
 
