@@ -1,11 +1,11 @@
 """M3 StaticAnalyzer 静态分析单元测试。
 
-覆盖：
-- `analyze()` 堆栈帧分析（行号匹配 / 空帧 / 单帧 / 多帧调用链）
-- `analyze_source_code()` 源码字符串分析（无堆栈场景 / 语法错误 / 函数未找到）
-- `analyze_handler()` 模块路径+函数名反查（行号精确命中 / 行号不匹配按名 fallback）
-- 可疑输入推断（Optional 无默认值 / 无类型注解）
-- 复杂度与内部调用提取
+覆盖 `analyze()` 堆栈帧分析入口：
+- 空帧 / 单帧 / 多帧调用链
+- 行号匹配 / 无效帧跳过 / 缺失文件降级
+- 函数签名、内部调用、可疑输入推断
+
+说明：无堆栈场景的 `analyze_handler()` 入口测试见 `test_url_resolver.py`。
 """
 
 from __future__ import annotations
@@ -14,11 +14,7 @@ import os
 
 import pytest
 
-from app.mcp.collectors.static_analyzer import (
-    analyze,
-    analyze_handler,
-    analyze_source_code,
-)
+from app.mcp.collectors.static_analyzer import analyze
 
 
 def _write_source(tmp_path: pytest.TempPathFactory, source: str) -> str:
@@ -102,92 +98,21 @@ def test_analyze_extracts_internal_calls(tmp_path):
     assert "get_user" in calls
 
 
-def test_analyze_source_code_returns_fault_location():
-    loc = analyze_source_code(_SOURCE, "get_user")
-    assert loc is not None
-    assert loc.function == "get_user"
-    assert loc.function_info is not None
-    assert loc.call_chain == ["get_user"]
-
-
-def test_analyze_source_code_empty_source_returns_none():
-    assert analyze_source_code("", "get_user") is None
-
-
-def test_analyze_source_code_empty_name_returns_none():
-    assert analyze_source_code(_SOURCE, "") is None
-
-
-def test_analyze_source_code_syntax_error_returns_none():
-    assert analyze_source_code("def broken(:\n", "broken") is None
-
-
-def test_analyze_source_code_missing_function_returns_none():
-    assert analyze_source_code(_SOURCE, "not_defined") is None
-
-
-def test_analyze_source_code_async_function():
-    src = (
-        "async def fetch_user():\n"
-        "    return await db.get(1)\n"
-    )
-    loc = analyze_source_code(src, "fetch_user")
-    assert loc is not None
-    assert loc.function == "fetch_user"
-
-
-def test_analyze_source_code_infers_suspicious_input():
+def test_analyze_infers_suspicious_input(tmp_path):
     src = (
         "def render(user_id: Optional[str]):\n"
         "    return user_id.upper()\n"
     )
-    loc = analyze_source_code(src, "render")
-    assert loc is not None
+    path = _write_source(tmp_path, src)
+    frames = [{"file": path, "function": "render", "line": 1}]
+    results = analyze(frames)
+    assert len(results) == 1
     assert any(
-        s["variable"] == "user_id" for s in loc.suspicious_inputs
+        s["variable"] == "user_id" for s in results[0].suspicious_inputs
     )
 
 
-def test_analyze_handler_line_hit_via_approx_line(tmp_path):
+def test_frame_missing_function_returns_none(tmp_path):
     path = _write_source(tmp_path, _SOURCE)
-    loc = analyze_handler(module_path=path, function_name="get_user", approx_line=6)
-    assert loc is not None
-    assert loc.function == "get_user"
-    assert loc.line_number == 6
-
-
-def test_analyze_handler_falls_back_to_name_when_line_mismatch(tmp_path):
-    path = _write_source(
-        tmp_path,
-        "import os\n\n"
-        "def helper():\n"
-        "    return 1\n\n"
-        "def get_user(user_id):\n"
-        "    return db.get(user_id)\n\n"
-        "def another():\n"
-        "    return 2\n",
-    )
-    loc = analyze_handler(module_path=path, function_name="get_user", approx_line=1)
-    assert loc is not None
-    assert loc.function == "get_user"
-    assert loc.line_number == 6
-
-
-def test_analyze_handler_async_support(tmp_path):
-    path = _write_source(
-        tmp_path,
-        "async def get_profile(uid):\n"
-        "    return await store.get(uid)\n",
-    )
-    loc = analyze_handler(module_path=path, function_name="get_profile", approx_line=1)
-    assert loc is not None
-    assert loc.function == "get_profile"
-
-
-def test_analyze_handler_missing_args_returns_none():
-    assert analyze_handler(module_path="", function_name="x") is None
-    assert analyze_handler(module_path="/tmp/x.py", function_name="") is None
-
-
-def test_analyze_handler_missing_file_returns_none():
-    assert analyze_handler(module_path="/tmp/not_exist.py", function_name="x") is None
+    frames = [{"file": path, "function": "not_defined", "line": 1}]
+    assert analyze(frames) == []

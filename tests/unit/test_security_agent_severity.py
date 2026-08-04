@@ -13,9 +13,11 @@ def _make_review(severity: str) -> str:
     })
 
 
-def test_valid_severity_contains_unknown():
-    """VALID_SEVERITY 应包含 'unknown' 防止 LLM 返回无效值泄漏"""
-    assert "unknown" in VALID_SEVERITY
+def test_invalid_severity_mapped_to_unknown_sentinel():
+    """'unknown' 是 VALID_SEVERITY 之外的哨兵值：无效 LLM 值应归为 'unknown' 而非泄漏原始值"""
+    assert "unknown" not in VALID_SEVERITY
+    result = _validate_security_review(_make_review("invalid_value"))
+    assert result["overall_severity"] == "unknown"
 
 
 def test_validate_normal_severity():
