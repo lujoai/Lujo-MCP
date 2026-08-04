@@ -14,7 +14,18 @@ from typing import Optional, Generator, AsyncGenerator
 from openai import OpenAI, AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 
 from app.config import settings
-from app.rag.knowledge_base import get_knowledge_entry, retrieve_similar, upsert_knowledge_entry
+from app.rag.knowledge_base import (
+    get_knowledge_entry,
+    get_entry_by_normalized_fingerprint,
+    get_entries_by_type_fingerprint,
+    retrieve_similar,
+    upsert_knowledge_entry,
+)
+from app.rag.debug_case import (
+    compute_normalized_fingerprint,
+    compute_type_fingerprint,
+    normalize_message_for_similarity,
+)
 from app.rag.vector_store import get_vector_store
 from app.mcp.core.redaction import redact
 
@@ -556,20 +567,34 @@ def _validate_and_normalize(raw_output: str) -> dict:
     return result
 
 
-def _get_error_fingerprint(context: dict) -> Optional[str]:
+def _get_error_signal(context: dict) -> tuple[str, str, Optional[str]]:
+    """从调试上下文提取 (异常类型, 异常消息, 精确指纹)。
+
+    优先从 context.exception 取，其次遍历 context.errors。
+    返回的 type/message 可为空串（无法提取时），fingerprint 可为 None。
+    """
     exception = context.get("exception")
     if isinstance(exception, dict):
-        fingerprint = exception.get("fingerprint")
-        if fingerprint:
-            return str(fingerprint)
+        return (
+            str(exception.get("type") or exception.get("exception_type") or ""),
+            str(exception.get("message") or exception.get("msg") or ""),
+            str(exception["fingerprint"]) if exception.get("fingerprint") else None,
+        )
 
     for error in context.get("errors", []) or []:
         if isinstance(error, dict):
-            fingerprint = error.get("fingerprint")
-            if fingerprint:
-                return str(fingerprint)
+            return (
+                str(error.get("type") or error.get("exception_type") or ""),
+                str(error.get("message") or error.get("msg") or ""),
+                str(error["fingerprint"]) if error.get("fingerprint") else None,
+            )
 
-    return None
+    return "", "", None
+
+
+def _get_error_fingerprint(context: dict) -> Optional[str]:
+    _, _, fingerprint = _get_error_signal(context)
+    return fingerprint
 
 
 def _annotate_analysis_result(
@@ -585,21 +610,70 @@ def _annotate_analysis_result(
 
 
 def _get_knowledge_base_result(context: dict) -> Optional[dict]:
-    fingerprint = _get_error_fingerprint(context)
+    exc_type, message, fingerprint = _get_error_signal(context)
     if not fingerprint:
         return None
 
+    # L1：精确指纹命中
     entry = get_knowledge_entry(fingerprint)
-    if entry is None:
-        # 精确指纹 miss → 向量检索 RAG fallback（二级召回）
-        return _try_vector_rag(context, fingerprint)
+    if entry is not None:
+        return _build_kb_result(entry, "knowledge_base")
 
+    # L1.5：归一化指纹命中（同模式、不同变量值）
+    if exc_type or message:
+        normalized_fp = compute_normalized_fingerprint(exc_type, message)
+        entry = get_entry_by_normalized_fingerprint(normalized_fp)
+        if entry is not None:
+            return _build_kb_result(entry, "knowledge_base_normalized")
+
+    # L2：类型级 Jaccard 兜底（同类型异常，消息 token 重叠）
+    if settings.kb_type_level_fallback and exc_type:
+        type_fp = compute_type_fingerprint(exc_type)
+        candidates = get_entries_by_type_fingerprint(type_fp, top_k=5)
+        entry = _best_type_fallback(candidates, message)
+        if entry is not None:
+            return _build_kb_result(entry, "knowledge_base_type")
+
+    # 精确指纹 miss → 向量检索 RAG fallback（二级召回）
+    return _try_vector_rag(context, fingerprint)
+
+
+def _best_type_fallback(
+    candidates: list[dict], message: str
+) -> dict | None:
+    """在 L2 候选里按消息 Jaccard 相似度选最优（低于阈值返回 None）。"""
+    if not candidates or not message:
+        return None
+    query_tokens = set(normalize_message_for_similarity(message).split())
+    if not query_tokens:
+        return None
+    min_score = settings.kb_seed_jaccard_min_score
+    best_entry: dict | None = None
+    best_score = 0.0
+    for cand in candidates:
+        cand_msg = str(
+            (cand.get("analysis") or {}).get("message")
+            or (cand.get("_kb_meta") or {}).get("message")
+            or ""
+        )
+        cand_tokens = set(normalize_message_for_similarity(cand_msg).split())
+        if not cand_tokens:
+            continue
+        inter = len(query_tokens & cand_tokens)
+        union = len(query_tokens | cand_tokens)
+        score = inter / union if union else 0.0
+        if score >= min_score and score > best_score:
+            best_score = score
+            best_entry = cand
+    return best_entry
+
+
+def _build_kb_result(entry: dict, analysis_source: str) -> dict:
+    """把 KB entry 封装为 LLM 分析结果结构（与现有 knowledge_base 分支一致）。"""
     analysis = copy.deepcopy(entry.get("analysis") or {})
     fix_suggestion = entry.get("fix_suggestion")
     if fix_suggestion and not analysis.get("fix"):
         analysis["fix"] = fix_suggestion
-
-    logger.info("Knowledge base hit (fingerprint=%s)", fingerprint)
     return {
         "analysis": analysis,
         "model": "__knowledge_base__",
@@ -611,7 +685,7 @@ def _get_knowledge_base_result(context: dict) -> Optional[dict]:
         "attempts": 0,
         "cached": False,
         "knowledge_base_hit": True,
-        "analysis_source": "knowledge_base",
+        "analysis_source": analysis_source,
     }
 
 
@@ -651,7 +725,9 @@ def _try_vector_rag(context: dict, fingerprint: str) -> Optional[dict]:
     }
 
 
-def _persist_analysis_to_knowledge_base(fingerprint: Optional[str], result: dict) -> None:
+def _persist_analysis_to_knowledge_base(
+    fingerprint: Optional[str], result: dict, context: Optional[dict] = None
+) -> None:
     if not fingerprint:
         return
 
@@ -659,10 +735,19 @@ def _persist_analysis_to_knowledge_base(fingerprint: Optional[str], result: dict
     if not isinstance(analysis, dict):
         return
 
+    # 注入异常类型/消息，支撑三级 fallback（L1.5 归一化 / L2 类型级）
+    if context:
+        exc_type, message, _ = _get_error_signal(context)
+        persist_analysis = copy.deepcopy(analysis)
+        persist_analysis.setdefault("exception_type", exc_type)
+        persist_analysis.setdefault("message", message)
+    else:
+        persist_analysis = analysis
+
     try:
         upsert_knowledge_entry(
             fingerprint=fingerprint,
-            analysis=analysis,
+            analysis=persist_analysis,
             fix_suggestion=analysis.get("fix", ""),
             source="llm",
         )
@@ -677,7 +762,7 @@ def _persist_analysis_to_knowledge_base(fingerprint: Optional[str], result: dict
     try:
         get_vector_store().add([{
             "fingerprint": fingerprint,
-            "analysis": analysis,
+            "analysis": persist_analysis,
             "fix_suggestion": analysis.get("fix", ""),
             "source": "llm",
         }])
@@ -876,7 +961,7 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
     elapsed = time.time() - start
 
     _set_cache_result(fingerprint, copy.deepcopy(result))
-    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result)
+    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result, context)
 
     logger.info(
         "LLM analysis complete",
@@ -957,7 +1042,7 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
     elapsed = time.time() - start
 
     await asyncio.to_thread(_set_cache_result, fingerprint, copy.deepcopy(result))
-    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result)
+    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result, context)
 
     logger.info(
         "LLM analysis complete",

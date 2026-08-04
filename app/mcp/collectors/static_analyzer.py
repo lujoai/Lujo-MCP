@@ -105,6 +105,41 @@ def analyze(stacktrace_frames: list[dict[str, Any]]) -> list[FaultLocation]:
     return results
 
 
+def analyze_handler(method: str, path: str) -> Optional[FaultLocation]:
+    """无堆栈场景下，通过 HTTP 方法+路径反查 handler 并做函数级静态分析。
+
+    v0.4.0 M3 引入。静默失败（无异常堆栈）时无法用堆栈帧定位故障函数，
+    本入口利用 url_resolver 把 (method, path) 映射到 FastAPI handler 端点，
+    再复用 _analyze_frame 提取函数签名/复杂度/可疑输入。
+
+    失败返回 None，静默降级，不阻断主流程。
+    """
+    if not method or not path:
+        return None
+    try:
+        from app.mcp.collectors.url_resolver import resolve
+
+        endpoint = resolve(method, path)
+        if endpoint is None:
+            return None
+        # 构造伪帧，复用帧分析逻辑（line 为 0 时 _analyze_frame 会拒绝，
+        # 因此用函数起始行兜底 —— 这里无法精确到行，交给 _analyze_frame 处理）
+        frame = {
+            "file": endpoint.get("file", ""),
+            "line": 0,
+            "function": endpoint.get("function", ""),
+        }
+        return _analyze_frame(frame)
+    except Exception:
+        logger.warning(
+            "StaticAnalyzer: 无堆栈 handler 分析失败 method=%s path=%s",
+            method,
+            path,
+            exc_info=True,
+        )
+        return None
+
+
 # ── 帧分析 ──
 
 
@@ -114,7 +149,7 @@ def _analyze_frame(frame: dict[str, Any]) -> Optional[FaultLocation]:
     line_number = frame.get("line", 0)
     function_name = frame.get("function", "")
 
-    if not file_path or not line_number or not function_name:
+    if not file_path or not function_name:
         return None
 
     # 解析源文件路径
@@ -210,7 +245,9 @@ class _FunctionVisitor(ast.NodeVisitor):
 
         # 匹配目标函数
         if node.name == self.target_function:
-            if node.lineno <= self.target_line <= (node.end_lineno or node.lineno):
+            if self.target_line <= 0 or node.lineno <= self.target_line <= (
+                node.end_lineno or node.lineno
+            ):
                 self.result = info
 
         # 继续遍历子节点（嵌套函数）

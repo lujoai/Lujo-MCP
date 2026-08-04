@@ -184,6 +184,15 @@ async def lifespan(app: FastAPI):
         from app.agent.repair_queue import start_repair_queue
         await start_repair_queue()
 
+    # ── v0.4.0 M2：加载种子知识到知识库（失败静默降级，不阻断启动）──
+    try:
+        from app.rag.seed_data import load_seed_data
+
+        seed_count = load_seed_data()
+        logger.info("知识库种子加载完成: %d 条", seed_count)
+    except Exception:
+        logger.warning("知识库种子加载失败，跳过（不影响启动）", exc_info=True)
+
     yield
     task.cancel()
 

@@ -83,6 +83,11 @@ class Coordinator:
 
         # Step 3: 调度 Agent DAG
         if settings.agent_multi_agent_enabled:
+            # 三层开关：agent → multi_agent → verify_loop
+            if settings.agent_verify_loop_enabled:
+                from app.agent.verify_loop import run_verify_loop
+
+                return await run_verify_loop(self._run_dag, ctx, sources)
             return await self._run_dag(ctx, sources)
 
         # Phase 1 兼容路径：单 Agent 串行

@@ -1,4 +1,4 @@
-﻿# Lujo-MCP 技术设计文档（DESIGN）
+# Lujo-MCP 技术设计文档（DESIGN）
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
@@ -2310,6 +2310,8 @@ ContextCompleteness 将 Debug Context 拆分为 9 个维度，各维度独立评
 
 #### 19.4.2 M3: Fault Localization 2.0 → CodeSnippet + GitContext 维度提升
 
+> **实现状态：✅ 已完成（2026-08-04）**。`url_resolver.py` 按 HTTP 方法+路径反查 FastAPI 路由表定位 handler；`static_analyzer.py` 新增 `analyze_handler` 无堆栈入口；`build_debug_context` 在静默失败场景注入 `static_analysis` 字段。
+
 **改进逻辑**：StaticAnalyzer（基于 Python `ast` 标准库，零外部依赖）在 Task 12 已落地，能从堆栈帧自动提取函数签名、参数、类型注解、复杂度、可疑输入。Task 13 将其集成到 `context_assembler`，并在无异常堆栈场景下基于网络请求 URL → handler 函数 → 源码片段的路径自动定位代码。
 
 **各场景维度变化**：
@@ -2323,6 +2325,8 @@ ContextCompleteness 将 Debug Context 拆分为 9 个维度，各维度独立评
 | E | 维持 1.0 | 0.0→0.6（自动采集 blame） | +0.06 |
 
 #### 19.4.3 M4: Agent Verify Loop → LLMAnalysis 置信度 + 长期 KB 积累
+
+> **实现状态：✅ 已完成（2026-08-04）**。`verify_loop.py` 实现三层开关（agent→multi→verify）+ 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回（`record_verification` 递增 `verify_count` / 提升 `case_confidence`）。Coordinator 在 `agent_verify_loop_enabled` 时走迭代闭环。
 
 **改进逻辑**：Agent Verify Loop 形成「修复→验证→记忆」闭环，每次成功修复的案例自动写入 DebugCase。短期效果是 LLMAnalysis 置信度因 VerifyAgent 验证反馈而从 medium→high；长期效果是知识库随系统运行持续积累，KnowledgeBase 精确命中率不断提升。
 

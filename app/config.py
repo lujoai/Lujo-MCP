@@ -274,12 +274,32 @@ class Settings(BaseSettings):
     # 关闭时 scorer 不执行，零行为变更（向后兼容）
     quality_scoring_enabled: bool = True
 
+    # ── KB 三级 fallback（v0.4.0 M2）──
+    # KB↔向量双写同步：KB 写入后自动同步向量索引，保证向量召回能覆盖全部条目
+    kb_vector_index_autosync: bool = True
+    # L2 类型级 Jaccard 兜底开关：精确指纹 & 归一化指纹 miss 后，按异常类型+消息 token 重叠兜底
+    kb_type_level_fallback: bool = True
+    # L2 类型级匹配的 Jaccard 相似度阈值，低于该值不返回
+    kb_seed_jaccard_min_score: float = 0.5
+
     # ── Agent Verify Loop（v0.4.0 M4）──
     # 迭代修复模式开关：开启后 Coordinator 按 DAG 迭代修复（修复→审查→验证→重试，最多 N 轮）
     # 关闭时走 Phase 2 单次 DAG（向后兼容）
     agent_iterative_repair_enabled: bool = False
     # 最大迭代轮数（每次迭代经过完整 DAG：修复→并行审查→验证）
     agent_max_iterations: int = 3
+    # Verify Loop 独立开关（与 agent_iterative_repair_enabled 叠加，三层开关：agent→multi→verify）
+    agent_verify_loop_enabled: bool = False
+    # Verify Loop 最大迭代轮数
+    agent_verify_loop_max_iterations: int = 3
+    # 判定通过阈值：综合验证分 >= 该值 → passed
+    agent_verify_loop_pass_threshold: float = 0.7
+    # 高置信通过阈值：>= 该值直接 passed 并快速收敛
+    agent_verify_loop_high_confidence_pass_threshold: float = 0.85
+    # 部分通过阈值：>= 该值且 < pass_threshold → partial（可继续迭代）
+    agent_verify_loop_partial_threshold: float = 0.5
+    # 验证通过后是否写回 KB（递增 verify_count / case_confidence）
+    agent_verify_loop_kb_writeback_enabled: bool = True
 
     # ── 服务 ──
     host: str = "0.0.0.0"

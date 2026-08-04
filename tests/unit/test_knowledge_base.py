@@ -150,3 +150,118 @@ def test_retrieve_similar_respects_explicit_top_k(monkeypatch):
 
     results = retrieve_similar("database timeout problem", top_k=1)
     assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# v0.4.0 M2：三级 fallback（L1 精确 / L1.5 归一化 / L2 类型级）+ 种子加载
+# ---------------------------------------------------------------------------
+
+
+def test_normalized_fingerprint_matching_l15(monkeypatch):
+    """同模式不同变量值应命中归一化指纹（L1.5）"""
+    from app.rag.debug_case import compute_normalized_fingerprint
+    from app.rag.knowledge_base import KnowledgeBaseStore
+
+    store = KnowledgeBaseStore()
+    store.upsert(
+        fingerprint="fp-exact",
+        analysis={
+            "root_cause": "int 解析失败",
+            "exception_type": "ValueError",
+            "message": "invalid literal for int() with base 10: 'abc'",
+        },
+        fix_suggestion="校验输入",
+        source="seed",
+    )
+    # 用函数计算归一化指纹，避免硬编码不一致
+    normalized = store.get_by_normalized_fingerprint(
+        compute_normalized_fingerprint("ValueError", "invalid literal for int() with base 10: 'xyz'")
+    )
+    assert normalized is not None
+    assert normalized["fingerprint"] == "fp-exact"
+
+
+def test_type_fingerprint_matching_l2(monkeypatch):
+    """同类型异常应可被类型级索引召回（L2）"""
+    from app.rag.knowledge_base import KnowledgeBaseStore
+
+    store = KnowledgeBaseStore()
+    store.upsert(
+        fingerprint="fp-keyerr",
+        analysis={
+            "root_cause": "缺少 user_id 键",
+            "exception_type": "KeyError",
+            "message": "'user_id'",
+        },
+        fix_suggestion="用 get()",
+        source="seed",
+    )
+    candidates = store.get_by_type_fingerprint("keyerror")
+    assert len(candidates) == 1
+    assert candidates[0]["fingerprint"] == "fp-keyerr"
+
+
+def test_type_fingerprint_strips_module_prefix():
+    """类型指纹应剥离模块前缀，builtins.KeyError 与 KeyError 视为同类"""
+    from app.rag.knowledge_base import KnowledgeBaseStore
+
+    store = KnowledgeBaseStore()
+    store.upsert(
+        fingerprint="fp-qualified",
+        analysis={
+            "root_cause": "缺少键",
+            "exception_type": "builtins.KeyError",
+            "message": "'x'",
+        },
+        fix_suggestion="用 get()",
+        source="seed",
+    )
+    candidates = store.get_by_type_fingerprint("keyerror")
+    assert len(candidates) == 1
+
+
+def test_load_seed_cases_populates_knowledge_base(monkeypatch):
+    """种子知识应可批量导入，覆盖 30 条且精确指纹可命中"""
+    from app.rag.knowledge_base import KnowledgeBaseStore
+    from app.rag.seed_data import SEED_CASES
+
+    store = KnowledgeBaseStore()
+    loaded = store.load_seed_cases(SEED_CASES)
+    assert loaded == 30
+    assert store.size() == 30
+    # 精确指纹命中（L1）
+    entry = store.get("seed:valueerror:int_literal")
+    assert entry is not None
+    assert entry["analysis"]["exception_type"] == "ValueError"
+
+
+def test_debug_case_roundtrip():
+    """DebugCase 与 KB entry 应可往返（to_kb_entry / from_kb_entry）"""
+    from app.rag.debug_case import DebugCase
+
+    case = DebugCase(
+        exception_type="ValueError",
+        message="invalid literal for int() with base 10: 'abc'",
+        fingerprint="fp-roundtrip",
+        root_cause="输入校验缺失",
+        fix_suggestion="加校验",
+        tags=["valueerror"],
+        case_confidence=0.9,
+        verify_count=2,
+    )
+    entry = case.to_kb_entry()
+    restored = DebugCase.from_kb_entry(entry)
+    assert restored.exception_type == "ValueError"
+    assert restored.case_confidence == 0.9
+    assert restored.verify_count == 2
+    assert restored.fingerprint == "fp-roundtrip"
+
+
+def test_normalization_strips_noise():
+    """归一化应剥离数字/hex/路径噪声，保留模式语义"""
+    from app.rag.debug_case import normalize_message_for_similarity
+
+    a = normalize_message_for_similarity("invalid literal for int() with base 10: 'abc'")
+    b = normalize_message_for_similarity("invalid literal for int() with base 10: 'xyz'")
+    assert a == b
+    assert "12345" not in normalize_message_for_similarity("value 12345 is bad")

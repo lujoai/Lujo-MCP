@@ -32,6 +32,7 @@
 | v5.4 | 2026-07-26 | 高级架构师 | **AI Debug Agent Phase 1 交付**：新增 `app/agent/` 模块（7 文件）——`BaseAgent` ABC + `AgentContext`/`AgentResult`/`AgentTrace` + `AgentStatus` 枚举、`RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + `_validate_repair_plan` 容错 JSON）、`RepairContextAssembler`（并发聚合 `analyze_async` + `retrieve_similar` + `get_recent_diff`，各失败静默降级）、`RepairQueue` + lifespan helper、`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）。新增 2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）+ 2 MCP 工具（`repair_async` + `repair_result`，工具数 15→17）。新增 9 个 `agent_*` 配置项（`agent_enabled` 默认 False）。Phase 1 定位为单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留），Phase 2 多 Agent DAG 为后续待办。单元测试 583 passed / 6 skipped / 0 failed；ruff 0 违规。 |
 | v5.5 | 2026-07-30 | 高级架构师 | **Dashboard 实时 SSE 推送交付（`DASH-SSE-001`）**：新增 `app/api/dashboard_events.py`——`DashboardEventBus` 广播总线（无 session 门槛，跨线程 `call_soon_threadsafe` 投递，队列满丢旧保最新）；`dashboard.py` 新增 `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 事件终止）+ `invalidate_cache` 内挂广播钩子（广播失败静默降级，不影响主写入链路）；`dashboard.html` 前端 EventSource 集成（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（向后兼容零开销）；鉴权复用 `?api_key=` query 降级（EventSource 无法设自定义 header）。新增 FR20 + 18 单测（测试基线 583→654 passed / 6 skipped / 0 failed）；ruff 0 违规。 |
 | v5.6 | 2026-08-03 | 架构委员会 | **v0.4.0 开发路线制定 + M1 Quality Foundation 交付**：(1) 架构委员会四轮评审（代码审计 / 技术架构 / 产品战略 / 开发路线），判定项目当前为「Beta 偏 Demo」，v0.4.0 唯一核心目标为「让 Debug Context 价值可量化、可证明」；(2) 制定 17 个任务、5 个 Milestone 的执行计划（M1 Quality System → M2 Debug Case Schema → M3 Fault Localization 2.0 → M4 Agent Verify Loop → M5 全量回归）；(3) M1 全部 6 个 Task 落地——`app/quality/` 模块（schemas + scorer 规则引擎，9 维度加权评分 + 证据提取 + 改进建议）、`context_assembler.py` 质量注入、`analyzer.py` LLM 增强（reasoning_chain + evidence_items）、Dashboard 质量报告卡片 + `/api/dashboard/trace/{tid}/quality` 独立端点；M3 Task 12（StaticAnalyzer，基于 `ast` 标准库函数级静态分析）同步落地；(4) 5 场景评分基线建立（平均综合 0.45），M2-M4 评分提升预期推演完成（平均 0.45→0.65）。详见 §12.2、DESIGN.md §19。测试基线 764 passed / 6 skipped / 0 failed。 |
+| v5.7 | 2026-08-04 | 架构委员会 | **M2-M4 交付**：(1) M2 Debug Case Schema——`debug_case.py` 标准 Schema + 三级指纹计算、`knowledge_base.py` 三级 fallback 匹配（L1 精确 → L1.5 归一化 → L2 类型级 Jaccard）+ 向量索引双写同步、`seed_data.py` 30 条种子知识；(2) M3 Fault Localization 2.0——`url_resolver.py` 无堆栈按方法+路径反查 handler、`static_analyzer.py` 新增 `analyze_handler` 无堆栈入口、`build_debug_context` 静默失败注入 `static_analysis` 字段；(3) M4 Agent Verify Loop——`verify_loop.py` 三层开关 + 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回（`record_verification` 递增 `verify_count` / 提升 `case_confidence`），Coordinator 在 `agent_verify_loop_enabled` 时走迭代闭环。详见 §12.2、DESIGN.md §19.4。测试基线 772 passed / 6 skipped / 0 failed。 |
 
 ---
 
@@ -587,9 +588,9 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | Milestone | 核心任务 | 预计工期 | 状态 |
 | --- | --- | --- | --- |
 | M1-quality-foundation | Quality System 核心框架 + LLM 分析增强 + Dashboard 质量报告 | 4-6 周 | ✅ 已完成（2026-08-03） |
-| M2-debug-case-schema | Debug Case 标准 Schema + 30 条种子知识 + 知识库导入/导出 | 3-4 周 | 待启动 |
-| M3-fault-localization | 函数级静态分析（基于 Python `ast` 标准库，零依赖） | 3-4 周 | Task 12 已完成，Task 13 待启动 |
-| M4-agent-verify-loop | Agent Verify Loop（迭代修复 + 验证 + 记忆沉淀） | 3-4 周 | 待启动 |
+| M2-debug-case-schema | Debug Case 标准 Schema + 30 条种子知识 + 知识库三级 fallback | 3-4 周 | ✅ 已完成（2026-08-04） |
+| M3-fault-localization | URL Resolver 无堆栈定位 + StaticAnalyzer 函数级静态分析 | 3-4 周 | ✅ 已完成（2026-08-04） |
+| M4-agent-verify-loop | Agent Verify Loop（三层开关 + 四级判定 + KB 写回） | 3-4 周 | ✅ 已完成（2026-08-04） |
 | M5-full-regression | 全量回归测试 + 文档更新 | 2 周 | 待启动 |
 
 #### M1 评分基线（5 场景对比）
