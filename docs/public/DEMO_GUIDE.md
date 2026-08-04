@@ -2,7 +2,7 @@
 
 本文档介绍如何启动项目并展示核心功能。
 
-> 演示能力不等同于默认交付状态；功能完成度与环境前提以仓库代码实情为准。
+> 演示能力不等同于默认交付状态；功能完成度与环境前提以内部文档为准。
 
 ## 一、启动项目
 
@@ -43,7 +43,7 @@ python -m app.main
 
 ```bash
 curl http://localhost:8000/
-# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.4.0"}
+# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.3.0"}
 ```
 
 ## 二、验证 Browser SDK

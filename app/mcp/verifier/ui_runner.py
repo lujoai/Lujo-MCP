@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 
 from app.config import settings
 
-logger = logging.getLogger("Lujo-MCP.ui_runner")
+logger = logging.getLogger("ai-debug-mcp.ui_runner")
 
 
 def inspect_url_security(url: str) -> dict:
@@ -702,7 +702,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                         # 使用 evaluate 获取标签名
                         try:
                             tag_name = inp.evaluate("el => el.tagName.toLowerCase()")
-                        except Exception:
+                        except:
                             tag_name = "input"  # 默认值
                         
                         # 根据元素类型获取值

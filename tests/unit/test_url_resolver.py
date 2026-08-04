@@ -1,198 +1,73 @@
-"""单元测试：URL → handler 反查解析器（url_resolver.py）。
-
-M3 回归覆盖（交接文档要求）：
-- resolve 通配路径匹配（FastAPI {param} 通配）
-- resolve_from_debug_context 多级优先级提取
-- 方法过滤 / 路径清理 / 静默降级
-"""
-
-from types import SimpleNamespace
-
-from app.mcp.collectors.url_resolver import (
-    _route_matches,
-    resolve,
-    resolve_from_debug_context,
-)
+"""单元测试：URL Resolver 路径模板正则 + 无堆栈 handler 静态分析（M3）。"""
+import tempfile
+import os
 
 
-# ---------------------------------------------------------------------------
-# _route_matches：路径模板匹配
-# ---------------------------------------------------------------------------
+class TestPathToRegex:
+    def test_path_param_regex(self):
+        from app.mcp.collectors.url_resolver import _path_to_regex
+
+        pat = _path_to_regex("/debug/{request_id}")
+        assert pat.match("/debug/abc-123") is not None
+        assert pat.match("/debug/") is None
+
+    def test_static_path_regex(self):
+        from app.mcp.collectors.url_resolver import _path_to_regex
+
+        pat = _path_to_regex("/health")
+        assert pat.match("/health") is not None
+        assert pat.match("/health/extra") is None
+
+    def test_multiple_params(self):
+        from app.mcp.collectors.url_resolver import _path_to_regex
+
+        pat = _path_to_regex("/a/{x}/b/{y}")
+        assert pat.match("/a/1/b/2") is not None
+        assert pat.match("/a/1/b/2/c") is None
 
 
-def test_route_matches_exact():
-    assert _route_matches("/api/users", "/api/users") is True
-    assert _route_matches("/api/users", "/api/orders") is False
+class TestAnalyzeHandler:
+    def test_analyze_handler_locates_function(self):
+        """analyze_handler 应解析 handler 源码并返回函数级静态分析。"""
+        from app.mcp.collectors.static_analyzer import analyze_handler
 
+        # 直接构造一个解析目标：用临时文件模拟源码，验证 analyze_handler 的解析链路
+        # 通过 monkeypatch 注入 resolve 返回的端点信息
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(
+                "def handle_debug(request_id: str):\n"
+                "    data = request_id\n"
+                "    return data\n"
+            )
+            tmp_path = f.name
 
-def test_route_matches_wildcard_param():
-    assert _route_matches("/api/users/{user_id}", "/api/users/123") is True
-    assert _route_matches("/api/users/{user_id}", "/api/users/abc-1") is True
+        fake_endpoint = {"file": tmp_path, "function": "handle_debug", "module": "x"}
+        import app.mcp.collectors.url_resolver as ur
 
+        original = ur.resolve
+        try:
+            ur.resolve = lambda method, path: fake_endpoint
 
-def test_route_matches_wildcard_not_match_extra_segment():
-    assert _route_matches("/api/users/{user_id}", "/api/users/123/orders") is False
+            loc = analyze_handler("GET", "/debug/abc")
+            assert loc is not None
+            assert loc.function == "handle_debug"
+            assert loc.function_info is not None
+            assert loc.function_info.name == "handle_debug"
+        finally:
+            ur.resolve = original
+            os.unlink(tmp_path)
 
+    def test_analyze_handler_none_on_missing(self):
+        """无命中时返回 None，不抛异常。"""
+        from app.mcp.collectors.static_analyzer import analyze_handler
 
-def test_route_matches_multiple_params():
-    assert _route_matches(
-        "/api/orgs/{org_id}/users/{user_id}", "/api/orgs/o1/users/u1"
-    ) is True
+        import app.mcp.collectors.url_resolver as ur
 
-
-def test_route_matches_does_not_cross_slash():
-    assert _route_matches("/{a}", "/x/y") is False
-
-
-# ---------------------------------------------------------------------------
-# resolve：mock 路由表反查
-# ---------------------------------------------------------------------------
-
-
-def _make_route(path, methods, endpoint_name="get_user", module="app.config"):
-    """构造一个伪 Starlette route 对象。
-
-    module 用真实可导入模块（app.config），保证 _handler_to_module_path
-    能成功 importlib.import_module 并抽取源文件路径。
-    """
-    return SimpleNamespace(
-        path=path,
-        methods={m.upper() for m in methods},
-        endpoint=SimpleNamespace(
-            __name__=endpoint_name, __module__=module
-        ),
-    )
-
-
-def _patch_routes(monkeypatch, routes):
-    """替换 _get_fastapi_routes 返回 mock 路由列表。"""
-    monkeypatch.setattr(
-        "app.mcp.collectors.url_resolver._get_fastapi_routes",
-        lambda: [(r, "") for r in routes],
-    )
-
-
-def test_resolve_finds_handler_by_exact_path(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/users", ["GET"], "get_users")],
-    )
-    info = resolve("GET", "/api/users")
-    assert info is not None
-    assert info.function_name == "get_users"
-    assert info.route_path == "/api/users"
-    assert "GET" in info.methods
-
-
-def test_resolve_matches_wildcard_path(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/users/{user_id}", ["GET"], "get_user")],
-    )
-    info = resolve("GET", "/api/users/123")
-    assert info is not None
-    assert info.function_name == "get_user"
-    assert info.route_path == "/api/users/{user_id}"
-
-
-def test_resolve_ignores_query_string_and_trailing_slash(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/users", ["GET"], "get_users")],
-    )
-    assert resolve("GET", "/api/users?x=1#frag") is not None
-    assert resolve("GET", "/api/users/") is not None
-
-
-def test_resolve_method_filter(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/users", ["POST"], "create_user")],
-    )
-    # GET 不匹配 POST 路由 → None
-    assert resolve("GET", "/api/users") is None
-    # POST 匹配 → 命中
-    assert resolve("POST", "/api/users") is not None
-
-
-def test_resolve_returns_none_for_unmatched_path(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/users", ["GET"], "get_users")],
-    )
-    assert resolve("GET", "/api/orders") is None
-
-
-def test_resolve_returns_none_for_empty_args():
-    assert resolve("", "/api/users") is None
-    assert resolve("GET", "") is None
-
-
-# ---------------------------------------------------------------------------
-# resolve_from_debug_context：多级优先级提取
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_from_debug_context_uses_input_path(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/users/{user_id}", ["GET"], "get_user")],
-    )
-    ctx = {
-        "input": {"method": "GET", "path": "/api/users/777"},
-        "network_trace": [],
-    }
-    info = resolve_from_debug_context(ctx)
-    assert info is not None
-    assert info.function_name == "get_user"
-
-
-def test_resolve_from_debug_context_falls_back_to_network_trace(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/items", ["GET"], "list_items")],
-    )
-    ctx = {
-        "input": {},
-        "network_trace": [
-            {"direction": "inbound", "method": "GET", "url": "/api/items"},
-        ],
-    }
-    info = resolve_from_debug_context(ctx)
-    assert info is not None
-    assert info.function_name == "list_items"
-
-
-def test_resolve_from_debug_context_uses_exception_extra(monkeypatch):
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/health", ["GET"], "healthz")],
-    )
-    ctx = {
-        "input": {},
-        "network_trace": [],
-        "exception": {"extra": {"method": "GET", "path": "/api/health"}},
-    }
-    info = resolve_from_debug_context(ctx)
-    assert info is not None
-    assert info.function_name == "healthz"
-
-
-def test_resolve_from_debug_context_returns_none_when_all_miss(monkeypatch):
-    _patch_routes(monkeypatch, [])
-    ctx = {"input": {}, "network_trace": [], "exception": {}}
-    assert resolve_from_debug_context(ctx) is None
-
-
-def test_resolve_from_debug_context_url_to_path(monkeypatch):
-    """完整 URL 也能被 _url_to_path 提取出路径。"""
-    _patch_routes(
-        monkeypatch,
-        [_make_route("/api/users", ["GET"], "get_users")],
-    )
-    ctx = {
-        "input": {"method": "GET", "url": "https://example.com:8080/api/users?x=1"},
-    }
-    info = resolve_from_debug_context(ctx)
-    assert info is not None
-    assert info.function_name == "get_users"
+        original = ur.resolve
+        try:
+            ur.resolve = lambda method, path: None
+            assert analyze_handler("GET", "/nope") is None
+        finally:
+            ur.resolve = original

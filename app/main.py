@@ -1,10 +1,10 @@
 """
-Lujo-MCP — 基于 MCP 协议的 AI 智能调试服务
+ai-debug-mcp — 基于 MCP 协议的 AI 智能调试服务
 """
 import logging
 
 import uvicorn
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
 from app import __version__
@@ -20,7 +20,6 @@ from app.api.mcp_routes import router as mcp_router
 from app.api.ingest import router as ingest_router
 from app.api.dashboard import router as dashboard_router
 from app.api.spec import router as spec_router
-from app.auth.rbac import require_role
 from fastapi.responses import HTMLResponse
 import pathlib
 
@@ -29,7 +28,7 @@ from app.mcp.tools import register_all_tools
 
 register_all_tools()
 
-logger = logging.getLogger("Lujo-MCP")
+logger = logging.getLogger("ai-debug-mcp")
 
 
 def validate_startup_configuration(host: str | None = None, api_key: str | None = None) -> None:
@@ -168,17 +167,6 @@ async def lifespan(app: FastAPI):
         from app.llm.analysis_queue import start_analysis_queue
         await start_analysis_queue()
 
-    # ── v0.4.0 M2：启动期加载种子知识到 KnowledgeBaseStore ──
-    # merge 模式：已存在的 fingerprint 跳过，避免覆盖用户分析沉淀
-    if settings.kb_seed_autoload_enabled:
-        from app.rag.knowledge_base import load_seed_cases
-        from app.rag.seed_data import SEED_CASES, SEED_CASE_COUNT
-        seed_stats = load_seed_cases(SEED_CASES)
-        logger.info(
-            "Knowledge base seed loaded (startup): expected=%d stats=%s",
-            SEED_CASE_COUNT, seed_stats,
-        )
-
     # ── P3-7 L3 缓存预热：启动期一次性回填 L1 + 启动定时任务 ──
     if settings.llm_cache_prewarm_enabled:
         from app.llm.cache_prewarm import (
@@ -195,6 +183,15 @@ async def lifespan(app: FastAPI):
     if settings.agent_enabled:
         from app.agent.repair_queue import start_repair_queue
         await start_repair_queue()
+
+    # ── v0.4.0 M2：加载种子知识到知识库（失败静默降级，不阻断启动）──
+    try:
+        from app.rag.seed_data import load_seed_data
+
+        seed_count = load_seed_data()
+        logger.info("知识库种子加载完成: %d 条", seed_count)
+    except Exception:
+        logger.warning("知识库种子加载失败，跳过（不影响启动）", exc_info=True)
 
     yield
     task.cancel()
@@ -268,6 +265,7 @@ def health():
     llm_ok = bool(settings.openai_api_key)
 
     storage_ok = True
+    storage_detail = settings.storage_backend
     if settings.storage_backend == "postgresql":
         try:
             from app.mcp.core.storage.pg_store import _get_pool
@@ -277,10 +275,12 @@ def health():
                 cur = conn.cursor()
                 cur.execute("SELECT 1")
                 conn.commit()
+                storage_detail = "postgresql (connected)"
             finally:
                 pool.putconn(conn)
         except Exception:
             storage_ok = False
+            storage_detail = "postgresql (disconnected)"
 
     if llm_ok and storage_ok:
         status = "ok"
@@ -293,7 +293,7 @@ def health():
         "status": status,
         "service": settings.service_name,
         "version": __version__,
-        "storage": "ok" if storage_ok else "error",
+        "storage": storage_detail,
         "llm_configured": llm_ok,
     }
 
@@ -335,7 +335,7 @@ def ai_debug_js():
     return HTMLResponse("<h1>SDK not found</h1>", status_code=404)
 
 
-@app.post("/debug", dependencies=[Depends(require_role("developer", "admin"))])
+@app.post("/debug")
 def debug(req: dict):
     """便捷调试入口"""
     request_id = create_request_id()

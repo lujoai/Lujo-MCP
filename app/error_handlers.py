@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-logger = logging.getLogger("Lujo-MCP.errors")
+logger = logging.getLogger("ai-debug-mcp.errors")
 
 
 def setup_error_handlers(app: FastAPI):

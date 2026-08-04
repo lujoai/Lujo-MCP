@@ -2,12 +2,11 @@
 
 import json
 import asyncio
-import threading
 import logging
 from dataclasses import dataclass
 from typing import Dict, List
 
-logger = logging.getLogger("Lujo-MCP.mcp.sse")
+logger = logging.getLogger("ai-debug-mcp.mcp.sse")
 _CLOSE_EVENT = {"_sse_control": "close"}
 
 
@@ -18,16 +17,10 @@ class _Subscription:
 
 
 class SSEHub:
-    """按 session 维护 asyncio.Queue 列表，支持跨线程发布
-
-    线程安全：``_queues`` 的所有读写操作通过 ``_lock`` 保护，
-    ``publish`` 和 ``close_session`` 可能从后台线程调用，
-    ``subscribe`` / ``unsubscribe`` 从事件循环线程调用。
-    """
+    """按 session 维护 asyncio.Queue 列表，支持跨线程发布"""
 
     def __init__(self):
         self._queues: Dict[str, List[_Subscription]] = {}
-        self._lock = threading.Lock()
 
     def subscribe(self, session_id: str) -> asyncio.Queue:
         """订阅 SSE 流。
@@ -42,29 +35,29 @@ class SSEHub:
 
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
-        with self._lock:
-            self._queues.setdefault(session_id, []).append(_Subscription(queue=q, loop=loop))
+        self._queues.setdefault(session_id, []).append(_Subscription(queue=q, loop=loop))
         return q
 
     def unsubscribe(self, session_id: str, q: asyncio.Queue) -> None:
-        with self._lock:
-            qs = self._queues.get(session_id)
-            if not qs:
-                return
-            qs[:] = [sub for sub in qs if sub.queue is not q]
-            if not qs:
-                self._queues.pop(session_id, None)
+        qs = self._queues.get(session_id)
+        if not qs:
+            return
+
+        for sub in list(qs):
+            if sub.queue is q:
+                qs.remove(sub)
+                break
+        if not qs:
+            self._queues.pop(session_id, None)
 
     def publish(self, session_id: str, message: dict) -> bool:
         """从任意线程发布 server→client 消息。"""
-        with self._lock:
-            qs = self._queues.get(session_id)
-            if not qs:
-                return False
-            subs = list(qs)
+        qs = self._queues.get(session_id)
+        if not qs:
+            return False
 
         delivered = False
-        for sub in subs:
+        for sub in list(qs):
             try:
                 sub.loop.call_soon_threadsafe(sub.queue.put_nowait, message)
                 delivered = True
@@ -84,12 +77,10 @@ class SSEHub:
         )
 
     def subscriber_count(self, session_id: str) -> int:
-        with self._lock:
-            return len(self._queues.get(session_id, []))
+        return len(self._queues.get(session_id, []))
 
     def close_session(self, session_id: str) -> int:
-        with self._lock:
-            qs = self._queues.pop(session_id, [])
+        qs = self._queues.pop(session_id, [])
         for sub in list(qs):
             try:
                 sub.loop.call_soon_threadsafe(sub.queue.put_nowait, _CLOSE_EVENT)

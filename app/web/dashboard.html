@@ -3,570 +3,348 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Lujo-MCP Dashboard</title>
+<title>ai-debug-mcp Dashboard</title>
 <style>
-  :root {
-    --bg-primary: #0f1117;
-    --bg-secondary: #161b22;
-    --bg-tertiary: #1c2128;
-    --bg-hover: #1c2840;
-    --border: #30363d;
-    --border-light: #21262d;
-    --text-primary: #e1e4e8;
-    --text-secondary: #8b949e;
-    --text-muted: #484f58;
-    --accent-blue: #58a6ff;
-    --accent-green: #3fb950;
-    --accent-red: #f85149;
-    --accent-yellow: #d2991d;
-    --accent-purple: #bc8cff;
-    --radius: 8px;
-    --radius-sm: 6px;
-    --shadow: 0 1px 3px rgba(0,0,0,.3);
-    --transition: .15s ease;
-  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    line-height: 1.5;
-  }
-
-  /* ── Header ── */
-  .header {
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border);
-    padding: 16px 24px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    position: sticky;
-    top: 0;
-    z-index: 10;
-  }
-  .header-left { display: flex; align-items: center; gap: 12px; }
-  .header-logo {
-    width: 32px; height: 32px;
-    background: var(--accent-blue);
-    border-radius: var(--radius-sm);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 16px; font-weight: bold; color: #fff;
-    box-shadow: 0 1px 4px rgba(88,166,255,.3);
-  }
-  .header h1 { font-size: 18px; color: var(--accent-blue); font-weight: 600; }
-  .header .meta { display: flex; align-items: center; gap: 16px; }
-  .header .refresh { font-size: 12px; color: var(--text-secondary); cursor: default; }
-  .header .refresh.loading { opacity: .6; }
-  .sse-badge {
-    font-size: 10px; padding: 2px 8px; border-radius: 10px;
-    background: var(--accent-green); color: #fff; opacity: .8;
-  }
-  .sse-badge.off { background: var(--text-muted); }
-
-  /* ── Stats ── */
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px;
-    padding: 16px 24px;
-  }
-  .stat-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px 20px;
-    text-align: center;
-    transition: border-color var(--transition), transform var(--transition);
-    box-shadow: 0 1px 2px rgba(0,0,0,.2);
-  }
-  .stat-card:hover {
-    border-color: var(--accent-blue);
-    transform: translateY(-1px);
-  }
-  .stat-card:focus-visible {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: 2px;
-  }
-  .stat-card .num {
-    font-size: 28px; font-weight: 700;
-    transition: color .3s;
-  }
-  .stat-card .num.updating { opacity: .5; }
-  .stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; text-transform: uppercase; letter-spacing: .5px; }
-  .stat-card.err .num { color: var(--accent-red); }
-  .stat-card.silent .num { color: var(--accent-yellow); }
-  .stat-card.spec .num { color: var(--accent-green); }
-
-  /* ── Layout ── */
-  .container {
-    display: flex;
-    gap: 16px;
-    padding: 0 24px 24px;
-    height: calc(100vh - 180px);
-  }
-  .panel {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 2px 8px rgba(0,0,0,.25);
-  }
-  .panel-left { flex: 1; }
-  .panel-right { flex: 1; }
-  .panel-header {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  /* ── Trace List ── */
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e1e4e8; }
+  .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 18px; color: #58a6ff; }
+  .header .refresh { font-size: 12px; color: #8b949e; }
+  .stats { display: flex; gap: 16px; padding: 16px 24px; }
+  .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 24px; flex: 1; text-align: center; }
+  .stat-card .num { font-size: 28px; font-weight: bold; }
+  .stat-card .label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+  .stat-card.err .num { color: #f85149; }
+  .stat-card.silent .num { color: #d2991d; }
+  .stat-card.spec .num { color: #3fb950; }
+  .container { display: flex; gap: 16px; padding: 0 24px 24px; height: calc(100vh - 180px); }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+  .panel-left { flex: 1; display: flex; flex-direction: column; }
+  .panel-right { flex: 1; display: flex; flex-direction: column; }
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid #30363d; font-size: 13px; color: #8b949e; text-transform: uppercase; }
   .trace-list { flex: 1; overflow-y: auto; }
-  .trace-item {
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border-light);
-    cursor: pointer;
-    transition: background var(--transition);
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-  }
-  .trace-item:hover { background: var(--bg-tertiary); }
-  .trace-item:focus-visible {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: -2px;
-  }
-  .trace-item.active { background: var(--bg-hover); border-left: 3px solid var(--accent-blue); }
+  .trace-item { padding: 10px 16px; border-bottom: 1px solid #21262d; cursor: pointer; transition: background .15s; display: flex; justify-content: space-between; align-items: flex-start; }
+  .trace-item:hover { background: #1c2128; }
+  .trace-item.active { background: #1c2840; border-left: 3px solid #58a6ff; }
   .trace-item .info { flex: 1; min-width: 0; }
-  .trace-item .type { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .trace-item .msg {
-    font-size: 11px; color: var(--text-secondary); margin-top: 2px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .trace-item .badge-group { display: flex; gap: 4px; flex-shrink: 0; margin-left: 8px; flex-wrap: wrap; }
-  .badge {
-    font-size: 10px; padding: 2px 6px; border-radius: 3px;
-    white-space: nowrap; font-weight: 500;
-  }
-  .badge-error { background: #f8514940; color: var(--accent-red); }
-  .badge-silent { background: #d2991d40; color: var(--accent-yellow); }
-  .badge-ok { background: #3fb95040; color: var(--accent-green); }
-  .badge-verify { background: #58a6ff40; color: var(--accent-blue); }
-  .badge-info { background: #bc8cff40; color: var(--accent-purple); }
-
-  /* ── Detail Panel ── */
+  .trace-item .type { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trace-item .msg { font-size: 11px; color: #8b949e; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trace-item .badge { font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 8px; white-space: nowrap; }
+  .badge-error { background: #f8514940; color: #f85149; }
+  .badge-silent { background: #d2991d40; color: #d2991d; }
+  .badge-ok { background: #3fb95040; color: #3fb950; }
+  .badge-verify { background: #58a6ff40; color: #58a6ff; margin-left: 4px; }
   .detail { flex: 1; overflow-y: auto; padding: 16px; }
-  .detail-empty { color: var(--text-muted); text-align: center; padding: 60px 20px; font-size: 14px; }
-  .detail h3 { font-size: 14px; margin-bottom: 8px; color: var(--accent-blue); }
-  .detail-section { margin-bottom: 20px; }
-  .detail-section .label {
-    font-size: 11px; color: var(--text-secondary); text-transform: uppercase;
-    letter-spacing: .5px; margin-bottom: 6px;
-  }
+  .detail-empty { color: #8b949e; text-align: center; padding: 40px; }
+  .detail h3 { font-size: 14px; margin-bottom: 8px; color: #58a6ff; }
+  .detail-section { margin-bottom: 16px; }
+  .detail-section .label { font-size: 11px; color: #8b949e; text-transform: uppercase; margin-bottom: 4px; }
   .detail-section .value { font-size: 13px; word-break: break-all; }
-
   .diff-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
-  .diff-table th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-weight: 500; }
-  .diff-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-light); }
-  .diff-table .exp { color: var(--accent-green); }
-  .diff-table .act { color: var(--accent-red); }
-  .no-data { color: var(--text-muted); font-style: italic; font-size: 12px; }
-
-  .code-snippet {
-    background: #0d1117;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 12px;
-    margin-top: 8px;
-    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-    font-size: 12px;
-    overflow-x: auto;
-    white-space: pre;
-    line-height: 1.6;
-  }
-
-  .loading { text-align: center; padding: 20px; color: var(--text-secondary); }
-  .loading::after { content: '...'; animation: dots 1.5s steps(4, end) infinite; }
-  @keyframes dots { 0%, 20% { content: ''; } 40% { content: '.'; } 60% { content: '..'; } 80%, 100% { content: '...'; } }
-
-  /* ── v0.4.0: Quality Report ── */
-  .quality-card { background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-top: 8px; }
+  .diff-table th { text-align: left; padding: 6px 8px; border-bottom: 1px solid #30363d; color: #8b949e; }
+  .diff-table td { padding: 6px 8px; border-bottom: 1px solid #21262d; }
+  .diff-table .exp { color: #3fb950; }
+  .diff-table .act { color: #f85149; }
+  .no-data { color: #484f58; font-style: italic; font-size: 12px; }
+  .code-snippet { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 8px; font-family: monospace; font-size: 12px; overflow-x: auto; white-space: pre; }
+  .loading { text-align: center; padding: 20px; color: #8b949e; }
+  /* v0.4.0: Quality 卡片样式 */
+  .quality-card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-top: 8px; }
   .quality-score-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
   .quality-score-row .big { font-size: 24px; font-weight: bold; }
-  .quality-score-bar { flex: 1; height: 8px; background: var(--border-light); border-radius: 4px; overflow: hidden; }
+  .quality-score-bar { flex: 1; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
   .quality-score-bar .fill { height: 100%; border-radius: 4px; transition: width .3s; }
-  .quality-score-high { color: var(--accent-green); } .quality-score-high .fill { background: var(--accent-green); }
-  .quality-score-mid { color: var(--accent-yellow); } .quality-score-mid .fill { background: var(--accent-yellow); }
-  .quality-score-low { color: var(--accent-red); } .quality-score-low .fill { background: var(--accent-red); }
-  .quality-formula { font-size: 11px; color: var(--text-secondary); margin-left: 8px; }
+  .quality-score-high { color: #3fb950; } .quality-score-high .fill { background: #3fb950; }
+  .quality-score-mid { color: #d2991d; } .quality-score-mid .fill { background: #d2991d; }
+  .quality-score-low { color: #f85149; } .quality-score-low .fill { background: #f85149; }
+  .quality-formula { font-size: 11px; color: #8b949e; margin-left: 8px; }
   .quality-dim-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 8px; }
-  .quality-dim { display: flex; justify-content: space-between; font-size: 11px; padding: 4px 8px; background: var(--bg-tertiary); border-radius: 4px; }
-  .quality-dim .name { color: var(--text-primary); }
+  .quality-dim { display: flex; justify-content: space-between; font-size: 11px; padding: 4px 8px; background: #161b22; border-radius: 4px; }
+  .quality-dim .name { color: #c9d1d9; }
   .quality-dim .score { font-weight: bold; }
   .quality-dim.missing { opacity: 0.5; }
-  .quality-dim.missing .score { color: var(--accent-red); }
+  .quality-dim.missing .score { color: #f85149; }
   .quality-evidence-list { font-size: 11px; margin-top: 6px; }
-  .quality-evidence-item { padding: 4px 8px; background: var(--bg-tertiary); border-radius: 4px; margin-bottom: 4px; display: flex; gap: 6px; }
+  .quality-evidence-item { padding: 4px 8px; background: #161b22; border-radius: 4px; margin-bottom: 4px; display: flex; gap: 6px; }
   .quality-evidence-item .rel { font-size: 10px; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
-  .quality-evidence-item .rel-high { background: #f8514940; color: var(--accent-red); }
-  .quality-evidence-item .rel-medium { background: #d2991d40; color: var(--accent-yellow); }
-  .quality-evidence-item .rel-low { background: #3fb95040; color: var(--accent-green); }
+  .quality-evidence-item .rel-high { background: #f8514940; color: #f85149; }
+  .quality-evidence-item .rel-medium { background: #d2991d40; color: #d2991d; }
+  .quality-evidence-item .rel-low { background: #3fb95040; color: #3fb950; }
   .quality-suggestions { font-size: 11px; margin-top: 8px; }
-  .quality-suggestion { padding: 4px 8px; background: #d2991d20; border-left: 2px solid var(--accent-yellow); margin-bottom: 4px; color: var(--accent-yellow); }
-
-  /* ── Error State ── */
-  .error-state { color: var(--accent-red); text-align: center; padding: 20px; font-size: 13px; }
-
-  /* ── Scrollbar ── */
+  .quality-suggestion { padding: 4px 8px; background: #d2991d20; border-left: 2px solid #d2991d; margin-bottom: 4px; color: #d2991d; }
   ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
-
-  /* ── Responsive ── */
-  @media (max-width: 768px) {
-    .container { flex-direction: column; height: auto; }
-    .panel { min-height: 300px; }
-    .stats { grid-template-columns: repeat(2, 1fr); }
-    .header { flex-wrap: wrap; gap: 8px; }
-  }
-  @media (max-width: 375px) {
-    .stats { grid-template-columns: 1fr; gap: 8px; padding: 8px 12px; }
-    .stat-card { padding: 12px 16px; }
-    .stat-card .num { font-size: 22px; }
-    .header { padding: 10px 12px; flex-direction: column; align-items: flex-start; }
-    .header .meta { width: 100%; justify-content: space-between; }
-    .container { padding: 0 12px 12px; }
-    .panel-left { min-height: 200px; }
-    .panel-right { min-height: 200px; }
-    .detail { padding: 12px; }
-  }
-
-  /* ── Focus Visible ── */
-  :focus-visible {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: 2px;
-  }
-  button:focus-visible,
-  a:focus-visible {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: 2px;
-    border-radius: var(--radius-sm);
-  }
+  ::-webkit-scrollbar-track { background: #0d1117; }
+  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="header-left">
-    <div class="header-logo">D</div>
-    <h1>Lujo-MCP</h1>
-  </div>
-  <div class="meta">
-    <span class="sse-badge" id="sse-badge">● Live</span>
-    <span class="refresh" id="refresh">Initializing...</span>
-  </div>
+  <h1>ai-debug-mcp Dashboard</h1>
+  <span class="refresh" id="refresh"></span>
 </div>
 
 <div class="stats">
-  <div class="stat-card" id="stat-total"><div class="num">--</div><div class="label">Total Traces</div></div>
-  <div class="stat-card err" id="stat-exc"><div class="num">--</div><div class="label">Exceptions</div></div>
-  <div class="stat-card silent" id="stat-silent"><div class="num">--</div><div class="label">Silent Failures</div></div>
-  <div class="stat-card spec" id="stat-specs"><div class="num">--</div><div class="label">Specs</div></div>
+  <div class="stat-card" id="stat-total"><div class="num">-</div><div class="label">Total Traces</div></div>
+  <div class="stat-card err" id="stat-exc"><div class="num">-</div><div class="label">Exceptions</div></div>
+  <div class="stat-card silent" id="stat-silent"><div class="num">-</div><div class="label">Silent Failures</div></div>
+  <div class="stat-card spec" id="stat-specs"><div class="num">-</div><div class="label">Specs</div></div>
 </div>
 
 <div class="container">
   <div class="panel panel-left">
-    <div class="panel-header">
-      <span>Recent Traces</span>
-      <span id="trace-count" style="font-size:11px;color:var(--text-muted)"></span>
-    </div>
-    <div class="trace-list" id="trace-list"><div class="loading">Loading</div></div>
+    <div class="panel-header">Recent Traces</div>
+    <div class="trace-list" id="trace-list"><div class="loading">Loading...</div></div>
   </div>
   <div class="panel panel-right">
     <div class="panel-header">Trace Detail</div>
-    <div class="detail" id="detail"><div class="detail-empty">← Select a trace to view details</div></div>
+    <div class="detail" id="detail"><div class="detail-empty">Select a trace to view details</div></div>
   </div>
 </div>
 
 <script>
-(function() {
-  'use strict';
-  // ── Utilities ──
-  const esc = (s) => s == null ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+async function fetchJSON(url) {
   const apiKey = new URLSearchParams(location.search).get('api_key') || '';
+  const headers = {};
+  if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(res.statusText);
+  return res.json();
+}
 
-  async function fetchJSON(url) {
-    const headers = {};
-    if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
-    const res = await fetch(url, { headers });
-    if (!res.ok) throw new Error(res.statusText);
-    return res.json();
-  }
+async function loadStats() {
+  try {
+    const s = await fetchJSON('/api/dashboard/stats');
+    document.getElementById('stat-total').querySelector('.num').textContent = s.total_traces;
+    document.getElementById('stat-exc').querySelector('.num').textContent = s.exceptions;
+    document.getElementById('stat-silent').querySelector('.num').textContent = s.silent_failures;
+    document.getElementById('stat-specs').querySelector('.num').textContent = s.spec_count;
+  } catch(e) { console.error('stats error', e); }
+}
 
-  // ── Stats ──
-  async function loadStats() {
-    try {
-      const s = await fetchJSON('/api/dashboard/stats');
-      document.getElementById('stat-total').querySelector('.num').textContent = s.total_traces ?? '--';
-      document.getElementById('stat-exc').querySelector('.num').textContent = s.exceptions ?? '--';
-      document.getElementById('stat-silent').querySelector('.num').textContent = s.silent_failures ?? '--';
-      document.getElementById('stat-specs').querySelector('.num').textContent = s.spec_count ?? '--';
-      document.getElementById('trace-count').textContent = `${s.total_traces ?? 0} total`;
-    } catch(e) {
-      console.error('stats error', e);
+function formatTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('zh-CN') + ' ' + d.toLocaleDateString('zh-CN');
+}
+
+async function loadTraces() {
+  const list = document.getElementById('trace-list');
+  try {
+    const data = await fetchJSON('/api/dashboard/traces?limit=50');
+    if (!data.traces.length) {
+      list.innerHTML = '<div class="loading">No traces yet</div>';
+      return;
     }
+    list.innerHTML = data.traces.map(t => `
+      <div class="trace-item" data-tid="${t.trace_id}" onclick="selectTrace('${t.trace_id}')">
+        <div class="info">
+          <div class="type">${esc(t.type)} ${t.has_silent_failure ? '<span class="badge badge-silent">SILENT</span>' : ''} ${t.verify_count ? '<span class="badge badge-verify">verify×'+t.verify_count+'</span>' : ''}</div>
+          <div class="msg">${esc(t.message)} · ${formatTime(t.timestamp)} · ×${t.occurrence_count}</div>
+        </div>
+        <span class="badge ${t.has_silent_failure ? 'badge-silent' : 'badge-error'}">${t.trace_kind}</span>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = '<div class="loading">Failed to load traces</div>';
   }
+}
 
-  function formatTime(ts) {
-    if (!ts) return '';
-    const d = new Date(ts * 1000);
-    const now = new Date();
-    const diffMs = now - d;
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return 'just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
-    if (diffMin < 1440) return `${Math.floor(diffMin / 60)}h ago`;
-    return d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN');
-  }
+async function selectTrace(tid) {
+  // highlight active
+  document.querySelectorAll('.trace-item').forEach(el => el.classList.remove('active'));
+  const el = document.querySelector(`[data-tid="${tid}"]`);
+  if (el) el.classList.add('active');
 
-  // ── Trace List ──
-  async function loadTraces() {
-    const list = document.getElementById('trace-list');
-    try {
-      const data = await fetchJSON('/api/dashboard/traces?limit=50');
-      if (!data.traces || !data.traces.length) {
-        list.innerHTML = '<div class="loading">No traces yet — waiting for data...</div>';
-        return;
-      }
-      list.innerHTML = data.traces.map(t => {
-        const badges = [];
-        if (t.has_silent_failure) badges.push('<span class="badge badge-silent">SILENT</span>');
-        if (t.verify_count) badges.push(`<span class="badge badge-verify">VERIFY×${t.verify_count}</span>`);
-        if (t.has_repair) badges.push('<span class="badge badge-info">REPAIR</span>');
-        const kindBadge = t.has_silent_failure ? 'badge-silent' : 'badge-error';
-        return `<div class="trace-item" data-tid="${t.trace_id}" onclick="window.dashboard && window.dashboard.selectTrace('${t.trace_id}')" tabindex="0" role="button">
-          <div class="info">
-            <div class="type">${esc(t.type)} ${badges.join(' ')}</div>
-            <div class="msg">${esc(t.message)} · ${formatTime(t.timestamp)} · ×${t.occurrence_count ?? 1}</div>
-          </div>
-          <span class="badge ${kindBadge}">${esc(t.trace_kind)}</span>
-        </div>`;
-      }).join('');
-    } catch(e) {
-      list.innerHTML = '<div class="error-state">⚠ Failed to load traces. Is the server running?</div>';
+  const detail = document.getElementById('detail');
+  detail.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const t = await fetchJSON('/api/dashboard/trace/' + tid);
+    let html = '';
+
+    // v0.4.0: Quality Report（综合评分卡片，放在最前面）
+    if (t.quality_report) {
+      html += renderQualityCard(t.quality_report);
     }
-  }
 
-  // ── Trace Detail ──
-  async function selectTrace(tid) {
-    document.querySelectorAll('.trace-item').forEach(el => el.classList.remove('active'));
-    const el = document.querySelector(`[data-tid="${tid}"]`);
-    if (el) el.classList.add('active');
-
-    const detail = document.getElementById('detail');
-    detail.innerHTML = '<div class="loading">Loading</div>';
-
-    try {
-      const t = await fetchJSON('/api/dashboard/trace/' + encodeURIComponent(tid));
-      let html = '';
-
-      // v0.4.0: Quality Report（综合评分卡片，放在最前面）
-      if (t.quality_report) {
-        html += renderQualityCard(t.quality_report);
-      }
-
-      if (t.exception) {
-        html += '<div class="detail-section"><div class="label">Exception</div>';
-        html += `<div class="value">${esc(t.exception.type)}: ${esc(t.exception.message)}</div>`;
-        if (t.exception.frames?.length) {
-          html += '<div class="code-snippet">' + t.exception.frames.map(f =>
-            `${esc(f.file)}:${f.line} in ${esc(f.function)}`
-          ).join('\n') + '</div>';
-        }
-        html += '</div>';
-      }
-
-      if (t.errors?.length) {
-        html += '<div class="detail-section"><div class="label">Errors</div>';
-        t.errors.forEach(e => {
-          html += `<div class="value">${esc(typeof e === 'string' ? e : e.message||'')}</div>`;
-        });
-        html += '</div>';
-      }
-
-      html += '<div class="detail-section"><div class="label">Spec Diffs</div>';
-      if (t.spec_diffs?.length) {
-        html += t.spec_diffs.map(diff => {
-          let section = `<div class="value" style="margin-bottom:8px">`;
-          section += `Matched: <b style="color:${diff.matched ? 'var(--accent-green)' : 'var(--accent-red)'}">${diff.matched}</b>`;
-          if (diff.silent_failure) section += ' | <b style="color:var(--accent-yellow)">Silent Failure</b>';
-          if (diff.spec_id) section += ` | Spec: ${esc(diff.spec_id)}`;
-          section += '</div>';
-          if (diff.diffs?.length) {
-            section += '<table class="diff-table"><tr><th>Field</th><th>Expected</th><th>Actual</th></tr>';
-            section += diff.diffs.map(d =>
-              `<tr><td>${esc(d.field)}</td><td class="exp">${esc(String(d.expected))}</td><td class="act">${esc(String(d.actual))}</td></tr>`
-            ).join('');
-            section += '</table>';
-          }
-          return section;
-        }).join('');
-      } else {
-        html += '<div class="no-data">No spec diffs — verify not yet run for this trace</div>';
+    // Exception
+    if (t.exception) {
+      html += '<div class="detail-section"><div class="label">Exception</div>';
+      html += `<div class="value">${esc(t.exception.type)}: ${esc(t.exception.message)}</div>`;
+      if (t.exception.frames && t.exception.frames.length) {
+        html += '<div class="code-snippet">' + t.exception.frames.map(f =>
+          `${f.file}:${f.line} in ${f.function}`
+        ).join('\n') + '</div>';
       }
       html += '</div>';
-
-      if (t.code_snippets?.length) {
-        html += '<div class="detail-section"><div class="label">Code Snippets</div>';
-        t.code_snippets.forEach(s => {
-          if (s.found) {
-            html += `<div class="code-snippet">${esc(s.file)}:${s.line}\n${esc(s.content||'')}</div>`;
-          }
-        });
-        html += '</div>';
-      }
-
-      detail.innerHTML = html;
-    } catch(e) {
-      detail.innerHTML = '<div class="error-state">⚠ Failed to load trace detail</div>';
     }
-  }
 
-  // ── v0.4.0: Quality Report 渲染 ──
-  const DIM_LABELS = {
-    trace: '异常堆栈', runtime: '运行时', code_snippet: '源码片段',
-    git_context: 'Git 归因', network: '网络', ui_event: 'UI 事件',
-    spec: '规范', knowledge_base: '知识库', llm_analysis: 'LLM 分析'
-  };
+    // Errors
+    if (t.errors && t.errors.length) {
+      html += '<div class="detail-section"><div class="label">Errors</div>';
+      t.errors.forEach(e => {
+        html += `<div class="value">${typeof e === 'string' ? esc(e) : esc(e.message||'')}</div>`;
+      });
+      html += '</div>';
+    }
 
-  function scoreClass(s) {
-    if (s >= 0.7) return 'quality-score-high';
-    if (s >= 0.3) return 'quality-score-mid';
-    return 'quality-score-low';
-  }
-
-  function renderQualityCard(qr) {
-    const comp = qr.context_completeness || {};
-    const conf = qr.analysis_confidence || {};
-    const overall = qr.overall_score || 0;
-    const compScore = comp.overall_score || 0;
-    const confScore = conf.overall_score || 0;
-    const cls = scoreClass(overall);
-    const dims = comp.dimensions || {};
-    const evidence = qr.evidence_items || [];
-    const suggestions = qr.suggestions || [];
-
-    let html = '<div class="detail-section"><div class="label">Quality Report (v0.4.0)</div>';
-    html += '<div class="quality-card">';
-
-    // 综合评分
-    html += `<div class="quality-score-row ${cls}">`;
-    html += `<div class="big">${overall.toFixed(2)}</div>`;
-    html += `<div class="quality-score-bar"><div class="fill" style="width:${(overall*100).toFixed(0)}%"></div></div>`;
-    html += `<div class="quality-formula">= ${compScore.toFixed(2)} × ${confScore.toFixed(2)}</div>`;
+    // Spec Diffs (verify results)
+    html += '<div class="detail-section"><div class="label">Spec Diffs</div>';
+    if (t.spec_diffs && t.spec_diffs.length) {
+      t.spec_diffs.forEach(diff => {
+        html += `<div class="value" style="margin-bottom:8px">`;
+        html += `Matched: <b style="color:${diff.matched?'#3fb950':'#f85149'}">${diff.matched}</b>`;
+        if (diff.silent_failure) html += ' | <b style="color:#d2991d">Silent Failure</b>';
+        if (diff.spec_id) html += ` | Spec: ${esc(diff.spec_id)}`;
+        html += '</div>';
+        if (diff.diffs && diff.diffs.length) {
+          html += '<table class="diff-table"><tr><th>Field</th><th>Expected</th><th>Actual</th></tr>';
+          diff.diffs.forEach(d => {
+            html += `<tr><td>${esc(d.field)}</td><td class="exp">${esc(String(d.expected))}</td><td class="act">${esc(String(d.actual))}</td></tr>`;
+          });
+          html += '</table>';
+        }
+      });
+    } else {
+      html += '<div class="no-data">No spec diffs — verify not yet run for this trace</div>';
+    }
     html += '</div>';
 
-    // 维度评分网格
-    if (Object.keys(dims).length) {
-      html += '<div class="quality-dim-grid">';
-      for (const [key, ds] of Object.entries(dims)) {
-        const label = DIM_LABELS[key] || key;
-        const missing = !ds.present;
-        const colorCls = ds.score >= 0.7 ? 'quality-score-high' : (ds.score >= 0.3 ? 'quality-score-mid' : 'quality-score-low');
-        html += `<div class="quality-dim ${missing ? 'missing' : ''}">`;
-        html += `<span class="name">${esc(label)}</span>`;
-        html += `<span class="score ${colorCls}" style="color:inherit">${ds.score.toFixed(2)}</span>`;
-        html += '</div>';
-      }
-      html += '</div>';
-    }
-
-    // 证据摘要（最多 5 条）
-    if (evidence.length) {
-      html += `<div class="quality-evidence-list">`;
-      html += `<div style="color:var(--text-secondary);margin-bottom:4px">证据 ${evidence.length} 条（高相关 ${conf.high_relevance_count || 0}）</div>`;
-      evidence.slice(0, 5).forEach(e => {
-        const relCls = e.relevance === 'high' ? 'rel-high' : (e.relevance === 'medium' ? 'rel-medium' : 'rel-low');
-        html += `<div class="quality-evidence-item">`;
-        html += `<span class="rel ${relCls}">${esc(e.relevance)}</span>`;
-        html += `<span>[${esc(e.type)}] ${esc((e.description||'').substring(0, 80))}</span>`;
-        html += `</div>`;
-      });
-      if (evidence.length > 5) {
-        html += `<div style="color:var(--text-muted);font-style:italic;padding:2px 8px">... 还有 ${evidence.length - 5} 条</div>`;
-      }
-      html += '</div>';
-    }
-
-    // 改进建议
-    if (suggestions.length) {
-      html += '<div class="quality-suggestions">';
-      suggestions.forEach(s => {
-        html += `<div class="quality-suggestion">💡 ${esc(s)}</div>`;
+    // Code snippets
+    if (t.code_snippets && t.code_snippets.length) {
+      html += '<div class="detail-section"><div class="label">Code Snippets</div>';
+      t.code_snippets.forEach(s => {
+        if (s.found) {
+          html += `<div class="code-snippet">${esc(s.file)}:${s.line}\n${esc(s.content||'')}</div>`;
+        }
       });
       html += '</div>';
     }
 
-    html += '</div></div>';
-    return html;
+    detail.innerHTML = html;
+  } catch(e) {
+    detail.innerHTML = '<div class="loading">Failed to load trace detail</div>';
   }
+}
 
-  // ── Refresh ──
-  async function refresh() {
-    const el = document.getElementById('refresh');
-    el.classList.add('loading');
-    el.textContent = 'Refreshing...';
-    await Promise.all([loadStats(), loadTraces()]);
-    el.classList.remove('loading');
-    el.textContent = 'Updated ' + new Date().toLocaleTimeString('zh-CN');
-  }
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
-  // ── SSE ──
-  let _refreshTimer = null;
-  function scheduleRefresh() {
-    if (_refreshTimer) return;
-    _refreshTimer = setTimeout(() => { _refreshTimer = null; refresh(); }, 500);
-  }
+// ── v0.4.0: Quality Report 渲染 ──
+const DIM_LABELS = {
+  trace: '异常堆栈', runtime: '运行时', code_snippet: '源码片段',
+  git_context: 'Git 归因', network: '网络', ui_event: 'UI 事件',
+  spec: '规范', knowledge_base: '知识库', llm_analysis: 'LLM 分析'
+};
 
-  function initSSE() {
-    try {
-      const url = '/api/dashboard/stream' + (apiKey ? '?api_key=' + encodeURIComponent(apiKey) : '');
-      const es = new EventSource(url);
-      es.onmessage = scheduleRefresh;
-      es.onerror = () => {
-        try { es.close(); } catch(e) {}
-        document.getElementById('sse-badge').textContent = '● Reconnecting';
-        document.getElementById('sse-badge').className = 'sse-badge off';
-        setTimeout(initSSE, 5000);
-      };
-      es.onopen = () => {
-        document.getElementById('sse-badge').textContent = '● Live';
-        document.getElementById('sse-badge').className = 'sse-badge';
-      };
-    } catch(e) {
-      console.error('SSE init failed', e);
-      document.getElementById('sse-badge').textContent = '● Off';
-      document.getElementById('sse-badge').className = 'sse-badge off';
+function scoreClass(s) {
+  if (s >= 0.7) return 'quality-score-high';
+  if (s >= 0.3) return 'quality-score-mid';
+  return 'quality-score-low';
+}
+
+function renderQualityCard(qr) {
+  const comp = qr.context_completeness || {};
+  const conf = qr.analysis_confidence || {};
+  const overall = qr.overall_score || 0;
+  const compScore = comp.overall_score || 0;
+  const confScore = conf.overall_score || 0;
+  const cls = scoreClass(overall);
+  const dims = comp.dimensions || {};
+  const evidence = qr.evidence_items || [];
+  const suggestions = qr.suggestions || [];
+
+  let html = '<div class="detail-section"><div class="label">Quality Report (v0.4.0)</div>';
+  html += '<div class="quality-card">';
+
+  // 综合评分
+  html += `<div class="quality-score-row ${cls}">`;
+  html += `<div class="big">${overall.toFixed(2)}</div>`;
+  html += `<div class="quality-score-bar"><div class="fill" style="width:${(overall*100).toFixed(0)}%"></div></div>`;
+  html += `<div class="quality-formula">= ${compScore.toFixed(2)} × ${confScore.toFixed(2)}</div>`;
+  html += '</div>';
+
+  // 维度评分网格
+  if (Object.keys(dims).length) {
+    html += '<div class="quality-dim-grid">';
+    for (const [key, ds] of Object.entries(dims)) {
+      const label = DIM_LABELS[key] || key;
+      const missing = !ds.present;
+      const colorCls = ds.score >= 0.7 ? 'quality-score-high' : (ds.score >= 0.3 ? 'quality-score-mid' : 'quality-score-low');
+      html += `<div class="quality-dim ${missing ? 'missing' : ''}">`;
+      html += `<span class="name">${esc(label)}</span>`;
+      html += `<span class="score ${colorCls}" style="color:inherit">${ds.score.toFixed(2)}</span>`;
+      html += '</div>';
     }
+    html += '</div>';
   }
 
-  // 将 selectTrace 暴露到全局（供 onclick 调用）
-  window.dashboard = { selectTrace };
+  // 证据摘要（最多 5 条）
+  if (evidence.length) {
+    html += `<div class="quality-evidence-list">`;
+    html += `<div style="color:#8b949e;margin-bottom:4px">证据 ${evidence.length} 条（高相关 ${conf.high_relevance_count || 0}）</div>`;
+    evidence.slice(0, 5).forEach(e => {
+      const relCls = e.relevance === 'high' ? 'rel-high' : (e.relevance === 'medium' ? 'rel-medium' : 'rel-low');
+      html += `<div class="quality-evidence-item">`;
+      html += `<span class="rel ${relCls}">${esc(e.relevance)}</span>`;
+      html += `<span>[${esc(e.type)}] ${esc((e.description||'').substring(0, 80))}</span>`;
+      html += `</div>`;
+    });
+    if (evidence.length > 5) {
+      html += `<div style="color:#484f58;font-style:italic;padding:2px 8px">... 还有 ${evidence.length - 5} 条</div>`;
+    }
+    html += '</div>';
+  }
 
-  // ── Init ──
-  refresh();
-  setInterval(refresh, 10000);
-  initSSE();
-})();
+  // 改进建议
+  if (suggestions.length) {
+    html += '<div class="quality-suggestions">';
+    suggestions.forEach(s => {
+      html += `<div class="quality-suggestion">💡 ${esc(s)}</div>`;
+    });
+    html += '</div>';
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+async function refresh() {
+  document.getElementById('refresh').textContent = 'Refreshing...';
+  await Promise.all([loadStats(), loadTraces()]);
+  document.getElementById('refresh').textContent = 'Updated ' + new Date().toLocaleTimeString('zh-CN');
+}
+
+// ── SSE 实时推送（叠加在 10s 轮询之上，轮询仍作兜底）──
+// 服务端在 trace/error 写入时广播变更信号，前端收到后即时 re-fetch，
+// 替代"等下一个 10s 轮询周期"。SSE 断开自动重连，期间轮询照常工作。
+let _refreshTimer = null;
+function scheduleRefresh() {
+  // 去抖：写入爆发期（如批量 ingest）合并为一次 refresh，避免抖动
+  if (_refreshTimer) return;
+  _refreshTimer = setTimeout(() => { _refreshTimer = null; refresh(); }, 500);
+}
+
+function initSSE() {
+  try {
+    // EventSource 无法设置自定义 header，复用 ?api_key= query 降级（与 sendBeacon 同机制）
+    const apiKey = new URLSearchParams(location.search).get('api_key') || '';
+    const url = '/api/dashboard/stream' + (apiKey ? ('?api_key=' + encodeURIComponent(apiKey)) : '');
+    const es = new EventSource(url);
+    es.onmessage = scheduleRefresh;
+    es.onerror = () => {
+      try { es.close(); } catch (e) {}
+      // 轮询仍兜底；5s 后尝试重连 SSE（服务端可能重启或临时不可用）
+      setTimeout(initSSE, 5000);
+    };
+  } catch (e) { console.error('SSE init failed', e); }
+}
+
+refresh();
+setInterval(refresh, 10000);
+initSSE();
 </script>
 </body>
 </html>

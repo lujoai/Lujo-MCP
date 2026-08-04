@@ -20,7 +20,7 @@ from starlette.responses import Response
 from app.config import settings
 from app.mcp.core.trace_repo import save_network_record
 
-logger = logging.getLogger("Lujo-MCP.middleware.network")
+logger = logging.getLogger("ai-debug-mcp.middleware.network")
 
 _PUBLIC_PATHS = {"/", "/health", "/metrics"}
 

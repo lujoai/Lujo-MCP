@@ -14,11 +14,22 @@ from typing import Optional, Generator, AsyncGenerator
 from openai import OpenAI, AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 
 from app.config import settings
-from app.rag.knowledge_base import get_knowledge_entry, retrieve_similar, upsert_knowledge_entry
+from app.rag.knowledge_base import (
+    get_knowledge_entry,
+    get_entry_by_normalized_fingerprint,
+    get_entries_by_type_fingerprint,
+    retrieve_similar,
+    upsert_knowledge_entry,
+)
+from app.rag.debug_case import (
+    compute_normalized_fingerprint,
+    compute_type_fingerprint,
+    normalize_message_for_similarity,
+)
 from app.rag.vector_store import get_vector_store
 from app.mcp.core.redaction import redact
 
-logger = logging.getLogger("Lujo-MCP.llm")
+logger = logging.getLogger("ai-debug-mcp.llm")
 
 # ── 熔断器（P3-8）──
 try:
@@ -39,13 +50,12 @@ def _get_llm_circuit_breaker():
     if not pybreaker or not settings.circuit_breaker_enabled:
         return None
     with _llm_circuit_breaker_lock:
-        if _llm_circuit_breaker is not None:
-            return _llm_circuit_breaker
-        _llm_circuit_breaker = pybreaker.CircuitBreaker(
-            fail_max=settings.cb_llm_max_failures,
-            reset_timeout=settings.cb_llm_reset_timeout,
-            exclude=[pybreaker.CircuitBreakerError],
-        )
+        if _llm_circuit_breaker is None:
+            _llm_circuit_breaker = pybreaker.CircuitBreaker(
+                fail_max=settings.cb_llm_max_failures,
+                reset_timeout=settings.cb_llm_reset_timeout,
+                exclude=[pybreaker.CircuitBreakerError],
+            )
     return _llm_circuit_breaker
 
 
@@ -73,7 +83,11 @@ def _llm_fallback_result() -> dict:
     }
 
 _client: Optional[OpenAI] = None
-_client_lock = threading.Lock()
+# _client_lock：模块级 bool 标志，作为轻量自旋锁使用。
+# 线程安全性：Python GIL 保证对 bool 的读写是原子的；多线程并发时
+# 仅一个线程能将 False → True 成功，其余线程进入自旋等待。
+# 模块级创建在 import 时即存在，不存在延迟初始化的竞态问题。
+_client_lock: bool = False
 
 # ── 异步 OpenAI 客户端（Phase 3.2）──
 _async_client: Optional[AsyncOpenAI] = None
@@ -215,7 +229,6 @@ def _set_l1_only(fingerprint: str, result: dict) -> None:
 
 _PROVIDER_BASE_URLS = {
     "openai": "",
-    "deepseek": "https://api.deepseek.com/v1",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4/",
     "custom": "",
 }
@@ -227,26 +240,33 @@ def _resolve_base_url() -> str:
 
 
 def _get_client() -> OpenAI:
-    global _client
-    if _client is not None:
-        return _client
-    with _client_lock:
-        if _client is not None:
-            return _client
-        api_key = settings.openai_api_key
-        if not api_key:
-            raise RuntimeError("请在 .env 中配置有效的 OPENAI_API_KEY")
+    global _client, _client_lock
+    if _client is None:
+        if _client_lock:
+            # 其他线程正在创建，等待后返回
+            for _ in range(50):
+                time.sleep(0.01)
+                if _client is not None:
+                    return _client
+            raise RuntimeError("OpenAI client 初始化超时")
+        _client_lock = True
+        try:
+            api_key = settings.openai_api_key
+            if not api_key:
+                raise RuntimeError("请在 .env 中配置有效的 OPENAI_API_KEY")
 
-        base_url = _resolve_base_url()
-        kwargs = {
-            "api_key": api_key,
-            "timeout": settings.llm_timeout,
-            "max_retries": 0,  # 我们自己控制重试
-        }
-        if base_url:
-            kwargs["base_url"] = base_url
+            base_url = _resolve_base_url()
+            kwargs = {
+                "api_key": api_key,
+                "timeout": settings.llm_timeout,
+                "max_retries": 0,  # 我们自己控制重试
+            }
+            if base_url:
+                kwargs["base_url"] = base_url
 
-        _client = OpenAI(**kwargs)
+            _client = OpenAI(**kwargs)
+        finally:
+            _client_lock = False
     return _client
 
 
@@ -547,20 +567,34 @@ def _validate_and_normalize(raw_output: str) -> dict:
     return result
 
 
-def _get_error_fingerprint(context: dict) -> Optional[str]:
+def _get_error_signal(context: dict) -> tuple[str, str, Optional[str]]:
+    """从调试上下文提取 (异常类型, 异常消息, 精确指纹)。
+
+    优先从 context.exception 取，其次遍历 context.errors。
+    返回的 type/message 可为空串（无法提取时），fingerprint 可为 None。
+    """
     exception = context.get("exception")
     if isinstance(exception, dict):
-        fingerprint = exception.get("fingerprint")
-        if fingerprint:
-            return str(fingerprint)
+        return (
+            str(exception.get("type") or exception.get("exception_type") or ""),
+            str(exception.get("message") or exception.get("msg") or ""),
+            str(exception["fingerprint"]) if exception.get("fingerprint") else None,
+        )
 
     for error in context.get("errors", []) or []:
         if isinstance(error, dict):
-            fingerprint = error.get("fingerprint")
-            if fingerprint:
-                return str(fingerprint)
+            return (
+                str(error.get("type") or error.get("exception_type") or ""),
+                str(error.get("message") or error.get("msg") or ""),
+                str(error["fingerprint"]) if error.get("fingerprint") else None,
+            )
 
-    return None
+    return "", "", None
+
+
+def _get_error_fingerprint(context: dict) -> Optional[str]:
+    _, _, fingerprint = _get_error_signal(context)
+    return fingerprint
 
 
 def _annotate_analysis_result(
@@ -576,29 +610,70 @@ def _annotate_analysis_result(
 
 
 def _get_knowledge_base_result(context: dict) -> Optional[dict]:
-    fingerprint = _get_error_fingerprint(context)
+    exc_type, message, fingerprint = _get_error_signal(context)
     if not fingerprint:
-        # 无堆栈指纹时仍尝试种子知识二级匹配（基于 exception.type + message）
-        seed_result = _try_seed_case_match(context)
-        if seed_result is not None:
-            return seed_result
         return None
 
+    # L1：精确指纹命中
     entry = get_knowledge_entry(fingerprint)
-    if entry is None:
-        # 堆栈指纹 miss → 尝试种子知识二级匹配（基于异常模式）
-        seed_result = _try_seed_case_match(context)
-        if seed_result is not None:
-            return seed_result
-        # 种子也 miss → 向量检索 RAG fallback（三级召回）
-        return _try_vector_rag(context, fingerprint)
+    if entry is not None:
+        return _build_kb_result(entry, "knowledge_base")
 
+    # L1.5：归一化指纹命中（同模式、不同变量值）
+    if exc_type or message:
+        normalized_fp = compute_normalized_fingerprint(exc_type, message)
+        entry = get_entry_by_normalized_fingerprint(normalized_fp)
+        if entry is not None:
+            return _build_kb_result(entry, "knowledge_base_normalized")
+
+    # L2：类型级 Jaccard 兜底（同类型异常，消息 token 重叠）
+    if settings.kb_type_level_fallback and exc_type:
+        type_fp = compute_type_fingerprint(exc_type)
+        candidates = get_entries_by_type_fingerprint(type_fp, top_k=5)
+        entry = _best_type_fallback(candidates, message)
+        if entry is not None:
+            return _build_kb_result(entry, "knowledge_base_type")
+
+    # 精确指纹 miss → 向量检索 RAG fallback（二级召回）
+    return _try_vector_rag(context, fingerprint)
+
+
+def _best_type_fallback(
+    candidates: list[dict], message: str
+) -> dict | None:
+    """在 L2 候选里按消息 Jaccard 相似度选最优（低于阈值返回 None）。"""
+    if not candidates or not message:
+        return None
+    query_tokens = set(normalize_message_for_similarity(message).split())
+    if not query_tokens:
+        return None
+    min_score = settings.kb_seed_jaccard_min_score
+    best_entry: dict | None = None
+    best_score = 0.0
+    for cand in candidates:
+        cand_msg = str(
+            (cand.get("analysis") or {}).get("message")
+            or (cand.get("_kb_meta") or {}).get("message")
+            or ""
+        )
+        cand_tokens = set(normalize_message_for_similarity(cand_msg).split())
+        if not cand_tokens:
+            continue
+        inter = len(query_tokens & cand_tokens)
+        union = len(query_tokens | cand_tokens)
+        score = inter / union if union else 0.0
+        if score >= min_score and score > best_score:
+            best_score = score
+            best_entry = cand
+    return best_entry
+
+
+def _build_kb_result(entry: dict, analysis_source: str) -> dict:
+    """把 KB entry 封装为 LLM 分析结果结构（与现有 knowledge_base 分支一致）。"""
     analysis = copy.deepcopy(entry.get("analysis") or {})
     fix_suggestion = entry.get("fix_suggestion")
     if fix_suggestion and not analysis.get("fix"):
         analysis["fix"] = fix_suggestion
-
-    logger.info("Knowledge base hit (fingerprint=%s)", fingerprint)
     return {
         "analysis": analysis,
         "model": "__knowledge_base__",
@@ -610,193 +685,8 @@ def _get_knowledge_base_result(context: dict) -> Optional[dict]:
         "attempts": 0,
         "cached": False,
         "knowledge_base_hit": True,
-        "analysis_source": "knowledge_base",
+        "analysis_source": analysis_source,
     }
-
-
-def _try_seed_case_match(context: dict) -> Optional[dict]:
-    """基于 (exception_type, exception_message) 三级 fallback 匹配种子知识。
-
-    M2 新增 + M3 扩展（瓶颈 B + E）：解决"同异常模式但参数值不同导致指纹 miss"问题
-    三级 fallback 链：
-    1. 精确 (type, message) 指纹匹配 — 确定性
-    2. 归一化 message（去变量值）指纹匹配 — 处理变量值差异
-    3. 同 exception_type 粗粒度候选 + Jaccard 相似度打分排序
-       （阈值 0.25，取 top 1）
-
-    命中时 KnowledgeBase 维度从 0.0 提升到 1.0，LLMAnalysis 置信度提升。
-
-    Returns:
-        命中时返回结构化分析 dict（与 _get_knowledge_base_result 同构）；
-        未命中返回 None，调用方应继续走向量检索或 LLM 链路。
-    """
-    exception = context.get("exception")
-    if not isinstance(exception, dict):
-        return None
-
-    exc_type = exception.get("type")
-    if not exc_type:
-        return None
-
-    exc_message = exception.get("message", "") or ""
-
-    # Feature flag：粗粒度匹配开关
-    try:
-        from app.config import settings as _settings
-        type_level_enabled = bool(
-            getattr(_settings, "kb_type_level_fallback", True)
-        )
-    except Exception:
-        type_level_enabled = True
-
-    from app.rag.debug_case import DebugCase
-
-    # ── 档 1：精确 (type, message) 指纹匹配 ──
-    seed_fingerprint = DebugCase.compute_fingerprint(exc_type, exc_message)
-    entry = get_knowledge_entry(seed_fingerprint)
-    if entry is not None:
-        return _build_seed_result(entry, exc_type, seed_fingerprint, match_level="exact")
-
-    if not type_level_enabled:
-        return None
-
-    # ── 档 2：归一化 message 指纹匹配（去变量值） ──
-    try:
-        normalized_msg = DebugCase.normalize_message_for_similarity(exc_message)
-        if normalized_msg != exc_message:
-            normalized_fp = DebugCase.compute_fingerprint(exc_type, normalized_msg)
-            entry = get_knowledge_entry(normalized_fp)
-            if entry is not None:
-                return _build_seed_result(
-                    entry, exc_type, normalized_fp,
-                    match_level="normalized",
-                )
-    except Exception:
-        logger.debug("Seed case normalized-fingerprint match failed", exc_info=True)
-
-    # ── 档 3：同 exception_type 粗粒度候选 + Jaccard 相似度排序 ──
-    try:
-        result = _try_type_level_seed_match(exc_type, exc_message)
-        if result is not None:
-            return result
-    except Exception:
-        logger.debug("Seed case type-level fallback failed", exc_info=True)
-
-    return None
-
-
-def _build_seed_result(
-    entry: dict,
-    exc_type: str,
-    fingerprint: str,
-    *,
-    match_level: str,
-) -> dict:
-    """构建种子命中的标准化分析结果（同构 _get_knowledge_base_result）。"""
-    analysis = copy.deepcopy(entry.get("analysis") or {})
-    fix_suggestion = entry.get("fix_suggestion")
-    if fix_suggestion and not analysis.get("fix"):
-        analysis["fix"] = fix_suggestion
-    # 种子知识确定性匹配置信度 high（档 2/3 也保持 high：模式匹配成功）
-    if not analysis.get("confidence"):
-        analysis["confidence"] = "high"
-    # 注入命中层级，便于后续 scorer / LLM 调整权重
-    analysis["_seed_match_level"] = match_level
-    analysis["_seed_match_fingerprint"] = fingerprint
-
-    logger.info(
-        "Seed case hit (match_level=%s, fingerprint=%s, exception_type=%s)",
-        match_level, fingerprint, exc_type,
-    )
-    return {
-        "analysis": analysis,
-        "model": f"__knowledge_base_seed_{match_level}__",
-        "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        },
-        "attempts": 0,
-        "cached": False,
-        "knowledge_base_hit": True,
-        "analysis_source": "knowledge_base_seed",
-    }
-
-
-def _try_type_level_seed_match(
-    exc_type: str, exc_message: str
-) -> Optional[dict]:
-    """遍历知识库内同 exception_type 的条目，用 Jaccard 相似度找最佳匹配。
-
-    流程：
-    1) 全量导出 KB → 按 analysis.exception_type 过滤出候选
-    2) 用 normalized_message 的 token Jaccard 打分（复用 vector_store 同一分词逻辑）
-    3) 最高分 > min_score（默认 0.25）则取 top 1 作为命中
-    """
-    # 最小有效 score：Jaccard ≥ 0.25 视为有语义重叠
-    try:
-        from app.config import settings as _settings
-        min_score = float(getattr(_settings, "kb_seed_jaccard_min_score", 0.25))
-    except Exception:
-        min_score = 0.25
-
-    from app.rag.debug_case import DebugCase
-    from app.rag.knowledge_base import get_knowledge_base  # 局部导入，避免循环依赖
-    from app.rag.vector_store import _tokenize  # 复用同一分词器
-
-    kb_entries = get_knowledge_base().export_all()
-    normalized_query = DebugCase.normalize_message_for_similarity(exc_message)
-    query_tokens = _tokenize(normalized_query or exc_message)
-    if not query_tokens:
-        return None
-
-    type_fp = DebugCase.compute_type_fingerprint(exc_type)
-    best_entry = None
-    best_score = -1.0
-    best_match_fp = None
-
-    for raw_entry in kb_entries:
-        analysis = raw_entry.get("analysis") or {}
-        entry_type = analysis.get("exception_type", "")
-        if not entry_type:
-            # 兜底：用 type_fingerprint 比较（兼容未结构化的旧 entry）
-            kb_meta = analysis.get("_kb_meta") or {}
-            if kb_meta.get("type_fingerprint") and kb_meta["type_fingerprint"] != type_fp:
-                continue
-        elif entry_type.split(".")[-1] != exc_type.split(".")[-1]:
-            continue
-
-        msg = analysis.get("exception_message", "") or ""
-        normalized_doc = (analysis.get("_kb_meta") or {}).get(
-            "normalized_message",
-            DebugCase.normalize_message_for_similarity(msg),
-        )
-        doc_tokens = _tokenize(normalized_doc or msg)
-        if not doc_tokens:
-            continue
-        inter = len(query_tokens & doc_tokens)
-        if inter == 0:
-            continue
-        union = len(query_tokens | doc_tokens)
-        score = inter / union if union else 0.0
-        if score > best_score:
-            best_score = score
-            best_entry = raw_entry
-            best_match_fp = raw_entry.get("fingerprint", "")
-
-    if best_entry is None or best_score < min_score:
-        return None
-
-    logger.info(
-        "Seed case type-level Jaccard hit: score=%.3f min_score=%.3f type=%s",
-        best_score, min_score, exc_type,
-    )
-    # 档 3 注入 jaccard_score，便于 LLM 做置信度修正
-    result = _build_seed_result(
-        best_entry, exc_type, best_match_fp, match_level="type_level"
-    )
-    result["analysis"]["_seed_jaccard_score"] = round(best_score, 4)
-    return result
 
 
 def _try_vector_rag(context: dict, fingerprint: str) -> Optional[dict]:
@@ -835,16 +725,9 @@ def _try_vector_rag(context: dict, fingerprint: str) -> Optional[dict]:
     }
 
 
-def _persist_analysis_to_knowledge_base(fingerprint: Optional[str], result: dict) -> None:
-    """将 LLM 分析结论沉淀到知识库，统一走 DebugCase Schema（瓶颈 F 修复）。
-
-    设计：
-    - 先尝试按 result.context 的 exception.type/message 构造 DebugCase
-      （写入的 KB 条目天然带 _kb_meta / normalized_message / type_fingerprint
-       → 与粗粒度匹配 fallback / 向量索引同步完全兼容）
-    - 失败时退化为旧 upsert_knowledge_entry(fingerprint, dict) 形式，
-      保证主流程不中断
-    """
+def _persist_analysis_to_knowledge_base(
+    fingerprint: Optional[str], result: dict, context: Optional[dict] = None
+) -> None:
     if not fingerprint:
         return
 
@@ -852,63 +735,19 @@ def _persist_analysis_to_knowledge_base(fingerprint: Optional[str], result: dict
     if not isinstance(analysis, dict):
         return
 
+    # 注入异常类型/消息，支撑三级 fallback（L1.5 归一化 / L2 类型级）
+    if context:
+        exc_type, message, _ = _get_error_signal(context)
+        persist_analysis = copy.deepcopy(analysis)
+        persist_analysis.setdefault("exception_type", exc_type)
+        persist_analysis.setdefault("message", message)
+    else:
+        persist_analysis = analysis
+
     try:
-        context = result.get("context") or {}
-        exc = context.get("exception") or {}
-        exc_type = exc.get("type") or ""
-        exc_message = exc.get("message", "") or ""
-        fix = analysis.get("fix") or ""
-        # 从 analysis 里推断 root_cause（优先取 reasoning_chain 摘要，回退为 root_cause 字段）
-        root = (
-            analysis.get("root_cause")
-            or analysis.get("reason")
-            or analysis.get("description")
-            or ""
-        )
-        if not root:
-            reasoning = analysis.get("reasoning_chain") or []
-            if isinstance(reasoning, list) and reasoning:
-                root = " ".join(
-                    s for s in reasoning[:3] if isinstance(s, str)
-                )[:400]
-
-        from app.rag.debug_case import CaseSource, DebugCase, Severity
-
-        try:
-            # 优先用 (exception_type, exception_message) 构造 DebugCase
-            if exc_type and (root or fix):
-                case_fp = DebugCase.compute_fingerprint(exc_type, exc_message)
-                # 确保与传入 fingerprint 兼容：若外部传了精确指纹，优先用外部
-                final_fp = fingerprint or case_fp
-                case = DebugCase(
-                    fingerprint=final_fp,
-                    exception_type=exc_type or "Unknown",
-                    exception_message=exc_message,
-                    root_cause=root or "<llm-analysis>",
-                    fix_suggestion=fix or "<llm-analysis>",
-                    tags=list(analysis.get("tags") or []),
-                    severity=Severity.MEDIUM,
-                    case_confidence=0.9,  # LLM 新分析默认高置信度，后续验证成功再递增
-                    verify_count=0,
-                    source=CaseSource.LLM.value,
-                )
-                upsert_knowledge_entry(
-                    fingerprint=final_fp,
-                    analysis=case.to_kb_entry()["analysis"],
-                    fix_suggestion=case.fix_suggestion,
-                    source=case.source,
-                )
-                return
-        except Exception:
-            logger.debug(
-                "LLM 沉淀 DebugCase Schema 失败，回退为旧 dict 写入",
-                exc_info=True,
-            )
-
-        # 回退：旧格式（向后兼容）
         upsert_knowledge_entry(
             fingerprint=fingerprint,
-            analysis=analysis,
+            analysis=persist_analysis,
             fix_suggestion=analysis.get("fix", ""),
             source="llm",
         )
@@ -923,7 +762,7 @@ def _persist_analysis_to_knowledge_base(fingerprint: Optional[str], result: dict
     try:
         get_vector_store().add([{
             "fingerprint": fingerprint,
-            "analysis": analysis,
+            "analysis": persist_analysis,
             "fix_suggestion": analysis.get("fix", ""),
             "source": "llm",
         }])
@@ -1122,7 +961,7 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
     elapsed = time.time() - start
 
     _set_cache_result(fingerprint, copy.deepcopy(result))
-    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result)
+    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result, context)
 
     logger.info(
         "LLM analysis complete",
@@ -1203,7 +1042,7 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
     elapsed = time.time() - start
 
     await asyncio.to_thread(_set_cache_result, fingerprint, copy.deepcopy(result))
-    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result)
+    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result, context)
 
     logger.info(
         "LLM analysis complete",
@@ -1244,12 +1083,9 @@ def analyze_stream(context: dict, model: Optional[str] = None) -> Generator[str,
         stream=True,
     )
 
-    try:
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-    finally:
-        stream.close()
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
 
 
 async def analyze_stream_async(context: dict, model: Optional[str] = None) -> AsyncGenerator[str, None]:
@@ -1274,9 +1110,6 @@ async def analyze_stream_async(context: dict, model: Optional[str] = None) -> As
         stream=True,
     )
 
-    try:
-        async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-    finally:
-        await stream.close()
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content

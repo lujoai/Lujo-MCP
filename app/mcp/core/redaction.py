@@ -15,7 +15,7 @@ from typing import Optional
 
 from app.config import settings
 
-logger = logging.getLogger("Lujo-MCP.redaction")
+logger = logging.getLogger("ai-debug-mcp.redaction")
 
 # 默认脱敏规则：(编译后的正则, 替换串)
 _DEFAULT_RULES: list[tuple["re.Pattern[str]", str]] = [

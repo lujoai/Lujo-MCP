@@ -50,47 +50,6 @@ _DIMENSION_WEIGHTS: dict[ContextDimension, float] = {
     ContextDimension.KNOWLEDGE_BASE: 0.05,
 }
 
-# 静默失败场景专用权重（PRD §12.2 场景 D 优化）
-# 静默失败 = 请求成功但行为未达预期，无异常堆栈可采集，TRACE 维度天然缺失。
-# 此时把 TRACE 的权重重新分配给该场景的核心证据维度：
-#   - SPEC（规范回归）是静默失败最直接的判定证据，权重 0.05 → 0.10
-#   - NETWORK（业务响应异常）次之，0.08 → 0.10
-#   - GIT 归因在无堆栈场景价值有限，0.12 → 0.10
-# 其余维度权重不变，总和仍为 1.0。
-_SILENT_FAILURE_DIMENSION_WEIGHTS: dict[ContextDimension, float] = {
-    ContextDimension.TRACE: 0.15,
-    ContextDimension.CODE_SNIPPET: 0.20,
-    ContextDimension.RUNTIME: 0.10,
-    ContextDimension.GIT_CONTEXT: 0.10,
-    ContextDimension.LLM_ANALYSIS: 0.12,
-    ContextDimension.NETWORK: 0.10,
-    ContextDimension.UI_EVENT: 0.08,
-    ContextDimension.SPEC: 0.10,
-    ContextDimension.KNOWLEDGE_BASE: 0.05,
-}
-
-
-def _is_silent_failure_scenario(debug_ctx: dict[str, Any]) -> bool:
-    """检测静默失败场景：无异常堆栈帧，但存在替代信号。
-
-    静默失败 = 请求返回成功但行为未达预期，无异常堆栈可采集。
-    判定条件：无堆栈帧（exception 为空或 frames 为空/0）且存在替代信号
-    （spec_diffs / network_trace / ui_events 任一非空）。
-    若连替代信号都没有（空上下文），不视为静默失败，避免虚高。
-    """
-    exc = debug_ctx.get("exception")
-    if isinstance(exc, dict):
-        frames = exc.get("frames") or []
-        frame_count = exc.get("frame_count", len(frames))
-        if frame_count > 0:
-            return False  # 有异常堆栈，非静默失败
-    has_signal = bool(
-        debug_ctx.get("spec_diffs")
-        or debug_ctx.get("network_trace")
-        or debug_ctx.get("ui_events")
-    )
-    return has_signal
-
 
 # ── 公共入口 ──
 
@@ -139,16 +98,7 @@ def is_enabled() -> bool:
 def _score_completeness(
     debug_ctx: dict[str, Any], repair_ctx: dict[str, Any]
 ) -> ContextCompleteness:
-    """逐维度评分，加权平均计算整体完整度。
-
-    权重按场景动态选择：静默失败（无异常堆栈）场景使用专用权重，
-    避免 TRACE 维度权重被浪费，其余场景用默认权重。
-    """
-    weights = (
-        _SILENT_FAILURE_DIMENSION_WEIGHTS
-        if _is_silent_failure_scenario(debug_ctx)
-        else _DIMENSION_WEIGHTS
-    )
+    """逐维度评分，加权平均计算整体完整度。"""
     dimensions: dict[ContextDimension, DimensionScore] = {}
     weighted_sum = 0.0
     missing_count = 0
@@ -157,7 +107,7 @@ def _score_completeness(
         scorer = _DIMENSION_SCORERS.get(dim)
         score = scorer(debug_ctx, repair_ctx) if scorer else _score_none(dim)
         dimensions[dim] = score
-        weighted_sum += score.score * weights.get(dim, 0.0)
+        weighted_sum += score.score * _DIMENSION_WEIGHTS.get(dim, 0.0)
         if not score.present:
             missing_count += 1
 
@@ -188,32 +138,20 @@ def _score_trace(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> Dime
     return DimensionScore(present=True, score=0.4, reason=f"堆栈过浅，仅 {frame_count} 帧，定位困难")
 
 
-def _score_code_snippet(debug_ctx: dict[str, Any], repair_ctx: dict[str, Any]) -> DimensionScore:
-    """CODE_SNIPPET 维度：源码片段是否成功采集。
-
-    M3 增强：当 code_snippets 为空但 repair_ctx.fault_locations 存在时，
-    说明静态分析已定位到函数级（虽然没有行级源码），给部分分。
-    """
+def _score_code_snippet(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> DimensionScore:
+    """CODE_SNIPPET 维度：源码片段是否成功采集。"""
     snippets = debug_ctx.get("code_snippets") or []
-    if snippets:
-        found = sum(1 for s in snippets if s.get("found"))
-        total = len(snippets)
-        if found == total:
-            return DimensionScore(present=True, score=1.0, reason=f"全部 {total} 帧源码已定位")
-        if found > 0:
-            return DimensionScore(
-                present=True, score=0.6, reason=f"{found}/{total} 帧源码已定位，{total - found} 帧未找到"
-            )
-        return DimensionScore(present=False, score=0.0, reason=f"全部 {total} 帧源码均未找到，检查路径映射")
-
-    # M3 fallback：无 code_snippets 但有 fault_locations（静态分析产出）
-    fault_locs = repair_ctx.get("fault_locations") or []
-    if fault_locs:
+    if not snippets:
+        return DimensionScore(present=False, score=0.0, reason="无源码片段")
+    found = sum(1 for s in snippets if s.get("found"))
+    total = len(snippets)
+    if found == total:
+        return DimensionScore(present=True, score=1.0, reason=f"全部 {total} 帧源码已定位")
+    if found > 0:
         return DimensionScore(
-            present=True, score=0.5,
-            reason=f"静态分析定位 {len(fault_locs)} 个可疑函数（无行级源码）",
+            present=True, score=0.6, reason=f"{found}/{total} 帧源码已定位，{total - found} 帧未找到"
         )
-    return DimensionScore(present=False, score=0.0, reason="无源码片段")
+    return DimensionScore(present=False, score=0.0, reason=f"全部 {total} 帧源码均未找到，检查路径映射")
 
 
 def _score_runtime(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> DimensionScore:
@@ -283,46 +221,16 @@ def _score_knowledge_base(debug_ctx: dict[str, Any], repair_ctx: dict[str, Any])
 
 
 def _score_llm_analysis(debug_ctx: dict[str, Any], repair_ctx: dict[str, Any]) -> DimensionScore:
-    """LLM_ANALYSIS 维度：先验 LLM 分析是否可用。
-
-    M4 增强：识别 case_confidence（float）和 verify_count（int）。
-    - case_confidence >= 0.9 + verify_count >= 2 → 1.0（验证过的结论）
-    - case_confidence >= 0.8 → 基础分 +0.1
-    - verify_count >= 1 → 额外 +0.05
-    """
+    """LLM_ANALYSIS 维度：先验 LLM 分析是否可用。"""
     prior = repair_ctx.get("prior_analysis") or {}
     if prior and prior.get("root_cause"):
         conf = prior.get("confidence", "low")
         src = prior.get("analysis_source", "unknown")
-        case_conf = float(prior.get("case_confidence", 0.0) or 0.0)
-        verify_count = int(prior.get("verify_count", 0) or 0)
-
-        # 基础分按 confidence 字符串
         if conf == "high":
-            base = 1.0
-        elif conf == "medium":
-            base = 0.8
-        else:
-            base = 0.5
-
-        # M4 加成：case_confidence 高 → 提升
-        if case_conf >= 0.9:
-            base = min(1.0, base + 0.1)
-        elif case_conf >= 0.8:
-            base = min(1.0, base + 0.05)
-
-        # M4 加成：verify_count > 0 → 经验证的结论更可信
-        if verify_count >= 2:
-            base = min(1.0, base + 0.05)
-        elif verify_count >= 1:
-            base = min(1.0, base + 0.03)
-
-        verify_note = f"，verify_count={verify_count}" if verify_count > 0 else ""
-        conf_note = f"，case_conf={case_conf:.2f}" if case_conf > 0 else ""
-        return DimensionScore(
-            present=True, score=round(base, 4),
-            reason=f"LLM 分析完成（置信度 {conf}，来源 {src}{conf_note}{verify_note}）",
-        )
+            return DimensionScore(present=True, score=1.0, reason=f"LLM 分析完成（置信度 high，来源 {src}）")
+        if conf == "medium":
+            return DimensionScore(present=True, score=0.8, reason=f"LLM 分析完成（置信度 medium，来源 {src}）")
+        return DimensionScore(present=True, score=0.5, reason=f"LLM 分析完成（置信度 low，来源 {src}）")
     return DimensionScore(present=False, score=0.0, reason="LLM 先验分析不可用（未启用或调用失败）")
 
 
@@ -506,29 +414,6 @@ def _extract_evidence(
             )
         )
 
-    # 10. M3 静态分析证据（fault_locations）
-    fault_locs = repair_ctx.get("fault_locations") or []
-    for loc in fault_locs:
-        if isinstance(loc, dict):
-            analyzer = loc.get("analyzer", "static_analyzer")
-            func = loc.get("function", "?")
-            file = loc.get("file", "?")
-            line = loc.get("line", "?")
-            evidence.append(
-                EvidenceItem(
-                    type=EvidenceType.CODE_SNIPPET,
-                    description=f"静态分析定位：{func}() at {file}:{line}（{analyzer}）",
-                    source=analyzer,
-                    relevance=RelevanceLevel.HIGH,
-                    location=f"{file}:{line}",
-                    detail={
-                        "signature": loc.get("signature", ""),
-                        "complexity": loc.get("complexity"),
-                        "suspicious_inputs": loc.get("suspicious_inputs", []),
-                    },
-                )
-            )
-
     return evidence
 
 
@@ -553,9 +438,11 @@ def _score_confidence(
     # 基础分（0-0.5）：5 条以上证据即满分
     base = min(total / 5.0, 1.0) * 0.5
 
-    # 质量加成（0-0.3）：高相关度证据数量（非占比，避免添加中等证据稀释分数）
-    # 5 条高相关证据即满分；3 条 = 0.18；1 条 = 0.06
-    quality = min(high_count / 5.0, 1.0) * 0.3
+    # 质量加成（0-0.3）：高相关度证据占比
+    if total > 0:
+        quality = (high_count / total) * 0.3
+    else:
+        quality = 0.0
 
     # 覆盖度加成（0-0.2）：已覆盖的维度数
     covered = _count_covered_dimensions(evidence_items)

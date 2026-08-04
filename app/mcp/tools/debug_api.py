@@ -7,7 +7,7 @@ from app.mcp.builders.context import build_context, build_debug_context
 from app.mcp.collectors.runtime import collect_runtime_snapshot
 from app.llm.analyzer import analyze
 
-logger = logging.getLogger("Lujo-MCP.debug-tool")
+logger = logging.getLogger("ai-debug-mcp.debug-tool")
 
 TOOL_DEF = {
     "name": "debug",

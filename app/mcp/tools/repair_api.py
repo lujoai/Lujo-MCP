@@ -18,7 +18,7 @@ from app.mcp.builders.context import build_context
 from app.mcp.collectors.runtime import collect_runtime_snapshot
 from app.mcp.core.logs import get_logs
 
-logger = logging.getLogger("Lujo-MCP.mcp.tools.repair")
+logger = logging.getLogger("ai-debug-mcp.mcp.tools.repair")
 
 
 REPAIR_ASYNC_DEF = {

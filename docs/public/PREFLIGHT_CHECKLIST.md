@@ -1,7 +1,7 @@
 # 启动前检查清单 / Pre-flight Checklist
 
-**适用版本 / Applicable Version**: v0.4.0  
-**最后更新 / Last Updated**: 2026-08-04
+**适用版本 / Applicable Version**: v0.3.0  
+**最后更新 / Last Updated**: 2026-07-30
 
 ---
 
@@ -609,7 +609,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | Lujo-MCP v0.4.0 | ..."
+#   - 日志输出 "服务启动 | Lujo-MCP v0.3.0 | ..."
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -629,7 +629,7 @@ curl http://localhost:8000/health
 #   {
 #     "status": "ok",              ← 或 "degraded"（LLM 未配置时）
 #     "service": "Lujo-MCP",
-#     "version": "0.4.0",
+#     "version": "0.3.0",
 #     "storage": "memory",         ← 或 "postgresql (connected)"
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

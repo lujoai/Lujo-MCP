@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "Lujo-MCP": {
+    "ai-debug-mcp": {
       "command": "python",
       "args": ["-m", "app.mcp_server"],
-      "cwd": "/替换为你的项目绝对路径/Lujo-MCP",
+      "cwd": "/替换为你的项目绝对路径/ai-debug-mcp",
       "env": {
         "PYTHONPATH": "."
       }

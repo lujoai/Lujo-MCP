@@ -16,13 +16,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
 
-logger = logging.getLogger("Lujo-MCP.agent.test")
+logger = logging.getLogger("ai-debug-mcp.agent.test")
 
 SYSTEM_PROMPT = """你是一位资深的测试工程师。基于以下修复方案与调试上下文，生成可执行的验证策略。输出 JSON：
 

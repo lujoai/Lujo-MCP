@@ -5,12 +5,12 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v5.7（v0.4.0 Quality System + Agent Verify Loop） |
+| 文档版本 | v5.5（Dashboard 实时 SSE 推送版） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v0.4.0 |
+| 当前产品版本 | v0.3.0 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-08-04 |
+| 最后更新 | 2026-07-30 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
@@ -32,9 +32,7 @@
 | v5.4 | 2026-07-26 | 高级架构师 | **AI Debug Agent Phase 1 交付**：新增 `app/agent/` 模块（7 文件）——`BaseAgent` ABC + `AgentContext`/`AgentResult`/`AgentTrace` + `AgentStatus` 枚举、`RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + `_validate_repair_plan` 容错 JSON）、`RepairContextAssembler`（并发聚合 `analyze_async` + `retrieve_similar` + `get_recent_diff`，各失败静默降级）、`RepairQueue` + lifespan helper、`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）。新增 2 REST 端点（`POST /api/debug/repair/async` + `GET /api/debug/repair/result/{job_id}`）+ 2 MCP 工具（`repair_async` + `repair_result`，工具数 15→17）。新增 9 个 `agent_*` 配置项（`agent_enabled` 默认 False）。Phase 1 定位为单 Agent（`RepairAgent`）+ 多 Agent 协同框架（`BaseAgent` ABC 预留），Phase 2 多 Agent DAG 为后续待办。单元测试 583 passed / 6 skipped / 0 failed；ruff 0 违规。 |
 | v5.5 | 2026-07-30 | 高级架构师 | **Dashboard 实时 SSE 推送交付（`DASH-SSE-001`）**：新增 `app/api/dashboard_events.py`——`DashboardEventBus` 广播总线（无 session 门槛，跨线程 `call_soon_threadsafe` 投递，队列满丢旧保最新）；`dashboard.py` 新增 `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 事件终止）+ `invalidate_cache` 内挂广播钩子（广播失败静默降级，不影响主写入链路）；`dashboard.html` 前端 EventSource 集成（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（向后兼容零开销）；鉴权复用 `?api_key=` query 降级（EventSource 无法设自定义 header）。新增 FR20 + 18 单测（测试基线 583→654 passed / 6 skipped / 0 failed）；ruff 0 违规。 |
 | v5.6 | 2026-08-03 | 架构委员会 | **v0.4.0 开发路线制定 + M1 Quality Foundation 交付**：(1) 架构委员会四轮评审（代码审计 / 技术架构 / 产品战略 / 开发路线），判定项目当前为「Beta 偏 Demo」，v0.4.0 唯一核心目标为「让 Debug Context 价值可量化、可证明」；(2) 制定 17 个任务、5 个 Milestone 的执行计划（M1 Quality System → M2 Debug Case Schema → M3 Fault Localization 2.0 → M4 Agent Verify Loop → M5 全量回归）；(3) M1 全部 6 个 Task 落地——`app/quality/` 模块（schemas + scorer 规则引擎，9 维度加权评分 + 证据提取 + 改进建议）、`context_assembler.py` 质量注入、`analyzer.py` LLM 增强（reasoning_chain + evidence_items）、Dashboard 质量报告卡片 + `/api/dashboard/trace/{tid}/quality` 独立端点；M3 Task 12（StaticAnalyzer，基于 `ast` 标准库函数级静态分析）同步落地；(4) 5 场景评分基线建立（平均综合 0.45），M2-M4 评分提升预期推演完成（平均 0.45→0.65）。详见 §12.2、DESIGN.md §19。测试基线 764 passed / 6 skipped / 0 failed。 |
-| v5.7 | 2026-08-04 | 架构委员会 | **v0.4.0 M2-M4 全部交付**：(1) **M2 Debug Case Schema**——`app/rag/debug_case.py` 新增 `case_confidence`/`verify_count` 字段 + `compute_type_fingerprint` + `normalize_message_for_similarity`；`KnowledgeBaseStore` 双写同步（`_sync_entry_to_vector_store` / `_sync_all_to_vector_store`）；三级 fallback 匹配（精确指纹→归一化指纹→类型级 Jaccard 相似匹配）；30 条种子知识 + 导入/导出。(2) **M3 Fault Localization 2.0**——`StaticAnalyzer` 增强（`analyze_source_code`/`analyze_handler` 支持无堆栈场景）；`URLResolver` 通过 HTTP 方法+路径反查 FastAPI 路由表；KB↔向量索引自动同步。(3) **M4 Agent Verify Loop**——`VerifyRecord`/`IterationResult`/`LoopState` 数据模型；Coordinator 三层开关调度（Phase1 → Phase2 → M4 Loop）；`_compute_verify_record` 合成 Test/Git/Security 信号；`_compute_iteration_verdict` 四级判定（passed/partial/rejected/skipped）；`_persist_kb_verify` 写回 KB `verify_count`/`case_confidence` 递增。M4 评分对比：5 场景平均质量分 0.48→0.67（达标除场景 D 差 0.05）。新增 38 单测（`test_verify_loop.py`）；测试基线 764 passed / 6 skipped / 0 failed。详见 §12.2、DESIGN.md §19。 |
-| v5.8 | 2026-08-04 | 架构委员会 | **v0.4.0 M5 全量回归测试 + 文档同步交付**：(1) M3 新增 48 单测（`test_static_analyzer.py` 18 项 + `test_url_resolver.py` 16 项 + `test_context_assembler.py` 静态分析集成 3 项 + `test_knowledge_base.py` 三级 fallback/双写同步 11 项），覆盖 6 个知识库准确度验证场景（精确指纹/归一化指纹/类型级 Jaccard/向量双写/种子向量召回/无堆栈 URL 反查+静态分析）；(2) 修复 3 个真实 bug（`_route_matches` 通配符转义、`analyzer.py` `get_knowledge_base` 未导入、`analyze_source_code` 无堆栈场景按名扫描）；(3) 全量单元回归 857 passed / 6 skipped / 0 failed，文档链接检查 110 链接 0 错误；(4) 同步 README/PROJECT_SUMMARY/CHANGELOG/RELEASE_NOTES/DESIGN 测试基线至 857。测试基线 764→857 passed / 6 skipped / 0 failed。 |
-| v5.9 | 2026-08-04 | 架构委员会 | **RAG 默认开启 + 质量提升配置**：`vector_store_enabled` 默认值 False→True（in_process 后端零依赖，Jaccard 相似度，无外部环境要求），默认开启向量召回，提升知识库命中概率 → 知识库维度默认满分，真实运行平均质量分进一步提升；`.env`/`.env.example` 同步说明。多 Agent/Verify Loop 仍待 LLM 配置（`.env` 填 `LLM_PROVIDER`/`API_KEY`/`MODEL`/`BASE_URL`）。 |
+| v5.7 | 2026-08-04 | 架构委员会 | **M2-M4 交付**：(1) M2 Debug Case Schema——`debug_case.py` 标准 Schema + 三级指纹计算、`knowledge_base.py` 三级 fallback 匹配（L1 精确 → L1.5 归一化 → L2 类型级 Jaccard）+ 向量索引双写同步、`seed_data.py` 30 条种子知识；(2) M3 Fault Localization 2.0——`url_resolver.py` 无堆栈按方法+路径反查 handler、`static_analyzer.py` 新增 `analyze_handler` 无堆栈入口、`build_debug_context` 静默失败注入 `static_analysis` 字段；(3) M4 Agent Verify Loop——`verify_loop.py` 三层开关 + 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回（`record_verification` 递增 `verify_count` / 提升 `case_confidence`），Coordinator 在 `agent_verify_loop_enabled` 时走迭代闭环。详见 §12.2、DESIGN.md §19.4。测试基线 772 passed / 6 skipped / 0 failed。 |
 
 ---
 
@@ -70,7 +68,7 @@
 
 > 本节直接回答「读 PRD 能否解决痛点」。结论：**已实现约 60%**，其余为真实待开发项。
 
-### 3.1 全部已落地（代码核实 ✅，v0.4.0 + Phase 5）
+### 3.1 全部已落地（代码核实 ✅，v0.3.0 + Phase 5）
 
 | 能力 | 代码证据 | 对应痛点 |
 | --- | --- | --- |
@@ -127,7 +125,7 @@
 
 ### 4.3 价值对比
 
-| 维度 | 传统 | Lujo-MCP（v0.4.0） |
+| 维度 | 传统 | Lujo-MCP（v0.3.0） |
 | --- | --- | --- |
 | 查日志 | 手动翻 | ✅ 自动捕获 |
 | 找代码 | 手动翻 | ✅ 内联源码片段+IDE 可跳转链接 |
@@ -163,7 +161,7 @@
 
 ## 7. 功能需求（含真实实现状态）
 
-> 说明：本节描述产品需求与阶段性实现状态；若与仓库中其他文档冲突，功能完成度以仓库代码实情判定为准。
+> 说明：本节描述产品需求与阶段性实现状态；若与仓库中其他文档冲突，功能完成度以内部文档的代码实情判定为准。
 
 > 状态：✅ 已实现 / ⚠️ 已实现模块但未接线或配置缺失 / 🔲 待开发。优先级 P0/P1/P2。
 
@@ -274,7 +272,7 @@
   3. 工厂 + 注册表：`get_vector_store()` 单例 + `register_vector_backend(name, cls)` 插槽。
   4. Qdrant 后端已实现（`QdrantVectorStore`）：OpenAI/智谱 Embeddings 语义召回 + uuid5 幂等 upsert + 静默降级；配置 `backend=qdrant` 时实例化，依赖未装或连接失败时降级为 add=no-op / search=空。
 - **集成位置**：`app/llm/analyzer.py` KB hook 区，精确指纹 miss 后做向量召回 fallback；返回结果新增 `knowledge_base_hit` / `analysis_source` 字段。
-- **配置项**：`vector_store_enabled=True`（默认开启，in_process 后端零依赖） / `vector_store_backend="in_process"` / `vector_store_top_k=3` / `vector_store_min_score=0.3` / `qdrant_url` / `qdrant_collection` / `qdrant_api_key`。
+- **配置项**：`vector_store_enabled=False` / `vector_store_backend="in_process"` / `vector_store_top_k=3` / `vector_store_min_score=0.3` / `qdrant_url` / `qdrant_collection` / `qdrant_api_key`。
 - **验收**：指纹未命中但知识库存在相似文档时，`analysis_source=vector_recall` 且相似度 ≥ `min_score` 才返回；`vector_store_enabled=False` 时行为与旧版完全一致。
 
 #### FR18 RBAC + API Key 轮换（AUDIT-2-13/14）（P0）✅ 已实现 —— `app/auth/key_rotation.py` + `app/auth/rbac.py` + `app/api/debug.py` + `app/api/mcp_routes.py`
@@ -359,7 +357,7 @@
 - 可靠性：降级沿用 v1.0；FR14 元素未发现不阻断主流程。
 - 兼容性：Python 3.10+；前端自动化支持 Chromium（Playwright）；规范支持 JSON/YAML/自然语言。
 - 限流削峰（FR16）：异步分析队列默认 `maxsize=100` + `workers=4`；满载返回 429 快速失败；停机 `drain_timeout=30s` 优雅终止；`llm_async_analysis_enabled=False` 时无行为变更。
-- 召回增强（FR17）：向量检索 RAG 默认开启（`vector_store_enabled=True`，in_process 后端零依赖），`top_k=3` + `min_score=0.3` 阈值过滤；`NullVectorStore`（`vector_store_enabled=False` 时）保证零行为变更；Qdrant 后端已实现，不可用时静默降级为 no-op。
+- 召回增强（FR17）：向量检索 RAG 默认关闭（`vector_store_enabled=False`），开启后 `top_k=3` + `min_score=0.3` 阈值过滤；`NullVectorStore` 保证零行为变更；Qdrant 后端已实现，不可用时静默降级为 no-op。
 
 ---
 
@@ -533,7 +531,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `LLM_QUEUE_MAXSIZE` | 100 | ✅ FR16 |
 | | `LLM_QUEUE_WORKERS` | 4 | ✅ FR16 |
 | | `LLM_QUEUE_DRAIN_TIMEOUT` | 30 | ✅ FR16 |
-| 向量检索 RAG | `VECTOR_STORE_ENABLED` | true | ✅ FR17（默认开启，in_process 后端零依赖） |
+| 向量检索 RAG | `VECTOR_STORE_ENABLED` | false | ✅ FR17 |
 | | `VECTOR_STORE_BACKEND` | in_process | ✅ FR17（支持 `in_process` / `qdrant` 双后端） |
 | | `VECTOR_STORE_TOP_K` | 3 | ✅ FR17 |
 | | `VECTOR_STORE_MIN_SCORE` | 0.3 | ✅ FR17 |
@@ -590,10 +588,10 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | Milestone | 核心任务 | 预计工期 | 状态 |
 | --- | --- | --- | --- |
 | M1-quality-foundation | Quality System 核心框架 + LLM 分析增强 + Dashboard 质量报告 | 4-6 周 | ✅ 已完成（2026-08-03） |
-| M2-debug-case-schema | Debug Case 标准 Schema + 30 条种子知识 + 知识库导入/导出 | 3-4 周 | ✅ 已完成（2026-08-04） |
-| M3-fault-localization | 函数级静态分析（基于 Python `ast` 标准库，零依赖） | 3-4 周 | ✅ 已完成（2026-08-04） |
-| M4-agent-verify-loop | Agent Verify Loop（迭代修复 + 验证 + 记忆沉淀） | 3-4 周 | ✅ 已完成（2026-08-04） |
-| M5-full-regression | 全量回归测试 + 文档更新 | 2 周 | ✅ 已完成（2026-08-04） |
+| M2-debug-case-schema | Debug Case 标准 Schema + 30 条种子知识 + 知识库三级 fallback | 3-4 周 | ✅ 已完成（2026-08-04） |
+| M3-fault-localization | URL Resolver 无堆栈定位 + StaticAnalyzer 函数级静态分析 | 3-4 周 | ✅ 已完成（2026-08-04） |
+| M4-agent-verify-loop | Agent Verify Loop（三层开关 + 四级判定 + KB 写回） | 3-4 周 | ✅ 已完成（2026-08-04） |
+| M5-full-regression | 全量回归测试 + 文档更新 | 2 周 | 待启动 |
 
 #### M1 评分基线（5 场景对比）
 

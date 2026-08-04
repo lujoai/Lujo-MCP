@@ -13,7 +13,7 @@ import psycopg2.errors
 from app.config import settings
 from app.mcp.core.storage.base import TraceStorage, SessionStorage
 
-logger = logging.getLogger("Lujo-MCP.storage.pg")
+logger = logging.getLogger("ai-debug-mcp.storage.pg")
 
 # ── 熔断器（P3-8）──
 try:

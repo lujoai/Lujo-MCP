@@ -17,7 +17,7 @@ import time
 import uuid
 from typing import Any, Optional
 
-logger = logging.getLogger("Lujo-MCP.agent.queue")
+logger = logging.getLogger("ai-debug-mcp.agent.queue")
 
 
 class QueueFullError(Exception):
@@ -66,11 +66,8 @@ class RepairQueue:
 
         延迟导入 Coordinator 规避循环依赖
         （coordinator → repair_agent → analyzer → ...）。
-        Coordinator 实例化一次后复用，避免高频任务下反复创建 Agent 实例。
         """
         from app.agent.coordinator import Coordinator
-
-        coordinator = Coordinator()
 
         try:
             while True:
@@ -80,7 +77,7 @@ class RepairQueue:
                         if job_id in self._jobs:
                             self._jobs[job_id]["status"] = "running"
                     async with self._semaphore:
-                        result = await coordinator.run(context, model)
+                        result = await Coordinator().run(context, model)
                     async with self._jobs_lock:
                         if job_id in self._jobs:
                             self._jobs[job_id]["status"] = "done"

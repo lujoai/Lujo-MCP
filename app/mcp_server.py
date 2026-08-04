@@ -7,10 +7,10 @@
 注册方式（在 Trae/Codex 的 MCP 配置里）：
 {
   "mcpServers": {
-    "Lujo-MCP": {
+    "ai-debug-mcp": {
       "command": "python",
       "args": ["-m", "app.mcp_server"],
-      "cwd": "/绝对路径/Lujo-MCP"
+      "cwd": "/绝对路径/ai-debug-mcp"
     }
   }
 }
@@ -40,10 +40,10 @@ from app.mcp.protocol.server import _tool_registry
 from app.mcp.tools import register_all_tools
 
 logging.basicConfig(level=logging.INFO, stream=None, force=True)  # stdio模式下不要往stdout打日志，避免污染协议流
-logger = logging.getLogger("Lujo-MCP")
+logger = logging.getLogger("ai-debug-mcp")
 
 register_all_tools()
-server = Server("Lujo-MCP")
+server = Server("ai-debug-mcp")
 
 # ── stdio 生命周期资源回收 ──
 # 由 finally / atexit / signal handler 触发，幂等。

@@ -17,7 +17,7 @@ from typing import Optional
 
 from app.config import settings
 
-logger = logging.getLogger("Lujo-MCP.git")
+logger = logging.getLogger("ai-debug-mcp.git")
 
 _MAX_COMMITS_BACK = 50
 

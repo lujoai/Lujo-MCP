@@ -30,7 +30,7 @@ from app.mcp.core.logs import add_log, add_logs_batch, get_logs
 from app.mcp.core.errors import record as _record_error, get_by_id as _get_error, get_latest as _get_latest
 from app.mcp.core.redaction import redact
 
-logger = logging.getLogger("Lujo-MCP.trace_repo")
+logger = logging.getLogger("ai-debug-mcp.trace_repo")
 _MAX_RETRY_ATTEMPTS = 3
 _RETRY_DELAY_SECONDS = 0.1
 

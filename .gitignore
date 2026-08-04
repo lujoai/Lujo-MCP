@@ -17,19 +17,6 @@ env/
 .env.*
 !.env.example
 
-# 密钥 / 证书文件
-*.key
-*.pem
-*.p12
-*.pfx
-*.keystore
-credentials*
-secrets*
-id_rsa*
-*.ppk
-.aws/
-.gcloud/
-
 # 测试与缓存
 .pytest_cache/
 .mypy_cache/
@@ -64,7 +51,7 @@ reference/
 INTERVIEW.md
 RESUME.md
 
-# 内部开发文档（不推 GitHub，整个目录排除）
+# 内部开发文档（整个目录不推 GitHub）
 docs/internal/
 
 # 本地测试产物/脚本（不推 GitHub）

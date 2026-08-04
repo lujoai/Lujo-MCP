@@ -73,21 +73,6 @@ class MCPInitializeResult(BaseModel):
     serverInfo: dict
 
 
-# ── 验证请求 ──
-class VerifyRequest(BaseModel):
-    actual: dict
-    spec: Optional[dict] = None
-    spec_id: Optional[str] = None
-    trace_id: Optional[str] = None
-
-
-class VerifyUIRequest(BaseModel):
-    spec: Optional[dict] = None
-    spec_id: Optional[str] = None
-    timeout_ms: Optional[int] = None
-    url: Optional[str] = None
-
-
 # ── 会话 ──
 class SessionInfo(BaseModel):
     session_id: str

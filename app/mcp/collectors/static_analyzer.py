@@ -105,226 +105,39 @@ def analyze(stacktrace_frames: list[dict[str, Any]]) -> list[FaultLocation]:
     return results
 
 
-def analyze_source_code(
-    source_code: str,
-    function_name: str,
-    *,
-    file_hint: str = "",
-) -> Optional[FaultLocation]:
-    """直接分析源代码字符串 + 目标函数名（用于 URL→handler 无文件场景）。
+def analyze_handler(method: str, path: str) -> Optional[FaultLocation]:
+    """无堆栈场景下，通过 HTTP 方法+路径反查 handler 并做函数级静态分析。
 
-    当无法拿到堆栈帧（如"无报错但功能不对"）时，可通过 URL 反查
-    handler 源码字符串，调用此函数进行静态分析。
+    v0.4.0 M3 引入。静默失败（无异常堆栈）时无法用堆栈帧定位故障函数，
+    本入口利用 url_resolver 把 (method, path) 映射到 FastAPI handler 端点，
+    再复用 _analyze_frame 提取函数签名/复杂度/可疑输入。
 
-    Args:
-        source_code: 源文件完整内容（UTF-8 字符串）
-        function_name: 目标函数名（如 `get_user_profile`）
-        file_hint: 可选文件路径提示（仅用于展示，不参与读取）
-
-    Returns:
-        FaultLocation（line_number 为函数起始行）或 None（解析失败 / 函数未找到）
+    失败返回 None，静默降级，不阻断主流程。
     """
-    if not source_code or not function_name:
-        return None
-
-    try:
-        tree = ast.parse(source_code)
-    except SyntaxError:
-        logger.warning("StaticAnalyzer: analyze_source_code 语法错误")
-        return None
-
-    # 按函数名全文件扫描（无堆栈场景没有精确行号，不能按行号匹配）
-    visitor = _FunctionNameOnlyVisitor(function_name)
-    visitor.visit(tree)
-    if not visitor.candidates:
-        return None
-    func_node = visitor.candidates[0]
-    func_info = visitor.builder_info.get(id(func_node))
-    if func_info is None:
-        builder = _FunctionBuilderVisitor()
-        builder.visit(func_node)
-        func_info = builder.result
-    if func_info is None:
-        return None
-
-    func_info.file = file_hint or "<source>"
-
-    suspicious = _infer_suspicious_inputs(func_info, source_code)
-
-    loc = FaultLocation(
-        file=func_info.file,
-        function=function_name,
-        line_number=func_node.lineno,
-        function_info=func_info,
-        suspicious_inputs=suspicious,
-    )
-
-    # 单结果场景不做调用链追溯（链长度=1）
-    loc.call_chain = [function_name]
-    return loc
-
-
-def analyze_handler(
-    *,
-    module_path: str,
-    function_name: str,
-    approx_line: int = 1,
-) -> Optional[FaultLocation]:
-    """通过 (module_path, function_name, approx_line) 直接分析 handler 源码。
-
-    简化入口：URL→handler 反查后拿到了模块路径+函数名+大致行号，
-    先尝试用 approx_line 行号范围匹配（_analyze_frame），
-    若行号不在函数内部则按函数名全文件 fallback（ast 扫描），
-    保持与堆栈帧一致的分析质量。
-    """
-    if not module_path or not function_name:
-        return None
-
-    # 第一步：用 approx_line 尝试行号范围匹配
-    virtual_frame = {
-        "file": module_path,
-        "function": function_name,
-        "line": approx_line,
-    }
-    loc = _analyze_frame(virtual_frame)
-    if loc is not None:
-        return loc
-
-    # 第二步：行号不在函数体内时（URL 反查无精确行号常见），按函数名全文件扫
-    resolved_path = _resolve_path(module_path)
-    if not resolved_path:
-        return None
-    source = _read_source(resolved_path)
-    if source is None:
+    if not method or not path:
         return None
     try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return None
-    visitor = _FunctionNameOnlyVisitor(function_name)
-    visitor.visit(tree)
-    if not visitor.candidates:
-        return None
-    # 多个同名函数（嵌套）时取第一个顶层定义
-    func_node = visitor.candidates[0]
-    # 复用 _build_function_info 构造 FunctionInfo
-    func_info = visitor.builder_info.get(id(func_node))
-    if func_info is None:
-        builder = _FunctionBuilderVisitor()
-        builder.visit(func_node)
-        func_info = builder.result
-    if func_info is None:
-        return None
-    func_info.file = resolved_path
-    suspicious = _infer_suspicious_inputs(func_info, source)
-    fault = FaultLocation(
-        file=resolved_path,
-        function=function_name,
-        line_number=func_node.lineno,
-        function_info=func_info,
-        call_chain=[function_name],
-        suspicious_inputs=suspicious,
-    )
-    return fault
+        from app.mcp.collectors.url_resolver import resolve
 
-
-# ── URL→handler 辅助：只按函数名匹配的 AST visitor ──
-
-
-class _FunctionNameOnlyVisitor(ast.NodeVisitor):
-    """扫描整个源文件 AST，收集所有与 target_function 同名的函数节点。
-
-    同时构建函数节点 → FunctionInfo 的映射（复用 _build_function_info 逻辑），
-    用于 approx_line 无法命中时的按名回退。
-    """
-
-    def __init__(self, target_function: str):
-        self.target_function = target_function
-        self.candidates: list[Any] = []  # list[FunctionDef | AsyncFunctionDef]
-        self.builder_info: dict[int, FunctionInfo] = {}
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        if node.name == self.target_function:
-            self.candidates.append(node)
-            self.builder_info[id(node)] = self._build(node)
-        self.generic_visit(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        if node.name == self.target_function:
-            self.candidates.append(node)
-            self.builder_info[id(node)] = self._build(node)
-        self.generic_visit(node)
-
-    def _build(self, node: ast.FunctionDef) -> FunctionInfo:
-        """复用 _FunctionVisitor._build_function_info 相同逻辑。"""
-        params = []
-        for arg in node.args.args:
-            param: dict[str, str] = {"name": arg.arg, "type_annotation": None, "default": None}
-            if arg.annotation:
-                param["type_annotation"] = ast.unparse(arg.annotation)
-            params.append(param)
-        defaults = node.args.defaults
-        num_defaults = len(defaults)
-        if num_defaults > 0:
-            for i, default in enumerate(defaults):
-                idx = len(params) - num_defaults + i
-                if 0 <= idx < len(params):
-                    try:
-                        params[idx]["default"] = ast.unparse(default)
-                    except Exception:
-                        params[idx]["default"] = "<expr>"
-        return_type = None
-        if node.returns:
-            try:
-                return_type = ast.unparse(node.returns)
-            except Exception:
-                return_type = "<expr>"
-        decorators: list[str] = []
-        for dec in node.decorator_list:
-            try:
-                decorators.append(ast.unparse(dec))
-            except Exception:
-                decorators.append("@<expr>")
-        docstring = ast.get_docstring(node)
-        call_visitor = _CallCollector()
-        call_visitor.visit(node)
-        internal_calls = sorted(set(call_visitor.calls))
-        complexity_visitor = _ComplexityVisitor()
-        complexity_visitor.visit(node)
-        hints = _build_complexity_hints(
-            node, complexity_visitor.nesting_depth, complexity_visitor.branch_count
+        endpoint = resolve(method, path)
+        if endpoint is None:
+            return None
+        # 构造伪帧，复用帧分析逻辑（line 为 0 时 _analyze_frame 会拒绝，
+        # 因此用函数起始行兜底 —— 这里无法精确到行，交给 _analyze_frame 处理）
+        frame = {
+            "file": endpoint.get("file", ""),
+            "line": 0,
+            "function": endpoint.get("function", ""),
+        }
+        return _analyze_frame(frame)
+    except Exception:
+        logger.warning(
+            "StaticAnalyzer: 无堆栈 handler 分析失败 method=%s path=%s",
+            method,
+            path,
+            exc_info=True,
         )
-        start = node.lineno
-        end = node.end_lineno or start
-        return FunctionInfo(
-            name=node.name,
-            file="",
-            line_start=start,
-            line_end=end,
-            params=params,
-            return_type=return_type,
-            decorators=decorators,
-            docstring=docstring,
-            internal_calls=internal_calls,
-            complexity_hints=hints,
-            total_lines=end - start + 1,
-            nesting_depth=complexity_visitor.nesting_depth,
-            branch_count=complexity_visitor.branch_count,
-        )
-
-
-class _FunctionBuilderVisitor(ast.NodeVisitor):
-    """从单个 FunctionDef 节点构建 FunctionInfo（供 name-only fallback 兜底）。"""
-
-    def __init__(self) -> None:
-        self.result: Optional[FunctionInfo] = None
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        builder = _FunctionNameOnlyVisitor(node.name)
-        self.result = builder._build(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self.visit_FunctionDef(node)  # type: ignore[arg-type]
+        return None
 
 
 # ── 帧分析 ──
@@ -336,7 +149,7 @@ def _analyze_frame(frame: dict[str, Any]) -> Optional[FaultLocation]:
     line_number = frame.get("line", 0)
     function_name = frame.get("function", "")
 
-    if not file_path or not line_number or not function_name:
+    if not file_path or not function_name:
         return None
 
     # 解析源文件路径
@@ -432,7 +245,9 @@ class _FunctionVisitor(ast.NodeVisitor):
 
         # 匹配目标函数
         if node.name == self.target_function:
-            if node.lineno <= self.target_line <= (node.end_lineno or node.lineno):
+            if self.target_line <= 0 or node.lineno <= self.target_line <= (
+                node.end_lineno or node.lineno
+            ):
                 self.result = info
 
         # 继续遍历子节点（嵌套函数）

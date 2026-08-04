@@ -2,7 +2,7 @@
 
 import logging
 
-logger = logging.getLogger("Lujo-MCP.context")
+logger = logging.getLogger("ai-debug-mcp.context")
 
 
 def build_context(request_id: str, logs: list) -> dict:
@@ -111,6 +111,28 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         except Exception:
             logger.warning("code_snippets 构建失败 (trace_id=%s)", tid)
 
+    # 无堆栈静态分析（M3）：静默失败无异常堆栈时，基于网络请求反查 handler
+    static_analysis = None
+    if not frames:
+        try:
+            method, path = _extract_request_target(trace)
+            if method and path:
+                from app.mcp.collectors.static_analyzer import analyze_handler
+
+                loc = analyze_handler(method, path)
+                if loc is not None:
+                    static_analysis = {
+                        "file": loc.file,
+                        "function": loc.function,
+                        "params": loc.function_info.params if loc.function_info else [],
+                        "complexity_hints": (
+                            loc.function_info.complexity_hints if loc.function_info else []
+                        ),
+                        "suspicious_inputs": loc.suspicious_inputs,
+                    }
+        except Exception:
+            logger.warning("static_analysis 构建失败 (trace_id=%s)", tid)
+
     # git 归因（前 3 帧）
     git_blame: list = []
     recent_diffs: list = []
@@ -194,6 +216,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "source": trace.get("source"),
         "extra": trace.get("extra", {}),
         "code_snippets": code_snippets,
+        "static_analysis": static_analysis,
         "git_blame": git_blame or None,
         "recent_diffs": recent_diffs or None,
         "related_specs": related_specs or None,
@@ -202,3 +225,50 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "spec_diffs": spec_diffs,
         "runtime": runtime,
     }
+
+
+def _extract_request_target(trace: dict) -> tuple[str | None, str | None]:
+    """从静默失败 trace 中提取 (method, path)，供 handler 反查定位。
+
+    优先从 network_records 解析（含 method + url），其次从 extra 透传字段兜底。
+    无法解析时返回 (None, None)，静默降级。
+    """
+    try:
+        from app.mcp.core import trace_repo
+
+        records = trace_repo.get_network_records(trace.get("trace_id", "")) or []
+        for rec in records:
+            method = rec.get("method")
+            url = rec.get("url") or rec.get("path")
+            if method and url:
+                path = _url_to_path(url)
+                if method and path:
+                    return method.upper(), path
+    except Exception:
+        pass
+    # extra 兜底：浏览器 SDK 可能直接透传 method/path
+    extra = trace.get("extra", {}) or {}
+    method = extra.get("method") or (extra.get("request") or {}).get("method")
+    path = extra.get("path") or (extra.get("request") or {}).get("path")
+    if method and path:
+        return str(method).upper(), str(path)
+    return None, None
+
+
+def _url_to_path(url: str) -> str | None:
+    """从 URL 中提取 path 部分（去掉 scheme/host/query）。"""
+    if not url:
+        return None
+    # 去掉 query/fragment
+    path = url.split("?")[0].split("#")[0]
+    # 去掉 scheme + host
+    if "://" in path:
+        path = path.split("://", 1)[1]
+        # 去掉 host 部分
+        idx = path.find("/")
+        if idx == -1:
+            return None
+        path = path[idx:]
+    if not path.startswith("/"):
+        path = "/" + path
+    return path

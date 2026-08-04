@@ -17,7 +17,7 @@ from typing import Any
 
 from app.config import settings
 
-logger = logging.getLogger("Lujo-MCP.agent.assembler")
+logger = logging.getLogger("ai-debug-mcp.agent.assembler")
 
 
 class RepairContextAssembler:
@@ -28,22 +28,17 @@ class RepairContextAssembler:
     """
 
     async def assemble(self, debug_context: dict[str, Any]) -> dict[str, Any]:
-        """并发执行子装配，返回聚合后的修复上下文。
+        """并发执行三个独立子装配，返回聚合后的修复上下文。
 
-        v0.4.0 M3 扩展：新增 static_analysis 并发步骤
-        - 有堆栈帧 → static_analyzer.analyze(frames) 函数级分析
-        - 无堆栈帧 → url_resolver 反查 handler → analyze_handler 源码定位
-
-        返回 dict 包含 fault_locations / quality_report 字段；
+        返回 dict 包含 quality_report 字段（v0.4.0 新增），
         评分失败时 quality_report 为 QualityReport.null_score()。
         """
-        # 并发执行：prior_analysis / vector_recall / git_context / static_analysis
+        # 并发执行：prior_analysis / vector_recall / git_context
         # 各 _safe_* 方法内部吞异常，永不抛出（return_exceptions=False 安全）
-        analysis, vector_recall, git_context, static_analysis = await asyncio.gather(
+        analysis, vector_recall, git_context = await asyncio.gather(
             self._safe_get_analysis(debug_context),
             self._safe_vector_recall(debug_context),
             self._safe_get_git_context(debug_context),
-            self._safe_static_analysis(debug_context),
         )
 
         repair_context = {
@@ -51,14 +46,12 @@ class RepairContextAssembler:
             "prior_analysis": analysis,
             "vector_recall": vector_recall,
             "git_context": git_context,
-            "fault_locations": static_analysis,
             "sources": {
                 "vector_recall": vector_recall,
                 "git_context": git_context,
                 "knowledge_base_hit": bool(
                     analysis and analysis.get("knowledge_base_hit")
                 ),
-                "fault_locations": bool(static_analysis),
             },
         }
 
@@ -156,91 +149,3 @@ class RepairContextAssembler:
         except Exception:
             logger.warning("git context assembly failed", exc_info=True)
             return []
-
-    async def _safe_static_analysis(
-        self, ctx: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        """M3 Task 13: 函数级静态分析（基于 Python ast 零依赖）。
-
-        两档 fallback：
-        1. 有堆栈帧 → static_analyzer.analyze(frames)，定位异常点周边函数签名/复杂度/可疑输入
-        2. 无堆栈帧 → url_resolver 基于 input/network 反查 handler → analyze_handler
-           定位 handler 源码（解决"无报错但功能不对"场景）
-
-        Feature flag: settings.static_analysis_enabled（默认 True）。
-        返回 list[dict]：FaultLocation dataclass → dict，便于后续 Agent 消费。
-        """
-        try:
-            from app.config import settings
-
-            if not getattr(settings, "static_analysis_enabled", True):
-                return []
-        except Exception:
-            # settings 读取失败继续默认启用
-            pass
-
-        try:
-            from app.mcp.collectors.static_analyzer import (
-                FaultLocation,
-                analyze,
-                analyze_handler,
-            )
-
-            # 档 1：堆栈帧 → analyze
-            frames = (ctx.get("exception") or {}).get("frames") or []
-            if frames:
-                results = await asyncio.to_thread(analyze, frames)
-                return [self._fault_location_to_dict(r) for r in results]
-
-            # 档 2：无堆栈 → URL→handler 反查
-            try:
-                from app.mcp.collectors.url_resolver import (
-                    resolve_from_debug_context,
-                )
-
-                handler_info = await asyncio.to_thread(resolve_from_debug_context, ctx)
-                if handler_info is None:
-                    return []
-                fault = await asyncio.to_thread(
-                    analyze_handler,
-                    module_path=handler_info.module_path,
-                    function_name=handler_info.function_name,
-                    approx_line=handler_info.approx_line,
-                )
-                if fault is None:
-                    return []
-                d = self._fault_location_to_dict(fault)
-                # 附带路由匹配信息（便于后续 Agent 确认定位准确性）
-                d["_handler_meta"] = {
-                    "route_path": handler_info.route_path,
-                    "methods": list(handler_info.methods),
-                    "module_dot_path": handler_info.module_dot_path,
-                }
-                return [d]
-            except Exception:
-                logger.debug(
-                    "static analysis URL→handler fallback failed",
-                    exc_info=True,
-                )
-                return []
-        except Exception:
-            logger.warning("static analysis assembly failed", exc_info=True)
-            return []
-
-    @staticmethod
-    def _fault_location_to_dict(loc: Any) -> dict[str, Any]:
-        """把 FaultLocation dataclass 转为 JSON 友好的 dict（含嵌套 FunctionInfo）。"""
-        from dataclasses import asdict
-
-        try:
-            return asdict(loc)
-        except Exception:
-            # asdict 失败则手动转（兼容异常情况）
-            return {
-                "file": getattr(loc, "file", ""),
-                "function": getattr(loc, "function", ""),
-                "line_number": getattr(loc, "line_number", 0),
-                "function_info": getattr(loc, "function_info", None),
-                "call_chain": list(getattr(loc, "call_chain", []) or []),
-                "suspicious_inputs": list(getattr(loc, "suspicious_inputs", []) or []),
-            }

@@ -14,14 +14,13 @@ import logging
 from collections import defaultdict
 from typing import Dict, Tuple
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
-from app.auth.rbac import require_role
 
-logger = logging.getLogger("Lujo-MCP.metrics")
+logger = logging.getLogger("ai-debug-mcp.metrics")
 
 # ── 线程安全指标存储（向后兼容）──
 _counter_lock = threading.Lock()
@@ -86,7 +85,7 @@ def _init_otel():
         provider = MeterProvider(resource=resource, metric_readers=[reader])
         otel_metrics.set_meter_provider(provider)
 
-        meter = provider.get_meter("Lujo-MCP")
+        meter = provider.get_meter("ai-debug-mcp")
 
         request_counter = meter.create_counter(
             "http_requests_total",
@@ -200,7 +199,7 @@ def _render_prometheus() -> str:
     return "\n".join(lines) + "\n"
 
 
-@router.get("/metrics", dependencies=[Depends(require_role("viewer", "developer", "admin"))])
+@router.get("/metrics")
 def metrics(request: Request):
     """Prometheus 指标端点
 

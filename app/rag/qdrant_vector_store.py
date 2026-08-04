@@ -21,7 +21,7 @@ from typing import Any, Optional
 from app.config import settings
 from app.rag.vector_store import VectorStore, _serialize_doc
 
-logger = logging.getLogger("Lujo-MCP.qdrant-vector-store")
+logger = logging.getLogger("ai-debug-mcp.qdrant-vector-store")
 
 # OpenAI embeddings API 单次最多 2048 个 input
 _EMBED_BATCH_SIZE = 2048
@@ -29,7 +29,6 @@ _EMBED_BATCH_SIZE = 2048
 # provider → 默认 base_url（与 analyzer._PROVIDER_BASE_URLS 保持一致，复制以避免循环 import）
 _PROVIDER_BASE_URLS = {
     "openai": "",
-    "deepseek": "https://api.deepseek.com/v1",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4/",
     "custom": "",
 }

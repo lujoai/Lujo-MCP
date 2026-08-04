@@ -1,14 +1,14 @@
-# Lujo-MCP 项目摘要
+﻿# Lujo-MCP 项目摘要
 
 > AI Agent 第一入口文件。任何 AI 进入项目请先读本文件，3 分钟理解项目全貌。
 
-> 项目功能完成度、待开发项、稳定性验证状态以仓库代码与测试用例实情为准。
+> 项目功能完成度、待开发项、稳定性验证状态以内部文档为准（不对外公开）。
 
 ---
 
 ## 1. 项目一句话介绍
 
-基于 MCP 协议的 AI 智能调试服务，解决"无报错但功能不对"的静默失败检测、"多 Agent 协同调试"以及历史结论复用三个核心问题。v0.4.0 新增 Quality System 质量评分 + 函数级静态分析 + Agent Verify Loop 迭代验证闭环。
+基于 MCP 协议的 AI 智能调试服务，解决"无报错但功能不对"的静默失败检测、"多 Agent 协同调试"以及历史结论复用三个核心问题。
 
 ---
 
@@ -157,17 +157,7 @@
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **857 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + Dashboard 质量报告 6 项 + M3 Fault Localization 2.0 新增 48 项）
-
-### v0.4.0 Quality System + Agent Verify Loop ✅（2026-08-04）
-
-- ✅ **Quality System 核心框架**（`app/quality/`）：`QualityScorer.evaluate()` 9 维度加权评分 + 证据提取 + 可信度评分 + 改进建议，纯函数 + 静默降级；M2-M4 增强：识别 `fault_locations`/`case_confidence`/`verify_count`
-- ✅ **Debug Case Schema**（`app/rag/debug_case.py`）：新增 `case_confidence`/`verify_count` 字段 + `compute_type_fingerprint` + `normalize_message_for_similarity`；`to_kb_entry`/`from_kb_entry` 往返保留 `_kb_meta`
-- ✅ **KnowledgeBaseStore 三级 fallback 匹配**：精确指纹→归一化指纹→类型级 Jaccard 相似匹配；KB↔向量索引双写同步（`_sync_entry_to_vector_store` / `_sync_all_to_vector_store`）；种子加载后自动重建向量索引；30 条种子知识 + 导入/导出
-- ✅ **Fault Localization 2.0**（`app/mcp/collectors/`）：`StaticAnalyzer` 增强 `analyze_source_code`/`analyze_handler` 支持无堆栈场景；`URLResolver` 通过 HTTP 方法+路径反查 FastAPI 路由表定位 handler 源码；函数名全文件扫描 fallback
-- ✅ **Agent Verify Loop**（`app/agent/schemas.py` + `app/agent/coordinator.py`）：`VerifyRecord`/`IterationResult`/`LoopState` 数据模型；Coordinator 三层开关调度（Phase1 → Phase2 → M4 Loop）；`_compute_verify_record` 合成 Test/Git/Security 信号；`_compute_iteration_verdict` 四级判定（passed/partial/rejected/skipped）；`_persist_kb_verify` 写回 KB `verify_count`/`case_confidence` 递增
-- ✅ **Dashboard 质量报告**（`app/api/dashboard.py` + `app/web/dashboard.html`）：`GET /api/dashboard/trace/{tid}/quality` 独立端点 + 前端 Quality 卡片（综合评分进度条 + 9 维度网格 + 证据列表 + 改进建议）
-- ✅ **评分提升验证**：M4 5 场景平均质量分 0.48→0.67（达标除场景 D 差 0.05，因缺 TRACE 维度）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **654 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项）
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -188,7 +178,7 @@
 
 ## 5. 当前开发阶段
 
-**当前阶段**：v0.4.0 Quality System + Agent Verify Loop 已交付（M1-M4 全部完成）；核心能力已成型；Browser SDK V3-V6 + 指纹知识库（三级 fallback 匹配 + KB↔向量索引双写同步）+ 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ M4 Agent Verify Loop（迭代修复 + 验证 + 记忆沉淀闭环）均已落地，当前进入 M5 全量回归测试阶段
+**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）均已落地，当前进入 Browser SDK 压缩 e2e 联调与 Docker 容器化复现阶段
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -207,21 +197,16 @@
 - AI Debug Agent Phase 1：单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留 ✅（2026-07-26）
 - AI Debug Agent Phase 2：多 Agent DAG（`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`）✅（2026-07-30）
 - Dashboard 实时 SSE 推送（`DASH-SSE-001`）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 轮询兜底 + 断线重连）✅（2026-07-30）
-- v0.4.0 M1 Quality Foundation：`app/quality/` 模块（schemas + scorer 9 维度评分 + 证据提取 + 改进建议）+ Context Assembler 质量注入 + LLM 增强（reasoning_chain + evidence_items）+ Dashboard 质量报告卡片 ✅（2026-08-03）
-- v0.4.0 M2 Debug Case Schema：`case_confidence`/`verify_count` 字段 + `compute_type_fingerprint` + `normalize_message_for_similarity` + 三级 fallback 匹配 + KB↔向量索引双写同步 + 30 条种子知识 ✅（2026-08-04）
-- v0.4.0 M3 Fault Localization 2.0：`StaticAnalyzer` 增强（无堆栈场景 `analyze_source_code`/`analyze_handler`）+ `URLResolver`（HTTP 方法+路径反查 FastAPI 路由表）+ KB↔向量索引自动同步 ✅（2026-08-04）
-- v0.4.0 M4 Agent Verify Loop：`VerifyRecord`/`IterationResult`/`LoopState` + Coordinator 三层开关调度 + 四级判定（passed/partial/rejected/skipped）+ KB 写回 `verify_count`/`case_confidence` 递增 ✅（2026-08-04）
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **857 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + Dashboard 质量报告 6 项 + M3 Fault Localization 2.0 新增 48 项）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **672 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + 安全加固 18 项）。
 
 **当前优先级**：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P1** | M5 全量回归测试 + 文档更新 | v0.4.0 收口：6 个知识库准确度验证用例 + 端到端回归 + 文档同步 |
-| **P2** | Browser SDK 压缩 e2e 联调 | 对 V3/V6 演示页与上报链路做手工联调收口（CI 交错任务，代码已完成仅验证） |
-| **P3** | Docker 容器化复现实验 | 完成 `STAB-007`，把 Redis / OTel / PG 容器化验证补齐 |
-| ~~P4~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
+| **P1** | Browser SDK 压缩 e2e 联调 | 对 V3/V6 演示页与上报链路做手工联调收口（CI 交错任务，代码已完成仅验证） |
+| **P2** | Docker 容器化复现实验 | 完成 `STAB-007`，把 Redis / OTel / PG 容器化验证补齐 |
+| ~~P3~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
 
 **v0.3.0 收口成果**：
 - 测试基线：340 passed / 6 skipped / 0 failed（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
@@ -266,7 +251,7 @@
 | 2 | DESIGN.md | 理解技术设计 |
 | 3 | PRD.md | 理解产品需求 |
 
-> 开发规则、当前状态、开发计划、长期路线图等仅用于本地开发参考，不随仓库公开发布。
+> 开发规则、当前状态、开发计划、长期路线图等内部文档不对外公开，AI Agent 可通过本地文件系统访问 `docs/internal/` 目录。
 
 ---
 
@@ -342,6 +327,6 @@ python -m app.mcp_server
 
 > **新增安全能力（2026-07-25，AUDIT-2-13/14）**：RBAC 三级角色分级（admin > developer > viewer）覆盖 33 条 REST 路由 + 17 个 MCP 工具；`require_role(*roles)` FastAPI 依赖工厂路由级门控 + `TOOL_ROLE_REQUIREMENTS` MCP 工具级门控；未命中映射默认 viewer（fail-closed）。多 key 恒定时间比较（`verify_api_key` 遍历不短路 + `hmac.compare_digest`）+ 单 key 向后兼容。LFI 路径白名单 + SSRF URL 白名单已上线。
 
-> 整改追踪见仓库提交历史与测试用例。修任一项须回填状态 + `文件:行` 验证。
+> 整改追踪见内部审计报告。修任一项须回填状态 + `文件:行` 验证。
 
 **P0 修复后的行为变更（AI 须知）**：① 0.0.0.0+空 `API_KEY` 现会拒绝启动（本地免鉴权用 `HOST=127.0.0.1`）；② 代码/Git 定位默认仅限进程 CWD，读 CWD 外源码需配 `WHITELIST_PATH_PREFIX`/`GIT_PATH_WHITELIST`；③ `verify_ui`/`auto_test` 默认拒私网/元数据/`file://`，本地联调设 `UI_URL_ALLOW_PRIVATE=true`；④ 工具调用受 `TOOL_TIMEOUT_SECONDS`（默认 60s）约束。P1（SEC-04/06/07/08/09）与 P2（SEC-13/M7）已修复。

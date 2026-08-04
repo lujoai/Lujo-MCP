@@ -24,18 +24,6 @@ from app.agent.dag import (
     build_phase2_agents,
     get_phase2_agent_names,
 )
-from app.config import settings
-
-
-@pytest.fixture(autouse=True)
-def _disable_verify_loop(monkeypatch):
-    """本文件只测 Phase 1 / Phase 2 DAG，不测 Verify Loop。
-
-    若 .env 开启了 agent_verify_loop_enabled=True，Coordinator 会在 Phase 2 DAG
-    外层叠加迭代（走 _run_verify_loop），返回结构与 DAG 不同，导致断言不稳定。
-    这里显式关闭 Verify Loop，保证多 Agent 测试走纯 DAG 路径。
-    """
-    monkeypatch.setattr(settings, "agent_verify_loop_enabled", False)
 
 
 class TestDagTopology:

@@ -16,13 +16,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
 
-logger = logging.getLogger("Lujo-MCP.agent.security")
+logger = logging.getLogger("ai-debug-mcp.agent.security")
 
 SYSTEM_PROMPT = """你是一位资深的安全工程师。审查以下修复方案是否存在安全风险，重点关注：
 - LFI（任意文件读取）、SSRF（服务端请求伪造）
@@ -44,7 +44,7 @@ SYSTEM_PROMPT = """你是一位资深的安全工程师。审查以下修复方�
 若修复方案无明显安全风险，risks 返回空数组，overall_severity 返回 "none"。
 只输出 JSON，不要包含其他文字。"""
 
-VALID_SEVERITY = {"high", "medium", "low", "none", "unknown"}
+VALID_SEVERITY = {"high", "medium", "low", "none"}
 VALID_CATEGORIES = {
     "LFI", "SSRF", "SQLi", "CmdInjection", "PathTraversal",
     "AuthBypass", "InfoLeak", "Deserialization", "HardcodedSecret", "Other",
@@ -96,7 +96,9 @@ def _validate_security_review(raw_output: str) -> dict[str, Any]:
 
     overall = parsed.get("overall_severity", "none")
     if overall not in VALID_SEVERITY:
-        overall = "none" if not overall else "unknown"
+        overall = "unknown" if overall else "none"
+        if overall == "":
+            overall = "none"
 
     summary = parsed.get("summary", "")
     summary = truncate_field(summary, MAX_FIELD_CHARS) if summary else ""

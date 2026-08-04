@@ -5,7 +5,7 @@ import logging
 
 from app.mcp.core.trace_repo import save_console_log
 
-logger = logging.getLogger("Lujo-MCP.tools.console")
+logger = logging.getLogger("ai-debug-mcp.tools.console")
 
 INGEST_CONSOLE_DEF = {
     "name": "ingest_console",

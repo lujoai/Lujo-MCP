@@ -1,7 +1,7 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.4.0  
-**最后更新 / Last Updated**: 2026-08-04
+**适用版本 / Applicable Version**: v0.3.0  
+**最后更新 / Last Updated**: 2026-07-30
 
 ---
 
@@ -58,7 +58,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HOST=127.0.0.1`
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | Lujo-MCP v0.4.0`
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | Lujo-MCP v0.3.0`
 
 ---
 
@@ -1063,7 +1063,7 @@ DEBUG=true    # 仅开发环境！
 
 1. 查阅 [发布说明 / Release Notes](./RELEASE_NOTES.md) 了解版本变更
 2. 查阅 [启动前检查清单 / Pre-flight Checklist](./PREFLIGHT_CHECKLIST.md) 全面检查环境
-3. 查阅仓库代码与测试用例了解功能详情与已知问题
+3. 查阅内部文档了解功能详情与已知问题
 
 ---
 

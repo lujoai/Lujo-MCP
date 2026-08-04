@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
 
-logger = logging.getLogger("Lujo-MCP.agent.repair")
+logger = logging.getLogger("ai-debug-mcp.agent.repair")
 
 
 SYSTEM_PROMPT = """你是一位资深的代码修复工程师。基于以下调试上下文、历史相似修复、git 近期改动，

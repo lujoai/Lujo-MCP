@@ -1,24 +1,18 @@
 # Release Notes / 发布说明
 
 > Post-release branch updates / 发布后主干增量：
-> - **v0.4.0 Quality System + Agent Verify Loop（2026-08-04）**：M1-M4 全部交付
->   - M1 Quality Foundation：`app/quality/` 9 维度评分 + Dashboard 质量报告
->   - M2 Debug Case Schema：`case_confidence`/`verify_count` + 三级 fallback 匹配 + KB↔向量索引双写同步 + 30 条种子知识
->   - M3 Fault Localization 2.0：`StaticAnalyzer` 无堆栈场景增强 + `URLResolver` 路由反查
->   - M4 Agent Verify Loop：迭代修复 + 验证 + 记忆沉淀闭环（`VerifyRecord` + 四级判定 + KB 写回）
->   - 5 场景平均质量分 0.48→0.67
 > - Browser SDK 已继续补齐 V3 网络错误自动标记、V6 UI 静默失败自动检测
 > - 调试分析链路已新增指纹知识库基础能力（命中优先 + 自动沉淀）
 > - Dashboard 实时 SSE 推送（DASH-SSE-001，2026-07-30）：`DashboardEventBus` 广播总线 + SSE 端点 + 前端 EventSource
 > - AI Debug Agent Phase 2 多 Agent DAG（AGENT-002，2026-07-30）：`RepairAgent` + `GitAgent`/`TestAgent`/`SecurityAgent` 并行审查
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
-> - 测试基线：857 passed / 6 skipped / 0 failed
-> - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见仓库提交历史与测试报告
-> - 上述增量属于 `v0.3.0` 之后的主干演进，v0.4.0 为当前最新版本
+> - 测试基线：672 passed / 6 skipped / 0 failed
+> - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
+> - 上述增量属于 `v0.3.0` 之后的主干演进，正式版本号以后续发版说明为准
 
-**Version / 版本**: v0.4.0  
-**Release Date / 发布日期**: 2026-08-04  
-**Codename / 代号**: Quality System & Agent Verify Loop
+**Version / 版本**: v0.3.0  
+**Release Date / 发布日期**: 2026-07-25  
+**Codename / 代号**: Stability & Production Ready
 
 ---
 

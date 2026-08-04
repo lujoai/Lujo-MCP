@@ -20,7 +20,7 @@ class TestOtelConfig:
         from app.config import settings
 
         assert settings.otel_enabled is False
-        assert settings.otel_service_name == "Lujo-MCP"
+        assert settings.otel_service_name == "ai-debug-mcp"
         assert settings.otel_exporter_endpoint == ""
         assert settings.otel_metrics_interval_ms == 60000
 

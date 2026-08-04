@@ -1,10 +1,6 @@
 """MCP 工具注册入口 —— 统一注册所有工具，供 HTTP / stdio 传输复用"""
 
-import logging
-
 from app.mcp.protocol.server import register_tool
-
-logger = logging.getLogger("Lujo-MCP.tools")
 
 
 def register_all_tools():
@@ -31,31 +27,23 @@ def register_all_tools():
         repair_async_handler, repair_result_handler,
     )
 
-    _tool_registrations = [
-        ("debug", debug_tool, debug_handler),
-        ("context", context_tool, context_handler),
-        ("trace", trace_tool, trace_handler),
-        ("stacktrace", stacktrace_tool, stacktrace_handler),
-        ("ingest_network", NETWORK_INGEST_DEF, ingest_network_handler),
-        ("network_trace", NETWORK_TRACE_DEF, get_network_trace_handler),
-        ("blame", BLAME_DEF, blame_handler),
-        ("recent_diff", RECENT_DIFF_DEF, recent_diff_handler),
-        ("silent_failure", SILENT_FAILURE_DEF, silent_failure_handler),
-        ("ingest_error", INGEST_ERROR_DEF, ingest_error_handler),
-        ("ingest_console", INGEST_CONSOLE_DEF, ingest_console_handler),
-        ("related_specs", RELATED_SPECS_DEF, related_specs_handler),
-        ("verify", VERIFY_DEF, verify_handler),
-        ("verify_ui", VERIFY_UI_DEF, verify_ui_handler),
-        ("auto_test", AUTO_TEST_DEF, auto_test_handler),
-        ("repair_async", REPAIR_ASYNC_DEF, repair_async_handler),
-        ("repair_result", REPAIR_RESULT_DEF, repair_result_handler),
-    ]
-    for name, tool_def, handler in _tool_registrations:
-        try:
-            register_tool(**tool_def, handler=handler)
-        except Exception as e:
-            logger.error("工具注册失败: name=%s error=%s", name, str(e), exc_info=True)
-            raise RuntimeError(f"工具 '{name}' 注册失败: {e}") from e
+    register_tool(**debug_tool, handler=debug_handler)
+    register_tool(**context_tool, handler=context_handler)
+    register_tool(**trace_tool, handler=trace_handler)
+    register_tool(**stacktrace_tool, handler=stacktrace_handler)
+    register_tool(**NETWORK_INGEST_DEF, handler=ingest_network_handler)
+    register_tool(**NETWORK_TRACE_DEF, handler=get_network_trace_handler)
+    register_tool(**BLAME_DEF, handler=blame_handler)
+    register_tool(**RECENT_DIFF_DEF, handler=recent_diff_handler)
+    register_tool(**SILENT_FAILURE_DEF, handler=silent_failure_handler)
+    register_tool(**INGEST_ERROR_DEF, handler=ingest_error_handler)
+    register_tool(**INGEST_CONSOLE_DEF, handler=ingest_console_handler)
+    register_tool(**RELATED_SPECS_DEF, handler=related_specs_handler)
+    register_tool(**VERIFY_DEF, handler=verify_handler)
+    register_tool(**VERIFY_UI_DEF, handler=verify_ui_handler)
+    register_tool(**AUTO_TEST_DEF, handler=auto_test_handler)
+    register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler)
+    register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler)
 
 
 # ── MCP 工具角色需求映射（供 mcp_routes.py 在 tools/call 分发前消费）──

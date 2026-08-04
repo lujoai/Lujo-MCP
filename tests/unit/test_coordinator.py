@@ -8,20 +8,6 @@ from unittest.mock import patch
 
 from app.agent.base import AgentResult, AgentStatus, AgentContext
 from app.agent.coordinator import Coordinator
-from app.config import settings
-
-
-@pytest.fixture(autouse=True)
-def _force_phase1_mode(monkeypatch):
-    """强制 Phase 1 单 Agent 模式，与 .env 的多 Agent / Verify Loop 配置解耦。
-
-    本文件测试的是 Phase 1 单 Agent 串行行为（Coordinator 未启用多 Agent DAG、
-    Verify Loop）。若 .env 开启了 agent_multi_agent_enabled / agent_verify_loop_enabled，
-    Coordinator 会走多 Agent 路径并调用真实 LLM，导致断言不稳定。
-    这里显式关闭这两个开关，保证测试确定性。
-    """
-    monkeypatch.setattr(settings, "agent_multi_agent_enabled", False)
-    monkeypatch.setattr(settings, "agent_verify_loop_enabled", False)
 
 
 def _make_debug_context():

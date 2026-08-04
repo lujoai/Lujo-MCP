@@ -1,5 +1,5 @@
 /**
- * Lujo-MCP Browser SDK v0.5.0
+ * ai-debug-mcp Browser SDK v0.5.0
  *
  * V2：批量上报 + sendBeacon 降级 + 指数退避重试。
  * 前端自动采集：全局异常捕获、网络请求记录、UI 事件上报、静默失败标记。

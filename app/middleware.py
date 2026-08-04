@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 from app.config import settings
 from app.state.store import get_state_store
 
-logger = logging.getLogger("Lujo-MCP.middleware")
+logger = logging.getLogger("ai-debug-mcp.middleware")
 
 
 # ── API Key 鉴权中间件 ──
@@ -56,13 +56,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         from app.auth.key_rotation import verify_api_key
         from app.auth.rbac import get_role_for_key
         if not verify_api_key(key):
-            # SEC-09: 记录认证失败审计日志
-            client_ip = request.client.host if request.client else "unknown"
-            key_prefix = key[:4] + "****" if len(key) >= 4 else "none"
-            logger.warning(
-                "认证失败: ip=%s key_prefix=%s path=%s method=%s",
-                client_ip, key_prefix, request.url.path, request.method,
-            )
             return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
         # 注入角色到 request.state，供下游 FastAPI 依赖（require_role）使用
@@ -115,20 +108,8 @@ class MaxBodySizeMiddleware(BaseHTTPMiddleware):
                     content={"detail": f"请求体过大，限制 {limit} 字节"},
                 )
 
-            # 未超限：通过 _receive 包装回填已读 body，确保下游路由能重新读取（避免空 body 422）
-            # 使用 request._receive 而非直接写入 request._body，避免依赖 Starlette 内部未公开属性
-            _cached_body = b"".join(chunks)
-            _orig_receive = request._receive
-            _body_sent = False
-
-            async def _receive_with_cache():
-                nonlocal _body_sent
-                if not _body_sent:
-                    _body_sent = True
-                    return {"type": "http.request", "body": _cached_body, "more_body": False}
-                return await _orig_receive()
-
-            request._receive = _receive_with_cache
+            # 未超限：回填已读 body，确保下游路由能重新读取（避免空 body 422）
+            request._body = b"".join(chunks)
 
         return await call_next(request)
 
@@ -143,10 +124,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'self'",
-        )
         return response
 
 

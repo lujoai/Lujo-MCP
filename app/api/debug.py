@@ -16,10 +16,10 @@ from app.mcp.collectors.stacktrace import capture_exception
 from app.llm.analyzer import analyze, analyze_stream_async
 from app.llm.analysis_queue import get_analysis_queue, QueueFullError
 from app.agent.repair_queue import get_repair_queue, QueueFullError as RepairQueueFullError
-from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse, VerifyRequest, VerifyUIRequest
+from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse
 from app.auth.rbac import require_role
 
-logger = logging.getLogger("Lujo-MCP.api")
+logger = logging.getLogger("ai-debug-mcp.api")
 
 router = APIRouter(prefix="/api/debug", tags=["debug"])
 
@@ -318,30 +318,37 @@ def list_sessions():
 
 
 @router.post("/verify", dependencies=[Depends(require_role("admin", "developer"))])
-def debug_verify(body: VerifyRequest):
+def debug_verify(body: dict):
     """比对实际结果 vs 期望规范，自动检测静默失败。
 
-    请求体使用 VerifyRequest Schema 验证，确保字段类型正确。
+    请求体：
+      actual: dict         — 实际结果（status_code、body、error 等）
+      spec?: dict          — 期望规范（与 spec_id 二选一）
+      spec_id?: str        — 已存储规范的 ID
+      trace_id?: str       — 关联的 trace_id
     """
     from app.mcp.tools.verify_api import verify_handler
 
     try:
-        return verify_handler(body.model_dump())
+        return verify_handler(body)
     except Exception as e:
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/verify/ui", dependencies=[Depends(require_role("admin", "developer"))])
-def debug_verify_ui(body: VerifyUIRequest):
+def debug_verify_ui(body: dict):
     """按 UI 规范启动 Playwright 自动遍历页面并验证交互结果（FR14）。
 
-    请求体使用 VerifyUIRequest Schema 验证，确保字段类型正确。
+    请求体：
+      spec?: dict          — UI 规范 {kind:'ui', target, expect:{interactions:[...]}}
+      spec_id?: str        — 已存储规范的 ID
+      timeout_ms?: int     — 单个操作超时毫秒
     """
     from app.mcp.tools.verify_ui_api import verify_ui_handler
 
     try:
-        return verify_ui_handler(body.model_dump())
+        return verify_ui_handler(body)
     except Exception as e:
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")

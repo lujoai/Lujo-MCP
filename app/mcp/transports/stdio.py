@@ -21,7 +21,7 @@ from app.mcp.protocol.jsonrpc import (
     InvalidRequestError,
 )
 
-logger = logging.getLogger("Lujo-MCP.mcp.stdio")
+logger = logging.getLogger("ai-debug-mcp.mcp.stdio")
 
 
 def _configure_stdio_logging():

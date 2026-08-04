@@ -32,7 +32,7 @@ from app.llm.analyzer import (
     _set_l1_only,
 )
 
-logger = logging.getLogger("Lujo-MCP.cache-prewarm")
+logger = logging.getLogger("ai-debug-mcp.cache-prewarm")
 
 # L2 Redis key 命名空间（与 analyzer.py:_set_cache_result 中的 setex key 一致）
 _L2_KEY_PREFIX = "ai-debug:llm:cache:"

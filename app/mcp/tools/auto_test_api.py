@@ -26,7 +26,7 @@ AUTO_TEST_DEF = {
     },
 }
 
-logger = logging.getLogger("Lujo-MCP.auto_test")
+logger = logging.getLogger("ai-debug-mcp.auto_test")
 
 
 async def _run(url: str, max_actions: int, capture_console: bool, capture_network: bool) -> dict:

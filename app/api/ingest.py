@@ -19,7 +19,7 @@ from app.mcp.tools.console_api import tool_ingest_console
 from app.mcp.core.trace_repo import save_ui_event
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
-logger = logging.getLogger("Lujo-MCP.ingest")
+logger = logging.getLogger("ai-debug-mcp.ingest")
 
 
 @router.post("/network", dependencies=[Depends(require_role("admin", "developer"))])
@@ -118,94 +118,60 @@ def ingest_ui_event(req: dict):
         raise HTTPException(status_code=400, detail="Internal server error")
 
 
-# ── 批量分发路由表 ──
-_DISPATCH_ROUTES: dict[str, tuple] = {}
-
-
-def _register_dispatch_route(path: str, handler, param_mapper):
-    _DISPATCH_ROUTES[path] = (handler, param_mapper)
-
-
 def _dispatch_single(path: str, payload: dict) -> dict:
     """将单条批量事件分发到对应的 ingest 处理器。
 
-    path 为 SDK 原始上报路径，payload 为该路径对应的完整请求体。
-    使用路由表 _DISPATCH_ROUTES 分发，新增路径只需注册即可。
+    path 为 SDK 原始上报路径（如 /ingest/error），payload 为该路径对应的完整请求体。
+    各路径的参数提取逻辑与独立 ingest 端点保持一致。
     """
-    entry = _DISPATCH_ROUTES.get(path)
-    if entry is None:
-        raise ValueError(f"Unknown ingest path: {path}")
-    handler, param_mapper = entry
-    return handler(**param_mapper(payload))
-
-
-# ── 路由表初始化 ──
-def _init_dispatch_routes():
-    if _DISPATCH_ROUTES:
-        return
-
-    def _map_error(p):
-        return {
-            "exc_type": p.get("exc_type", "UnknownError"),
-            "message": p.get("message", ""),
-            "frames": p.get("frames", []),
-            "source": p.get("source", "http_ingest"),
-            "extra": p.get("extra"),
-            "trace_id": p.get("trace_id"),
-            "session_id": p.get("session_id"),
-        }
-
-    def _map_network(p):
-        return {
-            "record": p.get("record", {}),
-            "trace_id": p.get("trace_id"),
-            "request_id": p.get("request_id"),
-        }
-
-    def _map_ui_event(p):
-        return {"p": p}
-
-    def _map_console(p):
-        return {
-            "level": p.get("level", "info"),
-            "message": p.get("message", ""),
-            "source": p.get("source", "browser_sdk"),
-            "extra": p.get("extra"),
-            "trace_id": p.get("trace_id"),
-            "request_id": p.get("request_id"),
-        }
-
-    def _map_silent_failure(p):
-        return {
-            "message": p.get("message", ""),
-            "frames": p.get("frames"),
-            "ui_events": p.get("ui_events"),
-            "network_records": p.get("network_records"),
-            "expectation": p.get("expectation"),
-            "observed": p.get("observed"),
-            "observed_events": p.get("observed_events"),
-            "source": p.get("source", "browser_sdk"),
-            "extra": p.get("extra"),
-            "trace_id": p.get("trace_id"),
-            "session_id": p.get("session_id"),
-        }
-
-    _register_dispatch_route("/ingest/error", tool_ingest_error, _map_error)
-    _register_dispatch_route("/ingest/network", tool_ingest_network, _map_network)
-    _register_dispatch_route("/ingest/console", tool_ingest_console, _map_console)
-    _register_dispatch_route("/ingest/silent-failure", tool_ingest_silent_failure, _map_silent_failure)
-
-    def _ui_event_handler(**kw):
-        p = kw["p"]
-        trace_id = p.get("trace_id")
+    if path == "/ingest/error":
+        return tool_ingest_error(
+            exc_type=payload.get("exc_type", "UnknownError"),
+            message=payload.get("message", ""),
+            frames=payload.get("frames", []),
+            source=payload.get("source", "http_ingest"),
+            extra=payload.get("extra"),
+            trace_id=payload.get("trace_id"),
+            session_id=payload.get("session_id"),
+        )
+    if path == "/ingest/network":
+        return tool_ingest_network(
+            record=payload.get("record", {}),
+            trace_id=payload.get("trace_id"),
+            request_id=payload.get("request_id"),
+        )
+    if path == "/ingest/ui-event":
+        trace_id = payload.get("trace_id")
         event_id = save_ui_event(
-            event=p.get("event", {}) or {},
+            event=payload.get("event", {}) or {},
             trace_id=trace_id,
-            extra=p.get("extra"),
+            extra=payload.get("extra"),
         )
         return {"event_id": event_id, "trace_id": trace_id, "saved": True}
-
-    _register_dispatch_route("/ingest/ui-event", _ui_event_handler, _map_ui_event)
+    if path == "/ingest/console":
+        return tool_ingest_console(
+            level=payload.get("level", "info"),
+            message=payload.get("message", ""),
+            source=payload.get("source", "browser_sdk"),
+            extra=payload.get("extra"),
+            trace_id=payload.get("trace_id"),
+            request_id=payload.get("request_id"),
+        )
+    if path == "/ingest/silent-failure":
+        return tool_ingest_silent_failure(
+            message=payload.get("message", ""),
+            frames=payload.get("frames"),
+            ui_events=payload.get("ui_events"),
+            network_records=payload.get("network_records"),
+            expectation=payload.get("expectation"),
+            observed=payload.get("observed"),
+            observed_events=payload.get("observed_events"),
+            source=payload.get("source", "browser_sdk"),
+            extra=payload.get("extra"),
+            trace_id=payload.get("trace_id"),
+            session_id=payload.get("session_id"),
+        )
+    raise ValueError(f"Unknown ingest path: {path}")
 
 
 @router.post("/batch", dependencies=[Depends(require_role("admin", "developer"))])
@@ -238,9 +204,6 @@ async def ingest_batch(request: Request):
     except Exception as e:
         logger.error(f"Failed to parse request body: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid request body")
-
-    # 确保批量分发路由表已初始化
-    _init_dispatch_routes()
 
     events = req.get("events", [])
     if not isinstance(events, list):

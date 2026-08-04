@@ -8,7 +8,7 @@ import logging
 
 from app.mcp.core.trace_repo import save_trace
 
-logger = logging.getLogger("Lujo-MCP.tools.ingest")
+logger = logging.getLogger("ai-debug-mcp.tools.ingest")
 
 INGEST_ERROR_DEF = {
     "name": "ingest_error",

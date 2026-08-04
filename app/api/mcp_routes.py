@@ -11,18 +11,17 @@ import json
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.config import settings
 from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INTERNAL_ERROR
-from app.mcp.protocol.server import dispatch_parsed, PROTOCOL_VERSION, CAPABILITIES
+from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES
 from app.mcp.transports.session import registry
 from app.mcp.transports.sse import hub
 from app.mcp.tools import TOOL_ROLE_REQUIREMENTS
-from app.auth.rbac import require_role
 
-logger = logging.getLogger("Lujo-MCP.api.mcp")
+logger = logging.getLogger("ai-debug-mcp.api.mcp")
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
 
@@ -40,7 +39,7 @@ def _accepted_sse(request: Request) -> bool:
     return "text/event-stream" in request.headers.get("Accept", "")
 
 
-@router.post("", dependencies=[Depends(require_role("viewer", "developer", "admin"))])
+@router.post("")
 async def mcp_post(request: Request):
     raw = await request.body()
     if not raw:
@@ -97,10 +96,7 @@ async def mcp_post(request: Request):
             # 未在 TOOL_ROLE_REQUIREMENTS 注册的工具默认需要 admin 角色（fail-closed）
             required_roles = ("admin",)
             logger.warning("工具 '%s' 未在 TOOL_ROLE_REQUIREMENTS 注册，默认要求 admin 角色", tool_name)
-        role = getattr(request.state, "role", None)
-        if role is None:
-            # 鉴权未启用时向后兼容为 admin
-            role = "admin" if not settings.rbac_enabled else "viewer"
+        role = getattr(request.state, "role", "admin")
         if role not in required_roles:
             return JSONResponse(
                 make_error(req_id, INVALID_REQUEST,
@@ -108,9 +104,9 @@ async def mcp_post(request: Request):
                 status_code=403,
             )
 
-    # ── 分发（使用已预解析的 dict，避免重复 JSON 解析）──
+    # ── 分发 ──
     try:
-        result = await dispatch_parsed(parsed)
+        result = await dispatch_raw(raw)
     except Exception:
         logger.exception("MCP dispatch 异常")
         return JSONResponse(make_error(req_id, INTERNAL_ERROR, "内部错误，详情见服务端日志"), status_code=500)
@@ -139,7 +135,7 @@ async def mcp_post(request: Request):
     return resp
 
 
-@router.get("", dependencies=[Depends(require_role("viewer", "developer", "admin"))])
+@router.get("")
 async def mcp_get(request: Request):
     if not _accepted_sse(request):
         # 非 SSE → 返回服务健康信息（保持旧行为）
@@ -158,12 +154,7 @@ async def mcp_get(request: Request):
         try:
             yield ": connected\n\n"
             while True:
-                try:
-                    msg = await asyncio.wait_for(q.get(), timeout=30)
-                except asyncio.TimeoutError:
-                    # 30s 无消息 → 发送心跳保活
-                    yield ": heartbeat\n\n"
-                    continue
+                msg = await q.get()
                 if hub.is_close_event(msg):
                     break
                 yield hub.format_event(msg)
@@ -175,7 +166,7 @@ async def mcp_get(request: Request):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.delete("", dependencies=[Depends(require_role("developer", "admin"))])
+@router.delete("")
 async def mcp_delete(request: Request):
     session_id = request.headers.get("Mcp-Session-Id")
     if session_id:

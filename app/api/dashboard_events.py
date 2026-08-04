@@ -15,11 +15,10 @@
 
 import asyncio
 import json
-import threading
 import logging
 from dataclasses import dataclass
 
-logger = logging.getLogger("Lujo-MCP.dashboard.sse")
+logger = logging.getLogger("ai-debug-mcp.dashboard.sse")
 
 # 关闭信号：close_all 投递给订阅者以促使其退出消费循环
 _CLOSE_EVENT = {"_dashboard_control": "close"}
@@ -38,33 +37,29 @@ class DashboardEventBus:
     设计要点：
     - 无订阅者时 ``publish`` 直接返回 0（零开销），写入主链路无感；
     - 队列满（消费过慢）时丢弃最旧事件保最新，**实时性优先于完整性**；
-    - 订阅者事件循环关闭时自动清理死订阅，避免泄漏；
-    - 线程安全：``_subs`` 列表通过 ``_lock`` 保护，`publish` 可从后台线程调用。
+    - 订阅者事件循环关闭时自动清理死订阅，避免泄漏。
     """
 
     def __init__(self) -> None:
         self._subs: list[_DashboardSubscription] = []
-        self._lock = threading.Lock()
 
     def subscribe(self) -> asyncio.Queue:
         """订阅事件流，返回专属队列。必须在运行中的事件循环内调用。"""
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
-        with self._lock:
-            self._subs.append(_DashboardSubscription(queue=q, loop=loop))
+        self._subs.append(_DashboardSubscription(queue=q, loop=loop))
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
-        with self._lock:
-            self._subs[:] = [sub for sub in self._subs if sub.queue is not q]
+        for sub in list(self._subs):
+            if sub.queue is q:
+                self._subs.remove(sub)
+                break
 
     def publish(self, event: dict) -> int:
         """广播事件到所有订阅者，返回成功投递数（含跨线程）。"""
-        with self._lock:
-            subs = list(self._subs)
-
         delivered = 0
-        for sub in subs:
+        for sub in list(self._subs):
             try:
                 sub.loop.call_soon_threadsafe(self._put_nowait, sub, event)
                 delivered += 1
@@ -90,27 +85,24 @@ class DashboardEventBus:
                 pass
 
     def _safe_remove(self, sub: _DashboardSubscription) -> None:
-        with self._lock:
-            try:
-                self._subs.remove(sub)
-            except ValueError:
-                pass
+        try:
+            self._subs.remove(sub)
+        except ValueError:
+            pass
 
     def subscriber_count(self) -> int:
-        with self._lock:
-            return len(self._subs)
+        return len(self._subs)
 
     def close_all(self) -> int:
         """优雅停机：向所有订阅者投递关闭信号并清空注册表。返回受影响订阅数。"""
-        with self._lock:
-            subs = list(self._subs)
-            self._subs.clear()
-        for sub in subs:
+        n = len(self._subs)
+        for sub in list(self._subs):
             try:
                 sub.loop.call_soon_threadsafe(self._put_nowait, sub, _CLOSE_EVENT)
             except RuntimeError:
                 pass
-        return len(subs)
+        self._subs.clear()
+        return n
 
     @staticmethod
     def format_event(event: dict) -> str:

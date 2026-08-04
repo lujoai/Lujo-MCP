@@ -20,11 +20,10 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ──
-    # provider: "openai" | "deepseek" | "zhipu" | "custom"
-    # openai   → 默认 https://api.openai.com/v1，模型 gpt-4o / gpt-4o-mini
-    # deepseek → 自动设置 base_url = https://api.deepseek.com/v1，模型 deepseek-v4-flash / deepseek-v4-pro
-    # zhipu    → 自动设置 base_url = https://open.bigmodel.cn/api/paas/v4/，模型 glm-5.2 / glm-4.5 / glm-4-flash
-    # custom   → 需自行填写 llm_base_url（任意 OpenAI 兼容端点，如自有网关/中转）
+    # provider: "openai" | "zhipu" | "custom"
+    # openai → 默认 https://api.openai.com/v1
+    # zhipu  → 自动设置 base_url = https://open.bigmodel.cn/api/paas/v4/，model 推荐 glm-4-flash
+    # custom → 需自行填写 llm_base_url
     llm_provider: str = "openai"
     openai_api_key: str = ""
     llm_model: str = "gpt-4o"
@@ -35,16 +34,6 @@ class Settings(BaseSettings):
     llm_fallback_model: str = "gpt-4o-mini"
     # 自定义 base_url（留空则按 llm_provider 自动选；填写后覆盖 provider 默认值）
     llm_base_url: str = ""
-
-    # ── LLM 预置 Provider / 模型（选型即填 API Key，URL 已预置）──
-    # 预置模型清单：provider 选中后按此列表选择模型，仅需填 OPENAI_API_KEY。
-    # 列表仅为可选项提示，实际模型名仍以 llm_model / llm_fallback_model 为准，可自定义。
-    llm_model_presets: dict[str, list[str]] = {
-        "openai": ["gpt-4o", "gpt-4o-mini"],
-        "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "zhipu": ["glm-5.2", "glm-4.5", "glm-4-flash"],
-        "custom": [],
-    }
 
     # ── 上下文 ──
     max_context_tokens: int = 8000
@@ -129,7 +118,7 @@ class Settings(BaseSettings):
     # 开启后使用 OTel SDK 记录指标，同时保留 /metrics Prometheus 文本端点向后兼容
     otel_enabled: bool = False
     # OTel 服务名（用于指标标签）
-    otel_service_name: str = "Lujo-MCP"
+    otel_service_name: str = "ai-debug-mcp"
     # OTLP gRPC 导出端点（如 http://localhost:4317），为空则使用 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量
     otel_exporter_endpoint: str = ""
     # OTel 采样率（0.0-1.0）
@@ -212,8 +201,7 @@ class Settings(BaseSettings):
     # ── 向量检索 RAG（Phase 7）──
     # 全局开关：开启后 LLM 分析前先做向量召回（精确指纹 miss 后的二级 fallback）
     # 抽象落在检索语义 add(docs)/search(query, top_k)，禁止 Qdrant collection/point 概念 leak 进接口
-    # 默认开启（in_process 后端零依赖，Jaccard 相似度，无外部环境要求）
-    vector_store_enabled: bool = True
+    vector_store_enabled: bool = False
     # 向量库后端：in_process（默认，零外部依赖）| qdrant（接入 OpenAI/智谱 Embeddings，语义召回）
     vector_store_backend: str = "in_process"
     # 召回 top_k 数量
@@ -274,25 +262,6 @@ class Settings(BaseSettings):
     # 不阻断最终输出聚合（仍静默降级），仅作为调用方可观测信号
     agent_dag_failure_threshold: int = 2
 
-    # ── M4 Agent Verify Loop（迭代修复 + 验证 + 知识库记忆）──
-    # 开启后 Coordinator 会在 Phase 2 DAG 外层加迭代（repair → review → verify → KB 写回）
-    # 需要先保证 agent_multi_agent_enabled=True，否则 Verify Loop 无法生效
-    agent_verify_loop_enabled: bool = False
-    # 最大迭代轮数（默认 3，最多 5，过大可能导致 Token 消耗显著提升）
-    agent_verify_loop_max_iterations: int = 3
-    # 迭代判定阈值（passed）：verify.overall_score ≥ pass 且 审查双 pass 且 test 可用
-    # 注：overall_score ∈ [0,1]，默认 0.7 对应"中等丰富度的验证策略 + 审查通过"
-    agent_verify_loop_pass_threshold: float = 0.7
-    # 迭代判定阈值（高置信度 repair 无 test 时 passed）：review 双 pass + repair.confidence>=medium
-    # + overall_score >= 该值
-    agent_verify_loop_high_confidence_pass_threshold: float = 0.85
-    # 迭代判定阈值（partial）：overall_score >= 该值但未达 pass 阈值 → 下轮迭代继续
-    agent_verify_loop_partial_threshold: float = 0.3
-    # 写回 KnowledgeBase 开关：迭代有效（verdict passed/partial/rejected）时，
-    # 对 DebugCase.verify_count / case_confidence 做增量（Δ +0.05/+0.02/-0.05）
-    # 关闭时 Verify Loop 仅做迭代判定，不做 KB 沉淀
-    agent_verify_loop_kb_writeback_enabled: bool = True
-
     # ── Dashboard 实时 SSE 推送（DASH-SSE-001）──
     # 启用后 /api/dashboard/stream 提供 SSE 通道，trace/error 写入时广播变更信号，
     # 前端 EventSource 收到后即时 re-fetch（叠加在 10s 轮询之上，轮询仍作兜底）。
@@ -305,24 +274,13 @@ class Settings(BaseSettings):
     # 关闭时 scorer 不执行，零行为变更（向后兼容）
     quality_scoring_enabled: bool = True
 
-    # ── Debug Case Schema + 种子知识（v0.4.0 M2）──
-    # 启动期自动加载 30 条种子知识到 KnowledgeBaseStore（merge 模式，已存在则跳过）
-    # 关闭时知识库启动为空，KnowledgeBase 维度评分维持 0.0
-    kb_seed_autoload_enabled: bool = True
-
-    # ── 知识库准确度提升（v0.4.0 M3 Fault Localization 阶段并行优化）──
-    # KB ↔ vector_store 双写同步。关闭时 KB 写入不更新向量索引，L2 召回退化（旧行为）
+    # ── KB 三级 fallback（v0.4.0 M2）──
+    # KB↔向量双写同步：KB 写入后自动同步向量索引，保证向量召回能覆盖全部条目
     kb_vector_index_autosync: bool = True
-    # 种子匹配三级 fallback 中"归一化指纹 + 类型级粗召回"开关
+    # L2 类型级 Jaccard 兜底开关：精确指纹 & 归一化指纹 miss 后，按异常类型+消息 token 重叠兜底
     kb_type_level_fallback: bool = True
-    # 类型级粗召回 Jaccard 最低分（0~1），分数低于此阈值的 type-level match 判定为 miss
-    kb_seed_jaccard_min_score: float = 0.25
-
-    # ── Fault Localization 2.0（v0.4.0 M3）──
-    # function-level 静态分析开关：开启后 RepairContextAssembler 调用 StaticAnalyzer
-    # - 有堆栈帧：对前 N 帧函数提取签名/复杂度/可疑输入
-    # - 无堆栈帧：URL→handler 反查定位源码后静态分析
-    static_analysis_enabled: bool = True
+    # L2 类型级匹配的 Jaccard 相似度阈值，低于该值不返回
+    kb_seed_jaccard_min_score: float = 0.5
 
     # ── Agent Verify Loop（v0.4.0 M4）──
     # 迭代修复模式开关：开启后 Coordinator 按 DAG 迭代修复（修复→审查→验证→重试，最多 N 轮）
@@ -330,12 +288,24 @@ class Settings(BaseSettings):
     agent_iterative_repair_enabled: bool = False
     # 最大迭代轮数（每次迭代经过完整 DAG：修复→并行审查→验证）
     agent_max_iterations: int = 3
+    # Verify Loop 独立开关（与 agent_iterative_repair_enabled 叠加，三层开关：agent→multi→verify）
+    agent_verify_loop_enabled: bool = False
+    # Verify Loop 最大迭代轮数
+    agent_verify_loop_max_iterations: int = 3
+    # 判定通过阈值：综合验证分 >= 该值 → passed
+    agent_verify_loop_pass_threshold: float = 0.7
+    # 高置信通过阈值：>= 该值直接 passed 并快速收敛
+    agent_verify_loop_high_confidence_pass_threshold: float = 0.85
+    # 部分通过阈值：>= 该值且 < pass_threshold → partial（可继续迭代）
+    agent_verify_loop_partial_threshold: float = 0.5
+    # 验证通过后是否写回 KB（递增 verify_count / case_confidence）
+    agent_verify_loop_kb_writeback_enabled: bool = True
 
     # ── 服务 ──
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = False
-    service_name: str = "Lujo-MCP"
+    service_name: str = "ai-debug-mcp"
 
     def model_post_init(self, __context: object) -> None:
         from dotenv import dotenv_values

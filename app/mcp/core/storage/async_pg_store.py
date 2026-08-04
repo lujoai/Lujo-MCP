@@ -40,7 +40,7 @@ import asyncpg
 from app.config import settings
 from app.mcp.core.storage.base import TraceStorage, SessionStorage
 
-logger = logging.getLogger("Lujo-MCP.storage.async_pg")
+logger = logging.getLogger("ai-debug-mcp.storage.async_pg")
 
 
 # ── 建表 DDL（与 pg_store.py 保持一致，确保表结构相同） ──
@@ -222,7 +222,7 @@ def _check_async_context() -> None:
         raise RuntimeError(
             "AsyncPG store 方法必须在 async 上下文中调用。"
             "当 pg_async_enabled=True 时，请确保所有调用路径已改为 async。"
-            "详见仓库迁移指南或启用 PG_ASYNC_ENABLED 配置项说明。"
+            "详见 docs/internal/ROADMAP.md Phase 3 迁移指南。"
         )
 
 

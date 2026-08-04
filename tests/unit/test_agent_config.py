@@ -3,51 +3,46 @@
 from app.config import Settings
 
 
-def _default_settings():
-    """返回不加载 .env 的 Settings，验证代码默认值（避免依赖本地 .env 配置）。"""
-    return Settings(_env_file=None)
-
-
 class TestAgentConfigDefaults:
     """新增 agent_* 字段默认值。"""
 
     def test_agent_enabled_default_false(self):
         """agent_enabled 默认 False，关闭时零行为变更。"""
-        s = _default_settings()
+        s = Settings()
         assert s.agent_enabled is False
 
     def test_agent_queue_defaults(self):
-        s = _default_settings()
+        s = Settings()
         assert s.agent_queue_maxsize == 50
         assert s.agent_queue_workers == 2
         assert s.agent_queue_drain_timeout == 60
 
     def test_agent_prior_analysis_enabled_default_true(self):
-        s = _default_settings()
+        s = Settings()
         assert s.agent_prior_analysis_enabled is True
 
     def test_agent_model_default_empty(self):
         """agent_model 默认空串，回退到 llm_model。"""
-        s = _default_settings()
+        s = Settings()
         assert s.agent_model == ""
 
     def test_agent_retry_timeout_defaults(self):
-        s = _default_settings()
+        s = Settings()
         assert s.agent_max_retries == 2
         assert s.agent_timeout == 90
 
     def test_agent_multi_agent_enabled_default_false(self):
         """Phase 2 DAG flag 默认关闭。"""
-        s = _default_settings()
+        s = Settings()
         assert s.agent_multi_agent_enabled is False
 
     def test_agent_dag_parallel_timeout_default_zero(self):
         """Phase 2 DAG 并行超时默认 0（继承 agent_timeout）。"""
-        s = _default_settings()
+        s = Settings()
         assert s.agent_dag_parallel_timeout == 0
 
     def test_agent_dag_failure_threshold_default_two(self):
-        s = _default_settings()
+        s = Settings()
         assert s.agent_dag_failure_threshold == 2
 
 
@@ -74,13 +69,13 @@ class TestAgentConfigIndependence:
     """agent_* 配置与 llm_* 配置解耦。"""
 
     def test_agent_workers_independent_from_llm_workers(self):
-        s = _default_settings()
+        s = Settings()
         # 两者是独立字段，互不影响
         assert s.agent_queue_workers != s.llm_queue_workers or s.agent_queue_workers == s.llm_queue_workers
         assert hasattr(s, "agent_queue_workers")
         assert hasattr(s, "llm_queue_workers")
 
     def test_agent_max_retries_independent_from_llm(self):
-        s = _default_settings()
+        s = Settings()
         assert s.agent_max_retries == 2
         assert s.llm_max_retries == 3

@@ -19,7 +19,7 @@ from app.mcp.protocol.jsonrpc import (
     parse_request,
 )
 
-logger = logging.getLogger("Lujo-MCP.protocol")
+logger = logging.getLogger("ai-debug-mcp.protocol")
 
 # MCP 协议版本
 PROTOCOL_VERSION = "2024-11-05"
@@ -203,14 +203,4 @@ async def dispatch_raw(raw: str | bytes) -> dict:
     except InvalidRequestError as e:
         return make_error(None, INVALID_REQUEST, str(e))
 
-    return await dispatch(req)
-
-
-async def dispatch_parsed(data: dict) -> dict:
-    """分发已预解析的 JSON-RPC 请求（避免重复 JSON 解析）"""
-    from app.mcp.protocol.jsonrpc import JSONRPCRequest
-    try:
-        req = JSONRPCRequest.model_construct(**data)
-    except Exception as e:
-        return make_error(None, INTERNAL_ERROR, str(e))
     return await dispatch(req)

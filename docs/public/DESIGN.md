@@ -2,9 +2,9 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.4.0｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.3.0｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
-> 功能完成度与默认可交付状态以仓库代码实情为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
+> 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
 > **v0.3.1 更新**：PostgreSQL 集成完成、Dashboard 读取 PG、MCP Tools 读取 PG、LLM 分析端到端验证、集成测试补充（13 用例）
 >
@@ -15,8 +15,6 @@
 > **AI Debug Agent Phase 1 更新（2026-07-26）**：新增 `app/agent/` 模块（7 文件）——`BaseAgent` ABC + `AgentContext`/`AgentResult`/`AgentTrace` + `AgentStatus` 枚举、`RepairAgent`（复用 `analyzer._get_async_client`，独立重试/fallback + `_validate_repair_plan` 容错 JSON）、`RepairContextAssembler`（并发聚合 `analyze_async` + `retrieve_similar` + `get_recent_diff`，各失败静默降级）、`RepairQueue` + lifespan helper（结构对称 `analysis_queue.py`）、`Coordinator` 编排器（装配上下文 → 调度 Agent → 收集 trace）。新增 2 REST 端点 + 2 MCP 工具（工具数 15→17）。9 个 `agent_*` 配置项（`agent_enabled` 默认 False）。Phase 1 = 单 Agent + 多 Agent 协同框架预留，Phase 2 多 Agent DAG 为后续待办。测试基线：583 passed / 6 skipped / 0 failed
 >
 > **Dashboard 实时 SSE 推送更新（2026-07-30，`DASH-SSE-001`）**：新增 `app/api/dashboard_events.py`——`DashboardEventBus` 进程内广播总线（无 session 门槛，`subscribe()` 返回 `asyncio.Queue(maxsize=256)`，`publish()` 用 `loop.call_soon_threadsafe` 跨线程投递，队列满丢旧保最新，`close_all()` 优雅停机）；`dashboard.py` 新增 `GET /api/dashboard/stream` SSE 端点（15s 心跳 + close 终止 + `finally` unsubscribe 防泄漏）+ `invalidate_cache` 内挂广播钩子（广播失败静默降级，不影响主写入链路）；`dashboard.html` 前端 EventSource 集成（去抖 refresh + 10s 轮询兜底 + 断线 5s 重连）；`dashboard_sse_enabled=False` 默认关闭（零开销向后兼容）；鉴权复用 `?api_key=` query 降级。测试基线：654 passed / 6 skipped / 0 failed
->
-> **v0.4.0 Quality System + Agent Verify Loop 更新（2026-08-04）**：M1-M5 全部交付——(1) `app/quality/` 模块（`QualityScorer` 9 维度加权评分 + 证据提取 + 可信度评分 + 改进建议）；(2) `app/rag/debug_case.py` 新增 `case_confidence`/`verify_count` + `compute_type_fingerprint` + `normalize_message_for_similarity`；`KnowledgeBaseStore` 三级 fallback 匹配 + KB↔向量索引双写同步；(3) `StaticAnalyzer` 增强（无堆栈场景 `analyze_source_code`/`analyze_handler`）+ `URLResolver`（HTTP 方法+路径反查 FastAPI 路由表）；(4) Agent Verify Loop（`VerifyRecord`/`IterationResult`/`LoopState` + Coordinator 三层开关调度 + 四级判定 + KB 写回 `verify_count`/`case_confidence`）；(5) M5 全量回归测试 + 文档同步（补全 `test_static_analyzer.py` 等 48 项 M3 用例，修复 3 个真实 bug）。详见 §19。测试基线：857 passed / 6 skipped / 0 failed
 
 ---
 
@@ -725,8 +723,8 @@ sequenceDiagram
 ## 13. 数据流通与执行流程复核（2026-07-22 静态取证）
 
 > 本节为「数据从入口到出口」的端到端复核，与 §2/§4 的设计图互为印证；所有结论附 `文件:行`。
-> 配套安全结论见仓库提交历史中的「SEC-01~15」相关修复。
-> ✅ 其中 **P0 四项（LFI/SSRF/默认鉴权/工具超时）已于 2026-07-22 修复**，详见仓库提交历史；下文描述的是修复前的原始数据流与风险面。
+> 配套安全结论见内部安全审查文档的「SEC-01~15」补充章。
+> ✅ 其中 **P0 四项（LFI/SSRF/默认鉴权/工具超时）已于 2026-07-22 修复**，详见内部审计报告；下文描述的是修复前的原始数据流与风险面。
 
 ### 13.1 两条入口（Ingress）
 
@@ -1474,7 +1472,7 @@ analyze(context)
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `vector_store_enabled` | bool | True | 是否启用向量检索 RAG（默认开启，in_process 后端零依赖） |
+| `vector_store_enabled` | bool | False | 是否启用向量检索 RAG |
 | `vector_store_backend` | str | "in_process" | 后端名称（注册表 key） |
 | `vector_store_top_k` | int | 3 | 召回条数上限 |
 | `vector_store_min_score` | float | 0.3 | 相似度下限（低于此分数丢弃） |
@@ -2312,6 +2310,8 @@ ContextCompleteness 将 Debug Context 拆分为 9 个维度，各维度独立评
 
 #### 19.4.2 M3: Fault Localization 2.0 → CodeSnippet + GitContext 维度提升
 
+> **实现状态：✅ 已完成（2026-08-04）**。`url_resolver.py` 按 HTTP 方法+路径反查 FastAPI 路由表定位 handler；`static_analyzer.py` 新增 `analyze_handler` 无堆栈入口；`build_debug_context` 在静默失败场景注入 `static_analysis` 字段。
+
 **改进逻辑**：StaticAnalyzer（基于 Python `ast` 标准库，零外部依赖）在 Task 12 已落地，能从堆栈帧自动提取函数签名、参数、类型注解、复杂度、可疑输入。Task 13 将其集成到 `context_assembler`，并在无异常堆栈场景下基于网络请求 URL → handler 函数 → 源码片段的路径自动定位代码。
 
 **各场景维度变化**：
@@ -2325,6 +2325,8 @@ ContextCompleteness 将 Debug Context 拆分为 9 个维度，各维度独立评
 | E | 维持 1.0 | 0.0→0.6（自动采集 blame） | +0.06 |
 
 #### 19.4.3 M4: Agent Verify Loop → LLMAnalysis 置信度 + 长期 KB 积累
+
+> **实现状态：✅ 已完成（2026-08-04）**。`verify_loop.py` 实现三层开关（agent→multi→verify）+ 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回（`record_verification` 递增 `verify_count` / 提升 `case_confidence`）。Coordinator 在 `agent_verify_loop_enabled` 时走迭代闭环。
 
 **改进逻辑**：Agent Verify Loop 形成「修复→验证→记忆」闭环，每次成功修复的案例自动写入 DebugCase。短期效果是 LLMAnalysis 置信度因 VerifyAgent 验证反馈而从 medium→high；长期效果是知识库随系统运行持续积累，KnowledgeBase 精确命中率不断提升。
 
