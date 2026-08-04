@@ -1,4 +1,5 @@
--- DEPRECATED: app 改用 traces 表 step 字段存储，本表从未被代码使用，保留仅供历史参考
+-- 本表由 pg_store.py 的 upsert_error 方法使用（app/mcp/core/errors.py 记录异常聚合），
+-- 与 traces 表 step 字段并存，用于异常指纹聚合/根因排序/历史查询。
 CREATE TABLE IF NOT EXISTS errors (
     id                  BIGSERIAL PRIMARY KEY,
     trace_id            TEXT,
