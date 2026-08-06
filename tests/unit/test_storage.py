@@ -333,6 +333,121 @@ class TestStorageFactory:
         assert "case-sensitive" in str(exc_info.value)
 
 
+class TestErrorSpecFactory:
+    """校验 factory 对 ErrorStorage / SpecStorage 的后端分发（方案 C）。
+
+    - memory 后端 → NoOpErrorStore / NoOpSpecStore（no-op 保接口一致）
+    - postgresql 后端 → PG 实现（stub 替换避免真实连 PG）
+    """
+
+    def setup_method(self):
+        factory_mod._error_store = None
+        factory_mod._spec_store = None
+
+    def teardown_method(self):
+        factory_mod._error_store = None
+        factory_mod._spec_store = None
+
+    def test_memory_returns_noop_stores(self, monkeypatch):
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "memory")
+
+        from app.mcp.core.storage.noop_store import NoOpErrorStore, NoOpSpecStore
+        es = factory_mod.get_error_store()
+        ss = factory_mod.get_spec_store()
+
+        assert isinstance(es, NoOpErrorStore)
+        assert isinstance(ss, NoOpSpecStore)
+
+    def test_postgresql_routes_to_pg_stores(self, monkeypatch):
+        """配置 postgresql → 分发到 PG 实现，不误回退 no-op。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "postgresql")
+        monkeypatch.setattr(_settings, "pg_async_enabled", False)
+
+        class _StubPGErrorStore:
+            def __init__(self): pass
+        class _StubPGSpecStore:
+            def __init__(self): pass
+
+        import app.mcp.core.storage.pg_store as pg_mod
+        import app.mcp.core.storage.noop_store as noop_mod
+
+        noop_calls = []
+        class _SpyNoOpErrorStore:
+            def __init__(self): noop_calls.append("error")
+        class _SpyNoOpSpecStore:
+            def __init__(self): noop_calls.append("spec")
+
+        monkeypatch.setattr(pg_mod, "PGErrorStore", _StubPGErrorStore)
+        monkeypatch.setattr(pg_mod, "PGSpecStore", _StubPGSpecStore)
+        monkeypatch.setattr(noop_mod, "NoOpErrorStore", _SpyNoOpErrorStore)
+        monkeypatch.setattr(noop_mod, "NoOpSpecStore", _SpyNoOpSpecStore)
+
+        es = factory_mod.get_error_store()
+        ss = factory_mod.get_spec_store()
+
+        assert isinstance(es, _StubPGErrorStore)
+        assert isinstance(ss, _StubPGSpecStore)
+        assert noop_calls == [], "配置 postgresql 但误回退 no-op store"
+
+
+class TestNoOpStores:
+    """校验 no-op 实现的零行为语义（memory 后端契约对齐）。"""
+
+    def test_noop_error_store(self):
+        from app.mcp.core.storage.noop_store import NoOpErrorStore
+        es = NoOpErrorStore()
+        assert es.upsert_error({"error_id": "e1"}) is None
+
+    def test_noop_spec_store(self):
+        from app.mcp.core.storage.noop_store import NoOpSpecStore
+        ss = NoOpSpecStore()
+        assert ss.save_spec({"id": "s1"}) is None
+        assert ss.get_spec("s1") is None
+        assert ss.list_specs() == []
+        assert ss.delete_spec("s1") is False
+
+
+class TestErrorSpecABCContract:
+    """校验 ErrorStorage / SpecStorage ABC 为抽象契约，且各后端实现一致。"""
+
+    def test_abc_is_abstract(self):
+        from app.mcp.core.storage.base import ErrorStorage, SpecStorage
+        import inspect
+        assert inspect.isabstract(ErrorStorage)
+        assert inspect.isabstract(SpecStorage)
+        # 抽象方法契约存在
+        assert "upsert_error" in ErrorStorage.__abstractmethods__
+        for m in ("save_spec", "get_spec", "list_specs", "delete_spec"):
+            assert m in SpecStorage.__abstractmethods__
+
+    def test_pg_stores_implement_abc(self):
+        from app.mcp.core.storage.pg_store import PGErrorStore, PGSpecStore
+        from app.mcp.core.storage.base import ErrorStorage, SpecStorage
+        assert isinstance(PGErrorStore(), ErrorStorage)
+        spec = PGSpecStore()
+        assert isinstance(spec, SpecStorage)
+        # 方法签名对齐 ABC
+        for m in ("save_spec", "get_spec", "list_specs", "delete_spec"):
+            assert callable(getattr(spec, m))
+
+    def test_async_pg_stores_implement_abc(self):
+        from app.mcp.core.storage.async_pg_store import AsyncPGErrorStore, AsyncPGSpecStore
+        from app.mcp.core.storage.base import ErrorStorage, SpecStorage
+        assert isinstance(AsyncPGErrorStore(), ErrorStorage)
+        spec = AsyncPGSpecStore()
+        assert isinstance(spec, SpecStorage)
+        for m in ("save_spec", "get_spec", "list_specs", "delete_spec"):
+            assert callable(getattr(spec, m))
+
+    def test_noop_stores_implement_abc(self):
+        from app.mcp.core.storage.noop_store import NoOpErrorStore, NoOpSpecStore
+        from app.mcp.core.storage.base import ErrorStorage, SpecStorage
+        assert isinstance(NoOpErrorStore(), ErrorStorage)
+        assert isinstance(NoOpSpecStore(), SpecStorage)
+
+
 # ════════════════════════════════════════════
 #  asyncpg 异步存储测试（Phase 3.1）
 #  需要 asyncpg 已安装（否则本节整体跳过）；用 fake pool/conn mock 测试关键方法
@@ -476,7 +591,7 @@ class TestAsyncPGStore:
             "traceback": "tb", "source": "src", "session_id": "s1",
             "first_seen": 1.0, "last_seen": 2.0,
         }
-        await self._mod.upsert_error(record)
+        await self._mod.AsyncPGErrorStore().upsert_error(record)
         execs = self._execute_calls()
         assert any("INSERT INTO errors" in c[1] for c in execs)
         insert = [c for c in execs if "INSERT INTO errors" in c[1]][0]
@@ -490,7 +605,7 @@ class TestAsyncPGStore:
     @pytest.mark.asyncio
     async def test_upsert_error_default_session(self):
         """session_id 为 None 时写入 '_global'。"""
-        await self._mod.upsert_error({
+        await self._mod.AsyncPGErrorStore().upsert_error({
             "error_id": "e2", "fingerprint": "fp2", "type": "KeyError",
             "message": "miss", "session_id": None,
             "first_seen": 1.0, "last_seen": 2.0,
@@ -505,7 +620,7 @@ class TestAsyncPGStore:
             "id": "sp1", "kind": "api", "target": "/users",
             "expect": {"status": 200}, "created_at": 1.0, "updated_at": 2.0,
         }
-        await self._mod.save_spec(spec)
+        await self._mod.AsyncPGSpecStore().save_spec(spec)
         execs = self._execute_calls()
         assert any("INSERT INTO specs" in c[1] for c in execs)
         insert = [c for c in execs if "INSERT INTO specs" in c[1]][0]
@@ -523,7 +638,7 @@ class TestAsyncPGStore:
                 expect='{"status": 200}', created_at=1.0, updated_at=2.0,
             )
         ]
-        spec = await self._mod.get_spec("sp1")
+        spec = await self._mod.AsyncPGSpecStore().get_spec("sp1")
         assert spec is not None
         assert spec["id"] == "sp1"
         assert spec["kind"] == "api"
@@ -535,13 +650,13 @@ class TestAsyncPGStore:
     @pytest.mark.asyncio
     async def test_get_spec_not_found(self):
         # fetchrow 队列为空 → 默认返回 None
-        spec = await self._mod.get_spec("missing")
+        spec = await self._mod.AsyncPGSpecStore().get_spec("missing")
         assert spec is None
 
     @pytest.mark.asyncio
     async def test_delete_spec(self):
         self._conn._execute_status = "DELETE 1"
-        ok = await self._mod.delete_spec("sp1")
+        ok = await self._mod.AsyncPGSpecStore().delete_spec("sp1")
         assert ok is True
         execs = self._execute_calls()
         assert any("DELETE FROM specs" in c[1] for c in execs)
@@ -549,7 +664,7 @@ class TestAsyncPGStore:
     @pytest.mark.asyncio
     async def test_delete_spec_not_found(self):
         self._conn._execute_status = "DELETE 0"
-        ok = await self._mod.delete_spec("missing")
+        ok = await self._mod.AsyncPGSpecStore().delete_spec("missing")
         assert ok is False
 
     @pytest.mark.asyncio

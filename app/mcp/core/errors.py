@@ -43,16 +43,19 @@ def compute_fingerprint(exc_type: str, frames: list[dict]) -> str:
 
 
 def _pg_upsert_error(record_data: dict) -> None:
-    """同步 upsert 错误到 PG errors 表。PG 不可用时静默跳过。
+    """同步 upsert 错误到 PG errors 表。非 PG 后端 / PG 不可用时静默跳过。
 
     在守护线程或 asyncio.to_thread 中调用，不阻塞主流程。
+
+    方案 C：经存储工厂分发，不再硬编码 pg_store 模块函数。
     """
     try:
         from app.config import settings
-        if settings.storage_backend != "postgresql":
+        if settings.storage_backend != "postgresql" or settings.pg_async_enabled:
+            # memory 后端 / asyncpg 后端（async 方法需在 async 上下文调用）不在此同步路径处理
             return
-        from app.mcp.core.storage.pg_store import upsert_error
-        upsert_error(record_data)
+        from app.mcp.core.storage.factory import get_error_store
+        get_error_store().upsert_error(record_data)
     except Exception:
         logger.debug("PG errors upsert 跳过", exc_info=True)
 

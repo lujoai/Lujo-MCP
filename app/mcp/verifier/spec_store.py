@@ -35,6 +35,22 @@ def _pg_available() -> bool:
         return False
 
 
+def _pg_spec_store():
+    """经工厂分发返回 SpecStorage 实例；非 PG / asyncpg 后端返回 None。
+
+    方案 C：sampling 不再硬编码 pg_store 模块函数。asyncpg 后端的方法为
+    async，无法在同步调用链中执行，此处返回 None 走内存 + trace_store 路径。
+    """
+    try:
+        from app.config import settings
+        if settings.storage_backend != "postgresql" or settings.pg_async_enabled:
+            return None
+        from app.mcp.core.storage.factory import get_spec_store
+        return get_spec_store()
+    except Exception:
+        return None
+
+
 def _new_id() -> str:
     return "spec-" + uuid.uuid4().hex[:12]
 
@@ -66,10 +82,10 @@ def _do_restore() -> list[dict]:
     trace_store 回退路径取 updated_at 最大者。
     """
     # Phase 2.4：PG 后端直接查 specs 表（消除 N+1）
-    if _pg_available():
+    store = _pg_spec_store()
+    if store is not None:
         try:
-            from app.mcp.core.storage.pg_store import list_specs_pg
-            return list_specs_pg()
+            return store.list_specs()
         except Exception:
             logger.debug("specs 表查询失败，回退 trace_store 扫描", exc_info=True)
 
@@ -147,10 +163,10 @@ def create(spec: dict) -> str:
     with _lock:
         _specs[spec_id] = record
     # Phase 2.4：双写 —— specs 表（PG 后端优先）
-    if _pg_available():
+    store = _pg_spec_store()
+    if store is not None:
         try:
-            from app.mcp.core.storage.pg_store import save_spec
-            save_spec(record)
+            store.save_spec(record)
         except Exception:
             logger.debug("specs 表写入失败 (spec_id=%s)", spec_id, exc_info=True)
     # 保留 trace_store 写入（迁移期双写）
@@ -168,10 +184,10 @@ def get(spec_id: str) -> dict | None:
             return dict(_specs[spec_id])
 
     # Phase 2.4：PG 后端优先从 specs 表读取
-    if _pg_available():
+    store = _pg_spec_store()
+    if store is not None:
         try:
-            from app.mcp.core.storage.pg_store import get_spec
-            data = get_spec(spec_id)
+            data = store.get_spec(spec_id)
             if data is not None:
                 with _lock:
                     _specs[spec_id] = data
@@ -231,10 +247,10 @@ def update(spec_id: str, patch: dict) -> dict | None:
         updated = dict(existing)
 
     # Phase 2.4：双写 —— specs 表（PG 后端优先）
-    if _pg_available():
+    store = _pg_spec_store()
+    if store is not None:
         try:
-            from app.mcp.core.storage.pg_store import save_spec
-            save_spec(updated)
+            store.save_spec(updated)
         except Exception:
             logger.debug("specs 表更新失败 (spec_id=%s)", spec_id, exc_info=True)
     # crash-safe append：写入新版本作为提交点，失败仅记录日志不影响内存层
@@ -256,10 +272,10 @@ def delete(spec_id: str) -> bool:
 
     if existed:
         # Phase 2.4：双删 —— specs 表（PG 后端优先）
-        if _pg_available():
+        store = _pg_spec_store()
+        if store is not None:
             try:
-                from app.mcp.core.storage.pg_store import delete_spec as _pg_delete
-                _pg_delete(spec_id)
+                store.delete_spec(spec_id)
             except Exception:
                 logger.debug("specs 表删除失败 (spec_id=%s)", spec_id, exc_info=True)
         try:

@@ -63,3 +63,48 @@ class SessionStorage(ABC):
     @abstractmethod
     def cleanup_expired(self, ttl_seconds: int) -> int:
         ...
+
+
+class ErrorStorage(ABC):
+    """错误持久化存储的抽象接口（Phase 2.3 errors 表）。
+
+    方案 C 拆分：把 PG 专属的模块级 `upsert_error` 收敛为 ABC 契约，
+    使 memory / pg / async_pg 三后端契约对齐，调用方经工厂分发而非硬编码 pg import。
+    """
+
+    @abstractmethod
+    def upsert_error(self, record_data: dict) -> None:
+        """upsert 一条错误记录（按 fingerprint+session_id 去重聚合）。"""
+        ...
+
+
+class SpecStorage(ABC):
+    """Spec 持久化存储的抽象接口（Phase 2.4 specs 表）。
+
+    方案 C 拆分：把 PG 专属的模块级 spec CRUD 收敛为 ABC 契约，
+    消除 spec_store.py 对 pg_store 模块函数的硬编码 import 与 try/except 降级。
+    """
+
+    @abstractmethod
+    def save_spec(self, spec: dict) -> None:
+        """upsert 一条 spec（按 id 去重）。"""
+        ...
+
+    @abstractmethod
+    def get_spec(self, spec_id: str) -> Optional[dict]:
+        """读取一条 spec，不存在返回 None。"""
+        ...
+
+    @abstractmethod
+    def list_specs(
+        self,
+        kind: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> list[dict]:
+        """列出 specs（可按 kind/target 过滤），按 updated_at 倒序。"""
+        ...
+
+    @abstractmethod
+    def delete_spec(self, spec_id: str) -> bool:
+        """删除一条 spec，返回是否删除成功。"""
+        ...

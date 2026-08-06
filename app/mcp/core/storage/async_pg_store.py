@@ -38,7 +38,7 @@ from typing import Optional
 import asyncpg
 
 from app.config import settings
-from app.mcp.core.storage.base import TraceStorage, SessionStorage
+from app.mcp.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage
 from app.mcp.core.storage._pg_errors import sanitize_pg_error
 
 logger = logging.getLogger("ai-debug-mcp.storage.async_pg")
@@ -588,159 +588,175 @@ class AsyncPGSessionStore(SessionStorage):
 
 
 # ════════════════════════════════════════════════════
-#  Phase 2.3：errors 表 CRUD（异步版）
+#  Phase 2.3：errors 表 CRUD（异步版）—— ErrorStorage ABC 实现
 #  按 (fingerprint, session_id) upsert，冲突时 occurrence_count += 1
 # ════════════════════════════════════════════════════
-async def upsert_error(record_data: dict) -> None:
-    """异步 upsert 一条错误记录到 errors 表。
+class AsyncPGErrorStore(ErrorStorage):
+    """基于 asyncpg 的异步 Error 存储。
 
-    按 (fingerprint, session_id) 去重：
-    - 不存在 → INSERT（occurrence_count=1）
-    - 已存在 → occurrence_count += 1，刷新 last_seen/message/frames 等
-
-    session_id 为 None 时写入 "_global"，与同步实现一致。
+    .. warning:: **ASYNC REQUIREMENT** — 方法为 ``async def``，必须 ``await`` 调用。
     """
-    _check_async_context()
-    await _ensure_init()
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        frames = record_data.get("frames")
-        frames_json = (
-            json.dumps(frames, ensure_ascii=False, default=str)
-            if frames is not None
-            else None
-        )
-        session_id = record_data.get("session_id") or "_global"
-        now = record_data.get("last_seen") or time.time()
-        await conn.execute(
-            """
-            INSERT INTO errors
-                (error_id, fingerprint, exception_type, message, frames,
-                 frame_count, traceback, source, session_id,
-                 occurrence_count, first_seen, last_seen)
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12)
-            ON CONFLICT (fingerprint, session_id) DO UPDATE SET
-                occurrence_count = errors.occurrence_count + 1,
-                last_seen       = EXCLUDED.last_seen,
-                updated_at      = CURRENT_TIMESTAMP,
-                message         = EXCLUDED.message,
-                frames          = EXCLUDED.frames,
-                frame_count     = EXCLUDED.frame_count,
-                traceback       = EXCLUDED.traceback,
-                source          = EXCLUDED.source
-            """,
-            record_data.get("error_id"),
-            record_data.get("fingerprint"),
-            record_data.get("type"),
-            record_data.get("message"),
-            frames_json,
-            record_data.get("frame_count", 0),
-            record_data.get("traceback"),
-            record_data.get("source"),
-            session_id,
-            1,
-            record_data.get("first_seen", now),
-            now,
-        )
+
+    def __init__(self):
+        pass
+
+    async def upsert_error(self, record_data: dict) -> None:
+        """异步 upsert 一条错误记录到 errors 表。
+
+        按 (fingerprint, session_id) 去重：
+        - 不存在 → INSERT（occurrence_count=1）
+        - 已存在 → occurrence_count += 1，刷新 last_seen/message/frames 等
+
+        session_id 为 None 时写入 "_global"，与同步实现一致。
+        """
+        _check_async_context()
+        await _ensure_init()
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            frames = record_data.get("frames")
+            frames_json = (
+                json.dumps(frames, ensure_ascii=False, default=str)
+                if frames is not None
+                else None
+            )
+            session_id = record_data.get("session_id") or "_global"
+            now = record_data.get("last_seen") or time.time()
+            await conn.execute(
+                """
+                INSERT INTO errors
+                    (error_id, fingerprint, exception_type, message, frames,
+                     frame_count, traceback, source, session_id,
+                     occurrence_count, first_seen, last_seen)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (fingerprint, session_id) DO UPDATE SET
+                    occurrence_count = errors.occurrence_count + 1,
+                    last_seen       = EXCLUDED.last_seen,
+                    updated_at      = CURRENT_TIMESTAMP,
+                    message         = EXCLUDED.message,
+                    frames          = EXCLUDED.frames,
+                    frame_count     = EXCLUDED.frame_count,
+                    traceback       = EXCLUDED.traceback,
+                    source          = EXCLUDED.source
+                """,
+                record_data.get("error_id"),
+                record_data.get("fingerprint"),
+                record_data.get("type"),
+                record_data.get("message"),
+                frames_json,
+                record_data.get("frame_count", 0),
+                record_data.get("traceback"),
+                record_data.get("source"),
+                session_id,
+                1,
+                record_data.get("first_seen", now),
+                now,
+            )
 
 
 # ════════════════════════════════════════════════════
-#  Phase 2.4：specs 表 CRUD（异步版，独立查询，消除 N+1）
+#  Phase 2.4：specs 表 CRUD（异步版，独立查询，消除 N+1）—— SpecStorage ABC 实现
 # ════════════════════════════════════════════════════
-async def save_spec(spec: dict) -> None:
-    """异步 upsert 一条 spec 到 specs 表（按 id 去重）。"""
-    _check_async_context()
-    await _ensure_init()
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        expect = spec.get("expect") or {}
-        expect_json = json.dumps(expect, ensure_ascii=False, default=str)
-        now = spec.get("updated_at") or time.time()
-        await conn.execute(
-            """
-            INSERT INTO specs (id, kind, target, expect, created_at, updated_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-            ON CONFLICT (id) DO UPDATE SET
-                kind       = EXCLUDED.kind,
-                target     = EXCLUDED.target,
-                expect     = EXCLUDED.expect,
-                updated_at = EXCLUDED.updated_at
-            """,
-            spec.get("id"),
-            spec.get("kind", "api"),
-            spec.get("target", ""),
-            expect_json,
-            spec.get("created_at", now),
-            now,
-        )
+class AsyncPGSpecStore(SpecStorage):
+    """基于 asyncpg 的异步 Spec 存储。
 
+    .. warning:: **ASYNC REQUIREMENT** — 方法为 ``async def``，必须 ``await`` 调用。
+    """
 
-async def get_spec(spec_id: str) -> Optional[dict]:
-    """异步从 specs 表读取一条 spec。"""
-    _check_async_context()
-    await _ensure_init()
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, kind, target, expect, created_at, updated_at "
-            "FROM specs WHERE id = $1",
-            spec_id,
-        )
-        if row is None:
-            return None
-        return {
-            "id": row["id"],
-            "kind": row["kind"],
-            "target": row["target"],
-            "expect": _parse_data(row["expect"]),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
+    def __init__(self):
+        pass
 
+    async def save_spec(self, spec: dict) -> None:
+        """异步 upsert 一条 spec 到 specs 表（按 id 去重）。"""
+        _check_async_context()
+        await _ensure_init()
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            expect = spec.get("expect") or {}
+            expect_json = json.dumps(expect, ensure_ascii=False, default=str)
+            now = spec.get("updated_at") or time.time()
+            await conn.execute(
+                """
+                INSERT INTO specs (id, kind, target, expect, created_at, updated_at)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+                ON CONFLICT (id) DO UPDATE SET
+                    kind       = EXCLUDED.kind,
+                    target     = EXCLUDED.target,
+                    expect     = EXCLUDED.expect,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                spec.get("id"),
+                spec.get("kind", "api"),
+                spec.get("target", ""),
+                expect_json,
+                spec.get("created_at", now),
+                now,
+            )
 
-async def list_specs_pg(
-    kind: Optional[str] = None,
-    target: Optional[str] = None,
-) -> list[dict]:
-    """异步从 specs 表读取所有 spec（可按 kind/target 过滤），按 updated_at 倒序。"""
-    _check_async_context()
-    await _ensure_init()
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        sql = "SELECT id, kind, target, expect, created_at, updated_at FROM specs"
-        params: list = []
-        conditions: list[str] = []
-        if kind:
-            conditions.append(f"kind = ${len(params) + 1}")
-            params.append(kind)
-        if target:
-            conditions.append(f"target LIKE ${len(params) + 1}")
-            params.append(f"%{target}%")
-        if conditions:
-            sql += " WHERE " + " AND ".join(conditions)
-        sql += " ORDER BY updated_at DESC"
-        records = await conn.fetch(sql, *params)
-        return [
-            {
-                "id": r["id"],
-                "kind": r["kind"],
-                "target": r["target"],
-                "expect": _parse_data(r["expect"]),
-                "created_at": r["created_at"],
-                "updated_at": r["updated_at"],
+    async def get_spec(self, spec_id: str) -> Optional[dict]:
+        """异步从 specs 表读取一条 spec。"""
+        _check_async_context()
+        await _ensure_init()
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, kind, target, expect, created_at, updated_at "
+                "FROM specs WHERE id = $1",
+                spec_id,
+            )
+            if row is None:
+                return None
+            return {
+                "id": row["id"],
+                "kind": row["kind"],
+                "target": row["target"],
+                "expect": _parse_data(row["expect"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
             }
-            for r in records
-        ]
 
+    async def list_specs(
+        self,
+        kind: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> list[dict]:
+        """异步从 specs 表读取所有 spec（可按 kind/target 过滤），按 updated_at 倒序。"""
+        _check_async_context()
+        await _ensure_init()
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            sql = "SELECT id, kind, target, expect, created_at, updated_at FROM specs"
+            params: list = []
+            conditions: list[str] = []
+            if kind:
+                conditions.append(f"kind = ${len(params) + 1}")
+                params.append(kind)
+            if target:
+                conditions.append(f"target LIKE ${len(params) + 1}")
+                params.append(f"%{target}%")
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+            sql += " ORDER BY updated_at DESC"
+            records = await conn.fetch(sql, *params)
+            return [
+                {
+                    "id": r["id"],
+                    "kind": r["kind"],
+                    "target": r["target"],
+                    "expect": _parse_data(r["expect"]),
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                }
+                for r in records
+            ]
 
-async def delete_spec(spec_id: str) -> bool:
-    """异步从 specs 表删除一条 spec，返回是否删除成功。"""
-    _check_async_context()
-    await _ensure_init()
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        status = await conn.execute(
-            "DELETE FROM specs WHERE id = $1",
-            spec_id,
-        )
-        return _affected_rows(status) > 0
+    async def delete_spec(self, spec_id: str) -> bool:
+        """异步从 specs 表删除一条 spec，返回是否删除成功。"""
+        _check_async_context()
+        await _ensure_init()
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            status = await conn.execute(
+                "DELETE FROM specs WHERE id = $1",
+                spec_id,
+            )
+            return _affected_rows(status) > 0

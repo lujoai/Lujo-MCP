@@ -11,7 +11,7 @@ import psycopg2.pool
 import psycopg2.errors
 
 from app.config import settings
-from app.mcp.core.storage.base import TraceStorage, SessionStorage
+from app.mcp.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage
 from app.mcp.core.storage._pg_errors import sanitize_pg_error
 
 logger = logging.getLogger("ai-debug-mcp.storage.pg")
@@ -407,28 +407,55 @@ def _execute_with_retry(
     return _do_execute()
 
 
-def _query_with_retry(conn, sql: str, params: tuple = (), fetch_all: bool = True):
-    """执行查询 SQL（SELECT），受熔断器保护。
+def _query_with_retry(
+    conn,
+    sql: str,
+    params: tuple = (),
+    fetch_all: bool = True,
+    max_retries: int = 2,
+):
+    """执行查询 SQL（SELECT），遇到连接断开时自动重连重试，受熔断器保护。
 
     P3-8: 熔断器保护，当 PG 连续失败时触发熔断。
+
+    与 _execute_with_retry 对齐读路径重连重试：OperationalError 时丢弃并
+    获取新连接重试，避免在坏连接上重复查询。坏连接 putconn(close=True) 关闭，
+    避免污染连接池。
 
     返回: fetch_all=True 返回所有行列表，fetch_all=False 返回单行
     """
 
     def _do_query():
+        nonlocal conn
         pool = _get_pool()
-        try:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            if fetch_all:
-                return cur.fetchall()
-            return cur.fetchone()
-        except psycopg2.OperationalError:
+        last_error = None
+        for attempt in range(max_retries + 1):
             try:
-                pool.putconn(conn, close=True)
-            except Exception:
-                pass
-            raise
+                cur = conn.cursor()
+                cur.execute(sql, params)
+                if fetch_all:
+                    return cur.fetchall()
+                return cur.fetchone()
+            except psycopg2.OperationalError as e:
+                last_error = e
+                if attempt < max_retries:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    conn = pool.getconn()
+                    logger.warning(f"PG 查询重试 ({attempt + 1}/{max_retries}): {e}")
+                    time.sleep(0.1)
+                else:
+                    try:
+                        pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    raise last_error
 
     cb = _get_pg_circuit_breaker()
     if cb:
@@ -673,180 +700,182 @@ class PGSessionStore(SessionStorage):
 
 
 # ════════════════════════════════════════════════════
-#  Phase 2.3：errors 表 CRUD（持久化聚合）
+#  Phase 2.3：errors 表 CRUD（持久化聚合）—— ErrorStorage ABC 实现
 #  按 (fingerprint, session_id) upsert，冲突时 occurrence_count += 1
 # ════════════════════════════════════════════════════
-def upsert_error(record_data: dict) -> None:
-    """upsert 一条错误记录到 errors 表。
+class PGErrorStore(ErrorStorage):
 
-    按 (fingerprint, session_id) 去重：
-    - 不存在 → INSERT（occurrence_count=1）
-    - 已存在 → occurrence_count += 1，刷新 last_seen/message/frames 等
+    def upsert_error(self, record_data: dict) -> None:
+        """upsert 一条错误记录到 errors 表。
 
-    session_id 为 None 时写入 "_global"，与 errors 内存分桶逻辑一致。
-    """
-    _ensure_init()
-    pool = _get_pool()
-    conn = pool.getconn()
-    try:
-        frames = record_data.get("frames")
-        frames_json = (
-            json.dumps(frames, ensure_ascii=False, default=str)
-            if frames is not None
-            else None
-        )
-        session_id = record_data.get("session_id") or "_global"
-        now = record_data.get("last_seen") or time.time()
-        conn, _ = _execute_with_retry(
-            conn,
-            """
-            INSERT INTO errors
-                (error_id, fingerprint, exception_type, message, frames,
-                 frame_count, traceback, source, session_id,
-                 occurrence_count, first_seen, last_seen)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (fingerprint, session_id) DO UPDATE SET
-                occurrence_count = errors.occurrence_count + 1,
-                last_seen       = EXCLUDED.last_seen,
-                updated_at      = CURRENT_TIMESTAMP,
-                message         = EXCLUDED.message,
-                frames          = EXCLUDED.frames,
-                frame_count     = EXCLUDED.frame_count,
-                traceback       = EXCLUDED.traceback,
-                source          = EXCLUDED.source
-            """,
-            (
-                record_data.get("error_id"),
-                record_data.get("fingerprint"),
-                record_data.get("type"),
-                record_data.get("message"),
-                frames_json,
-                record_data.get("frame_count", 0),
-                record_data.get("traceback"),
-                record_data.get("source"),
-                session_id,
-                1,
-                record_data.get("first_seen", now),
-                now,
-            ),
-        )
-    finally:
-        pool.putconn(conn)
+        按 (fingerprint, session_id) 去重：
+        - 不存在 → INSERT（occurrence_count=1）
+        - 已存在 → occurrence_count += 1，刷新 last_seen/message/frames 等
+
+        session_id 为 None 时写入 "_global"，与 errors 内存分桶逻辑一致。
+        """
+        _ensure_init()
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            frames = record_data.get("frames")
+            frames_json = (
+                json.dumps(frames, ensure_ascii=False, default=str)
+                if frames is not None
+                else None
+            )
+            session_id = record_data.get("session_id") or "_global"
+            now = record_data.get("last_seen") or time.time()
+            conn, _ = _execute_with_retry(
+                conn,
+                """
+                INSERT INTO errors
+                    (error_id, fingerprint, exception_type, message, frames,
+                     frame_count, traceback, source, session_id,
+                     occurrence_count, first_seen, last_seen)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (fingerprint, session_id) DO UPDATE SET
+                    occurrence_count = errors.occurrence_count + 1,
+                    last_seen       = EXCLUDED.last_seen,
+                    updated_at      = CURRENT_TIMESTAMP,
+                    message         = EXCLUDED.message,
+                    frames          = EXCLUDED.frames,
+                    frame_count     = EXCLUDED.frame_count,
+                    traceback       = EXCLUDED.traceback,
+                    source          = EXCLUDED.source
+                """,
+                (
+                    record_data.get("error_id"),
+                    record_data.get("fingerprint"),
+                    record_data.get("type"),
+                    record_data.get("message"),
+                    frames_json,
+                    record_data.get("frame_count", 0),
+                    record_data.get("traceback"),
+                    record_data.get("source"),
+                    session_id,
+                    1,
+                    record_data.get("first_seen", now),
+                    now,
+                ),
+            )
+        finally:
+            pool.putconn(conn)
 
 
 # ════════════════════════════════════════════════════
-#  Phase 2.4：specs 表 CRUD（独立查询，消除 N+1）
+#  Phase 2.4：specs 表 CRUD（独立查询，消除 N+1）—— SpecStorage ABC 实现
 # ════════════════════════════════════════════════════
-def save_spec(spec: dict) -> None:
-    """upsert 一条 spec 到 specs 表（按 id 去重）。"""
-    _ensure_init()
-    pool = _get_pool()
-    conn = pool.getconn()
-    try:
-        expect = spec.get("expect") or {}
-        expect_json = json.dumps(expect, ensure_ascii=False, default=str)
-        now = spec.get("updated_at") or time.time()
-        conn, _ = _execute_with_retry(
-            conn,
-            """
-            INSERT INTO specs (id, kind, target, expect, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                kind       = EXCLUDED.kind,
-                target     = EXCLUDED.target,
-                expect     = EXCLUDED.expect,
-                updated_at = EXCLUDED.updated_at
-            """,
-            (
-                spec.get("id"),
-                spec.get("kind", "api"),
-                spec.get("target", ""),
-                expect_json,
-                spec.get("created_at", now),
-                now,
-            ),
-        )
-    finally:
-        pool.putconn(conn)
+class PGSpecStore(SpecStorage):
 
+    def save_spec(self, spec: dict) -> None:
+        """upsert 一条 spec 到 specs 表（按 id 去重）。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            expect = spec.get("expect") or {}
+            expect_json = json.dumps(expect, ensure_ascii=False, default=str)
+            now = spec.get("updated_at") or time.time()
+            conn, _ = _execute_with_retry(
+                conn,
+                """
+                INSERT INTO specs (id, kind, target, expect, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    kind       = EXCLUDED.kind,
+                    target     = EXCLUDED.target,
+                    expect     = EXCLUDED.expect,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (
+                    spec.get("id"),
+                    spec.get("kind", "api"),
+                    spec.get("target", ""),
+                    expect_json,
+                    spec.get("created_at", now),
+                    now,
+                ),
+            )
+        finally:
+            pool.putconn(conn)
 
-def get_spec(spec_id: str) -> Optional[dict]:
-    """从 specs 表读取一条 spec。"""
-    _ensure_init()
-    pool = _get_pool()
-    conn = pool.getconn()
-    try:
-        row = _query_with_retry(
-            conn,
-            "SELECT id, kind, target, expect, created_at, updated_at "
-            "FROM specs WHERE id = %s",
-            (spec_id,),
-            fetch_all=False,
-        )
-        if row is None:
-            return None
-        return {
-            "id": row[0],
-            "kind": row[1],
-            "target": row[2],
-            "expect": _parse_data(row[3]),
-            "created_at": row[4],
-            "updated_at": row[5],
-        }
-    finally:
-        pool.putconn(conn)
-
-
-def list_specs_pg(
-    kind: Optional[str] = None,
-    target: Optional[str] = None,
-) -> list[dict]:
-    """从 specs 表读取所有 spec（可按 kind/target 过滤），按 updated_at 倒序。"""
-    _ensure_init()
-    pool = _get_pool()
-    conn = pool.getconn()
-    try:
-        sql = (
-            "SELECT id, kind, target, expect, created_at, updated_at FROM specs"
-        )
-        params: list = []
-        conditions: list[str] = []
-        if kind:
-            conditions.append("kind = %s")
-            params.append(kind)
-        if target:
-            conditions.append("target LIKE %s")
-            params.append(f"%{target}%")
-        if conditions:
-            sql += " WHERE " + " AND ".join(conditions)
-        sql += " ORDER BY updated_at DESC"
-        rows = _query_with_retry(conn, sql, tuple(params))
-        return [
-            {
-                "id": r[0],
-                "kind": r[1],
-                "target": r[2],
-                "expect": _parse_data(r[3]),
-                "created_at": r[4],
-                "updated_at": r[5],
+    def get_spec(self, spec_id: str) -> Optional[dict]:
+        """从 specs 表读取一条 spec。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            row = _query_with_retry(
+                conn,
+                "SELECT id, kind, target, expect, created_at, updated_at "
+                "FROM specs WHERE id = %s",
+                (spec_id,),
+                fetch_all=False,
+            )
+            if row is None:
+                return None
+            return {
+                "id": row[0],
+                "kind": row[1],
+                "target": row[2],
+                "expect": _parse_data(row[3]),
+                "created_at": row[4],
+                "updated_at": row[5],
             }
-            for r in rows
-        ]
-    finally:
-        pool.putconn(conn)
+        finally:
+            pool.putconn(conn)
 
+    def list_specs(
+        self,
+        kind: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> list[dict]:
+        """从 specs 表读取所有 spec（可按 kind/target 过滤），按 updated_at 倒序。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            sql = (
+                "SELECT id, kind, target, expect, created_at, updated_at FROM specs"
+            )
+            params: list = []
+            conditions: list[str] = []
+            if kind:
+                conditions.append("kind = %s")
+                params.append(kind)
+            if target:
+                conditions.append("target LIKE %s")
+                params.append(f"%{target}%")
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+            sql += " ORDER BY updated_at DESC"
+            rows = _query_with_retry(conn, sql, tuple(params))
+            return [
+                {
+                    "id": r[0],
+                    "kind": r[1],
+                    "target": r[2],
+                    "expect": _parse_data(r[3]),
+                    "created_at": r[4],
+                    "updated_at": r[5],
+                }
+                for r in rows
+            ]
+        finally:
+            pool.putconn(conn)
 
-def delete_spec(spec_id: str) -> bool:
-    """从 specs 表删除一条 spec，返回是否删除成功。"""
-    _ensure_init()
-    pool = _get_pool()
-    conn = pool.getconn()
-    try:
-        conn, rowcount = _execute_with_retry(
-            conn,
-            "DELETE FROM specs WHERE id = %s",
-            (spec_id,),
-        )
-        return rowcount > 0
-    finally:
-        pool.putconn(conn)
+    def delete_spec(self, spec_id: str) -> bool:
+        """从 specs 表删除一条 spec，返回是否删除成功。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            conn, rowcount = _execute_with_retry(
+                conn,
+                "DELETE FROM specs WHERE id = %s",
+                (spec_id,),
+            )
+            return rowcount > 0
+        finally:
+            pool.putconn(conn)
