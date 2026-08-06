@@ -39,6 +39,7 @@ import asyncpg
 
 from app.config import settings
 from app.mcp.core.storage.base import TraceStorage, SessionStorage
+from app.mcp.core.storage._pg_errors import sanitize_pg_error
 
 logger = logging.getLogger("ai-debug-mcp.storage.async_pg")
 
@@ -165,8 +166,9 @@ async def _get_pool() -> asyncpg.Pool:
                         settings.pg_async_max,
                     )
                 except (OSError, asyncpg.PostgresError) as e:
+                    # 完整细节（含 DSN 参数）进日志，便于排障；传播的错误只含脱敏摘要（N4-FU-3）
                     logger.critical("asyncpg 连接失败: %s", e)
-                    raise RuntimeError(f"无法连接 PostgreSQL (asyncpg): {e}")
+                    raise RuntimeError(sanitize_pg_error(e)) from None
     return _pool
 
 

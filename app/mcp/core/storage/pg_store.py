@@ -12,6 +12,7 @@ import psycopg2.errors
 
 from app.config import settings
 from app.mcp.core.storage.base import TraceStorage, SessionStorage
+from app.mcp.core.storage._pg_errors import sanitize_pg_error
 
 logger = logging.getLogger("ai-debug-mcp.storage.pg")
 
@@ -86,8 +87,9 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
                         settings.pg_max_connections,
                     )
                 except psycopg2.OperationalError as e:
-                    logger.critical(f"PostgreSQL 连接失败: {e}")
-                    raise RuntimeError(f"无法连接 PostgreSQL: {e}")
+                    # 完整细节（含 DSN 参数）进日志，便于排障；传播的错误只含脱敏摘要（N4-FU-3）
+                    logger.critical("PostgreSQL 连接失败: %s", e)
+                    raise RuntimeError(sanitize_pg_error(e)) from None
     return _pool
 
 
