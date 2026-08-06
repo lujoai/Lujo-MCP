@@ -10,6 +10,18 @@ from app.agent.base import AgentResult, AgentStatus, AgentContext
 from app.agent.coordinator import Coordinator
 
 
+@pytest.fixture(autouse=True)
+def _force_phase1(monkeypatch):
+    """本文件覆盖 Phase 1 单 Agent 串行逻辑。
+
+    若 .env 中开启了 AGENT_MULTI_AGENT_ENABLED / AGENT_VERIFY_LOOP_ENABLED，
+    Coordinator.run 会走 Phase 2 DAG / Verify Loop 真实 LLM 路径，导致 mock
+    的 coord._agents["repair"] 不生效。此处强制关闭，保证测试确定走 Phase 1。
+    """
+    monkeypatch.setattr("app.config.settings.agent_multi_agent_enabled", False)
+    monkeypatch.setattr("app.config.settings.agent_verify_loop_enabled", False)
+
+
 def _make_debug_context():
     return {
         "request_id": "r1",

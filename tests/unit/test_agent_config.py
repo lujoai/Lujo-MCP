@@ -6,8 +6,13 @@ from app.config import Settings
 class TestAgentConfigDefaults:
     """新增 agent_* 字段默认值。"""
 
-    def test_agent_enabled_default_false(self):
-        """agent_enabled 默认 False，关闭时零行为变更。"""
+    def test_agent_enabled_default_false(self, monkeypatch):
+        """agent_enabled 默认 False，关闭时零行为变更。
+
+        本地 .env 可能开启 AGENT_ENABLED；环境变量优先于 .env，
+        此处显式置 false 以校验代码默认值为关闭。
+        """
+        monkeypatch.setenv("AGENT_ENABLED", "false")
         s = Settings()
         assert s.agent_enabled is False
 
@@ -31,8 +36,13 @@ class TestAgentConfigDefaults:
         assert s.agent_max_retries == 2
         assert s.agent_timeout == 90
 
-    def test_agent_multi_agent_enabled_default_false(self):
-        """Phase 2 DAG flag 默认关闭。"""
+    def test_agent_multi_agent_enabled_default_false(self, monkeypatch):
+        """Phase 2 DAG flag 默认关闭。
+
+        本地 .env 可能开启 AGENT_MULTI_AGENT_ENABLED；环境变量优先于 .env，
+        此处显式置 false 以校验代码默认值为关闭。
+        """
+        monkeypatch.setenv("AGENT_MULTI_AGENT_ENABLED", "false")
         s = Settings()
         assert s.agent_multi_agent_enabled is False
 

@@ -1,4 +1,4 @@
-﻿# Lujo-MCP 项目摘要
+# Lujo-MCP 项目摘要
 
 > AI Agent 第一入口文件。任何 AI 进入项目请先读本文件，3 分钟理解项目全貌。
 
@@ -157,7 +157,7 @@
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **654 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **798 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项）
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -198,7 +198,7 @@
 - AI Debug Agent Phase 2：多 Agent DAG（`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`）✅（2026-07-30）
 - Dashboard 实时 SSE 推送（`DASH-SSE-001`）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 轮询兜底 + 断线重连）✅（2026-07-30）
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **672 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + 安全加固 18 项）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **798 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项）。
 
 **当前优先级**：
 

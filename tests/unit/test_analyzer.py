@@ -189,7 +189,7 @@ class TestLLMProvider:
         from app.config import settings
         assert hasattr(settings, "llm_provider")
         assert hasattr(settings, "llm_base_url")
-        assert settings.llm_provider in ("openai", "zhipu", "custom", "unknown")
+        assert settings.llm_provider in ("openai", "zhipu", "custom", "deepseek", "unknown")
 
 
 class TestLLMOutputValidation:
