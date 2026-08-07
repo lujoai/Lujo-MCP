@@ -223,23 +223,56 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 `build_context(request_id, logs)` → `{request_id, flow, input, output, errors}`。单条格式异常 `try/except` 标记为 `<malformed>` 并跳过，**不阻断整体**。
 
+`build_debug_context(trace_id)` 输出当前新增 **`fault_localization`** 字段：
+
+- **来源**：`app/runtime/context/fault_localizer.py`（见 §3.4.3）。
+- **作用**：根据 runtime trace、stack frames、static analysis 信号生成故障定位候选（候选位置排序，非最终根因判断）。
+- **降级**：构建失败或 `frames` 为空时返回 `None`，不影响 Debug Context 其余部分。
+
 > ⚠️ 注意：此构建器现已含 `code_snippets`（FR11 已接线）。详见 §6。
 
-#### 3.4.3 Stacktrace Collector（`app/runtime/collectors/stacktrace.py`）✅
+#### 3.4.3 Fault Localizer（`app/runtime/context/fault_localizer.py`）✅
+
+从 stack frames 中筛选"最值得 AI Agent 优先检查的位置"（启发式候选，不声称绝对根因）。
+
+**职责**：
+
+- stack frame 分析
+- suspicious score 计算
+- `likely_cause_candidate` 生成
+- 可解释 reasons 输出（含命中的规则与加分项）
+
+**约束**：
+
+- 纯计算模块：无 IO、无数据库、无 LLM、无 RAG
+- 不改变 trace 数据（只读）
+- 归属 `runtime/context`，不依赖 mcp/agent/llm/rag
+
+**评分信号**：
+
+- stack position（栈位置）
+- suspicious inputs（可疑输入）
+- complexity hints（复杂度提示）
+- project code（是否项目代码）
+- call chain（调用链汇聚点）
+
+> ⚠️ 注意：输出统一使用 `likely_cause_candidate` / `suspicious_frames`，**不要**表述为 `root_cause` / `absolute_root_cause`——这是启发式定位，不是确定根因。
+
+#### 3.4.4 Stacktrace Collector（`app/runtime/collectors/stacktrace.py`）✅
 
 `capture_exception(exc)` → `{type, message, traceback, frames[], frame_count}`；每帧 `{file, line, function, code, locals}`。`format_trace_for_ai()` 生成精简文本（含局部变量前 N 个）。
 
-#### 3.4.4 Code Locator（`app/runtime/collectors/code_locator.py`）✅ 已接线
+#### 3.4.5 Code Locator（`app/runtime/collectors/code_locator.py`）✅ 已接线
 
 - `get_code_snippet(file, line, context_lines)`：用 `linecache` 读取 `line±context_lines` 行，报错行以 `>>> N: ` 标注；文件读不到返回 `found=False`。
 - `get_snippets_for_frames(frames)`：批量处理堆栈帧。
 - **已修复**：`config.py` 已增加 `code_context_lines`、`source_path_map`、`ide_scheme`、`whitelist_path_prefix`。
 
-#### 3.4.5 Runtime Snapshot（`app/runtime/collectors/runtime.py`）✅
+#### 3.4.6 Runtime Snapshot（`app/runtime/collectors/runtime.py`）✅
 
 `collect_runtime_snapshot()`（psutil）→ `RuntimeSnapshot{pid, cpu_percent, memory_mb, thread_count, open_files, python_version, env_hint}`。失败降级（不抛未捕获异常）。
 
-#### 3.4.6 LLM Analyzer（`app/llm/analyzer.py`）✅
+#### 3.4.7 LLM Analyzer（`app/llm/analyzer.py`）✅
 
 - `SYSTEM_PROMPT`：要求模型输出 JSON `{root_cause, impact, fix, confidence}`。
 - `build_analysis_prompt(context)`：把 context 拼为文本（调试/展示用）。
@@ -249,7 +282,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 - **✅ 新增 AsyncOpenAI**：`analyze_async` / `analyze_stream_async` 全链路 async/await，不再阻塞事件循环。
 - **✅ 多级缓存**：L1（OrderedDict LRU 进程级，100 条）+ L2（Redis 分布式，TTL 1h）+ L3 缓存预热（`app/llm/cache_prewarm.py`，从 L2 扫描热门 fingerprint 回填 L1，只写 L1 不刷新 L2 TTL，2026-07-26 落地），按 `fingerprint` 缓存 LLM 分析结果，同类错误不再重复调用。Dashboard 缓存加 Redis L2 + `invalidate_cache`。
 
-#### 3.4.7 全局异常钩子（`app/runtime/hooks/exception_hook.py`）✅
+#### 3.4.8 全局异常钩子（`app/runtime/hooks/exception_hook.py`）✅
 
 `install_global_hook()`（幂等）：
 - 覆盖 `sys.excepthook` → 未捕获同步异常自动 `capture_exception(exc, source="global_hook")`。
@@ -375,10 +408,22 @@ sequenceDiagram
 
 ```python
 # TraceEntry: {step, data, ts}
-# DebugContext: {trace, runtime?, code_snippets:[CodeSnippet], note}
+# DebugContext: {trace, runtime?, code_snippets:[CodeSnippet], fault_localization?, note}
 # CodeSnippet: {file, error_line, snippet, found}
 # RuntimeSnapshot: {pid, cpu_percent, memory_mb, thread_count, open_files, python_version, env_hint}
 # Session: {session_id, created_at, last_active, metadata}
+```
+
+`DebugContextPayload` 可选字段 **`fault_localization`**（构建失败或无 frames 时为空/`None`）：
+
+```json
+{
+  "suspicious_frames": [
+    {"file": "...", "function": "...", "line": 1, "score": 0.0, "reasons": ["..."], "is_likely_cause": false, "is_project_code": true}
+  ],
+  "likely_cause_candidate": "最值得优先检查的位置（候选，非根因）",
+  "method": "heuristic_stack_score"
+}
 ```
 
 LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|medium|low"}`。
@@ -1733,7 +1778,7 @@ Track C (RBAC)        Track A (削峰队列)         Track B (向量检索)
 
 - **Track C** 保证 `/analyze/async` 端点可被角色门控（如仅 `developer` 及以上可触发异步分析）
 - **Track A** 在 LLM 上游削峰，防止突发请求打爆 RPM/TPM 配额
-- **Track B** 在 LLM 调用前做向量召回，命中相似历史上下文时减少重复 LLM 调用（与 §3.4.6 的 L1/L2 缓存互补——L1/L2 走精确指纹，向量召回走语义相似）
+- **Track B** 在 LLM 调用前做向量召回，命中相似历史上下文时减少重复 LLM 调用（与 §3.4.7 的 L1/L2 缓存互补——L1/L2 走精确指纹，向量召回走语义相似）
 
 ### 16.6 测试与验证策略
 
