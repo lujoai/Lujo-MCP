@@ -6,7 +6,7 @@ class TestDebugFlow:
     def test_full_debug_flow(self):
         """模拟从请求到上下文构建的完整流程"""
         from app.runtime.core.logs import create_request_id, add_log, get_logs, delete_logs
-        from app.mcp.builders.context import build_context
+        from app.runtime.context.builder import build_context
 
         request_id = create_request_id()
 

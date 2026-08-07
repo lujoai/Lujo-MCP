@@ -2,7 +2,7 @@
 import pytest
 
 from app.config import settings
-from app.mcp.core.redaction import redact
+from app.runtime.core.redaction import redact
 
 
 @pytest.fixture(autouse=True)
