@@ -64,7 +64,7 @@ class TestRepairQueueFullBackpressure:
         monkeypatch.setattr(settings, "agent_queue_workers", 1)
 
         # 先用 logs API 注入一个 trace（绕过 build_context 的 404）
-        from app.mcp.core.logs import create_request_id, add_log
+        from app.runtime.core.logs import create_request_id, add_log
 
         req_id = create_request_id()
         add_log(req_id, "request_start", {"test": True})

@@ -193,7 +193,7 @@ class TestAtomicWrites:
     def test_update_appends_new_version_without_delete(self):
         """update 不再调用 delete_logs，仅追加新版本到存储层。"""
         from unittest.mock import patch
-        from app.mcp.core.logs import get_logs as _get_logs
+        from app.runtime.core.logs import get_logs as _get_logs
 
         spec_id = spec_store.create({
             "kind": "api",
@@ -210,7 +210,7 @@ class TestAtomicWrites:
 
     def test_read_returns_newest_when_multiple_versions(self):
         """多版本共存时 get() 应返回 updated_at 最大者。"""
-        from app.mcp.core.logs import add_log as _add_log
+        from app.runtime.core.logs import add_log as _add_log
         from app.runtime.verifier.spec_store import _STEP_SPEC
 
         spec_id = "multi-version-spec"
@@ -235,7 +235,7 @@ class TestAtomicWrites:
 
     def test_restore_picks_newest_version(self):
         """_restore_if_needed 应将最新版本写入 _specs。"""
-        from app.mcp.core.logs import add_log as _add_log
+        from app.runtime.core.logs import add_log as _add_log
         from app.runtime.verifier.spec_store import _STEP_SPEC
 
         spec_id = "restore-newest-spec"

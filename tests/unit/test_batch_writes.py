@@ -94,7 +94,7 @@ class TestLogsBatch:
 
     def test_add_logs_batch_writes_all(self):
         """批量写入多条日志"""
-        from app.mcp.core.logs import add_logs_batch, get_logs
+        from app.runtime.core.logs import add_logs_batch, get_logs
 
         add_logs_batch("test-batch", [
             ("meta", {"kind": "test"}),
@@ -108,7 +108,7 @@ class TestLogsBatch:
 
     def test_add_logs_batch_preserves_order(self):
         """批量写入保持顺序"""
-        from app.mcp.core.logs import add_logs_batch, get_logs
+        from app.runtime.core.logs import add_logs_batch, get_logs
 
         add_logs_batch("order-test", [
             ("c", {"x": 3}),
@@ -122,7 +122,7 @@ class TestLogsBatch:
 
     def test_add_logs_batch_empty_list(self):
         """空列表不报错"""
-        from app.mcp.core.logs import add_logs_batch
+        from app.runtime.core.logs import add_logs_batch
 
         add_logs_batch("empty", [])
 
@@ -135,7 +135,7 @@ class TestLogsBatch:
 
         monkeypatch.setattr("app.api.dashboard.invalidate_cache", mock_invalidate)
 
-        from app.mcp.core.logs import add_logs_batch
+        from app.runtime.core.logs import add_logs_batch
 
         add_logs_batch("cache-test", [
             ("meta", {}),
@@ -152,7 +152,7 @@ class TestTraceRepoBatch:
     def test_save_trace_writes_meta_link_data_in_order(self):
         """save_trace 后 META/LINK/DATA 三条按顺序写入"""
         from app.mcp.core.trace_repo import save_trace
-        from app.mcp.core.logs import get_logs
+        from app.runtime.core.logs import get_logs
 
         error_id = save_trace(
             exc_type="RuntimeError",
@@ -171,7 +171,7 @@ class TestTraceRepoBatch:
     def test_save_trace_without_trace_id_skips_link(self):
         """不传 trace_id 时只有 META + DATA"""
         from app.mcp.core.trace_repo import save_trace
-        from app.mcp.core.logs import get_logs
+        from app.runtime.core.logs import get_logs
 
         error_id = save_trace(
             exc_type="RuntimeError",
@@ -189,7 +189,7 @@ class TestTraceRepoBatch:
     def test_save_trace_data_is_last(self):
         """DATA 始终是最后一条（SEC-13 commit-marker 语义）"""
         from app.mcp.core.trace_repo import save_trace
-        from app.mcp.core.logs import get_logs
+        from app.runtime.core.logs import get_logs
 
         error_id = save_trace(
             exc_type="RuntimeError",

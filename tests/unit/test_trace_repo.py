@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from app.config import settings
 from app.mcp.core import trace_repo, errors
-from app.mcp.core.logs import list_request_ids, get_logs
+from app.runtime.core.logs import list_request_ids, get_logs
 
 
 @pytest.fixture(autouse=True)

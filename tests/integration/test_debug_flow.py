@@ -5,7 +5,7 @@ class TestDebugFlow:
 
     def test_full_debug_flow(self):
         """模拟从请求到上下文构建的完整流程"""
-        from app.mcp.core.logs import create_request_id, add_log, get_logs, delete_logs
+        from app.runtime.core.logs import create_request_id, add_log, get_logs, delete_logs
         from app.mcp.builders.context import build_context
 
         request_id = create_request_id()
@@ -39,7 +39,7 @@ class TestDebugFlow:
 
     def test_concurrent_requests(self):
         """验证多个请求的追踪互不干扰"""
-        from app.mcp.core.logs import create_request_id, add_log, get_logs, delete_logs
+        from app.runtime.core.logs import create_request_id, add_log, get_logs, delete_logs
 
         ids = [create_request_id() for _ in range(5)]
 

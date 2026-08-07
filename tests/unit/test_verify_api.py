@@ -51,14 +51,14 @@ class TestVerifyPersistence:
     @pytest.fixture(autouse=True)
     def _clean_trace_persist(self):
         """清理 PostgreSQL 中可能遗留的 trace-persist-1 数据"""
-        from app.mcp.core.logs import delete_logs
+        from app.runtime.core.logs import delete_logs
         delete_logs("trace-persist-1")
         yield
         delete_logs("trace-persist-1")
 
     def test_verify_persists_with_trace_id(self):
         """有 trace_id 时，verify 结果持久化到 logs（step=verify）"""
-        from app.mcp.core.logs import get_logs
+        from app.runtime.core.logs import get_logs
 
         result = verify_handler({
             "actual": {"status_code": 200, "body": {"name": "Bob"}},
@@ -75,7 +75,7 @@ class TestVerifyPersistence:
 
     def test_verify_no_persist_without_trace_id(self):
         """无 trace_id 时不持久化"""
-        from app.mcp.core.logs import get_logs
+        from app.runtime.core.logs import get_logs
 
         verify_handler({
             "actual": {"status_code": 200, "body": {}},
