@@ -8,7 +8,23 @@
 
 ## 1. 项目一句话介绍
 
-基于 MCP 协议的 AI 智能调试服务，解决"无报错但功能不对"的静默失败检测、"多 Agent 协同调试"以及历史结论复用三个核心问题。
+**Lujo-MCP：面向 AI Agent 的运行时调试上下文基础设施。**
+
+基于 MCP 协议，为 Claude / Trae / Cursor / Qoder 等 AI Agent 提供真实运行时 Bug 现场信息（Runtime Debug Context），解决"无报错但功能不对"的静默失败检测、"多 Agent 协同调试"以及历史结论复用（Debug Experience RAG）三个核心问题。
+
+**核心能力链路**：
+
+```
+Runtime 数据采集
+    ↓
+Debug Context 构建
+    ↓
+Debug Experience RAG 检索
+    ↓
+Agent 分析增强
+    ↓
+Verifier 验证
+```
 
 ---
 
@@ -47,11 +63,14 @@
 | 存储工厂 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) | memory/pg 一键切换 |
 | PG 存储 | [app/runtime/core/storage/pg_store.py](../../app/runtime/core/storage/pg_store.py) | 连接池+自动建表（修改需审批） |
 | 上下文构建 | [app/runtime/context/builder.py](../../app/runtime/context/builder.py) | build_debug_context |
+| 故障定位 | [app/runtime/context/fault_localizer.py](../../app/runtime/context/fault_localizer.py) | 栈帧启发式评分，生成 `likely_cause_candidate`（候选，非根因） |
 | 断言引擎 | [app/runtime/verifier/assert_engine.py](../../app/runtime/verifier/assert_engine.py) | assert_behavior 纯函数 |
 | 规范存储 | [app/runtime/verifier/spec_store.py](../../app/runtime/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
 | 异常钩子 | [app/runtime/hooks/exception_hook.py](../../app/runtime/hooks/exception_hook.py) | sys.excepthook + asyncio |
 | LLM 分析 | [app/llm/analyzer.py](../../app/llm/analyzer.py) | 重试/超时/fallback/流式 |
 | 指纹知识库 | [app/rag/knowledge_base.py](../../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀） |
+| Debug 经验记录 | [app/rag/experience.py](../../app/rag/experience.py) | `DebugExperienceRecord` 输出 DTO/View（纯 View，不建存储、不替代 DebugCase） |
+| 经验检索器 | [app/rag/retriever.py](../../app/rag/retriever.py) | 三层检索：fingerprint 精确 → message normalize → vector（默认关闭） |
 | 向量检索抽象 | [app/rag/vector_store.py](../../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
 | Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](../../app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
 | 工具注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
@@ -178,7 +197,7 @@
 
 ## 5. 当前开发阶段
 
-**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）均已落地，当前进入 Browser SDK 压缩 e2e 联调与 Docker 容器化复现阶段
+**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地，当前进入 v0.4 开发阶段收尾：以稳定性、文档完善、Release 准备为主
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -197,8 +216,28 @@
 - AI Debug Agent Phase 1：单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留 ✅（2026-07-26）
 - AI Debug Agent Phase 2：多 Agent DAG（`GitAgent` + `TestAgent` + `SecurityAgent` 编排，`AGENT-002`）✅（2026-07-30）
 - Dashboard 实时 SSE 推送（`DASH-SSE-001`）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 轮询兜底 + 断线重连）✅（2026-07-30）
+- **P1 Debug Experience RAG（2026-08-07）**：
+  - D1 Debug Experience 数据链路：`app/rag/experience.py` `DebugExperienceRecord`（纯 View DTO，不建存储、不替代 DebugCase）✅
+  - D2 RAG Retriever 能力：`app/rag/retriever.py` 三层检索（fingerprint 精确 → message normalize → vector，失败降级 `[]`）✅
+  - D3 Context Assembler 解耦：`_safe_debug_experience_recall()` 集成 + `debug_experience_enabled=False` 默认关闭，关闭零调用零耗时 ✅
+  - D4 全量验证：874 passed / 6 skipped / 0 failed；架构隔离 PASS ✅
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **798 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项）。
+**v0.4 开发阶段**：
+
+已完成：
+- Runtime Context 数据采集 ✅
+- MCP 调试工具链 ✅
+- Debug Experience Knowledge Base ✅
+- RAG Retriever ✅
+- Agent Context Assembly 解耦 ✅
+
+暂未实现：
+- 自动代码修复（Repair Loop 闭环）
+- Patch 生成
+- 多 Agent 协作（独立自动修复链路）
+- 自动 Repair Loop
+
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **874 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项）。
 
 **当前优先级**：
 

@@ -2427,3 +2427,89 @@ ContextCompleteness 将 Debug Context 拆分为 9 个维度，各维度独立评
 - ❌ 告警/通知系统
 - ❌ SaaS 托管平台
 - ❌ 多项目采集隔离（v0.5.0 团队协作的前置条件）
+
+---
+
+## 20. 冻结架构分层与依赖规则（2026-08-07 同步，P1 Debug Experience RAG）
+
+> 本节为当前**已冻结**的架构分层与依赖规则。Architecture Frozen：任何新增能力必须按本分层落位，不得改变依赖方向。
+> 背景：P1 Debug Experience RAG（D1-D4）完成后同步冻结当前架构状态。
+
+### 20.1 当前分层
+
+```
+MCP Layer
+    |
+Transport / API Layer
+    |
+Runtime Context Layer
+    |
+Agent Layer
+    |
+RAG Layer
+    |
+Storage Layer
+```
+
+| 层级 | 职责 | 关键模块 |
+| --- | --- | --- |
+| MCP Layer | 协议工具面 | `app/mcp/tools/`、`app/mcp_server.py`、`app/mcp/transports/` |
+| Transport / API Layer | 传输与 REST/API 分发 | `app/api/`、`app/mcp/protocol/` |
+| Runtime Context Layer | 采集真实运行现场 | `app/runtime/`（context / collectors / core / hooks / verifier） |
+| Agent Layer | 推理与流程编排 | `app/agent/`（coordinator / context_assembler / dag / agents） |
+| RAG Layer | 经验检索与上下文增强 | `app/rag/`（knowledge_base / vector_store / experience / retriever） |
+| Storage Layer | 持久化 | `app/runtime/core/storage/`（factory / pg / async_pg / memory） |
+
+### 20.2 依赖规则
+
+**允许**：
+
+| 依赖 | 说明 |
+| --- | --- |
+| Agent → RAG | Agent 编排层消费 RAG 能力（当前 `app/agent/context_assembler.py` → `app/rag/retriever.py`，P1 D3 落地） |
+
+**禁止**：
+
+| 依赖 | 禁止原因 |
+| --- | --- |
+| Runtime → RAG | Runtime 只负责采集真实运行现场，不消费经验检索 |
+| Runtime → Agent | Runtime 不编排 Agent |
+| Runtime → LLM | Runtime 不做模型推理 |
+| Runtime → MCP | Runtime 不依赖协议层（依赖方向已反转，MCP 依赖 Runtime） |
+| RAG → Agent | RAG 不得反向依赖 Agent |
+| RAG → Runtime | RAG 不读取运行时采集模块 |
+| RAG → LLM | RAG 不发起模型调用 |
+| RAG → MCP | RAG 不依赖协议层 |
+
+**分层职责**：
+
+- **Runtime**：负责采集真实运行现场（trace / stack / runtime / git / network / ui / spec）。
+- **RAG**：负责经验检索和上下文增强（Debug Experience Knowledge Base → Retriever → Agent Context）。
+- **Agent**：负责推理和流程编排（Runtime ↓ Agent ├── RAG └── LLM）。
+
+### 20.3 P1 Debug Experience RAG（D1-D4）
+
+**数据流**：
+
+```
+异常特征（exception type / message / fingerprint / debug context）
+    ↓
+Debug Experience Retriever（app/rag/retriever.py）
+    ├─ L1 fingerprint 精确匹配（score 1.0，source="fingerprint"）
+    ├─ L2 message normalize 相似匹配（score 0.95 + Jaccard，source="message_similarity"）
+    └─ L3 vector 召回（仅 vector_store_enabled=True，source="vector"）
+    ↓
+list[DebugExperienceRecord]（app/rag/experience.py，纯 View DTO）
+    ↓
+Agent Context Assembler 注入 assemble() 输出 debug_experience（可选，默认 None）
+    ↓
+后续 Repair Loop（未来规划，未实现）
+```
+
+**设计约束**：
+
+- `DebugExperienceRecord` 只能作为 Retriever 输出 DTO/View：不创建数据库存储、不替代 `DebugCase`、不修改已有 KB schema。
+- 数据来源必须是已有 `DebugCase` / KB / verify writeback，Retriever 本身不产生新数据。
+- Feature flag：`debug_experience_enabled=False`（默认关闭）；关闭状态不调用 retriever，零额外耗时。
+- 降级：Retriever 任何异常禁止 raise，返回 `[]` 或已有成功结果，不阻断 Agent assemble 主流程。
+- 禁止：引入 RepairAgent、引入新的 LLM 调用链、实现 Repair Loop 代码。

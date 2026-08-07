@@ -99,24 +99,24 @@ rag ──▶ 外部向量库（qdrant）
 ## 5. 当前发现问题（V1 已裁决，冻结）
 
 ### F1（✅ 已接受）— tools 直接调用 LLM
-- 位置：[debug_api.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/mcp/tools/debug_api.py#L8) `from app.llm.analyzer import analyze`
+- 位置：[debug_api.py](../../app/mcp/tools/debug_api.py#L8) `from app.llm.analyzer import analyze`
 - **裁决**：接受。`mcp/tools` 作为 **Application Adapter / Composition Layer**，负责组合 runtime/llm/agent 能力。**不引入 service facade 层**，除非后续明确要求。
 - 允许方向：`mcp/tools → runtime · llm · agent`（编排）。
 
 ### F2（✅ 已接受）— tools 直接调用 Agent
-- 位置：[repair_api.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/mcp/tools/repair_api.py#L15) `from app.agent.repair_queue import get_repair_queue`
+- 位置：[repair_api.py](../../app/mcp/tools/repair_api.py#L15) `from app.agent.repair_queue import get_repair_queue`
 - **裁决**：接受，与 F1 一并作为编排边界。禁止改为 `mcp → services → agent`，除非明确要求。
 
 ### F3（✅ 已批准）— LLM 依赖 RAG
-- 位置：[analyzer.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/llm/analyzer.py#L17-L29) `app.rag.knowledge_base` / `app.rag.debug_case` / `app.rag.vector_store`
+- 位置：[analyzer.py](../../app/llm/analyzer.py#L17-L29) `app.rag.knowledge_base` / `app.rag.debug_case` / `app.rag.vector_store`
 - **裁决**：批准为显式依赖 `llm → rag`（知识检索增强）。禁止反向 `rag → llm`。
 
 ### F4（⏸ 暂不处理）— app/services 为空
-- 位置：[services/__init__.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/services/__init__.py)
+- 位置：[services/__init__.py](../../app/services/__init__.py)
 - **裁决**：暂不处理。不因 F4 引入 service 层；空占位保持现状，除非后续明确要求清理。
 
 ### F5（⏸ 后续单独处理）— schema 重复定义
-- 位置：[schemas/__init__.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/schemas/__init__.py#L8) 与 [schemas/trace.py](file:///c:/Users/ASUS/Dev/Projects/Lujo-MCP/app/schemas/trace.py#L15) 均定义 `TraceEntry`
+- 位置：[schemas/__init__.py](../../app/schemas/__init__.py#L8) 与 [schemas/trace.py](../../app/schemas/trace.py#L15) 均定义 `TraceEntry`
 - **裁决**：后续单独处理，不在架构冻结范围强制。
 
 ### ✅ 已确认边界清晰项（无需处理）
