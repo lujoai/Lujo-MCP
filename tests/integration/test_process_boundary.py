@@ -429,7 +429,7 @@ class TestUninstallGlobalHook:
     """N3：验证 uninstall_global_hook 行为"""
 
     def test_uninstall_restores_excepthook(self):
-        from app.mcp.hooks import exception_hook
+        from app.runtime.hooks import exception_hook
 
         original = sys.excepthook
         try:
@@ -448,7 +448,7 @@ class TestUninstallGlobalHook:
             sys.excepthook = original
 
     def test_uninstall_is_idempotent(self):
-        from app.mcp.hooks import exception_hook
+        from app.runtime.hooks import exception_hook
 
         original = sys.excepthook
         try:

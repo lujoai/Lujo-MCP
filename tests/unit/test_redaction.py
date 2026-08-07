@@ -93,7 +93,7 @@ def test_json_no_false_positive():
 def test_capture_exception_message_redacted():
     """exception_hook 路径：capture_exception 返回的 message 经 _redact_exception_data 后被脱敏"""
     from app.runtime.collectors.stacktrace import capture_exception
-    from app.mcp.hooks.exception_hook import _redact_exception_data
+    from app.runtime.hooks.exception_hook import _redact_exception_data
 
     try:
         raise ValueError('login failed password="super_secret"')
@@ -108,7 +108,7 @@ def test_capture_exception_message_redacted():
 def test_capture_exception_traceback_redacted():
     """exception_hook 路径：capture_exception 返回的 traceback 经 _redact_exception_data 后被脱敏"""
     from app.runtime.collectors.stacktrace import capture_exception
-    from app.mcp.hooks.exception_hook import _redact_exception_data
+    from app.runtime.hooks.exception_hook import _redact_exception_data
 
     secret_token = "ghp_abc123secrettoken"
     try:
