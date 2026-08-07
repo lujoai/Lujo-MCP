@@ -3,13 +3,13 @@
 import pytest
 import logging
 
-from app.mcp.core.storage.memory_store import MemoryTraceStore, MemorySessionStore
+from app.runtime.core.storage.memory_store import MemoryTraceStore, MemorySessionStore
 
 
 @pytest.fixture(autouse=True)
 def _reset_factory_cache():
     """每个测试前重置 factory 全局缓存，避免缓存污染"""
-    import app.mcp.core.storage.factory as f
+    import app.runtime.core.storage.factory as f
     f._trace_store = None
     f._session_store = None
     yield
@@ -29,10 +29,10 @@ class TestTraceStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.mcp.core.storage.pg_store.PGTraceStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGTraceStore.__init__", _boom)
 
         with caplog.at_level(logging.WARNING):
-            from app.mcp.core.storage.factory import get_trace_store
+            from app.runtime.core.storage.factory import get_trace_store
             store = get_trace_store()
 
         assert isinstance(store, MemoryTraceStore)
@@ -48,9 +48,9 @@ class TestTraceStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.mcp.core.storage.pg_store.PGTraceStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGTraceStore.__init__", _boom)
 
-        from app.mcp.core.storage.factory import get_trace_store
+        from app.runtime.core.storage.factory import get_trace_store
         with pytest.raises(RuntimeError, match="模拟 PG 连接失败"):
             get_trace_store()
 
@@ -59,7 +59,7 @@ class TestTraceStoreFallback:
         monkeypatch.setattr("app.config.settings.storage_backend", "memory")
         monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
-        from app.mcp.core.storage.factory import get_trace_store
+        from app.runtime.core.storage.factory import get_trace_store
         store = get_trace_store()
 
         assert isinstance(store, MemoryTraceStore)
@@ -77,10 +77,10 @@ class TestSessionStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.mcp.core.storage.pg_store.PGSessionStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGSessionStore.__init__", _boom)
 
         with caplog.at_level(logging.WARNING):
-            from app.mcp.core.storage.factory import get_session_store
+            from app.runtime.core.storage.factory import get_session_store
             store = get_session_store()
 
         assert isinstance(store, MemorySessionStore)
@@ -96,9 +96,9 @@ class TestSessionStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.mcp.core.storage.pg_store.PGSessionStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGSessionStore.__init__", _boom)
 
-        from app.mcp.core.storage.factory import get_session_store
+        from app.runtime.core.storage.factory import get_session_store
         with pytest.raises(RuntimeError, match="模拟 PG 连接失败"):
             get_session_store()
 
@@ -107,7 +107,7 @@ class TestSessionStoreFallback:
         monkeypatch.setattr("app.config.settings.storage_backend", "memory")
         monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
-        from app.mcp.core.storage.factory import get_session_store
+        from app.runtime.core.storage.factory import get_session_store
         store = get_session_store()
 
         assert isinstance(store, MemorySessionStore)

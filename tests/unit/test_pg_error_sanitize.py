@@ -8,7 +8,7 @@
 
 import pytest
 
-from app.mcp.core.storage._pg_errors import sanitize_pg_error
+from app.runtime.core.storage._pg_errors import sanitize_pg_error
 
 
 def _dsn_leak_variants():

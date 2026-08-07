@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import Any
 
-from app.mcp.core.storage.factory import get_trace_store
+from app.runtime.core.storage.factory import get_trace_store
 
 
 def create_request_id() -> str:

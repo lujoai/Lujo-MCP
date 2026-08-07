@@ -54,7 +54,7 @@ def _pg_upsert_error(record_data: dict) -> None:
         if settings.storage_backend != "postgresql" or settings.pg_async_enabled:
             # memory 后端 / asyncpg 后端（async 方法需在 async 上下文调用）不在此同步路径处理
             return
-        from app.mcp.core.storage.factory import get_error_store
+        from app.runtime.core.storage.factory import get_error_store
         get_error_store().upsert_error(record_data)
     except Exception:
         logger.debug("PG errors upsert 跳过", exc_info=True)
@@ -368,7 +368,7 @@ def query_pg_errors(
         from app.config import settings
         if settings.storage_backend != "postgresql":
             return []
-        from app.mcp.core.storage.pg_store import _get_pool, _ensure_init, _parse_data
+        from app.runtime.core.storage.pg_store import _get_pool, _ensure_init, _parse_data
     except Exception:
         return []
 

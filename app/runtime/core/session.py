@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import Optional
 
-from app.mcp.core.storage.factory import get_session_store
+from app.runtime.core.storage.factory import get_session_store
 from app.config import settings
 
 

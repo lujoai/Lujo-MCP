@@ -45,7 +45,7 @@ def _pg_spec_store():
         from app.config import settings
         if settings.storage_backend != "postgresql" or settings.pg_async_enabled:
             return None
-        from app.mcp.core.storage.factory import get_spec_store
+        from app.runtime.core.storage.factory import get_spec_store
         return get_spec_store()
     except Exception:
         return None

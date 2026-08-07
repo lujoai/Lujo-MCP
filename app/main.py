@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
     # 启动定时清理任务
     import asyncio
     import uuid
-    from app.mcp.core.storage.factory import get_trace_store, get_session_store
+    from app.runtime.core.storage.factory import get_trace_store, get_session_store
     from app.state.store import get_state_store, RedisStateStore
     
     # 启动期 fail-fast：主动触发 factory 校验，非法 STORAGE_BACKEND 立即崩，
@@ -217,7 +217,7 @@ async def lifespan(app: FastAPI):
     # 优雅关闭：关闭 PG 连接池（同步 psycopg2）
     if settings.storage_backend == "postgresql":
         try:
-            from app.mcp.core.storage.pg_store import close_pool
+            from app.runtime.core.storage.pg_store import close_pool
             close_pool()
         except Exception as e:
             logger.warning(f"关闭 PG 连接池失败: {e}")
@@ -225,7 +225,7 @@ async def lifespan(app: FastAPI):
     # 优雅关闭：关闭 asyncpg 连接池（Phase 3.1）
     if settings.pg_async_enabled:
         try:
-            from app.mcp.core.storage.async_pg_store import close_pool as close_async_pool
+            from app.runtime.core.storage.async_pg_store import close_pool as close_async_pool
             await close_async_pool()
         except Exception as e:
             logger.warning(f"关闭 asyncpg 连接池失败: {e}")
@@ -278,7 +278,7 @@ def health():
     storage_ok = True
     if settings.storage_backend == "postgresql":
         try:
-            from app.mcp.core.storage.factory import get_trace_store
+            from app.runtime.core.storage.factory import get_trace_store
             storage_ok = get_trace_store().ping()
         except Exception:
             storage_ok = False
@@ -302,7 +302,7 @@ def internal_health():
     storage_detail = settings.storage_backend
     if settings.storage_backend == "postgresql":
         try:
-            from app.mcp.core.storage.factory import get_trace_store
+            from app.runtime.core.storage.factory import get_trace_store
             if get_trace_store().ping():
                 storage_detail = "postgresql (connected)"
             else:

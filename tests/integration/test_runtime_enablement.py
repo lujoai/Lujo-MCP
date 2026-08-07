@@ -147,7 +147,7 @@ def test_circuit_breaker_instances_available_when_enabled():
     _require_circuit_breaker()
 
     from app.llm.analyzer import _get_llm_circuit_breaker
-    from app.mcp.core.storage.pg_store import _get_pg_circuit_breaker
+    from app.runtime.core.storage.pg_store import _get_pg_circuit_breaker
 
     assert _get_llm_circuit_breaker() is not None
     assert _get_pg_circuit_breaker() is not None

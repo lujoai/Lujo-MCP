@@ -1,7 +1,7 @@
 """单元测试：批量写入（P3-3）—— storage 批量接口 + logs 批量 API"""
 
-from app.mcp.core.storage.memory_store import MemoryTraceStore
-from app.mcp.core.storage.base import TraceStorage
+from app.runtime.core.storage.memory_store import MemoryTraceStore
+from app.runtime.core.storage.base import TraceStorage
 
 
 class TestMemorySaveEntries:

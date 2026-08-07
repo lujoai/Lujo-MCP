@@ -171,16 +171,16 @@ class TestPGCircuitBreaker:
 
     def teardown_method(self):
         """每个测试后清理熔断器实例"""
-        import app.mcp.core.storage.pg_store as pg_store_module
+        import app.runtime.core.storage.pg_store as pg_store_module
 
         if pg_store_module._pg_circuit_breaker:
             pg_store_module._pg_circuit_breaker.close()
         pg_store_module._pg_circuit_breaker = None
 
-    @patch("app.mcp.core.storage.pg_store._get_pool")
+    @patch("app.runtime.core.storage.pg_store._get_pool")
     def test_pg_circuit_breaker_triggers_after_max_failures(self, mock_get_pool):
         """PG 连续失败达到 fail_max 后触发熔断"""
-        from app.mcp.core.storage.pg_store import _execute_with_retry
+        from app.runtime.core.storage.pg_store import _execute_with_retry
         import pybreaker
         import psycopg2
 
@@ -190,7 +190,7 @@ class TestPGCircuitBreaker:
             exclude=[pybreaker.CircuitBreakerError],
         )
 
-        import app.mcp.core.storage.pg_store as pg_store_module
+        import app.runtime.core.storage.pg_store as pg_store_module
 
         pg_store_module._pg_circuit_breaker = cb
 
@@ -207,11 +207,11 @@ class TestPGCircuitBreaker:
         with pytest.raises(pybreaker.CircuitBreakerError):
             _execute_with_retry(mock_conn, "SELECT 1", max_retries=0)
 
-    @patch("app.mcp.core.storage.pg_store._get_pool")
-    @patch("app.mcp.core.storage.pg_store._get_pg_circuit_breaker")
+    @patch("app.runtime.core.storage.pg_store._get_pool")
+    @patch("app.runtime.core.storage.pg_store._get_pg_circuit_breaker")
     def test_pg_circuit_breaker_disabled_when_setting_off(self, mock_get_cb, mock_get_pool):
         """circuit_breaker_enabled=False 时不触发熔断"""
-        from app.mcp.core.storage.pg_store import _execute_with_retry
+        from app.runtime.core.storage.pg_store import _execute_with_retry
         import psycopg2
 
         mock_get_cb.return_value = None
@@ -227,10 +227,10 @@ class TestPGCircuitBreaker:
             with pytest.raises(psycopg2.OperationalError):
                 _execute_with_retry(mock_conn, "SELECT 1", max_retries=0)
 
-    @patch("app.mcp.core.storage.pg_store._get_pool")
+    @patch("app.runtime.core.storage.pg_store._get_pool")
     def test_pg_circuit_breaker_protects_queries(self, mock_get_pool):
         """PG 查询方法受熔断器保护"""
-        from app.mcp.core.storage.pg_store import _query_with_retry
+        from app.runtime.core.storage.pg_store import _query_with_retry
         import pybreaker
         import psycopg2
 
@@ -240,7 +240,7 @@ class TestPGCircuitBreaker:
             exclude=[pybreaker.CircuitBreakerError],
         )
 
-        import app.mcp.core.storage.pg_store as pg_store_module
+        import app.runtime.core.storage.pg_store as pg_store_module
 
         pg_store_module._pg_circuit_breaker = cb
 
@@ -271,7 +271,7 @@ class TestCircuitBreakerDisabledWhenPybreakerMissing:
     def test_pg_circuit_breaker_none_when_pybreaker_missing(self):
         """pybreaker 未安装时 PG 熔断器为 None"""
         import importlib
-        from app.mcp.core.storage import pg_store
+        from app.runtime.core.storage import pg_store
 
         importlib.reload(pg_store)
         assert pg_store._pg_circuit_breaker is None

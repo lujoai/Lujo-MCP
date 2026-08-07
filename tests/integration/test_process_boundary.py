@@ -344,7 +344,7 @@ class TestPGPoolLifecycleBoundary:
 
         # 前置探测：PG 是否真的可连通
         try:
-            from app.mcp.core.storage.pg_store import _get_pool
+            from app.runtime.core.storage.pg_store import _get_pool
             pool = _get_pool()
             conn = pool.getconn()
             try:
@@ -480,7 +480,7 @@ class TestCleanupResources:
 
     def test_cleanup_closes_pg_pool_when_postgresql(self, monkeypatch):
         import app.mcp_server as mcp_server
-        from app.mcp.core.storage import pg_store
+        from app.runtime.core.storage import pg_store
 
         monkeypatch.setattr(mcp_server, "_cleanup_done", False)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
@@ -503,7 +503,7 @@ class TestCleanupResources:
 
     def test_cleanup_skips_pg_pool_when_memory(self, monkeypatch):
         import app.mcp_server as mcp_server
-        from app.mcp.core.storage import pg_store
+        from app.runtime.core.storage import pg_store
 
         monkeypatch.setattr(mcp_server, "_cleanup_done", False)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
