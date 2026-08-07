@@ -71,6 +71,7 @@ def test_to_dict_roundtrip():
     assert set(d.keys()) == {
         "fingerprint", "exception_type", "message_pattern", "debug_context_summary",
         "fault_location", "analysis", "solution", "verification_result", "confidence",
+        "source",
     }
     d["analysis"]["x"] = 1
     d["fault_location"].append("b.py")

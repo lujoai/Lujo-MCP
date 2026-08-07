@@ -44,6 +44,8 @@ class DebugExperienceRecord:
     solution: str = ""
     verification_result: str = "unverified"
     confidence: float = 0.0
+    # 检索来源标记（retriever 赋值）：fingerprint / message_similarity / vector
+    source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """转 dict（供 Agent 上下文 JSON 序列化）。"""
@@ -57,6 +59,7 @@ class DebugExperienceRecord:
             "solution": self.solution,
             "verification_result": self.verification_result,
             "confidence": self.confidence,
+            "source": self.source,
         }
 
     # ── 构造：从 KB entry 映射 ──
