@@ -27,7 +27,7 @@ from app.rag.debug_case import (
     normalize_message_for_similarity,
 )
 from app.rag.vector_store import get_vector_store
-from app.mcp.core.redaction import redact
+from app.runtime.core.redaction import redact
 
 logger = logging.getLogger("ai-debug-mcp.llm")
 
