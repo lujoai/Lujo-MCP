@@ -7,9 +7,9 @@ import os
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.mcp.core.logs import create_request_id, add_log, get_logs
-from app.mcp.builders.context import build_context
-from app.mcp.collectors.stacktrace import capture_exception, format_trace_for_ai
+from app.runtime.core.logs import create_request_id, add_log, get_logs
+from app.runtime.context.builder import build_context
+from app.runtime.collectors.stacktrace import capture_exception, format_trace_for_ai
 
 
 def risky_function(x, y):
