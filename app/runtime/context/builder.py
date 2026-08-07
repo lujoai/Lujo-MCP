@@ -2,6 +2,8 @@
 
 import logging
 
+from app.runtime.context.fault_localizer import localize, to_payload
+
 logger = logging.getLogger("ai-debug-mcp.context")
 
 
@@ -199,6 +201,15 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     exc_type = trace.get("exc_type")
     message = trace.get("message")
 
+    # 故障定位候选（V1）：仅筛选"最值得优先检查的位置"，不声称绝对根因。
+    # 失败降级为 None，不影响 Debug Context 其余部分。
+    fault_localization = None
+    if frames:
+        try:
+            fault_localization = to_payload(localize(frames, exc_type, message))
+        except Exception:
+            logger.warning("fault_localization 构建失败 (trace_id=%s)", tid)
+
     return {
         "request_id": tid,
         "trace_id": tid,
@@ -224,6 +235,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "ui_events": ui_events,
         "spec_diffs": spec_diffs,
         "runtime": runtime,
+        "fault_localization": fault_localization,
     }
 
 

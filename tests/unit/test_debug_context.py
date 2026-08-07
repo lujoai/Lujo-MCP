@@ -114,3 +114,53 @@ def test_build_debug_context_spec_diffs_none_when_no_verify():
     ctx = build_debug_context(tid)
     assert ctx is not None
     assert ctx["spec_diffs"] is None
+
+
+def test_build_debug_context_includes_fault_localization():
+    """正常 trace：build_debug_context 返回 fault_localization，含候选结构。"""
+    tid = trace_repo.save_trace(
+        "ValueError", "bad value",
+        frames=[{"file": "app/config.py", "line": 9, "function": "Settings"}],
+        source="test",
+    )
+    ctx = build_debug_context(tid)
+    assert ctx is not None
+    fl = ctx["fault_localization"]
+    assert fl is not None
+    assert "suspicious_frames" in fl
+    assert "method" in fl
+    assert "likely_cause_candidate" in fl
+    assert isinstance(fl["suspicious_frames"], list)
+
+
+def test_build_debug_context_fault_localization_none_when_no_frames():
+    """空 frames：不报错，fault_localization=None。"""
+    tid = trace_repo.save_trace("E", "m", [])
+    ctx = build_debug_context(tid)
+    assert ctx is not None
+    assert ctx["fault_localization"] is None
+
+
+def test_build_debug_context_fault_localizer_error_degrades(monkeypatch):
+    """localizer 异常不影响 Debug Context：原有字段正常返回，fault_localization=None。"""
+    from app.runtime.context import builder as context_builder
+
+    tid = trace_repo.save_trace(
+        "ValueError", "bad value",
+        frames=[{"file": "app/config.py", "line": 9, "function": "Settings"}],
+        source="test",
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("localizer boom")
+
+    monkeypatch.setattr(context_builder, "localize", _boom)
+    ctx = build_debug_context(tid)
+
+    assert ctx is not None
+    # 原有 Debug Context 正常返回，不被 localizer 异常影响
+    assert ctx["exception"]["type"] == "ValueError"
+    assert ctx["exception"]["frames"] == [{"file": "app/config.py", "line": 9, "function": "Settings"}]
+    assert "runtime" in ctx
+    assert "code_snippets" in ctx
+    assert ctx["fault_localization"] is None

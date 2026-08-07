@@ -278,9 +278,24 @@ class TestPayloadAndDeterminism:
         assert payload["suspicious_frames"][0]["contributions"][0]["rule"] == "stack_position"
 
     def test_module_import_does_not_touch_upper_layers(self):
-        """纯计算约束：import fault_localizer 不触发 mcp/agent/llm/rag。"""
-        import sys as _sys
+        """纯计算约束：在干净进程中 import fault_localizer 不触发 mcp/agent/llm/rag。
 
-        # 关键上层模块不应被加载
-        for forbidden in ("app.llm", "app.agent", "app.rag", "app.mcp"):
-            assert forbidden not in _sys.modules, f"{forbidden} 不应被导入"
+        用子进程隔离验证：主测试进程中可能已被其他测试模块（如 test_debug_context）
+        加载 app.llm 等上层模块，直接检查 sys.modules 会误报。
+        """
+        import subprocess
+        import sys
+
+        code = (
+            "import sys;"
+            "import app.runtime.context.fault_localizer;"
+            "bad=[m for m in ('app.llm','app.agent','app.rag','app.mcp') if m in sys.modules];"
+            "print('loaded:', bad);"
+            "sys.exit(1 if bad else 0)"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True
+        )
+        assert proc.returncode == 0, (
+            f"干净进程下 import fault_localizer 不应加载上层模块: {proc.stdout} {proc.stderr}"
+        )

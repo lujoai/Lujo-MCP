@@ -31,6 +31,7 @@ class DebugContextPayload(BaseModel):
     trace: TraceEntry
     runtime: Optional[RuntimeInfo] = None
     code_snippets: list[CodeSnippet] = Field(default_factory=list)
+    fault_localization: Optional[dict] = None
     note: str = (
         "以上为原始堆栈、运行时状态与相关代码片段，未做 AI 分析。"
         "请结合项目代码库上下文自行判断根因与修复方案。"
