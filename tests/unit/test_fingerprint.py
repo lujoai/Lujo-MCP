@@ -1,7 +1,8 @@
 """指纹去重 + 聚合单测（M10）"""
 import pytest
 
-from app.mcp.core import errors, trace_repo
+from app.runtime.core import errors
+from app.mcp.core import trace_repo
 from app.mcp.tools import trace_api
 
 

@@ -2,7 +2,7 @@
 import time
 
 
-from app.mcp.core import errors
+from app.runtime.core import errors
 
 
 def _frames():

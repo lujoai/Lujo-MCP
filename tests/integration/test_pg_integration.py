@@ -274,7 +274,8 @@ class TestTraceRepoPersistence:
 
     def test_get_trace_reads_back_from_pg_after_errors_clear(self, unique_request_id):
         """C4 下半段：写入 → 清空 errors 内存 → get_trace 仍能从 PG 读回"""
-        from app.mcp.core import trace_repo, errors
+        from app.mcp.core import trace_repo
+        from app.runtime.core import errors
 
         error_id = trace_repo.save_trace(
             "SilentFailure", "click no response",

@@ -1,7 +1,7 @@
 """单元测试公共 fixture：每个用例前后清空全局 errors 近期缓冲，避免指纹去重导致的跨用例污染。"""
 import pytest
 
-from app.mcp.core import errors
+from app.runtime.core import errors
 
 
 @pytest.fixture(autouse=True)

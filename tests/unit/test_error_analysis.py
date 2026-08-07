@@ -4,7 +4,7 @@ import pytest
 import time
 from unittest.mock import patch, MagicMock
 
-from app.mcp.core import errors
+from app.runtime.core import errors
 from app.api import dashboard as dashboard_module
 
 
