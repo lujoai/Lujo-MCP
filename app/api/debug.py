@@ -7,12 +7,11 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import json
 
 from app.config import settings
-from app.mcp.core.logs import create_request_id, add_log, get_logs
-from app.mcp.core.session import session_manager
-import time
-from app.mcp.builders.context import build_context
-from app.mcp.collectors.runtime import collect_runtime_snapshot
-from app.mcp.collectors.stacktrace import capture_exception
+from app.runtime.core.logs import create_request_id, add_log, get_logs
+from app.runtime.core.session import session_manager
+from app.runtime.context.builder import build_context
+from app.runtime.collectors.runtime import collect_runtime_snapshot
+from app.runtime.collectors.stacktrace import capture_exception
 from app.llm.analyzer import analyze, analyze_stream_async
 from app.llm.analysis_queue import get_analysis_queue, QueueFullError
 from app.agent.repair_queue import get_repair_queue, QueueFullError as RepairQueueFullError
@@ -63,7 +62,7 @@ def debug_run(req: DebugRequest) -> DebugResponse:
             context["exception"] = error_info
             # FR11：附加报错行源码片段
             if error_info.get("frames"):
-                from app.mcp.collectors.code_locator import get_snippets_for_frames
+                from app.runtime.collectors.code_locator import get_snippets_for_frames
                 context["code_snippets"] = [
                     s.model_dump() for s in get_snippets_for_frames(error_info["frames"])
                 ]

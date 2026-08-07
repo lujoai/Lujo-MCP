@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth.rbac import require_role
-from app.mcp.verifier import spec_store
+from app.runtime.verifier import spec_store
 from app.schemas import Spec, SpecListResponse
 
 logger = logging.getLogger("ai-debug-mcp.spec_api")

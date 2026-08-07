@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth.rbac import require_role
-from app.mcp.core import errors, logs
+from app.runtime.core import errors, logs
 from app.llm.analyzer import _get_redis_cache
 
 logger = logging.getLogger("ai-debug-mcp.dashboard")
@@ -231,7 +231,7 @@ def get_stats():
         if t.get("trace_kind") == "exception" and not t.get("has_silent_failure")
     )
 
-    from app.mcp.verifier import spec_store
+    from app.runtime.verifier import spec_store
     spec_count = len(spec_store.list_specs())
 
     return {
@@ -253,7 +253,7 @@ def list_traces(limit: int = 100):
 @router.get("/trace/{trace_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def get_trace_detail(trace_id: str):
     """获取 trace 详情（含 spec_diffs + quality_report，v0.4.0）"""
-    from app.mcp.builders.context import build_debug_context
+    from app.runtime.context.builder import build_debug_context
 
     ctx = build_debug_context(trace_id)
     if ctx is None:
@@ -308,7 +308,7 @@ def get_trace_quality(trace_id: str):
     复用 get_trace_detail 的评分逻辑，但只返回 quality_report 字段，
     供前端单独轮询或刷新质量评分（避免拉取完整 trace 详情）。
     """
-    from app.mcp.builders.context import build_debug_context
+    from app.runtime.context.builder import build_debug_context
 
     ctx = build_debug_context(trace_id)
     if ctx is None:
@@ -324,7 +324,7 @@ def get_trace_quality(trace_id: str):
 @router.get("/specs", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def list_specs():
     """列出所有已存规范"""
-    from app.mcp.verifier import spec_store
+    from app.runtime.verifier import spec_store
     return {"specs": spec_store.list_specs()}
 
 

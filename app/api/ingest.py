@@ -17,7 +17,7 @@ from app.mcp.tools.network_api import tool_ingest_network, tool_get_network_trac
 from app.mcp.tools.silent_failure_api import tool_ingest_silent_failure
 from app.mcp.tools.ingest_api import tool_ingest_error
 from app.mcp.tools.console_api import tool_ingest_console
-from app.mcp.core.trace_repo import save_ui_event
+from app.runtime.core.trace_repo import save_ui_event
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 logger = logging.getLogger("ai-debug-mcp.ingest")

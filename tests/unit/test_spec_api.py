@@ -101,7 +101,7 @@ class TestSpecAPIErrorSanitization:
         sensitive = "DB_PASSWORD=hunter2"
         def _boom(_):
             raise RuntimeError(sensitive)
-        monkeypatch.setattr("app.mcp.verifier.spec_store.create", _boom)
+        monkeypatch.setattr("app.runtime.verifier.spec_store.create", _boom)
 
         resp = client.post("/api/spec", json={"kind": "api", "target": "GET /x", "expect": {}})
         assert resp.status_code == 500
@@ -112,7 +112,7 @@ class TestSpecAPIErrorSanitization:
         sensitive = "postgresql://user:pwd@host:5432/db"
         def _boom(*, kind=None, target=None):
             raise RuntimeError(sensitive)
-        monkeypatch.setattr("app.mcp.verifier.spec_store.list_specs", _boom)
+        monkeypatch.setattr("app.runtime.verifier.spec_store.list_specs", _boom)
 
         resp = client.get("/api/spec")
         assert resp.status_code == 500
