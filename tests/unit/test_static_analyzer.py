@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from app.mcp.collectors.static_analyzer import analyze
+from app.runtime.collectors.static_analyzer import analyze
 
 
 def _write_source(tmp_path: pytest.TempPathFactory, source: str) -> str:

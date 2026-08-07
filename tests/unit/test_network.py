@@ -2,7 +2,7 @@
 import pytest
 
 from app.config import settings
-from app.mcp.collectors import network as net_collector
+from app.runtime.collectors import network as net_collector
 from app.mcp.tools import network_api
 from app.mcp.core import trace_repo
 

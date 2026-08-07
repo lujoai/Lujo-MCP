@@ -2,7 +2,7 @@
 import pytest
 
 from app.config import settings
-from app.mcp.collectors import spec as spec_collector
+from app.runtime.collectors import spec as spec_collector
 from app.mcp.tools import spec_api
 
 

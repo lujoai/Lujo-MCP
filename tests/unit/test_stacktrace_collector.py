@@ -1,5 +1,5 @@
 """单元测试：stacktrace collector"""
-from app.mcp.collectors.stacktrace import capture_exception, format_trace_for_ai
+from app.runtime.collectors.stacktrace import capture_exception, format_trace_for_ai
 
 
 class TestStacktraceCollector:

@@ -92,7 +92,7 @@ def test_json_no_false_positive():
 
 def test_capture_exception_message_redacted():
     """exception_hook 路径：capture_exception 返回的 message 经 _redact_exception_data 后被脱敏"""
-    from app.mcp.collectors.stacktrace import capture_exception
+    from app.runtime.collectors.stacktrace import capture_exception
     from app.mcp.hooks.exception_hook import _redact_exception_data
 
     try:
@@ -107,7 +107,7 @@ def test_capture_exception_message_redacted():
 
 def test_capture_exception_traceback_redacted():
     """exception_hook 路径：capture_exception 返回的 traceback 经 _redact_exception_data 后被脱敏"""
-    from app.mcp.collectors.stacktrace import capture_exception
+    from app.runtime.collectors.stacktrace import capture_exception
     from app.mcp.hooks.exception_hook import _redact_exception_data
 
     secret_token = "ghp_abc123secrettoken"
@@ -127,7 +127,7 @@ def test_capture_exception_traceback_redacted():
 
 def test_format_trace_for_ai_redacted():
     """format_trace_for_ai 输出文本中敏感信息已被 redact() 掩码"""
-    from app.mcp.collectors.stacktrace import format_trace_for_ai
+    from app.runtime.collectors.stacktrace import format_trace_for_ai
 
     exc_data = {
         "type": "ValueError",

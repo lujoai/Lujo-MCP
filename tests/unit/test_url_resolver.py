@@ -5,21 +5,21 @@ import os
 
 class TestPathToRegex:
     def test_path_param_regex(self):
-        from app.mcp.collectors.url_resolver import _path_to_regex
+        from app.runtime.collectors.url_resolver import _path_to_regex
 
         pat = _path_to_regex("/debug/{request_id}")
         assert pat.match("/debug/abc-123") is not None
         assert pat.match("/debug/") is None
 
     def test_static_path_regex(self):
-        from app.mcp.collectors.url_resolver import _path_to_regex
+        from app.runtime.collectors.url_resolver import _path_to_regex
 
         pat = _path_to_regex("/health")
         assert pat.match("/health") is not None
         assert pat.match("/health/extra") is None
 
     def test_multiple_params(self):
-        from app.mcp.collectors.url_resolver import _path_to_regex
+        from app.runtime.collectors.url_resolver import _path_to_regex
 
         pat = _path_to_regex("/a/{x}/b/{y}")
         assert pat.match("/a/1/b/2") is not None
@@ -29,7 +29,7 @@ class TestPathToRegex:
 class TestAnalyzeHandler:
     def test_analyze_handler_locates_function(self):
         """analyze_handler 应解析 handler 源码并返回函数级静态分析。"""
-        from app.mcp.collectors.static_analyzer import analyze_handler
+        from app.runtime.collectors.static_analyzer import analyze_handler
 
         # 直接构造一个解析目标：用临时文件模拟源码，验证 analyze_handler 的解析链路
         # 通过 monkeypatch 注入 resolve 返回的端点信息
@@ -44,7 +44,7 @@ class TestAnalyzeHandler:
             tmp_path = f.name
 
         fake_endpoint = {"file": tmp_path, "function": "handle_debug", "module": "x"}
-        import app.mcp.collectors.url_resolver as ur
+        import app.runtime.collectors.url_resolver as ur
 
         original = ur.resolve
         try:
@@ -61,9 +61,9 @@ class TestAnalyzeHandler:
 
     def test_analyze_handler_none_on_missing(self):
         """无命中时返回 None，不抛异常。"""
-        from app.mcp.collectors.static_analyzer import analyze_handler
+        from app.runtime.collectors.static_analyzer import analyze_handler
 
-        import app.mcp.collectors.url_resolver as ur
+        import app.runtime.collectors.url_resolver as ur
 
         original = ur.resolve
         try:
