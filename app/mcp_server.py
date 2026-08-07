@@ -35,7 +35,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from app.config import settings
-from app.mcp.hooks.exception_hook import install_global_hook, uninstall_global_hook
+from app.runtime.hooks.exception_hook import install_global_hook, uninstall_global_hook
 from app.mcp.protocol.server import _tool_registry
 from app.mcp.tools import register_all_tools
 

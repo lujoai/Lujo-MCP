@@ -18,7 +18,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.config import settings
-from app.mcp.core.trace_repo import save_network_record
+from app.runtime.core.trace_repo import save_network_record
 
 logger = logging.getLogger("ai-debug-mcp.middleware.network")
 

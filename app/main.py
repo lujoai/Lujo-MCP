@@ -13,8 +13,8 @@ from app.utils.logging import setup_logging
 from app.middleware import setup_middleware
 from app.error_handlers import setup_error_handlers
 from app.observability import setup_observability
-from app.mcp.core.logs import create_request_id, add_log, get_logs
-from app.mcp.builders.context import build_context
+from app.runtime.core.logs import create_request_id, add_log, get_logs
+from app.runtime.context.builder import build_context
 from app.api.debug import router as debug_router
 from app.api.mcp_routes import router as mcp_router
 from app.api.ingest import router as ingest_router
