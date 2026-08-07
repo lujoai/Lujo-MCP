@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.api import dashboard as dashboard_module
 from app.api.dashboard import router
-from app.mcp.core import trace_repo
+from app.runtime.core import trace_repo
 from app.mcp.tools.verify_api import verify_handler
 
 

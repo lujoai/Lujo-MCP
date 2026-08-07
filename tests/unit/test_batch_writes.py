@@ -151,7 +151,7 @@ class TestTraceRepoBatch:
 
     def test_save_trace_writes_meta_link_data_in_order(self):
         """save_trace 后 META/LINK/DATA 三条按顺序写入"""
-        from app.mcp.core.trace_repo import save_trace
+        from app.runtime.core.trace_repo import save_trace
         from app.runtime.core.logs import get_logs
 
         error_id = save_trace(
@@ -170,7 +170,7 @@ class TestTraceRepoBatch:
 
     def test_save_trace_without_trace_id_skips_link(self):
         """不传 trace_id 时只有 META + DATA"""
-        from app.mcp.core.trace_repo import save_trace
+        from app.runtime.core.trace_repo import save_trace
         from app.runtime.core.logs import get_logs
 
         error_id = save_trace(
@@ -188,7 +188,7 @@ class TestTraceRepoBatch:
 
     def test_save_trace_data_is_last(self):
         """DATA 始终是最后一条（SEC-13 commit-marker 语义）"""
-        from app.mcp.core.trace_repo import save_trace
+        from app.runtime.core.trace_repo import save_trace
         from app.runtime.core.logs import get_logs
 
         error_id = save_trace(

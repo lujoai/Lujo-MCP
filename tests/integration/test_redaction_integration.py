@@ -22,7 +22,7 @@ locals 脱敏的端到端验证通过 save_trace 直接调用完成（绕过 _pa
 """
 import uuid
 
-from app.mcp.core.trace_repo import (
+from app.runtime.core.trace_repo import (
     save_trace,
     get_trace,
     save_network_record,

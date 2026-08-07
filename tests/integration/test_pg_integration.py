@@ -238,7 +238,7 @@ class TestTraceRepoPersistence:
 
     def test_save_trace_persists_to_pg(self, unique_request_id):
         """C4 上半段：save_trace 后 PG 中能查到 trace_data / trace_meta 条目"""
-        from app.mcp.core import trace_repo
+        from app.runtime.core import trace_repo
 
         error_id = trace_repo.save_trace(
             "ValueError", "bad value",
@@ -274,7 +274,7 @@ class TestTraceRepoPersistence:
 
     def test_get_trace_reads_back_from_pg_after_errors_clear(self, unique_request_id):
         """C4 下半段：写入 → 清空 errors 内存 → get_trace 仍能从 PG 读回"""
-        from app.mcp.core import trace_repo
+        from app.runtime.core import trace_repo
         from app.runtime.core import errors
 
         error_id = trace_repo.save_trace(
@@ -311,7 +311,7 @@ class TestTraceRepoPersistence:
 
     def test_save_trace_with_caller_trace_id_keys_unified_in_pg(self, unique_request_id):
         """C3 SDK 场景：传入 trace_id，PG 中 add_log key 必须统一为 error_id"""
-        from app.mcp.core import trace_repo
+        from app.runtime.core import trace_repo
 
         caller_tid = f"sdk-{uuid.uuid4().hex[:8]}"
         error_id = trace_repo.save_trace(

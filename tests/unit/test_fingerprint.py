@@ -2,7 +2,7 @@
 import pytest
 
 from app.runtime.core import errors
-from app.mcp.core import trace_repo
+from app.runtime.core import trace_repo
 from app.mcp.tools import trace_api
 
 

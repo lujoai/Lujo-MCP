@@ -3,7 +3,7 @@ import pytest
 
 from app.config import settings
 from app.runtime.collectors import ui_event as ui_collector
-from app.mcp.core import trace_repo
+from app.runtime.core import trace_repo
 
 
 @pytest.fixture(autouse=True)

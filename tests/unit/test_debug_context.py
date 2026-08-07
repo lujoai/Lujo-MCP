@@ -2,7 +2,7 @@
 import pytest
 
 from app.config import settings
-from app.mcp.core import trace_repo
+from app.runtime.core import trace_repo
 from app.runtime.context.builder import build_debug_context
 from app.mcp.tools import network_api
 

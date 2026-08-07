@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import patch
 
 from app.config import settings
-from app.mcp.core import trace_repo
+from app.runtime.core import trace_repo
 from app.runtime.core import errors
 from app.runtime.core.logs import list_request_ids, get_logs
 
@@ -229,8 +229,8 @@ class TestSaveTraceAtomicity:
         META+LINK 通过 add_logs_batch 批量写入，DATA 通过 add_log 单独写入。
         """
         caller_tid = "sdk-sec13-001"
-        with patch("app.mcp.core.trace_repo.add_log") as mock_add_log, \
-             patch("app.mcp.core.trace_repo.add_logs_batch") as mock_batch:
+        with patch("app.runtime.core.trace_repo.add_log") as mock_add_log, \
+             patch("app.runtime.core.trace_repo.add_logs_batch") as mock_batch:
             trace_repo.save_trace(
                 "SilentFailure", "click no response", [],
                 source="browser_sdk", trace_kind="silent_failure",
