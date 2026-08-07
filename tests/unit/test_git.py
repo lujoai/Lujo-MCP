@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from app.config import settings
-from app.mcp.core import git as git_core
+from app.runtime.core import git as git_core
 from app.mcp.tools import git_api
 
 
