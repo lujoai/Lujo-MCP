@@ -210,6 +210,16 @@ class Settings(BaseSettings):
     vector_store_min_score: float = 0.3
     # InProcessVectorStore 容量上限（R3）：超过后按 FIFO 驱逐最旧 doc，防长期运行 OOM
     vector_store_max_docs: int = 10000
+
+    # ── Debug Experience RAG（P1）──
+    # 全局开关：Agent ContextAssembler 是否组合检索历史调试经验（retriever）
+    # 默认关闭：关闭时零调用、零额外耗时
+    debug_experience_enabled: bool = False
+    # 返回候选上限
+    debug_experience_top_k: int = 3
+    # 检索相似度阈值（预留配置，retriever 内部过滤使用）
+    debug_experience_min_score: float = 0.3
+
     # Qdrant 配置（backend=qdrant 时生效；依赖未装或连接失败时静默降级为 add=no-op / search=空）
     qdrant_url: str = ""
     qdrant_collection: str = "ai-debug-kb"

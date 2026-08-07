@@ -1,8 +1,9 @@
 """单元测试：修复上下文装配器（context_assembler.py）。
 
-覆盖：三个子装配并发执行、各自失败静默降级、sources 结构正确。
+覆盖：四个子装配并发执行、各自失败静默降级、sources 结构正确。
 """
 
+import contextlib
 import pytest
 from unittest.mock import patch
 
@@ -192,3 +193,110 @@ class TestEmptyContext:
 
         assert result["git_context"] == []
         assert result["debug_context"] == ctx
+
+
+class TestDebugExperienceRecall:
+    """debug_experience 子装配（P1）：开关 / 成功 / 降级 / top_k。"""
+
+    @staticmethod
+    def _base_patches():
+        return (
+            patch("app.llm.analyzer.analyze_async", return_value=None),
+            patch("app.rag.knowledge_base.retrieve_similar", return_value=[]),
+            patch("app.runtime.core.git.get_recent_diff", return_value=None),
+        )
+
+    @staticmethod
+    def _enter_patches(extra_patch):
+        stack = contextlib.ExitStack()
+        for p in TestDebugExperienceRecall._base_patches():
+            stack.enter_context(p)
+        if extra_patch is not None:
+            stack.enter_context(extra_patch)
+        return stack
+
+    @pytest.mark.asyncio
+    async def test_disabled_by_default_skips_retriever(self, assembler, monkeypatch):
+        """默认关闭：retriever 不被调用，debug_experience=None。"""
+        monkeypatch.setattr("app.config.settings.debug_experience_enabled", False)
+        with self._enter_patches(patch(
+            "app.rag.retriever.retrieve_debug_experience",
+            side_effect=AssertionError("retriever must not be called when disabled"),
+        )):
+            result = await assembler.assemble(_make_debug_context())
+        assert result["debug_experience"] is None
+
+    @pytest.mark.asyncio
+    async def test_enabled_returns_experience(self, assembler, monkeypatch):
+        """开启：retriever 命中返回 records。"""
+        monkeypatch.setattr("app.config.settings.debug_experience_enabled", True)
+        from app.rag.experience import DebugExperienceRecord
+
+        fake = DebugExperienceRecord(
+            fingerprint="fp-1",
+            exception_type="ValueError",
+            message_pattern="bad input",
+            source="fingerprint",
+        )
+        with self._enter_patches(patch(
+            "app.rag.retriever.retrieve_debug_experience", return_value=[fake]
+        )):
+            result = await assembler.assemble(_make_debug_context())
+
+        assert result["debug_experience"] is not None
+        assert result["debug_experience"][0].fingerprint == "fp-1"
+        assert result["debug_experience"][0].source == "fingerprint"
+
+    @pytest.mark.asyncio
+    async def test_retriever_exception_degrades(self, assembler, monkeypatch):
+        """retriever 抛异常：debug_experience=None，其他字段不受影响。"""
+        monkeypatch.setattr("app.config.settings.debug_experience_enabled", True)
+        with self._enter_patches(patch(
+            "app.rag.retriever.retrieve_debug_experience",
+            side_effect=RuntimeError("kb down"),
+        )):
+            result = await assembler.assemble(_make_debug_context())
+
+        assert result["debug_experience"] is None
+        assert result["debug_context"] == _make_debug_context()
+        assert result["prior_analysis"] is None
+        assert result["vector_recall"] == []
+        assert result["git_context"] == []
+
+    @pytest.mark.asyncio
+    async def test_existing_fields_unchanged_when_enabled(self, assembler, monkeypatch):
+        """开启后已有字段与关闭基线一致。"""
+        result_off = await assembler.assemble(_make_debug_context())
+
+        monkeypatch.setattr("app.config.settings.debug_experience_enabled", True)
+        with patch("app.rag.retriever.retrieve_debug_experience", return_value=[]):
+            result_on = await assembler.assemble(_make_debug_context())
+
+        assert result_on["debug_context"] == result_off["debug_context"]
+        assert result_on["prior_analysis"] == result_off["prior_analysis"]
+        assert result_on["vector_recall"] == result_off["vector_recall"]
+        assert result_on["git_context"] == result_off["git_context"]
+        # 空结果 → None
+        assert result_on["debug_experience"] is None
+
+    @pytest.mark.asyncio
+    async def test_top_k_passed_correctly(self, assembler, monkeypatch):
+        """top_k 与异常特征参数正确传递给 retriever。"""
+        monkeypatch.setattr("app.config.settings.debug_experience_enabled", True)
+        monkeypatch.setattr("app.config.settings.debug_experience_top_k", 5)
+
+        captured = {}
+
+        def fake_retriever(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with self._enter_patches(patch(
+            "app.rag.retriever.retrieve_debug_experience", side_effect=fake_retriever
+        )):
+            await assembler.assemble(_make_debug_context())
+
+        assert captured["top_k"] == 5
+        assert captured["exc_type"] == "ValueError"
+        assert captured["message"] == "bad input"
+        assert captured["debug_context"] is not None

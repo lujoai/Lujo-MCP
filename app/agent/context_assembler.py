@@ -1,11 +1,12 @@
 """修复上下文装配器 —— 并发聚合 debug context + 历史修复 + git diff + 先验分析 + 质量评分。
 
 设计要点（与 build_debug_context 各 collector 的 fail-safe 模式一致）：
-- 三个子装配并发执行（asyncio.gather + asyncio.to_thread），缩短延迟
+- 四个子装配并发执行（asyncio.gather + asyncio.to_thread），缩短延迟
 - 各子装配独立 try/except，失败静默降级，不阻断整体
-- 复用 analyzer.analyze_async / knowledge_base.retrieve_similar / git.get_recent_diff
-  零侵入主链路
+- 复用 analyzer.analyze_async / knowledge_base.retrieve_similar / git.get_recent_diff /
+  rag.retriever.retrieve_debug_experience，零侵入主链路
 - v0.4.0: 装配完成后调用 QualityScorer 评分，注入 quality_report 字段
+- v0.4.1 P1: 新增 debug_experience 子装配（Agent 选择性获取历史调试经验，默认关闭）
 """
 
 from __future__ import annotations
@@ -28,17 +29,18 @@ class RepairContextAssembler:
     """
 
     async def assemble(self, debug_context: dict[str, Any]) -> dict[str, Any]:
-        """并发执行三个独立子装配，返回聚合后的修复上下文。
+        """并发执行四个独立子装配，返回聚合后的修复上下文。
 
         返回 dict 包含 quality_report 字段（v0.4.0 新增），
         评分失败时 quality_report 为 QualityReport.null_score()。
         """
-        # 并发执行：prior_analysis / vector_recall / git_context
+        # 并发执行：prior_analysis / vector_recall / git_context / debug_experience
         # 各 _safe_* 方法内部吞异常，永不抛出（return_exceptions=False 安全）
-        analysis, vector_recall, git_context = await asyncio.gather(
+        analysis, vector_recall, git_context, debug_experience = await asyncio.gather(
             self._safe_get_analysis(debug_context),
             self._safe_vector_recall(debug_context),
             self._safe_get_git_context(debug_context),
+            self._safe_debug_experience_recall(debug_context),
         )
 
         repair_context = {
@@ -46,6 +48,7 @@ class RepairContextAssembler:
             "prior_analysis": analysis,
             "vector_recall": vector_recall,
             "git_context": git_context,
+            "debug_experience": debug_experience,
             "sources": {
                 "vector_recall": vector_recall,
                 "git_context": git_context,
@@ -124,6 +127,41 @@ class RepairContextAssembler:
         except Exception:
             logger.warning("vector recall failed", exc_info=True)
             return []
+
+    async def _safe_debug_experience_recall(
+        self, ctx: dict[str, Any]
+    ) -> list[Any] | None:
+        """Debug Experience 组合检索（P1）：复用 rag.retriever.retrieve_debug_experience。
+
+        - 受 settings.debug_experience_enabled 控制，默认关闭 → 返回 None（零调用、零耗时）；
+        - 参数来源：assemble 输入 debug_context 的 exception type / message / fingerprint；
+        - 失败静默降级为 None，不阻断 Agent 主流程。
+        """
+        if not settings.debug_experience_enabled:
+            return None
+        try:
+            from app.rag.retriever import retrieve_debug_experience
+
+            exception = ctx.get("exception") or {}
+            extra = ctx.get("extra") or {}
+            fingerprint = ctx.get("fingerprint")
+            if not fingerprint and isinstance(extra, dict):
+                fingerprint = extra.get("fingerprint")
+
+            records = await asyncio.to_thread(
+                retrieve_debug_experience,
+                exc_type=exception.get("type"),
+                message=exception.get("message"),
+                fingerprint=fingerprint,
+                debug_context=ctx,
+                top_k=settings.debug_experience_top_k,
+            )
+            if not records:
+                return None
+            return list(records)
+        except Exception:
+            logger.warning("debug experience recall failed", exc_info=True)
+            return None
 
     async def _safe_get_git_context(
         self, ctx: dict[str, Any]
