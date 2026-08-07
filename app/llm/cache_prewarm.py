@@ -207,8 +207,10 @@ def start_prewarm_task() -> None:
     global _prewarm_task
 
     if _prewarm_task is not None:
-        # 已有任务在跑：先停止旧任务，避免泄漏
-        stop_prewarm_task()
+        # 已有任务在跑：直接 cancel，避免泄漏（start_prewarm_task 是同步函数，
+        # 无法 await stop_prewarm_task，用 cancel() 替代）
+        _prewarm_task.cancel()
+        _prewarm_task = None
 
     if settings.llm_cache_prewarm_interval_seconds <= 0:
         # interval=0：仅 startup 一次性预热，不创建定时任务

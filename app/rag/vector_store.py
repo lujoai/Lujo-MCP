@@ -69,9 +69,16 @@ class InProcessVectorStore(VectorStore):
     用 token 重叠的 Jaccard 相似度（零 numpy / sentence-transformers 依赖）。
     每条 doc 存 (text, original_doc) 与对应 token set；search 时计算 query token
     与每条 doc token 的 Jaccard 相似度，过滤 min_score 后取 top_k。
+
+    容量上限：超过 ``max_docs`` 时按 FIFO 淘汰最旧 doc，避免长期运行 OOM
+    （对齐 MemoryTraceStore 的容量约束，CODE_REVIEW R3）。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_docs: int | None = None) -> None:
+        # max_docs 为 None 时取配置（默认 10000），保证单例与测试注入均可控
+        if max_docs is None:
+            max_docs = int(getattr(settings, "vector_store_max_docs", 10000))
+        self._max_docs = max(1, max_docs)
         self._docs: list[tuple[str, dict[str, Any]]] = []
         self._doc_tokens: list[set[str]] = []
         self._lock = threading.Lock()
@@ -84,6 +91,11 @@ class InProcessVectorStore(VectorStore):
                 text = _serialize_doc(doc)
                 self._docs.append((text, doc))
                 self._doc_tokens.append(_tokenize(text))
+            # FIFO 驱逐最旧 doc，直至容量以内（长期运行内存有界）
+            overflow = len(self._docs) - self._max_docs
+            if overflow > 0:
+                del self._docs[:overflow]
+                del self._doc_tokens[:overflow]
 
     def search(self, query: str, top_k: int) -> list[tuple[dict[str, Any], float]]:
         if not query or top_k <= 0:

@@ -20,6 +20,7 @@ from app.api.mcp_routes import router as mcp_router
 from app.api.ingest import router as ingest_router
 from app.api.dashboard import router as dashboard_router
 from app.api.spec import router as spec_router
+from app.api.auth import router as auth_router
 from fastapi.responses import HTMLResponse
 import pathlib
 
@@ -213,13 +214,21 @@ async def lifespan(app: FastAPI):
         drain_stats = await drain_analysis_queue(settings.llm_queue_drain_timeout)
         logger.info("analysis queue drain stats: %s", drain_stats)
 
-    # 优雅关闭：关闭 PG 连接池
+    # 优雅关闭：关闭 PG 连接池（同步 psycopg2）
     if settings.storage_backend == "postgresql":
         try:
             from app.mcp.core.storage.pg_store import close_pool
             close_pool()
         except Exception as e:
             logger.warning(f"关闭 PG 连接池失败: {e}")
+
+    # 优雅关闭：关闭 asyncpg 连接池（Phase 3.1）
+    if settings.pg_async_enabled:
+        try:
+            from app.mcp.core.storage.async_pg_store import close_pool as close_async_pool
+            await close_async_pool()
+        except Exception as e:
+            logger.warning(f"关闭 asyncpg 连接池失败: {e}")
 
     # 优雅关闭：关闭 OTel 指标导出器
     try:
@@ -256,28 +265,49 @@ app.include_router(mcp_router)
 app.include_router(ingest_router)
 app.include_router(dashboard_router)
 app.include_router(spec_router)
+app.include_router(auth_router)
 
 
 @app.get("/")
 @app.get("/health")
 def health():
-    """增强健康检查 —— 包含存储层可用性验证"""
+    """健康检查 —— 仅返回状态，不暴露内部配置"""
+    llm_ok = bool(settings.openai_api_key)
+
+    # 经存储抽象层探活（A1），不直接操作后端连接池
+    storage_ok = True
+    if settings.storage_backend == "postgresql":
+        try:
+            from app.mcp.core.storage.factory import get_trace_store
+            storage_ok = get_trace_store().ping()
+        except Exception:
+            storage_ok = False
+
+    if llm_ok and storage_ok:
+        status = "ok"
+    elif not llm_ok and not storage_ok:
+        status = "unhealthy"
+    else:
+        status = "degraded"
+
+    return {"status": status}
+
+
+@app.get("/internal/health")
+def internal_health():
+    """详细健康检查 —— 仅集群内访问，暴露完整配置信息"""
     llm_ok = bool(settings.openai_api_key)
 
     storage_ok = True
     storage_detail = settings.storage_backend
     if settings.storage_backend == "postgresql":
         try:
-            from app.mcp.core.storage.pg_store import _get_pool
-            pool = _get_pool()
-            conn = pool.getconn()
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT 1")
-                conn.commit()
+            from app.mcp.core.storage.factory import get_trace_store
+            if get_trace_store().ping():
                 storage_detail = "postgresql (connected)"
-            finally:
-                pool.putconn(conn)
+            else:
+                storage_ok = False
+                storage_detail = "postgresql (disconnected)"
         except Exception:
             storage_ok = False
             storage_detail = "postgresql (disconnected)"

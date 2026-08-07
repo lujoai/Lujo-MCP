@@ -181,3 +181,58 @@ class TestRunVerifyLoop:
             assert result["verify_loop"]["kb_writeback"] is None
         finally:
             settings.agent_verify_loop_kb_writeback_enabled = saved
+
+    def test_loop_round_timeout_degrades_to_failed(self, monkeypatch):
+        """R4：单轮超时后静默降级为 failed，不阻塞整体。"""
+        from app.agent.verify_loop import run_verify_loop
+        from app.config import settings
+
+        saved = settings.agent_verify_loop_round_timeout
+        monkeypatch.setattr(settings, "agent_verify_loop_round_timeout", 0.05)
+        try:
+            async def iteration_fn(ctx, sources):
+                await asyncio.sleep(1)  # 远超单轮超时
+                return {"repair_plan": {"fix": "x"}}
+
+            class Ctx:
+                def __init__(self):
+                    self.repair_context = {}
+
+            import asyncio
+
+            result = asyncio.run(run_verify_loop(iteration_fn, Ctx(), {}))
+            # 每轮都超时 → 全部判定 failed，但循环不被单轮卡死，跑满 max_iterations
+            assert result["verify_loop"]["final_verdict"] == "failed"
+            assert result["verify_loop"]["total_iterations"] == 3
+        finally:
+            settings.agent_verify_loop_round_timeout = saved
+
+    def test_loop_round_timeout_zero_disables_timeout(self, monkeypatch):
+        """R4：round_timeout=0 不设单轮超时（向后兼容）。"""
+        from app.agent.verify_loop import run_verify_loop
+        from app.config import settings
+
+        saved = settings.agent_verify_loop_round_timeout
+        monkeypatch.setattr(settings, "agent_verify_loop_round_timeout", 0)
+        try:
+            async def iteration_fn(ctx, sources):
+                # 带异步等待的合法结果（若误套超时 0 会被立即取消）
+                await asyncio.sleep(0.01)
+                return {
+                    "repair_plan": {"fix": "x"},
+                    "test_plan": {"test_cases": ["t1"]},
+                    "security_review": {"findings": [{"severity": "low"}]},
+                    "git_attribution": {"file": "a.py"},
+                }
+
+            class Ctx:
+                def __init__(self):
+                    self.repair_context = {}
+
+            import asyncio
+
+            result = asyncio.run(run_verify_loop(iteration_fn, Ctx(), {}))
+            assert result["verify_loop"]["final_verdict"] == "high_confidence"
+            assert result["verify_loop"]["total_iterations"] == 1
+        finally:
+            settings.agent_verify_loop_round_timeout = saved

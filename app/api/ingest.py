@@ -6,6 +6,7 @@
 保持 proj1 安全中间件体系不变。
 """
 import gzip
+import io
 import json
 import logging
 
@@ -20,6 +21,22 @@ from app.mcp.core.trace_repo import save_ui_event
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 logger = logging.getLogger("ai-debug-mcp.ingest")
+
+_MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
+
+
+def _bounded_gzip_decompress(data: bytes, max_size: int = _MAX_DECOMPRESSED_SIZE) -> bytes:
+    with gzip.GzipFile(fileobj=io.BytesIO(data)) as f:
+        chunks, total = [], 0
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_size:
+                raise ValueError(f"Decompressed size exceeds {max_size} bytes")
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.post("/network", dependencies=[Depends(require_role("admin", "developer"))])
@@ -197,10 +214,12 @@ async def ingest_batch(request: Request):
     try:
         if content_encoding == "gzip":
             body = await request.body()
-            body = gzip.decompress(body)
+            body = _bounded_gzip_decompress(body)
             req = json.loads(body.decode("utf-8"))
         else:
             req = await request.json()
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to parse request body: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid request body")

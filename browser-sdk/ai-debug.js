@@ -219,6 +219,44 @@
     return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function";
   }
 
+  // ── Beacon 短时令牌（CODE_REVIEW S1）──
+  // sendBeacon/EventSource 无法设置自定义 header，历史实现把永久 API Key 放进
+  // ?api_key= 查询参数（会被代理/CDN/浏览器历史/Referer 明文记录）。
+  // 现改为：先用 header 换取短时令牌并缓存，URL 只带该令牌上报。
+  var _beaconToken = null;
+  var _beaconTokenExpiresAt = 0;
+
+  function _beaconTokenValid() {
+    return !!_beaconToken && _beaconTokenExpiresAt > Date.now() + 10000;
+  }
+
+  // 主动续期：保证页面关闭（sendBeacon）时令牌已缓存且未过期
+  function _refreshBeaconToken() {
+    if (!cfg.apiKey || !cfg.endpoint || _beaconTokenValid()) return;
+    var xhr = new XMLHttpRequest();
+    var url = cfg.endpoint.replace(/\/+$/, "") + "/auth/beacon-token";
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.setRequestHeader("X-API-Key", cfg.apiKey);
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          _beaconToken = data.token;
+          _beaconTokenExpiresAt = Date.now() + (data.expires_in || 60) * 1000;
+        } catch (e) {
+          _beaconToken = null;
+        }
+      } else {
+        // 换取失败不致命：sendBeacon 场景会退回同步 XHR（带 header）
+        _beaconToken = null;
+      }
+    };
+    xhr.onerror = function () { _beaconToken = null; };
+    xhr.send("{}");
+  }
+
   function _flushBatch(useBeacon) {
     if (_batchQueue.length === 0 || !cfg.endpoint) return;
 
@@ -282,10 +320,12 @@
           // 页面关闭场景：优先 sendBeacon
           if (useBeacon && _hasSendBeacon()) {
             if (compressedBody.byteLength <= _BEACON_SIZE_LIMIT) {
-              var beaconUrl = url;
-              if (cfg.apiKey) {
-                beaconUrl += "?api_key=" + encodeURIComponent(cfg.apiKey);
+              if (!_beaconTokenValid()) {
+                // 令牌不可用 → 退回同步 XHR（带 header），避免 URL 暴露永久 Key
+                _sendBatchSyncCompressed(url, compressedBody);
+                return;
               }
+              var beaconUrl = url + "?token=" + encodeURIComponent(_beaconToken);
               var beaconBlob = new Blob([compressedBody], { type: "application/json" });
               if (navigator.sendBeacon(beaconUrl, beaconBlob)) {
                 return; // sendBeacon 成功
@@ -318,10 +358,12 @@
     // 页面关闭场景：优先 sendBeacon
     if (useBeacon && _hasSendBeacon()) {
       if (body.length <= _BEACON_SIZE_LIMIT) {
-        var beaconUrl = url;
-        if (cfg.apiKey) {
-          beaconUrl += "?api_key=" + encodeURIComponent(cfg.apiKey);
+        if (!_beaconTokenValid()) {
+          // 令牌不可用 → 退回同步 XHR（带 header），避免 URL 暴露永久 Key
+          _sendBatchSync(url, body);
+          return;
         }
+        var beaconUrl = url + "?token=" + encodeURIComponent(_beaconToken);
         var blob = new Blob([body], { type: "application/json" });
         if (navigator.sendBeacon(beaconUrl, blob)) {
           return; // sendBeacon 成功
@@ -1187,6 +1229,9 @@
     _installConsoleHook();
     _installPageHideHook();
     _restorePendingBatches(); // V5 恢复暂存的批次
+    // 主动换取 beacon 令牌并周期性续期（S1：sendBeacon 场景避免永久 Key 进 URL）
+    _refreshBeaconToken();
+    setInterval(_refreshBeaconToken, 25000);
     console.log("[ai-debug] SDK initialized, session=" + _sessionId);
   }
 
@@ -1339,7 +1384,15 @@
     getSessionId: getSessionId,
     getTraceId: getTraceId,
     setTraceId: setTraceId,
-    _cfg: cfg,
+    _getPublicConfig: function() {
+      var copy = {};
+      for (var k in cfg) {
+        if (cfg.hasOwnProperty(k) && k !== 'apiKey') {
+          copy[k] = cfg[k];
+        }
+      }
+      return copy;
+    },
     _getPendingUISilentFailure: function() { return _pendingUISilentFailure; },
     _getLastDomMutationAt: function() { return _lastDomMutationAt; },
     _getUIMutationObserver: function() { return _uiMutationObserver; },

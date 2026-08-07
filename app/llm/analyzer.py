@@ -83,11 +83,7 @@ def _llm_fallback_result() -> dict:
     }
 
 _client: Optional[OpenAI] = None
-# _client_lock：模块级 bool 标志，作为轻量自旋锁使用。
-# 线程安全性：Python GIL 保证对 bool 的读写是原子的；多线程并发时
-# 仅一个线程能将 False → True 成功，其余线程进入自旋等待。
-# 模块级创建在 import 时即存在，不存在延迟初始化的竞态问题。
-_client_lock: bool = False
+_client_lock = threading.Lock()
 
 # ── 异步 OpenAI 客户端（Phase 3.2）──
 _async_client: Optional[AsyncOpenAI] = None
@@ -240,33 +236,24 @@ def _resolve_base_url() -> str:
 
 
 def _get_client() -> OpenAI:
-    global _client, _client_lock
+    global _client
     if _client is None:
-        if _client_lock:
-            # 其他线程正在创建，等待后返回
-            for _ in range(50):
-                time.sleep(0.01)
-                if _client is not None:
-                    return _client
-            raise RuntimeError("OpenAI client 初始化超时")
-        _client_lock = True
-        try:
-            api_key = settings.openai_api_key
-            if not api_key:
-                raise RuntimeError("请在 .env 中配置有效的 OPENAI_API_KEY")
+        with _client_lock:
+            if _client is None:
+                api_key = settings.openai_api_key
+                if not api_key:
+                    raise RuntimeError("请在 .env 中配置有效的 OPENAI_API_KEY")
 
-            base_url = _resolve_base_url()
-            kwargs = {
-                "api_key": api_key,
-                "timeout": settings.llm_timeout,
-                "max_retries": 0,  # 我们自己控制重试
-            }
-            if base_url:
-                kwargs["base_url"] = base_url
+                base_url = _resolve_base_url()
+                kwargs = {
+                    "api_key": api_key,
+                    "timeout": settings.llm_timeout,
+                    "max_retries": 0,
+                }
+                if base_url:
+                    kwargs["base_url"] = base_url
 
-            _client = OpenAI(**kwargs)
-        finally:
-            _client_lock = False
+                _client = OpenAI(**kwargs)
     return _client
 
 
@@ -955,9 +942,13 @@ def analyze(context: dict, model: Optional[str] = None) -> dict:
             result = cb.call(_call_llm)
         else:
             result = _call_llm()
-    except pybreaker.CircuitBreakerError:
-        logger.warning("LLM 熔断器已触发，返回 fallback 结果")
-        return _llm_fallback_result()
+    except Exception as exc:
+        # pybreaker 未安装时为 None；此时无熔断器异常，须原样抛出，避免
+        # 求值 `pybreaker.CircuitBreakerError` 时因 None 触发 AttributeError 掩盖真实异常。
+        if pybreaker and isinstance(exc, pybreaker.CircuitBreakerError):
+            logger.warning("LLM 熔断器已触发，返回 fallback 结果")
+            return _llm_fallback_result()
+        raise
     elapsed = time.time() - start
 
     _set_cache_result(fingerprint, copy.deepcopy(result))
@@ -1030,19 +1021,28 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
     try:
         cb = _get_llm_circuit_breaker()
         if cb:
+            sync_client = _get_client()
             result = await asyncio.to_thread(
                 cb.call,
-                lambda: asyncio.run(_call_llm()),
+                lambda: _retry_call(
+                    sync_client, model_name, messages,
+                    temperature=settings.llm_temperature,
+                    max_retries=settings.llm_max_retries,
+                ),
             )
         else:
             result = await _call_llm()
-    except pybreaker.CircuitBreakerError:
-        logger.warning("LLM 熔断器已触发，返回 fallback 结果")
-        return _llm_fallback_result()
+    except Exception as exc:
+        # pybreaker 未安装时为 None；此时无熔断器异常，须原样抛出，避免
+        # 求值 `pybreaker.CircuitBreakerError` 时因 None 触发 AttributeError 掩盖真实异常。
+        if pybreaker and isinstance(exc, pybreaker.CircuitBreakerError):
+            logger.warning("LLM 熔断器已触发，返回 fallback 结果")
+            return _llm_fallback_result()
+        raise
     elapsed = time.time() - start
 
     await asyncio.to_thread(_set_cache_result, fingerprint, copy.deepcopy(result))
-    _persist_analysis_to_knowledge_base(knowledge_base_fingerprint, result, context)
+    await asyncio.to_thread(_persist_analysis_to_knowledge_base, knowledge_base_fingerprint, result, context)
 
     logger.info(
         "LLM analysis complete",

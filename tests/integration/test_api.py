@@ -15,10 +15,20 @@ def client():
 class TestHealthEndpoint:
 
     def test_health_ok(self, client):
+        # /health 仅返回状态，不暴露内部配置（S7 / A1）
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
+        assert set(data.keys()) == {"status"}
+        assert data["status"] in ("ok", "degraded", "unhealthy")
+
+    def test_internal_health_exposes_service(self, client):
+        # /internal/health 返回详细配置，供集群内访问
+        resp = client.get("/internal/health")
+        assert resp.status_code == 200
+        data = resp.json()
         assert data["service"] == "ai-debug-mcp"
+        assert "version" in data
         assert data["status"] in ("ok", "degraded", "unhealthy")
 
 

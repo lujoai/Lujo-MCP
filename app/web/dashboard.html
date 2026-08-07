@@ -329,16 +329,37 @@ function scheduleRefresh() {
 
 function initSSE() {
   try {
-    // EventSource 无法设置自定义 header，复用 ?api_key= query 降级（与 sendBeacon 同机制）
+    // EventSource 无法设置自定义 header（S1）：先用 header 换取短时 beacon 令牌，
+    // 再在 URL 中携带该令牌，避免永久 API Key 进入查询参数被明文记录。
     const apiKey = new URLSearchParams(location.search).get('api_key') || '';
-    const url = '/api/dashboard/stream' + (apiKey ? ('?api_key=' + encodeURIComponent(apiKey)) : '');
-    const es = new EventSource(url);
-    es.onmessage = scheduleRefresh;
-    es.onerror = () => {
-      try { es.close(); } catch (e) {}
-      // 轮询仍兜底；5s 后尝试重连 SSE（服务端可能重启或临时不可用）
-      setTimeout(initSSE, 5000);
+    const doConnect = (token) => {
+      const url = '/api/dashboard/stream' + (token ? ('?token=' + encodeURIComponent(token)) : '');
+      const es = new EventSource(url);
+      es.onmessage = scheduleRefresh;
+      es.onerror = () => {
+        try { es.close(); } catch (e) {}
+        // 轮询仍兜底；5s 后尝试重连 SSE（服务端可能重启或临时不可用）
+        setTimeout(initSSE, 5000);
+      };
     };
+    if (apiKey) {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/auth/beacon-token', true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('X-API-Key', apiKey);
+      xhr.onreadystatechange = () => {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { doConnect(JSON.parse(xhr.responseText).token); } catch (e) { doConnect(''); }
+        } else {
+          doConnect('');
+        }
+      };
+      xhr.onerror = () => doConnect('');
+      xhr.send('{}');
+    } else {
+      doConnect('');
+    }
   } catch (e) { console.error('SSE init failed', e); }
 }
 

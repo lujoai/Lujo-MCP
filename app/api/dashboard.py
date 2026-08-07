@@ -338,8 +338,9 @@ async def dashboard_stream(request: Request):
     钩子）广播 ``dashboard_changed`` 信号，客户端收到后即时 re-fetch stats+traces，
     替代"等下一个 10s 轮询周期"。
 
-    鉴权：``EventSource`` 无法设置自定义 header，复用 ``AuthMiddleware`` 的
-    ``?api_key=`` query 参数降级（与 ``sendBeacon`` 同机制）。
+    鉴权：``EventSource`` 无法设置自定义 header，前端先用 header 换取短时
+    beacon 令牌（``POST /auth/beacon-token``）再以 ``?token=`` 携带（S1，
+    避免永久 API Key 进查询参数被明文记录）。
 
     降级：``dashboard_sse_enabled=False`` 时返回 503（功能未启用）。
     """

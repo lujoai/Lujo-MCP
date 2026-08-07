@@ -208,6 +208,8 @@ class Settings(BaseSettings):
     vector_store_top_k: int = 3
     # 召回相似度阈值，低于该分数不返回
     vector_store_min_score: float = 0.3
+    # InProcessVectorStore 容量上限（R3）：超过后按 FIFO 驱逐最旧 doc，防长期运行 OOM
+    vector_store_max_docs: int = 10000
     # Qdrant 配置（backend=qdrant 时生效；依赖未装或连接失败时静默降级为 add=no-op / search=空）
     qdrant_url: str = ""
     qdrant_collection: str = "ai-debug-kb"
@@ -231,6 +233,15 @@ class Settings(BaseSettings):
     rbac_enabled: bool = False
     # key→role 映射，逗号分隔，如 "key1:admin,key2:viewer"；未配置时默认 admin（向后兼容）
     rbac_role_mapping: str = ""
+    # ── Beacon 短时令牌（CODE_REVIEW S1）──
+    # sendBeacon/EventSource 无法设置自定义 header，历史实现把永久 API Key 放进
+    # ?api_key= 查询参数（会被代理/CDN/浏览器历史/Referer 明文记录）。
+    # 现改为：SDK 先用 header 换取短时令牌，URL 只带该令牌上报。
+    # 令牌 TTL（秒）：越短越安全，需 > SDK 刷新周期（默认 60s）。
+    beacon_token_ttl_seconds: int = 60
+    # 令牌作用域前缀（逗号分隔）：只对该前缀下的路径有效（fail-closed）。
+    # 覆盖 SDK sendBeacon 上报（/ingest/*）与仪表盘 SSE 直播（/api/dashboard/stream）。
+    beacon_token_scope: str = "/ingest,/api/dashboard/stream"
 
     # ── AI Debug Agent（Phase 1：自动修复 + 多 Agent 协同）──
     # 全局开关：开启后 POST /api/debug/repair/async 走有界队列 + K 常驻消费协程
@@ -266,7 +277,8 @@ class Settings(BaseSettings):
     # 启用后 /api/dashboard/stream 提供 SSE 通道，trace/error 写入时广播变更信号，
     # 前端 EventSource 收到后即时 re-fetch（叠加在 10s 轮询之上，轮询仍作兜底）。
     # 关闭时不挂载广播行为（broadcast_dashboard_event 为 no-op），零开销向后兼容。
-    # 鉴权复用 AuthMiddleware 的 ?api_key= query 降级（EventSource 无法设自定义 header）。
+    # 鉴权复用 AuthMiddleware 的短时 beacon 令牌（S1，EventSource 无法设自定义 header，
+    # 前端先换取令牌再以 ?token= 携带，避免永久 API Key 进 URL）。
     dashboard_sse_enabled: bool = False
 
     # ── Quality System（v0.4.0）──
@@ -292,6 +304,9 @@ class Settings(BaseSettings):
     agent_verify_loop_enabled: bool = False
     # Verify Loop 最大迭代轮数
     agent_verify_loop_max_iterations: int = 3
+    # 单轮 DAG 执行超时（秒，R4）：0 表示不设单轮超时（向后兼容）。
+    # 设值后每轮迭代用 asyncio.wait_for 包裹，避免单轮卡死消耗 agent_timeout × N。
+    agent_verify_loop_round_timeout: float = 0
     # 判定通过阈值：综合验证分 >= 该值 → passed
     agent_verify_loop_pass_threshold: float = 0.7
     # 高置信通过阈值：>= 该值直接 passed 并快速收敛

@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from enum import Enum
 from typing import Any, Awaitable, Callable, Optional
@@ -120,8 +121,25 @@ async def run_verify_loop(
     final_verdict: VerifyVerdict = VerifyVerdict.FAILED
     kb_writeback: Optional[bool] = None
 
+    # 单轮 DAG 执行超时（秒）：0 表示不设单轮超时（向后兼容）
+    round_timeout = float(getattr(settings, "agent_verify_loop_round_timeout", 0) or 0)
+
     for i in range(1, max_iterations + 1):
-        result = await iteration_fn(ctx, sources)
+        if round_timeout > 0:
+            try:
+                result = await asyncio.wait_for(
+                    iteration_fn(ctx, sources), timeout=round_timeout
+                )
+            except asyncio.TimeoutError:
+                # 单轮超时：静默降级为 FAILED，避免卡死消耗整个 agent_timeout × N
+                logger.warning(
+                    "Verify Loop 第 %d 轮超时（>%.1fs），判定为 failed",
+                    i,
+                    round_timeout,
+                )
+                result = {"repair_plan": None}
+        else:
+            result = await iteration_fn(ctx, sources)
         final_result = result
 
         score = compute_verify_score(result)

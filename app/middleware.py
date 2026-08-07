@@ -33,10 +33,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return auth_header[7:]
         if api_key_header:
             return api_key_header
-        # sendBeacon 无法设置自定义 header，降级从 query 参数提取
-        api_key_query = request.query_params.get("api_key", "")
-        if api_key_query:
-            return api_key_query
         return ""
 
     async def dispatch(self, request: Request, call_next):
@@ -55,13 +51,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         key = self._extract_key(request)
         from app.auth.key_rotation import verify_api_key
         from app.auth.rbac import get_role_for_key
-        if not verify_api_key(key):
-            return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+        if verify_api_key(key):
+            # 注入角色到 request.state，供下游 FastAPI 依赖（require_role）使用
+            request.state.role = get_role_for_key(key)
+            return await call_next(request)
 
-        # 注入角色到 request.state，供下游 FastAPI 依赖（require_role）使用
-        request.state.role = get_role_for_key(key)
+        # sendBeacon / EventSource 无法设置自定义 header（S1）：尝试短时 beacon 令牌。
+        # 令牌仅对 scope 前缀（默认 /ingest）有效且短 TTL，避免永久 Key 出现在 URL。
+        from app.auth.beacon import verify_beacon_token
+        token = request.query_params.get("token", "")
+        role = verify_beacon_token(token, request.url.path) if token else None
+        if role is not None:
+            request.state.role = role
+            return await call_next(request)
 
-        return await call_next(request)
+        return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
 
 # ── 请求体大小限制中间件 ──

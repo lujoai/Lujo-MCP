@@ -97,14 +97,28 @@ class AnalysisQueue:
             self._workers.append(asyncio.create_task(self._worker()))
 
     async def drain(self, timeout: float) -> dict[str, int]:
-        """优雅停机：取消消费协程，等待队列排空（最长 timeout 秒）。
+        """优雅停机：先让 worker 排空队列，超时后强制取消。
 
-        超时不抛异常，仅记录未完成 job 数。返回 ``{"drained": int, "unfinished": int}``。
+        修复：先等待队列排空（worker 仍在消费），超时后再取消 worker。
+        原实现先取消 worker 再 join()，但 worker 退出后无人调 task_done()，
+        导致 join() 永远超时。
         """
-        # 取消所有 worker，使其不再消费新任务
+        unfinished = 0
+        drained = 0
+
+        # 先尝试让队列自然排空（worker 仍在消费）
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout=timeout)
+        except asyncio.TimeoutError:
+            unfinished = self._queue.qsize()
+            logger.warning(
+                "analysis queue drain timed out: %d jobs unfinished, cancelling workers",
+                unfinished,
+            )
+
+        # 取消所有 worker（如果还没退出）
         for w in self._workers:
             w.cancel()
-        # 等待 worker 退出（忽略 CancelledError）
         for w in self._workers:
             try:
                 await w
@@ -112,15 +126,6 @@ class AnalysisQueue:
                 pass
         self._workers.clear()
 
-        unfinished = 0
-        drained = 0
-        try:
-            await asyncio.wait_for(self._queue.join(), timeout=timeout)
-        except asyncio.TimeoutError:
-            unfinished = self._queue.qsize()
-            logger.warning(
-                "analysis queue drain timed out: %d jobs unfinished", unfinished
-            )
         # 统计本周期内已完成 job 数（done / failed）
         async with self._jobs_lock:
             for job in self._jobs.values():

@@ -474,11 +474,28 @@ class PGTraceStore(TraceStorage):
     def __init__(self):
         _ensure_init()
 
+    def ping(self) -> bool:
+        """真实探活：SELECT 1。失败返回 False 而非抛异常（A1）。"""
+        try:
+            _ensure_init()
+            conn = _get_pool().getconn()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                conn.commit()
+                return True
+            finally:
+                self._put(conn)
+        except Exception:
+            logger.debug("PG 探活失败", exc_info=True)
+            return False
+
     def _conn(self):
         return _get_pool().getconn()
 
     def _put(self, conn):
-        _get_pool().putconn(conn)
+        if conn is not None and not conn.closed:
+            _get_pool().putconn(conn)
 
     def save_entry(self, request_id: str, entry: dict) -> None:
         conn = self._conn()
@@ -605,7 +622,8 @@ class PGSessionStore(SessionStorage):
         return _get_pool().getconn()
 
     def _put(self, conn):
-        _get_pool().putconn(conn)
+        if conn is not None and not conn.closed:
+            _get_pool().putconn(conn)
 
     def save(self, session_id: str, data: dict) -> None:
         conn = self._conn()
@@ -760,7 +778,8 @@ class PGErrorStore(ErrorStorage):
                 ),
             )
         finally:
-            pool.putconn(conn)
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
 
 
 # ════════════════════════════════════════════════════
@@ -798,7 +817,8 @@ class PGSpecStore(SpecStorage):
                 ),
             )
         finally:
-            pool.putconn(conn)
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
 
     def get_spec(self, spec_id: str) -> Optional[dict]:
         """从 specs 表读取一条 spec。"""
@@ -824,7 +844,8 @@ class PGSpecStore(SpecStorage):
                 "updated_at": row[5],
             }
         finally:
-            pool.putconn(conn)
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
 
     def list_specs(
         self,
@@ -863,7 +884,8 @@ class PGSpecStore(SpecStorage):
                 for r in rows
             ]
         finally:
-            pool.putconn(conn)
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
 
     def delete_spec(self, spec_id: str) -> bool:
         """从 specs 表删除一条 spec，返回是否删除成功。"""
@@ -878,4 +900,5 @@ class PGSpecStore(SpecStorage):
             )
             return rowcount > 0
         finally:
-            pool.putconn(conn)
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)

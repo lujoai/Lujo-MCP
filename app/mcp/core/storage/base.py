@@ -40,6 +40,14 @@ class TraceStorage(ABC):
         """列出最近的 request_id（可选，默认返回空列表）"""
         return []
 
+    def ping(self) -> bool:
+        """连通性探活（可选，A1）：健康检查经此抽象而非直接操作后端连接池。
+
+        默认实现恒返回 True；需要真实探活的后端（如 PG）覆写为实际检查。
+        探活失败返回 False，不应抛异常。
+        """
+        return True
+
 
 class SessionStorage(ABC):
     """会话存储的抽象接口"""

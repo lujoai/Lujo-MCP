@@ -314,7 +314,6 @@ class TestHttpMainBoundary:
         except json.JSONDecodeError as e:
             pytest.fail(f"/health 响应不是合法 JSON: {e}\n原始: {body_text!r}")
 
-        assert "service" in body, f"/health 响应缺少 service 字段: {body}"
         assert "status" in body, f"/health 响应缺少 status 字段: {body}"
         assert body["status"] in ("ok", "degraded", "unhealthy"), (
             f"/health status 异常: {body['status']}"

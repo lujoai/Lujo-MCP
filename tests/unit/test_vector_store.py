@@ -57,6 +57,35 @@ class TestInProcessVectorStore:
         store.add([])
         assert store.search("anything", top_k=3) == []
 
+    def test_fifo_eviction_when_over_max_docs(self):
+        """R3：超过 max_docs 后按 FIFO 驱逐最旧 doc。"""
+        store = InProcessVectorStore(max_docs=3)
+        store.add([
+            {"id": "a", "root_cause": "alpha"},
+            {"id": "b", "root_cause": "bravo"},
+            {"id": "c", "root_cause": "charlie"},
+        ])
+        # 第 4 条触发驱逐最旧的 a
+        store.add([{"id": "d", "root_cause": "delta"}])
+        assert store._max_docs == 3
+        assert len(store._docs) == 3
+        # 内部状态：a 已被驱逐，b/c/d 保留（FIFO）
+        ids = [doc.get("id") for _text, doc in store._docs]
+        assert "a" not in ids
+        assert ids == ["b", "c", "d"]
+
+    def test_max_docs_defaults_to_config(self, monkeypatch):
+        """R3：max_docs 未显式传入时取配置 vector_store_max_docs。"""
+        monkeypatch.setattr(settings, "vector_store_max_docs", 2)
+        store = InProcessVectorStore()
+        store.add([
+            {"id": "a", "root_cause": "alpha"},
+            {"id": "b", "root_cause": "bravo"},
+            {"id": "c", "root_cause": "charlie"},
+        ])
+        assert store._max_docs == 2
+        assert len(store._docs) == 2
+
     def test_search_results_sorted_desc_by_score(self, monkeypatch):
         monkeypatch.setattr(settings, "vector_store_min_score", 0.0)
         store = InProcessVectorStore()

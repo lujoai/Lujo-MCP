@@ -46,6 +46,8 @@ class StateStore(ABC):
 class MemoryStateStore(StateStore):
     """内存实现（开发 / 单机默认）"""
 
+    _MAX_ENTRIES = 100_000
+
     def __init__(self):
         self._data: dict[str, float] = {}
         self._timestamps: dict[str, list[float]] = {}
@@ -60,11 +62,13 @@ class MemoryStateStore(StateStore):
             if len(self._timestamps[key]) >= limit:
                 return False
             self._timestamps[key].append(now)
+            self._evict_if_needed()
         return True
 
     def incr(self, key: str, by: int = 1) -> int:
         with self._lock:
             self._data[key] = self._data.get(key, 0) + by
+            self._evict_if_needed()
             return int(self._data[key])
 
     def incr_float(self, key: str, by: float) -> float:
@@ -79,6 +83,16 @@ class MemoryStateStore(StateStore):
     def keys(self, prefix: str) -> List[str]:
         with self._lock:
             return [k for k in self._data if k.startswith(prefix)]
+
+    def _evict_if_needed(self) -> None:
+        """当 _data 超过上限时，按 LRU（最旧 key）驱逐一半。"""
+        if len(self._data) < self._MAX_ENTRIES:
+            return
+        keys = list(self._data.keys())
+        drop = len(keys) // 2
+        for k in keys[:drop]:
+            self._data.pop(k, None)
+            self._timestamps.pop(k, None)
 
 
 class RedisStateStore(StateStore):
