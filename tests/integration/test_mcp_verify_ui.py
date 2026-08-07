@@ -23,7 +23,7 @@ from app.mcp.protocol import server as protocol_server
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
 from app.mcp.tools import register_all_tools
 from app.mcp.tools.verify_ui_api import verify_ui_handler
-from app.mcp.verifier import ui_runner
+from app.runtime.verifier import ui_runner
 
 
 @pytest.fixture(scope="session", autouse=True)

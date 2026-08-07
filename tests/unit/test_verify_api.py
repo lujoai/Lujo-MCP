@@ -1,7 +1,7 @@
 """单元测试：verify 工具"""
 import pytest
 from app.mcp.tools.verify_api import verify_handler
-from app.mcp.verifier import spec_store
+from app.runtime.verifier import spec_store
 
 
 @pytest.fixture(autouse=True)

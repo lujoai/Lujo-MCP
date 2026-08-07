@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.debug import router
-from app.mcp.verifier import spec_store
+from app.runtime.verifier import spec_store
 
 
 @pytest.fixture(autouse=True)

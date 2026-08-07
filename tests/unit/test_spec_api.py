@@ -3,7 +3,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from app.api.spec import router as spec_router
-from app.mcp.verifier import spec_store
+from app.runtime.verifier import spec_store
 
 
 @pytest.fixture(autouse=True)
@@ -101,7 +101,7 @@ class TestSpecAPIErrorSanitization:
         sensitive = "DB_PASSWORD=hunter2"
         def _boom(_):
             raise RuntimeError(sensitive)
-        monkeypatch.setattr(spec_store, "create", _boom)
+        monkeypatch.setattr("app.mcp.verifier.spec_store.create", _boom)
 
         resp = client.post("/api/spec", json={"kind": "api", "target": "GET /x", "expect": {}})
         assert resp.status_code == 500
@@ -112,7 +112,7 @@ class TestSpecAPIErrorSanitization:
         sensitive = "postgresql://user:pwd@host:5432/db"
         def _boom(*, kind=None, target=None):
             raise RuntimeError(sensitive)
-        monkeypatch.setattr(spec_store, "list_specs", _boom)
+        monkeypatch.setattr("app.mcp.verifier.spec_store.list_specs", _boom)
 
         resp = client.get("/api/spec")
         assert resp.status_code == 500

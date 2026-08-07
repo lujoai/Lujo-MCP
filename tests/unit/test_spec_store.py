@@ -1,6 +1,6 @@
 """单元测试：规范存储 spec_store"""
 import pytest
-from app.mcp.verifier import spec_store
+from app.runtime.verifier import spec_store
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +125,7 @@ class TestAssertEngineIntegration:
 
     def test_spec_from_store_works_with_assert(self):
         """spec_store 存的 spec 能直接喂给 assert_behavior"""
-        from app.mcp.verifier.assert_engine import assert_behavior
+        from app.runtime.verifier.assert_engine import assert_behavior
 
         spec_id = spec_store.create({
             "kind": "api",
@@ -200,7 +200,7 @@ class TestAtomicWrites:
             "target": "GET /api/user",
             "expect": {"status": 200},
         })
-        with patch("app.mcp.verifier.spec_store.delete_logs") as mock_delete:
+        with patch("app.runtime.verifier.spec_store.delete_logs") as mock_delete:
             updated = spec_store.update(spec_id, {"expect": {"status": 201}})
             assert mock_delete.call_count == 0
         assert updated is not None
@@ -211,7 +211,7 @@ class TestAtomicWrites:
     def test_read_returns_newest_when_multiple_versions(self):
         """多版本共存时 get() 应返回 updated_at 最大者。"""
         from app.mcp.core.logs import add_log as _add_log
-        from app.mcp.verifier.spec_store import _STEP_SPEC
+        from app.runtime.verifier.spec_store import _STEP_SPEC
 
         spec_id = "multi-version-spec"
         # 注入旧版本
@@ -236,7 +236,7 @@ class TestAtomicWrites:
     def test_restore_picks_newest_version(self):
         """_restore_if_needed 应将最新版本写入 _specs。"""
         from app.mcp.core.logs import add_log as _add_log
-        from app.mcp.verifier.spec_store import _STEP_SPEC
+        from app.runtime.verifier.spec_store import _STEP_SPEC
 
         spec_id = "restore-newest-spec"
         # 注入旧版本

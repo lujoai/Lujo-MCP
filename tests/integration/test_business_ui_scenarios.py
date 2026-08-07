@@ -15,7 +15,7 @@ from threading import Thread
 
 import pytest
 
-from app.mcp.verifier import ui_runner
+from app.runtime.verifier import ui_runner
 
 
 @pytest.fixture

@@ -1,7 +1,7 @@
 """单元测试：UI runner 与 verify_ui 工具"""
 import pytest
 
-from app.mcp.verifier import ui_runner
+from app.runtime.verifier import ui_runner
 
 
 class TestUIRunner:

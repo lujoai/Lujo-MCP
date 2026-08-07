@@ -1,5 +1,5 @@
 """单元测试：断言引擎 assert_engine"""
-from app.mcp.verifier.assert_engine import assert_behavior
+from app.runtime.verifier.assert_engine import assert_behavior
 
 
 class TestAssertBehaviorApi:
