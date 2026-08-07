@@ -15,7 +15,7 @@ import uuid
 import threading
 import logging
 
-from app.mcp.core.logs import add_log, get_logs, delete_logs
+from app.runtime.core.logs import add_log, get_logs, delete_logs
 
 logger = logging.getLogger("ai-debug-mcp.spec_store")
 _STEP_SPEC = "spec"
@@ -92,7 +92,7 @@ def _do_restore() -> list[dict]:
     # 内存后端回退：扫描 trace_store（legacy N+1 路径）
     latest: dict[str, tuple[dict, float]] = {}
     try:
-        from app.mcp.core.logs import list_request_ids as _list_rids
+        from app.runtime.core.logs import list_request_ids as _list_rids
         request_ids = _list_rids(limit=500)
         for rid in request_ids:
             logs = get_logs(rid)

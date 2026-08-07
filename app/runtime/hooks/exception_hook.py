@@ -17,7 +17,7 @@ import sys
 from types import TracebackType
 
 from app.runtime.collectors.stacktrace import capture_exception
-from app.mcp.core.errors import record as record_error
+from app.runtime.core.errors import record as record_error
 from app.runtime.core.redaction import redact
 
 _installed = False

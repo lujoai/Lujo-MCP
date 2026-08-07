@@ -48,9 +48,9 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     返回 dict（兼容 analyzer 的 exception/runtime 字段），无 trace 时返回 None。
     各子采集失败降级，不阻断整体构建。
     """
-    from app.mcp.core import trace_repo
+    from app.runtime.core import trace_repo
     from app.runtime.collectors.code_locator import get_snippets_for_frames
-    from app.mcp.core.git import get_blame_for_frame, get_recent_diff
+    from app.runtime.core.git import get_blame_for_frame, get_recent_diff
     from app.runtime.collectors.runtime import collect_runtime_snapshot
     from app.runtime.collectors.spec import get_related_specs
 
@@ -58,7 +58,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     if trace is None:
         # fallback: 数据可能通过 add_log 直接写入存储（非 errors 缓冲），
         # 从 TraceStorage 构造最小 trace 对象
-        from app.mcp.core.logs import get_logs
+        from app.runtime.core.logs import get_logs
         entries = get_logs(trace_id) if trace_id else []
         if not entries:
             return None
@@ -162,7 +162,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
 
     # verify 断言结果（spec_diffs，V5 闭环）
     try:
-        from app.mcp.core.logs import get_logs
+        from app.runtime.core.logs import get_logs
         spec_diffs = [e["data"] for e in get_logs(tid) if e.get("step") == "verify"] or None
     except Exception:
         spec_diffs = None
@@ -234,7 +234,7 @@ def _extract_request_target(trace: dict) -> tuple[str | None, str | None]:
     无法解析时返回 (None, None)，静默降级。
     """
     try:
-        from app.mcp.core import trace_repo
+        from app.runtime.core import trace_repo
 
         records = trace_repo.get_network_records(trace.get("trace_id", "")) or []
         for rec in records:
