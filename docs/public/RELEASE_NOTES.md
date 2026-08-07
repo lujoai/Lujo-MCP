@@ -1,7 +1,9 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.4.0（2026-08-04，Debug Context Quality）**。M1 Quality System、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归。
-> 测试基线：单元 792 passed / 6 skipped / 0 failed（不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
+> 最新版本：**v0.4.0-beta（2026-08-07）**。基于 v0.4.0（Debug Context Quality）主干，完成 P1 Debug Experience RAG（D1-D4）与文档冻结（D5）。
+> 测试基线：单元 874 passed / 6 skipped / 0 failed（不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
+>
+> **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
 > 历史 v0.3.0 之后的主干演进（已并入 v0.4.0）：
 > - Browser SDK 已继续补齐 V3 网络错误自动标记、V6 UI 静默失败自动检测
@@ -11,9 +13,9 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.4.0  
-**Release Date / 发布日期**: 2026-08-04  
-**Codename / 代号**: Debug Context Quality — 让 Debug Context 价值可量化、可证明
+**Version / 版本**: v0.4.0-beta  
+**Release Date / 发布日期**: 2026-08-07  
+**Codename / 代号**: Debug Experience RAG — 让 AI Agent 理解真实 Bug 运行现场
 
 ---
 
@@ -21,7 +23,7 @@
 
 ### 📋 版本概述
 
-v0.4.0 是 Lujo-MCP 的「调试上下文质量」里程碑版本。核心目标是将 Debug Context 从"有数据"提升为"可量化、可证明、可沉淀"。通过质量评分系统（M1）、知识库三级 fallback（M2）、无堆栈故障定位（M3）与 Agent Verify Loop（M4）四层能力，将调试上下文质量基线从 0.45 提升至 0.65，并完成全量回归（M5）。
+v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v0.4.0（Debug Context Quality）主干之上，通过 Debug Experience 数据链路（D1）、三层检索 Retriever（D2）、Context Assembler 解耦（D3）、全量验证（D4）与文档冻结（D5），让 AI Agent 不仅能读取代码，还能复用历史调试经验理解真实 Bug 运行现场。测试基线提升至 **874 passed / 6 skipped / 0 failed**，无回归，并完成架构依赖方向冻结（Architecture Frozen）。
 
 ### ✨ 新增功能
 
@@ -43,6 +45,12 @@ v0.4.0 是 Lujo-MCP 的「调试上下文质量」里程碑版本。核心目标
 #### M4 Agent Verify Loop（验证闭环）
 - **Verify Loop**（`app/agent/verify_loop.py`）：迭代修复闭环——三层开关（agent→multi→verify）+ 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回
 - **KB 验证写回**：`record_verification()` 递增 `verify_count` / 提升 `case_confidence`，写入后同步向量库
+
+#### P1 Debug Experience RAG（v0.4.0-beta 新增，2026-08-07）
+- **Debug Experience 数据链路（D1）**（`app/rag/experience.py`）：`DebugExperienceRecord` dataclass（纯 View DTO，不建存储、不替代 DebugCase）+ `from_kb_entry()` / `from_debug_context()`；字段含 fingerprint / exception_type / message_pattern / debug_context_summary / fault_location / analysis / solution / verification_result / confidence / source
+- **三层检索 Retriever（D2）**（`app/rag/retriever.py`）：`retrieve_debug_experience()` — L1 fingerprint 精确（score 1.0）/ L2 message normalize（score 0.95 + Jaccard）/ L3 vector（仅 `vector_store_enabled=True`）；合并去重 + score 排序 + top_k；任何异常禁止 raise，返回 `[]` 或已有成功结果
+- **Context Assembly 解耦（D3）**（`app/agent/context_assembler.py` + `app/config.py`）：新增 `_safe_debug_experience_recall()`（开关短路零调用 + 异常降级 + `asyncio.to_thread` 并发），`assemble()` 输出新增可选字段 `debug_experience`（默认 None）；`debug_experience_enabled` 默认 `False`，关闭状态零调用、零耗时
+- **Architecture Frozen（D5）**：六层架构（MCP → Transport/API → Runtime Context → Agent → RAG → Storage）与依赖规则冻结；允许 Agent → RAG，禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP
 
 ### 🔧 功能优化
 
@@ -66,6 +74,7 @@ v0.4.0 是 Lujo-MCP 的「调试上下文质量」里程碑版本。核心目标
 2. **e2e 测试需实时服务器**：Browser SDK 端到端用例需先启动 uvicorn（`python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`）
 3. **本地 `.env` 覆盖默认值**：若本地 `.env` 设置了 `AGENT_ENABLED=true` / `LLM_PROVIDER=deepseek`，会覆盖默认值（CI 无此配置，使用默认值）
 4. **M4 长期价值需持续观测**：Verify Loop 的长期收益依赖知识库积累，需通过后续运行持续验证
+5. **P1 未实现（v0.4.0-beta 明确不含）**：自动修复（Repair Loop）未实现、Patch 生成未实现、自动代码修改/自动提交未实现、多 Agent Repair 未实现、新增 LLM 调用链未引入；`debug_experience_enabled` 默认关闭，需显式启用
 
 ### 🔄 兼容性说明
 
@@ -92,7 +101,7 @@ v0.4.0 是 Lujo-MCP 的「调试上下文质量」里程碑版本。核心目标
    ```
 5. **验证**
    ```bash
-   pytest tests/unit/ -q   # 单元 792 passed / 6 skipped / 0 failed
+   pytest tests/unit/ -q   # 单元 874 passed / 6 skipped / 0 failed
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000  # 启动后跑 e2e
    ```
 
@@ -102,7 +111,7 @@ v0.4.0 是 Lujo-MCP 的「调试上下文质量」里程碑版本。核心目标
 
 ### 📋 Release Overview
 
-v0.4.0 is the **Debug Context Quality** milestone of Lujo-MCP. Its core objective is to elevate the Debug Context from "has data" to "quantifiable, provable, and accumulative". Through the Quality System (M1), knowledge base three-level fallback (M2), stackless fault localization (M3), and Agent Verify Loop (M4), the average debug context quality baseline improved from 0.45 to 0.65, followed by full regression (M5).
+v0.4.0-beta is the **P1 Debug Experience RAG** milestone of Lujo-MCP. Building on the v0.4.0 (Debug Context Quality) trunk, it delivers the Debug Experience data pipeline (D1), three-layer retrieval Retriever (D2), Context Assembler decoupling (D3), full validation (D4), and document freeze (D5), enabling AI Agents to reuse historical debugging experience and understand real bug runtime context. Test baseline improved to **874 passed / 6 skipped / 0 failed** with no regression, and the architectural dependency directions are now frozen (Architecture Frozen).
 
 ### ✨ New Features
 
@@ -125,6 +134,12 @@ v0.4.0 is the **Debug Context Quality** milestone of Lujo-MCP. Its core objectiv
 - **Verify Loop** (`app/agent/verify_loop.py`): iterative repair closed-loop — three-level switches (agent→multi→verify) + four-level verdict (high_confidence/passed/partial/failed) + KB writeback after verification
 - **KB verification writeback**: `record_verification()` increments `verify_count` / improves `case_confidence`
 
+#### P1 Debug Experience RAG (new in v0.4.0-beta, 2026-08-07)
+- **Debug Experience data pipeline (D1)** (`app/rag/experience.py`): `DebugExperienceRecord` dataclass (pure View DTO, no storage, does not replace DebugCase) + `from_kb_entry()` / `from_debug_context()`
+- **Three-layer retrieval Retriever (D2)** (`app/rag/retriever.py`): `retrieve_debug_experience()` — L1 fingerprint exact (score 1.0) / L2 message normalize (score 0.95 + Jaccard) / L3 vector (only when `vector_store_enabled=True`); merge dedup + score sort + top_k; never raises, returns `[]` or prior successful results on any failure
+- **Context Assembly decoupling (D3)** (`app/agent/context_assembler.py` + `app/config.py`): new `_safe_debug_experience_recall()` (flag short-circuit zero-call + degradation + `asyncio.to_thread` concurrency); `assemble()` adds optional `debug_experience` field (default None); `debug_experience_enabled` defaults to `False` (zero call / zero overhead when off)
+- **Architecture Frozen (D5)**: six-layer architecture (MCP → Transport/API → Runtime Context → Agent → RAG → Storage) and dependency rules frozen; allows Agent → RAG, forbids Runtime → RAG/Agent/LLM/MCP and RAG → Agent/Runtime/LLM/MCP
+
 ### 🐛 Bug Fixes
 
 - **`test_static_analyzer.py`**: removed stale `analyze_source_code` / legacy `analyze_handler(module_path=...)` cases; kept current `analyze()` cases (stackless entry covered by `test_url_resolver.py`)
@@ -136,6 +151,7 @@ v0.4.0 is the **Debug Context Quality** milestone of Lujo-MCP. Its core objectiv
 2. Browser SDK e2e tests require a live server (`uvicorn app.main:app --port 8000`)
 3. Local `.env` overrides (`AGENT_ENABLED=true`, `LLM_PROVIDER=deepseek`) affect default-value tests; CI uses defaults
 4. M4 long-term value depends on ongoing knowledge base accumulation
+5. **Not implemented in v0.4.0-beta**: automatic repair (Repair Loop), Patch generation, automatic code modification/commit, multi-agent repair, and new LLM call chains; `debug_experience_enabled` defaults to off (must be explicitly enabled)
 
 ### 🔄 Compatibility
 
@@ -149,7 +165,7 @@ v0.4.0 is the **Debug Context Quality** milestone of Lujo-MCP. Its core objectiv
 2. `pip install -r requirements.txt`
 3. Optional: enable `AGENT_VERIFY_LOOP_ENABLED=true` in `.env`
 4. `python -m app.main`
-5. Verify: `pytest tests/unit/ -q` (792 passed / 6 skipped / 0 failed)
+5. Verify: `pytest tests/unit/ -q` (874 passed / 6 skipped / 0 failed)
 
 ---
 
