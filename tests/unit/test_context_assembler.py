@@ -47,7 +47,7 @@ class TestAssembleSuccess:
         ), patch(
             "app.rag.knowledge_base.retrieve_similar", return_value=fake_vector
         ), patch(
-            "app.mcp.core.git.get_recent_diff", return_value=fake_git_entry
+            "app.runtime.core.git.get_recent_diff", return_value=fake_git_entry
         ):
             result = await assembler.assemble(ctx)
 
@@ -74,7 +74,7 @@ class TestAnalysisDegradation:
         ), patch(
             "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
-            "app.mcp.core.git.get_recent_diff", return_value=None
+            "app.runtime.core.git.get_recent_diff", return_value=None
         ):
             result = await assembler.assemble(ctx)
 
@@ -97,7 +97,7 @@ class TestAnalysisDegradation:
         ), patch(
             "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
-            "app.mcp.core.git.get_recent_diff", return_value=None
+            "app.runtime.core.git.get_recent_diff", return_value=None
         ):
             result = await assembler.assemble(ctx)
 
@@ -116,7 +116,7 @@ class TestVectorRecallDegradation:
         ), patch(
             "app.rag.knowledge_base.retrieve_similar", side_effect=RuntimeError("qdrant down")
         ), patch(
-            "app.mcp.core.git.get_recent_diff", return_value=None
+            "app.runtime.core.git.get_recent_diff", return_value=None
         ):
             result = await assembler.assemble(ctx)
 
@@ -136,7 +136,7 @@ class TestGitContextDegradation:
         ), patch(
             "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
-            "app.mcp.core.git.get_recent_diff", side_effect=RuntimeError("git timeout")
+            "app.runtime.core.git.get_recent_diff", side_effect=RuntimeError("git timeout")
         ):
             result = await assembler.assemble(ctx)
 
@@ -166,7 +166,7 @@ class TestGitContextDegradation:
         ), patch(
             "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
-            "app.mcp.core.git.get_recent_diff", side_effect=fake_get_recent_diff
+            "app.runtime.core.git.get_recent_diff", side_effect=fake_get_recent_diff
         ):
             result = await assembler.assemble(ctx)
 
@@ -186,7 +186,7 @@ class TestEmptyContext:
         ), patch(
             "app.rag.knowledge_base.retrieve_similar", return_value=[]
         ), patch(
-            "app.mcp.core.git.get_recent_diff", return_value=None
+            "app.runtime.core.git.get_recent_diff", return_value=None
         ):
             result = await assembler.assemble(ctx)
 

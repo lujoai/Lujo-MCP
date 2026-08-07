@@ -93,7 +93,7 @@ class GitAgent(BaseAgent):
             return self._map_preassembled_to_frames(frames, preassembled)
 
         # 回退：独立拉取（装配器失败或未装配时）
-        from app.mcp.core.git import get_recent_diff
+        from app.runtime.core.git import get_recent_diff
 
         results: list[dict[str, Any]] = []
         for f in frames:

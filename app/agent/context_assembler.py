@@ -133,7 +133,7 @@ class RepairContextAssembler:
         git 模块自带白名单 + 超时保护，无需重复实现安全控制。
         """
         try:
-            from app.mcp.core.git import get_recent_diff
+            from app.runtime.core.git import get_recent_diff
 
             frames = (ctx.get("exception") or {}).get("frames") or []
             results: list[dict[str, Any]] = []

@@ -82,7 +82,7 @@ class TestGitAgentFallback:
         agent = GitAgent()
 
         with patch(
-            "app.mcp.core.git.get_recent_diff",
+            "app.runtime.core.git.get_recent_diff",
             return_value={"file": "app/foo.py", "commit": "deadbeef"},
         ):
             result = await agent.run(_ctx(frames=frames, repair_context={}))
@@ -98,7 +98,7 @@ class TestGitAgentFallback:
         agent = GitAgent()
 
         with patch(
-            "app.mcp.core.git.get_recent_diff", side_effect=RuntimeError("boom")
+            "app.runtime.core.git.get_recent_diff", side_effect=RuntimeError("boom")
         ):
             result = await agent.run(_ctx(frames=frames, repair_context={}))
 
