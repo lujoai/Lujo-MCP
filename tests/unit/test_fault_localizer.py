@@ -20,8 +20,8 @@ from app.runtime.context.fault_localizer import (
     ScoreContribution,
     SuspiciousFrame,
     _is_project_code,
-    _to_payload,
     localize,
+    to_payload,
 )
 from app.runtime.collectors.static_analyzer import FaultLocation, FunctionInfo
 
@@ -259,7 +259,7 @@ class TestPayloadAndDeterminism:
         ]
 
     def test_to_payload_shape(self):
-        """_to_payload 输出结构符合注入约定。"""
+        """to_payload 输出结构符合注入约定。"""
         result = FaultLocalizationResult(
             suspicious_frames=[
                 SuspiciousFrame(
@@ -271,7 +271,7 @@ class TestPayloadAndDeterminism:
             ],
             likely_cause_candidate="app/x.py:1 in f (score=55)",
         )
-        payload = _to_payload(result)
+        payload = to_payload(result)
         assert payload["method"] == "heuristic_stack_score"
         assert payload["likely_cause_candidate"] == "app/x.py:1 in f (score=55)"
         assert payload["suspicious_frames"][0]["file"] == "app/x.py"

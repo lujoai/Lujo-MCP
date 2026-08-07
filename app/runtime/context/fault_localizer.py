@@ -294,8 +294,8 @@ def localize(
     return result
 
 
-# 供 builder 注入的 dict 化辅助（C2 使用，保持纯函数）
-def _to_payload(result: FaultLocalizationResult) -> dict[str, Any]:
+# 供 builder 注入的 dict 化辅助（公开接口，纯数据转换）
+def to_payload(result: FaultLocalizationResult) -> dict[str, Any]:
     """将定位结果转成可注入 DebugContextPayload 的 dict（可选字段，纯数据）。"""
     return {
         "method": result.method,
@@ -325,6 +325,6 @@ __all__ = [
     "ScoreContribution",
     "SuspiciousFrame",
     "localize",
+    "to_payload",
     "_is_project_code",
-    "_to_payload",
 ]
