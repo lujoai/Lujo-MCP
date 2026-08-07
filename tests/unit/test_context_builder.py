@@ -1,5 +1,5 @@
 """单元测试：context builder"""
-from app.mcp.builders.context import build_context
+from app.runtime.context.builder import build_context
 
 
 class TestContextBuilder:
