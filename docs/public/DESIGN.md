@@ -212,30 +212,30 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 ### 3.4 调试引擎
 
-#### 3.4.1 Trace Log 管理（`app/mcp/core/logs.py`）✅
+#### 3.4.1 Trace Log 管理（`app/runtime/core/logs.py`）✅
 
 - `create_request_id()` → 唯一 ID。
 - `add_log(request_id, step, data)` → 时序追加，步骤含 `request_start`/`processing`/`response_ready`/`error` 及 MCP 专用 `mcp_*`。
 - `get_logs(request_id)` → 按序取回。
 - 持久化由 `trace_store` 后端（`memory`/`postgresql`）承担；TTL 清理（`main.py` `periodic_cleanup`，300s 周期）。
 
-#### 3.4.2 Context Builder（`app/mcp/builders/context.py`）✅
+#### 3.4.2 Context Builder（`app/runtime/context/builder.py`）✅
 
 `build_context(request_id, logs)` → `{request_id, flow, input, output, errors}`。单条格式异常 `try/except` 标记为 `<malformed>` 并跳过，**不阻断整体**。
 
 > ⚠️ 注意：此构建器现已含 `code_snippets`（FR11 已接线）。详见 §6。
 
-#### 3.4.3 Stacktrace Collector（`app/mcp/collectors/stacktrace.py`）✅
+#### 3.4.3 Stacktrace Collector（`app/runtime/collectors/stacktrace.py`）✅
 
 `capture_exception(exc)` → `{type, message, traceback, frames[], frame_count}`；每帧 `{file, line, function, code, locals}`。`format_trace_for_ai()` 生成精简文本（含局部变量前 N 个）。
 
-#### 3.4.4 Code Locator（`app/mcp/collectors/code_locator.py`）✅ 已接线
+#### 3.4.4 Code Locator（`app/runtime/collectors/code_locator.py`）✅ 已接线
 
 - `get_code_snippet(file, line, context_lines)`：用 `linecache` 读取 `line±context_lines` 行，报错行以 `>>> N: ` 标注；文件读不到返回 `found=False`。
 - `get_snippets_for_frames(frames)`：批量处理堆栈帧。
 - **已修复**：`config.py` 已增加 `code_context_lines`、`source_path_map`、`ide_scheme`、`whitelist_path_prefix`。
 
-#### 3.4.5 Runtime Snapshot（`app/mcp/collectors/runtime.py`）✅
+#### 3.4.5 Runtime Snapshot（`app/runtime/collectors/runtime.py`）✅
 
 `collect_runtime_snapshot()`（psutil）→ `RuntimeSnapshot{pid, cpu_percent, memory_mb, thread_count, open_files, python_version, env_hint}`。失败降级（不抛未捕获异常）。
 
@@ -249,7 +249,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 - **✅ 新增 AsyncOpenAI**：`analyze_async` / `analyze_stream_async` 全链路 async/await，不再阻塞事件循环。
 - **✅ 多级缓存**：L1（OrderedDict LRU 进程级，100 条）+ L2（Redis 分布式，TTL 1h）+ L3 缓存预热（`app/llm/cache_prewarm.py`，从 L2 扫描热门 fingerprint 回填 L1，只写 L1 不刷新 L2 TTL，2026-07-26 落地），按 `fingerprint` 缓存 LLM 分析结果，同类错误不再重复调用。Dashboard 缓存加 Redis L2 + `invalidate_cache`。
 
-#### 3.4.7 全局异常钩子（`app/mcp/hooks/exception_hook.py`）✅
+#### 3.4.7 全局异常钩子（`app/runtime/hooks/exception_hook.py`）✅
 
 `install_global_hook()`（幂等）：
 - 覆盖 `sys.excepthook` → 未捕获同步异常自动 `capture_exception(exc, source="global_hook")`。
@@ -264,16 +264,16 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 | 组件 | 职责 | 实现 |
 | --- | --- | --- |
 | `trace_store` | trace/session 持久化 | `memory` / `postgresql` / `async_pg`（工厂 `storage/factory.py`） |
-| `async_pg_store` ✅ | asyncpg 异步存储（feature flag `pg_async_enabled=False` 默认关闭） | `app/mcp/core/storage/async_pg_store.py`，灰度切换可回退 |
+| `async_pg_store` ✅ | asyncpg 异步存储（feature flag `pg_async_enabled=False` 默认关闭） | `app/runtime/core/storage/async_pg_store.py`，灰度切换可回退 |
 | `session registry` | MCP `Mcp-Session-Id` 会话生命周期 | `transports/session.py`，TTL 1800s |
 | `state store` | 限流/计数 | `memory` / `redis`（Redis ZSET 滑动窗口限流） |
 | `sse hub` | 服务端→客户端广播 | `transports/sse.py` |
 | `dashboard event bus` ✅ | Dashboard 实时 SSE 广播（FR20，无 session 门槛） | `app/api/dashboard_events.py`（`DashboardEventBus`，跨线程 `call_soon_threadsafe`，队列满丢旧保最新） |
-| `specs` ✅ | 规范存储（FR15） | `app/mcp/verifier/spec_store.py`，**独立 specs 表**（消除 N+1 查询，不再从 traces 扫描恢复） |
-| `errors` ✅ | 异常持久化聚合 | `app/mcp/core/errors.py`，**独立 errors 表**（fingerprint + occurrence_count 落 PG，重启不丢失） |
+| `specs` ✅ | 规范存储（FR15） | `app/runtime/verifier/spec_store.py`，**独立 specs 表**（消除 N+1 查询，不再从 traces 扫描恢复） |
+| `errors` ✅ | 异常持久化聚合 | `app/runtime/core/errors.py`，**独立 errors 表**（fingerprint + occurrence_count 落 PG，重启不丢失） |
 | `MemoryTraceStore` | 内存存储 | **OrderedDict + max_entries 容量上限**（防 OOM） |
 
-#### 3.5.1 PostgreSQL 存储实现（`app/mcp/core/storage/pg_store.py`）✅
+#### 3.5.1 PostgreSQL 存储实现（`app/runtime/core/storage/pg_store.py`）✅
 
 **连接池**：`psycopg2.pool.ThreadedConnectionPool`（minconn=2, maxconn=10），线程安全，全局单例。
 
@@ -391,22 +391,22 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 | 能力 | 组件 | 说明 |
 | --- | --- | --- |
-| 脱敏 | [app/mcp/core/redaction.py](../../app/mcp/core/redaction.py) | 存储边界统一脱敏，默认开启；**复合键名子串匹配 + 白名单** |
-| 统一存取 | [app/mcp/core/trace_repo.py](../../app/mcp/core/trace_repo.py) | 在 TraceStorage + errors 之上实现 save_trace/get_trace/save_network_record/save_ui_event |
-| 网络采集 | `app/mcp/collectors/network.py` + `tools/network_api.py` | 解析/截断 + ingest_network/get_network_trace |
-| UI 采集 | `app/mcp/collectors/ui_event.py` | 解析/截断 |
-| Git 归因 | [app/mcp/core/git.py](../../app/mcp/core/git.py) + `tools/git_api.py` | blame/diff，带超时+路径白名单 |
+| 脱敏 | [app/runtime/core/redaction.py](../../app/runtime/core/redaction.py) | 存储边界统一脱敏，默认开启；**复合键名子串匹配 + 白名单** |
+| 统一存取 | [app/runtime/core/trace_repo.py](../../app/runtime/core/trace_repo.py) | 在 TraceStorage + errors 之上实现 save_trace/get_trace/save_network_record/save_ui_event |
+| 网络采集 | `app/runtime/collectors/network.py` + `tools/network_api.py` | 解析/截断 + ingest_network/get_network_trace |
+| UI 采集 | `app/runtime/collectors/ui_event.py` | 解析/截断 |
+| Git 归因 | [app/runtime/core/git.py](../../app/runtime/core/git.py) + `tools/git_api.py` | blame/diff，带超时+路径白名单 |
 | 静默失败 | `app/mcp/tools/silent_failure_api.py` + [api/ingest.py](../../app/api/ingest.py) | 编排 ui/network + trace_kind |
 | 跨语言上报 | `app/mcp/tools/ingest_api.py` + `api/ingest.py` | ingest_error |
 | inbound 采集 | [app/middleware_network.py](../../app/middleware_network.py) | 独立中间件，默认关闭，安全栈内层 |
-| 完整上下文 | [app/mcp/builders/context.py](../../app/mcp/builders/context.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
-| 规范驱动采集 | `app/mcp/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
-| 指纹去重聚合 | [app/mcp/core/errors.py](../../app/mcp/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
+| 完整上下文 | [app/runtime/context/builder.py](../../app/runtime/context/builder.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
+| 规范驱动采集 | `app/runtime/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
+| 指纹去重聚合 | [app/runtime/core/errors.py](../../app/runtime/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
 | 双传输注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) + [app/mcp_server.py](../../app/mcp_server.py) | HTTP / stdio 均为 17 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
-| 代码定位 | [app/mcp/collectors/code_locator.py](../../app/mcp/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
-| 静默失败检测 | [app/mcp/verifier/assert_engine.py](../../app/mcp/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
+| 代码定位 | [app/runtime/collectors/code_locator.py](../../app/runtime/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
+| 静默失败检测 | [app/runtime/verifier/assert_engine.py](../../app/runtime/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
-| 规范驱动闭环 | [app/mcp/verifier/spec_store.py](../../app/mcp/verifier/spec_store.py) | spec CRUD + verify 工具 + spec_diffs 注入 |
+| 规范驱动闭环 | [app/runtime/verifier/spec_store.py](../../app/runtime/verifier/spec_store.py) | spec CRUD + verify 工具 + spec_diffs 注入 |
 
 ---
 
@@ -708,14 +708,14 @@ sequenceDiagram
 | HTTP MCP | `app/api/mcp_routes.py` |
 | stdio MCP | `app/mcp_server.py` |
 | JSON-RPC | `app/mcp/protocol/{server,jsonrpc}.py` |
-| Trace | `app/mcp/core/logs.py` |
-| Context | `app/mcp/builders/context.py` |
-| Stacktrace | `app/mcp/collectors/stacktrace.py` |
-| Code Locator | `app/mcp/collectors/code_locator.py` ✅ |
-| Runtime | `app/mcp/collectors/runtime.py` |
+| Trace | `app/runtime/core/logs.py` |
+| Context | `app/runtime/context/builder.py` |
+| Stacktrace | `app/runtime/collectors/stacktrace.py` |
+| Code Locator | `app/runtime/collectors/code_locator.py` ✅ |
+| Runtime | `app/runtime/collectors/runtime.py` |
 | LLM | `app/llm/analyzer.py` |
-| 异常钩子 | `app/mcp/hooks/exception_hook.py` ✅ |
-| 存储 | `app/mcp/core/storage/*` |
+| 异常钩子 | `app/runtime/hooks/exception_hook.py` ✅ |
+| 存储 | `app/runtime/core/storage/*` |
 | 会话/SSE | `app/mcp/transports/{session,sse}.py` |
 | 可观测 | `app/observability.py` |
 | 配置 | `app/config.py` |
@@ -1092,7 +1092,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 ## 15. 数据层长期优化设计（Phase 5，2026-07-24）
 
 > 本章记录 Phase 5 数据层长期优化的设计决策，包括 P3-1 表分区和 P3-2 归档策略。
-> 实现位置：`app/mcp/core/storage/pg_store.py`（同步）、`app/mcp/core/storage/async_pg_store.py`（异步）、`app/config.py`
+> 实现位置：`app/runtime/core/storage/pg_store.py`（同步）、`app/runtime/core/storage/async_pg_store.py`（异步）、`app/config.py`
 
 ### 15.1 设计背景与目标
 
@@ -1819,7 +1819,7 @@ app/agent/
 | --- | --- | --- |
 | `analyze_async(context)` | `app/llm/analyzer.py` LLM 根因分析 | 失败 → `root_cause=None`，trace 记录降级 |
 | `retrieve_similar(fingerprint)` | `app/rag/vector_store.py` 向量召回 | 失败 → `similar_cases=[]`，trace 记录降级 |
-| `get_recent_diff()` | `app/mcp/core/git.py` 最近 Git diff | 失败 → `recent_diff=None`，trace 记录降级 |
+| `get_recent_diff()` | `app/runtime/core/git.py` 最近 Git diff | 失败 → `recent_diff=None`，trace 记录降级 |
 
 并发执行使用 `asyncio.gather(*tasks, return_exceptions=True)`，任一异常被捕获并转为降级标记，不阻断主链路。
 
@@ -2367,7 +2367,7 @@ ContextCompleteness 将 Debug Context 拆分为 9 个维度，各维度独立评
 | 模块 | 路径 | 禁止原因 |
 | --- | --- | --- |
 | MCP 协议层 | `app/mcp/protocol/` | 基础协议层，变更影响所有下游 |
-| Storage 抽象层 | `app/mcp/core/storage/` | 接口稳定。PG 同步/异步双轨延后至 v0.5.0 |
+| Storage 抽象层 | `app/runtime/core/storage/` | 接口稳定。PG 同步/异步双轨延后至 v0.5.0 |
 | Browser SDK 采集链 | `browser-sdk/ai-debug.js` | 2000+ 行原生 JS，V2-V6 迭代积累。任何改动可能引入采集覆盖率退化 |
 | Agent 框架 | `app/agent/base.py` | BaseAgent ABC 是多 Agent 契约基础。v0.4.0 只增加新 Agent 实现，不修改契约 |
 | 安全中间件 | `app/middleware.py` | 中间件栈顺序错误可能导致安全漏洞 |

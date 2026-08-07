@@ -37,8 +37,8 @@ v0.4.0 是 Lujo-MCP 的「调试上下文质量」里程碑版本。核心目标
 - **种子知识库**（`app/rag/seed_data.py`）：30 条覆盖常见异常的种子案例，启动时加载
 
 #### M3 Fault Localization 2.0（无堆栈定位）
-- **URL Resolver**（`app/mcp/collectors/url_resolver.py`）：无堆栈场景下按 HTTP 方法+路径反查 FastAPI 路由表定位 handler
-- **无堆栈静态分析**（`app/mcp/builders/context.py`）：静默失败无异常堆栈时，基于网络请求反查 handler 并做函数级静态分析（`ast` 标准库），注入 `static_analysis` 字段
+- **URL Resolver**（`app/runtime/collectors/url_resolver.py`）：无堆栈场景下按 HTTP 方法+路径反查 FastAPI 路由表定位 handler
+- **无堆栈静态分析**（`app/runtime/context/builder.py`）：静默失败无异常堆栈时，基于网络请求反查 handler 并做函数级静态分析（`ast` 标准库），注入 `static_analysis` 字段
 
 #### M4 Agent Verify Loop（验证闭环）
 - **Verify Loop**（`app/agent/verify_loop.py`）：迭代修复闭环——三层开关（agent→multi→verify）+ 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回
@@ -118,8 +118,8 @@ v0.4.0 is the **Debug Context Quality** milestone of Lujo-MCP. Its core objectiv
 - **Seed knowledge base** (`app/rag/seed_data.py`): 30 seed cases, loaded at startup
 
 #### M3 Fault Localization 2.0
-- **URL Resolver** (`app/mcp/collectors/url_resolver.py`): reverse-lookup FastAPI route table by HTTP method + path for stackless scenarios
-- **Stackless static analysis** (`app/mcp/builders/context.py`): inject `static_analysis` field via function-level static analysis (`ast` stdlib)
+- **URL Resolver** (`app/runtime/collectors/url_resolver.py`): reverse-lookup FastAPI route table by HTTP method + path for stackless scenarios
+- **Stackless static analysis** (`app/runtime/context/builder.py`): inject `static_analysis` field via function-level static analysis (`ast` stdlib)
 
 #### M4 Agent Verify Loop
 - **Verify Loop** (`app/agent/verify_loop.py`): iterative repair closed-loop — three-level switches (agent→multi→verify) + four-level verdict (high_confidence/passed/partial/failed) + KB writeback after verification
@@ -179,7 +179,7 @@ v0.3.0 是 Lujo-MCP 项目的稳定性与生产就绪版本。本次发布重点
   - 数据表格结构验证 (`data_table` 断言)
   - 数值范围验证 (`numeric_range` 断言)
   - 登录流程验证（组合现有功能）
-  - 代码位置: `app/mcp/verifier/ui_runner.py`
+  - 代码位置: `app/runtime/verifier/ui_runner.py`
 
 #### 存储与数据优化
 - **PostgreSQL 高级特性**
@@ -187,7 +187,7 @@ v0.3.0 是 Lujo-MCP 项目的稳定性与生产就绪版本。本次发布重点
   - 数据归档策略 (`PG_ARCHIVE_ENABLED=true`)
   - asyncpg 异步存储 (`PG_ASYNC_ENABLED=true`)
   - 批量写入优化
-  - 代码位置: `app/mcp/core/storage/pg_store.py`, `app/mcp/core/storage/async_pg_store.py`
+  - 代码位置: `app/runtime/core/storage/pg_store.py`, `app/runtime/core/storage/async_pg_store.py`
 
 #### 可观测性
 - **OpenTelemetry 集成**
@@ -198,7 +198,7 @@ v0.3.0 是 Lujo-MCP 项目的稳定性与生产就绪版本。本次发布重点
 - **熔断器机制**
   - LLM 调用熔断保护
   - PostgreSQL 连接熔断保护
-  - 代码位置: `app/llm/analyzer.py`, `app/mcp/core/storage/pg_store.py`
+  - 代码位置: `app/llm/analyzer.py`, `app/runtime/core/storage/pg_store.py`
 
 #### 缓存优化
 - **多级缓存架构**
@@ -216,7 +216,7 @@ v0.3.0 是 Lujo-MCP 项目的稳定性与生产就绪版本。本次发布重点
 - **存储降级机制**
   - PostgreSQL 不可用时自动降级到 Memory Store
   - 由 `storage_fallback_to_memory` 配置控制
-  - 代码位置: `app/mcp/core/storage/factory.py`
+  - 代码位置: `app/runtime/core/storage/factory.py`
 
 - **安全增强**
   - fail-closed 鉴权机制
@@ -224,7 +224,7 @@ v0.3.0 是 Lujo-MCP 项目的稳定性与生产就绪版本。本次发布重点
   - IP / 端点级限流
   - 安全响应头默认启用
   - LFI / SSRF / URL 白名单防护
-  - 代码位置: `app/middleware.py`, `app/mcp/verifier/ui_runner.py`
+  - 代码位置: `app/middleware.py`, `app/runtime/verifier/ui_runner.py`
 
 ### 🐛 问题修复
 
@@ -236,7 +236,7 @@ v0.3.0 是 Lujo-MCP 项目的稳定性与生产就绪版本。本次发布重点
 - **SEC-13 非原子写入**
   - `spec_store.update()` 改为 crash-safe append
   - `trace_repo.save_trace()` 写入顺序优化
-  - 代码位置: `app/mcp/verifier/spec_store.py`, `app/mcp/core/trace_repo.py`
+  - 代码位置: `app/runtime/verifier/spec_store.py`, `app/runtime/core/trace_repo.py`
 
 - **M7 API_KEY 空串鉴权**
   - 空串/纯空白 `api_key` 归一化为 `None`
@@ -370,7 +370,7 @@ v0.3.0 is the Stability & Production Ready release of Lujo-MCP. This release foc
   - Data table structure verification (`data_table` assertion)
   - Numeric range verification (`numeric_range` assertion)
   - Login flow verification (combining existing features)
-  - Location: `app/mcp/verifier/ui_runner.py`
+  - Location: `app/runtime/verifier/ui_runner.py`
 
 #### Storage & Data Optimization
 - **PostgreSQL Advanced Features**
@@ -378,7 +378,7 @@ v0.3.0 is the Stability & Production Ready release of Lujo-MCP. This release foc
   - Data archival strategy (`PG_ARCHIVE_ENABLED=true`)
   - asyncpg async storage (`PG_ASYNC_ENABLED=true`)
   - Batch write optimization
-  - Location: `app/mcp/core/storage/pg_store.py`, `app/mcp/core/storage/async_pg_store.py`
+  - Location: `app/runtime/core/storage/pg_store.py`, `app/runtime/core/storage/async_pg_store.py`
 
 #### Observability
 - **OpenTelemetry Integration**
@@ -389,7 +389,7 @@ v0.3.0 is the Stability & Production Ready release of Lujo-MCP. This release foc
 - **Circuit Breaker Mechanism**
   - LLM call circuit breaker protection
   - PostgreSQL connection circuit breaker protection
-  - Location: `app/llm/analyzer.py`, `app/mcp/core/storage/pg_store.py`
+  - Location: `app/llm/analyzer.py`, `app/runtime/core/storage/pg_store.py`
 
 #### Cache Optimization
 - **Multi-Level Cache Architecture**
@@ -407,7 +407,7 @@ v0.3.0 is the Stability & Production Ready release of Lujo-MCP. This release foc
 - **Storage Fallback Mechanism**
   - Automatic fallback to Memory Store when PostgreSQL is unavailable
   - Controlled by `storage_fallback_to_memory` configuration
-  - Location: `app/mcp/core/storage/factory.py`
+  - Location: `app/runtime/core/storage/factory.py`
 
 - **Security Enhancements**
   - fail-closed authentication mechanism
@@ -415,7 +415,7 @@ v0.3.0 is the Stability & Production Ready release of Lujo-MCP. This release foc
   - IP / endpoint-level rate limiting
   - Security response headers enabled by default
   - LFI / SSRF / URL whitelist protection
-  - Location: `app/middleware.py`, `app/mcp/verifier/ui_runner.py`
+  - Location: `app/middleware.py`, `app/runtime/verifier/ui_runner.py`
 
 ### 🐛 Bug Fixes
 
@@ -427,7 +427,7 @@ v0.3.0 is the Stability & Production Ready release of Lujo-MCP. This release foc
 - **SEC-13 Non-Atomic Writes**
   - `spec_store.update()` changed to crash-safe append
   - `trace_repo.save_trace()` write order optimization
-  - Location: `app/mcp/verifier/spec_store.py`, `app/mcp/core/trace_repo.py`
+  - Location: `app/runtime/verifier/spec_store.py`, `app/runtime/core/trace_repo.py`
 
 - **M7 API_KEY Empty String Authentication**
   - Empty/whitespace-only `api_key` normalized to `None`

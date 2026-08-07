@@ -73,7 +73,7 @@
 
 | 能力 | 代码证据 | 对应痛点 |
 | --- | --- | --- |
-| **全局异常自动捕获** | `app/mcp/hooks/exception_hook.py` | P3 ✅ |
+| **全局异常自动捕获** | `app/runtime/hooks/exception_hook.py` | P3 ✅ |
 | **代码定位 + 源码片段 + IDE 链接** | `code_locator.py` → `stone_finish_api` / `context_api` → `get_debug_context` 含 `code_snippets` + `vscode://` 链接 | P1 ✅ |
 | **宿主 AI 推理模式** | 服务只交付结构化原始数据，宿主 AI 自行推理 | P2 ✅ |
 | **LLM 分析 + 多 provider** | `analyzer.py`（openai/zhipu/custom）| 辅助 P2 ✅ |
@@ -192,7 +192,7 @@
   1. `config.py` 增加 `code_context_lines`（默认 5）、`source_path_map`、`ide_scheme`、`whitelist_path_prefix`。
   2. `code_locator.py` 生成 `vscode://file/<abs>:<lineno>` 可点击链接，支持路径映射与白名单防穿越。
   3. `stacktrace` / `context` 工具及 `/api/debug/run` 在异常含帧时自动附加 `code_snippets`。
-  4. 新建 `app/mcp/core/errors.py` 近期异常存储；`exception_hook` 真正持久化捕获的异常，供 `get_debug_context`/`list_recent_traces`/`search_logs` 检索。
+  4. 新建 `app/runtime/core/errors.py` 近期异常存储；`exception_hook` 真正持久化捕获的异常，供 `get_debug_context`/`list_recent_traces`/`search_logs` 检索。
   5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，当时的 6 个 stdio 工具全部可用（现已扩至 15 个，见 §10.2）。
 - **验收**：`get_debug_context` / `stacktrace` 返回每帧源码片段与 IDE 链接；点击可在 IDE 打开到对应行。
 
@@ -201,19 +201,19 @@
 - **说明**：本产品**不**生成"给人类复制的提示词文本"，而是把清洗好的结构化上下文直接交给宿主 AI 推理（见 `mcp_server.py` 设计原则与 `analyze_with_llm` 可选工具）。这从架构上消解了 P2「手写规范提示词」——开发者无需整理格式。
 - **可选增强（🔲）**：增加 `GET /api/debug/prompt` 返回纯文本提示词，便于非 MCP 场景一键复制。
 
-#### FR13 静默失败检测（Silent Failure Detection）（P0）✅ 已实现 —— `app/mcp/verifier/assert_engine.py` + `verify` 工具
+#### FR13 静默失败检测（Silent Failure Detection）（P0）✅ 已实现 —— `app/runtime/verifier/assert_engine.py` + `verify` 工具
 
 - **目标**：无异常、API 200 时，依规范识别"行为不符预期"。
 - **已落地**：`ingest_silent_failure` + `assert_engine` + `verify` 工具 + `/api/debug/verify` 全部就绪。
 - **验收**：给定"200 但字段缺失"请求 → `verify` 自动判 `silent_failure=true` ✅。
 
-#### FR14 规范驱动前端自动化验证（P1）✅ 已实现 —— `app/mcp/verifier/ui_runner.py` + `verify_ui` 工具
+#### FR14 规范驱动前端自动化验证（P1）✅ 已实现 —— `app/runtime/verifier/ui_runner.py` + `verify_ui` 工具
 
 - **目标**：不用人工点 UI，按规范自动遍历交互并断言。
 - **功能点**：规范入口（元素/动作/期望状态）；对接 Playwright 自动点击/输入；`无响应且无报错` → 静默失败；输出 `{page,interactions[]}`。
 - **验收**：含"按钮无反应"的规范，自动遍历并报告为 `silent_failure`。
 
-#### FR15 规范驱动开发闭环（SDD 主线）（P0）✅ 已实现 —— `app/mcp/verifier/spec_store.py` + verify 闭环 + spec_diffs 注入
+#### FR15 规范驱动开发闭环（SDD 主线）（P0）✅ 已实现 —— `app/runtime/verifier/spec_store.py` + verify 闭环 + spec_diffs 注入
 
 - **目标**：规范作为一等公民，从"等报错"升级为"持续比对规范校验"。
 - **已落地**：`collectors/spec.py` 扫描 + `spec_store.py` CRUD + `/api/spec` REST 端点 + `verify` 工具 + `spec_diffs` 注入 `build_debug_context`。
