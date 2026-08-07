@@ -14,9 +14,9 @@ from typing import Any
 
 from app.agent.repair_queue import get_repair_queue
 from app.config import settings
-from app.mcp.builders.context import build_context
-from app.mcp.collectors.runtime import collect_runtime_snapshot
-from app.mcp.core.logs import get_logs
+from app.runtime.context.builder import build_context
+from app.runtime.collectors.runtime import collect_runtime_snapshot
+from app.runtime.core.logs import get_logs
 
 logger = logging.getLogger("ai-debug-mcp.mcp.tools.repair")
 

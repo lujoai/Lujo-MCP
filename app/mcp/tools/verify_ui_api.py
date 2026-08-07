@@ -9,7 +9,7 @@ MCP 工具：verify_ui —— 按 UI 规范启动 Playwright 自动遍历并验�
 
 可选依赖：playwright（未安装时返回错误提示，不影响其他功能）。
 """
-from app.mcp.verifier import ui_runner
+from app.runtime.verifier import ui_runner
 
 VERIFY_UI_DEF = {
     "name": "verify_ui",
@@ -56,7 +56,7 @@ def verify_ui_handler(arguments: dict) -> dict:
 
     # spec 优先；spec_id 从存储取
     if spec is None and spec_id:
-        from app.mcp.verifier import spec_store
+        from app.runtime.verifier import spec_store
         spec = spec_store.get(spec_id)
 
     if spec is None:

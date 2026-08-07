@@ -117,7 +117,7 @@ async def auto_test_handler(arguments: dict) -> dict:
         return {"error": "playwright 未安装。安装: pip install playwright && playwright install chromium"}
 
     url = arguments["url"]
-    from app.mcp.verifier.ui_runner import is_safe_url
+    from app.runtime.verifier.ui_runner import is_safe_url
     ok, reason = is_safe_url(url)
     if not ok:
         return {"error": f"URL 被安全策略拒绝：{reason}", "url": url}

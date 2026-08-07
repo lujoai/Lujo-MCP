@@ -6,8 +6,8 @@ MCP 工具：verify —— 比对实际结果 vs 期望规范，自动检测静�
 
 spec 与 spec_id 二选一：传 spec 直接比对；传 spec_id 从 spec_store 取已存储规范。
 """
-from app.mcp.verifier.assert_engine import assert_behavior
-from app.mcp.verifier import spec_store
+from app.runtime.verifier.assert_engine import assert_behavior
+from app.runtime.verifier import spec_store
 
 VERIFY_DEF = {
     "name": "verify",
@@ -78,7 +78,7 @@ def verify_handler(arguments: dict) -> dict:
     # 有 trace_id 时持久化结果，供 build_debug_context 注入 spec_diffs（V5 闭环）
     if trace_id:
         try:
-            from app.mcp.core.logs import add_log
+            from app.runtime.core.logs import add_log
             add_log(trace_id, "verify", result)
         except Exception:
             pass

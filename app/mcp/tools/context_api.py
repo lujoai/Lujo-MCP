@@ -1,8 +1,8 @@
 """MCP 上下文工具 —— 获取请求的调试上下文"""
 
-from app.mcp.core.logs import get_logs
-from app.mcp.builders.context import build_context
-from app.mcp.collectors.code_locator import get_snippets_for_frames
+from app.runtime.core.logs import get_logs
+from app.runtime.context.builder import build_context
+from app.runtime.collectors.code_locator import get_snippets_for_frames
 
 TOOL_DEF = {
     "name": "context",

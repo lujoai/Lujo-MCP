@@ -3,7 +3,7 @@ MCP 工具：get_related_specs —— 根据文件路径返回相关项目规范
 
 AI 在给出修复建议前应参考这些规范，确保方案符合项目约定。
 """
-from app.mcp.collectors.spec import get_related_specs
+from app.runtime.collectors.spec import get_related_specs
 
 RELATED_SPECS_DEF = {
     "name": "get_related_specs",

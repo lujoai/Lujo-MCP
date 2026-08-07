@@ -6,7 +6,7 @@ MCP 工具：ingest_error —— 供任意语言/进程主动上报错误。
 """
 import logging
 
-from app.mcp.core.trace_repo import save_trace
+from app.runtime.core.trace_repo import save_trace
 
 logger = logging.getLogger("ai-debug-mcp.tools.ingest")
 

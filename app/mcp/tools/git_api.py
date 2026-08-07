@@ -3,7 +3,7 @@ MCP 工具：get_blame_for_frame / get_recent_diff。
 
 供宿主 AI 判断错误是否由近期改动引入。安全（超时+白名单）在 core/git 实现。
 """
-from app.mcp.core.git import get_blame_for_frame, get_recent_diff
+from app.runtime.core.git import get_blame_for_frame, get_recent_diff
 
 
 # ── HTTP 侧注册用 TOOL_DEF（M8 注册）──

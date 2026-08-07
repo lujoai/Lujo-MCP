@@ -9,9 +9,9 @@ trace_kind="silent_failure" 的记录关联入库，供 get_debug_context 取回
 """
 import logging
 
-from app.mcp.collectors.network import parse_network_records
-from app.mcp.collectors.ui_event import parse_ui_events
-from app.mcp.core.trace_repo import save_trace, save_ui_event, save_network_record
+from app.runtime.collectors.network import parse_network_records
+from app.runtime.collectors.ui_event import parse_ui_events
+from app.runtime.core.trace_repo import save_trace, save_ui_event, save_network_record
 
 logger = logging.getLogger("ai-debug-mcp.tools.silent_failure")
 

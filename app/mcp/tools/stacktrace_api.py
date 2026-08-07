@@ -1,9 +1,9 @@
 """MCP 堆栈追踪工具 —— 获取异常调用栈"""
 
 import sys
-from app.mcp.collectors.stacktrace import capture_exception, format_trace_for_ai
-from app.mcp.collectors.code_locator import get_snippets_for_frames
-from app.mcp.core.logs import get_logs
+from app.runtime.collectors.stacktrace import capture_exception, format_trace_for_ai
+from app.runtime.collectors.code_locator import get_snippets_for_frames
+from app.runtime.core.logs import get_logs
 
 TOOL_DEF = {
     "name": "stacktrace",
@@ -70,7 +70,7 @@ def get_stacktrace(trace_id: str | None = None) -> dict:
     供 stdio MCP 工具使用：优先取近期异常存储中的记录，
     否则退而取当前线程未捕获异常。
     """
-    from app.mcp.core.errors import get_by_id, get_latest
+    from app.runtime.core.errors import get_by_id, get_latest
 
     err = get_by_id(trace_id) if trace_id else get_latest()
     if err is None:

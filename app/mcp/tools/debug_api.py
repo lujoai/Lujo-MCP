@@ -2,9 +2,9 @@
 
 import logging
 
-from app.mcp.core.logs import create_request_id, add_log, get_logs
-from app.mcp.builders.context import build_context, build_debug_context
-from app.mcp.collectors.runtime import collect_runtime_snapshot
+from app.runtime.core.logs import create_request_id, add_log, get_logs
+from app.runtime.context.builder import build_context, build_debug_context
+from app.runtime.collectors.runtime import collect_runtime_snapshot
 from app.llm.analyzer import analyze
 
 logger = logging.getLogger("ai-debug-mcp.debug-tool")

@@ -3,7 +3,7 @@ MCP 工具：ingest_console —— 供浏览器 SDK 上报控制台日志。
 """
 import logging
 
-from app.mcp.core.trace_repo import save_console_log
+from app.runtime.core.trace_repo import save_console_log
 
 logger = logging.getLogger("ai-debug-mcp.tools.console")
 

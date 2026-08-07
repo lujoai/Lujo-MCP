@@ -6,8 +6,8 @@ MCP 工具：ingest_network / get_network_trace。
 
 复用 trace_repo 存取层，脱敏在存储边界统一执行。
 """
-from app.mcp.collectors.network import parse_network_record
-from app.mcp.core.trace_repo import save_network_record, get_network_records
+from app.runtime.collectors.network import parse_network_record
+from app.runtime.core.trace_repo import save_network_record, get_network_records
 
 
 # ── HTTP 侧注册用 TOOL_DEF（M8 注册）──

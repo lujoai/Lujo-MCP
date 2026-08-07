@@ -1,7 +1,7 @@
 """MCP 追踪工具 —— 获取原始追踪日志 / 检索近期捕获的异常"""
 
-from app.mcp.core.logs import get_logs, list_request_ids
-from app.mcp.core.errors import list_recent, search as search_errors
+from app.runtime.core.logs import get_logs, list_request_ids
+from app.runtime.core.errors import list_recent, search as search_errors
 
 TOOL_DEF = {
     "name": "trace",
