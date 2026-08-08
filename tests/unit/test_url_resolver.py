@@ -2,6 +2,22 @@
 import tempfile
 import os
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _allow_temp_source_paths(monkeypatch):
+    """P0-2 LFI 修复后白名单默认收敛到项目根/CWD；测试用系统临时文件
+    模拟 handler 源码，需把 temp 目录加入 whitelist_path_prefix。"""
+    from app.config import settings
+
+    prefix = (settings.whitelist_path_prefix or "").strip()
+    roots = [p.strip() for p in prefix.split(",") if p.strip()]
+    if not roots:
+        roots = [os.path.abspath(os.getcwd())]
+    roots.append(os.path.abspath(tempfile.gettempdir()))
+    monkeypatch.setattr(settings, "whitelist_path_prefix", ",".join(roots))
+
 
 class TestPathToRegex:
     def test_path_param_regex(self):

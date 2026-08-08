@@ -170,13 +170,13 @@ class Settings(BaseSettings):
     cb_llm_max_failures: int = 5
     # 熔断后半开状态等待时间（秒），期间允许一次试探调用
     cb_llm_reset_timeout: int = 30
-    # 滑动窗口大小（秒），超过窗口的失败不计入统计
-    cb_llm_window_size: int = 60
+    # 注：无 cb_llm_window_size —— pybreaker 用 fail_max 计数 + reset_timeout
+    # 复位，无时间窗参数，该配置项已移除（FIX: P2 死配置收敛）
 
     # PG 熔断器配置（cb_pg_*）
     cb_pg_max_failures: int = 3
     cb_pg_reset_timeout: int = 15
-    cb_pg_window_size: int = 60
+    # 注：无 cb_pg_window_size —— 同上，pybreaker 无时间窗参数（FIX: P2 死配置收敛）
 
     # ── P3-6 异步分析队列（消息队列削峰）──
     # 全局开关：开启后 /api/debug/analyze/async 走有界队列 + K 常驻消费协程，对齐 LLM RPM/TPM
@@ -217,8 +217,10 @@ class Settings(BaseSettings):
     debug_experience_enabled: bool = False
     # 返回候选上限
     debug_experience_top_k: int = 3
-    # 检索相似度阈值（预留配置，retriever 内部过滤使用）
-    debug_experience_min_score: float = 0.3
+    # 检索相似度阈值：score 必须严格大于该值才返回。
+    # FIX: P2 接入 retriever —— 此前为预留配置从未被消费；默认 0.0 保持
+    # 现状行为（仅过滤 score<=0 的无重叠结果），调大可收紧 Jaccard/向量召回
+    debug_experience_min_score: float = 0.0
 
     # Qdrant 配置（backend=qdrant 时生效；依赖未装或连接失败时静默降级为 add=no-op / search=空）
     qdrant_url: str = ""
@@ -230,9 +232,10 @@ class Settings(BaseSettings):
     # 向量维度：必须与 qdrant_embedding_model 对齐，且与已建 collection 维度一致
     # 维度不匹配时适配器不自动重建 collection（避免丢数据），改为 warning + 降级
     qdrant_embedding_dim: int = 1536
-    # Qdrant 建连超时（秒），参照 Redis socket_timeout=2 的快速失败风格
-    qdrant_connect_timeout: int = 5
-    # Qdrant upsert/query 单次请求超时（秒）；embedding 调用走 llm_timeout
+    # Qdrant upsert/query 单次请求超时（秒）；embedding 调用走 llm_timeout。
+    # 注：无 qdrant_connect_timeout —— qdrant-client 的 timeout 仅接受单一数值
+    # （内部 math.ceil 处理），无法单独设置建连超时，连接与请求共用
+    # qdrant_request_timeout（FIX: P2 死配置收敛）
     qdrant_request_timeout: int = 10
 
     # ── RBAC + API_KEY 轮换（AUDIT-2-13/14）──

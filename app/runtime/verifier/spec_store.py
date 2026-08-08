@@ -175,25 +175,32 @@ def create(spec: dict) -> str:
 
 
 def get(spec_id: str) -> dict | None:
-    """取一条规范。优先从内存取，fallback 从存储层恢复。
+    """取一条规范。
 
     Phase 2.4：PG 后端优先从 specs 表读取（消除 N+1）。
-    """
-    with _lock:
-        if spec_id in _specs:
-            return dict(_specs[spec_id])
 
-    # Phase 2.4：PG 后端优先从 specs 表读取
+    FIX: P2 回源比对 —— 此前内存命中直接返回，PG 侧更新（多实例写入/
+    进程重启后恢复的旧值）永不回源，内存旧值残留。现改为先回源读 specs 表，
+    updated_at 较新则覆盖内存缓存；无 PG 时保持原内存优先语义。
+    """
+    # FIX: P2 先回源，避免内存旧值压过存储新值
     store = _pg_spec_store()
     if store is not None:
         try:
             data = store.get_spec(spec_id)
             if data is not None:
                 with _lock:
-                    _specs[spec_id] = data
+                    cached = _specs.get(spec_id)
+                    if cached is None or _spec_version_ts(data, {}) > _spec_version_ts(cached, {}):
+                        _specs[spec_id] = data
                 return dict(data)
         except Exception:
             logger.debug("specs 表读取失败 (spec_id=%s)", spec_id, exc_info=True)
+
+    # 内存兜底
+    with _lock:
+        if spec_id in _specs:
+            return dict(_specs[spec_id])
 
     # fallback：从 trace_store 恢复到内存
     _restore_if_needed()
@@ -265,19 +272,24 @@ def delete(spec_id: str) -> bool:
     """删除一条规范，返回是否删除成功。
 
     Phase 2.4：双删 —— specs 表（PG 后端）+ trace_store。
+
+    FIX: P2 先查 PG 再判 exists —— 此前 `existed` 只看内存 _specs，进程重启
+    后（未 restore 或 PG 侧有而内存无）直接 return False，PG 侧记录永远删不掉。
+    现改为：PG 删除成功即视为存在。
     """
     with _lock:
         existed = spec_id in _specs
         _specs.pop(spec_id, None)
 
+    # Phase 2.4：双删 —— specs 表（PG 后端优先）
+    store = _pg_spec_store()
+    if store is not None:
+        try:
+            if store.delete_spec(spec_id):
+                existed = True
+        except Exception:
+            logger.debug("specs 表删除失败 (spec_id=%s)", spec_id, exc_info=True)
     if existed:
-        # Phase 2.4：双删 —— specs 表（PG 后端优先）
-        store = _pg_spec_store()
-        if store is not None:
-            try:
-                store.delete_spec(spec_id)
-            except Exception:
-                logger.debug("specs 表删除失败 (spec_id=%s)", spec_id, exc_info=True)
         try:
             delete_logs(spec_id)
         except Exception:

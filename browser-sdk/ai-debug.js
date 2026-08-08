@@ -293,7 +293,8 @@
 
   // V5 压缩传输：根据 payload 大小决定是否压缩
   function _sendBatchWithCompression(url, body, useBeacon) {
-    var shouldCompress = cfg.enableCompression && 
+    // FIX: P1-2 sendBeacon 无法设置 Content-Encoding: gzip，beacon 场景永不压缩
+    var shouldCompress = !useBeacon && cfg.enableCompression &&
                          body.length > cfg.compressionThreshold &&
                          typeof CompressionStream !== "undefined";
 
@@ -306,6 +307,13 @@
 
   // V5 gzip 压缩实现（使用 Compression Streams API）
   function _compressAndSend(url, body, useBeacon) {
+    // FIX: P1-2 beacon 分支不压缩（后端仅在 content-encoding: gzip 时解压，
+    // gzip 字节按 JSON 解析必然 400；且 sendBeacon 返回 true 会被 SDK 误判为成功）。
+    // 页面关闭场景数据量小，原始 JSON 直接发送可接受。
+    if (useBeacon) {
+      _sendBatchDirect(url, body, true);
+      return;
+    }
     try {
       var blob = new Blob([body]);
       var cs = new CompressionStream("gzip");
@@ -503,15 +511,30 @@
       try {
         pending = JSON.parse(stored);
       } catch (e) {
+        // FIX: P1-1 坏数据直接清掉，避免每次启动反复解析失败（死循环）
+        localStorage.removeItem(cfg.localStorageKey);
         return;
       }
       
       // 清空 localStorage
       localStorage.removeItem(cfg.localStorageKey);
       
-      // 逐个重新发送
+      // FIX: P1-1 暂存内容是整包字符串 {"events":[...]}，必须展开为 {path, payload} 队列元素，
+      // 直接 push 整个解析对象会导致 flush 时二次包裹 {"events":[{"events":[...]}]}，
+      // 后端逐条取 event.path 为空 → 数据全丢。
       pending.forEach(function(body) {
-        _batchQueue.push(JSON.parse(body));
+        var parsed;
+        try {
+          parsed = JSON.parse(body);
+        } catch (e) {
+          return; // 单条坏数据跳过
+        }
+        var events = (parsed && Array.isArray(parsed.events)) ? parsed.events : [];
+        events.forEach(function(ev) {
+          if (ev && typeof ev === "object" && ev.path) {
+            _batchQueue.push({ path: ev.path, payload: ev.payload });
+          }
+        });
       });
       
       // 立即 flush

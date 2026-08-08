@@ -121,11 +121,52 @@ _cache_lock = threading.Lock()
 
 
 def _compute_context_fingerprint(context: dict) -> str:
-    """计算上下文指纹，用于缓存命中判定"""
+    """计算上下文指纹，用于缓存命中判定。
+
+    FIX: P1-8 以 error-surface 为主键（异常 fingerprint/type/message + key frames
+    file:line:function），不再包含 request_id —— 否则每次请求唯一、
+    缓存命中率趋近 0。缓存淘汰与 TTL 语义不变（L1 LRU + TTL，L2 Redis）。
+    """
+    exc_type, message, fingerprint = _get_error_signal(context)
+
+    # key frames：取异常的前几帧（file:line:function），忽略请求维度噪声
+    frames: list = []
+    exception = context.get("exception")
+    if isinstance(exception, dict):
+        frames = exception.get("frames") or []
+    if not frames:
+        for error in context.get("errors", []) or []:
+            if isinstance(error, dict) and error.get("frames"):
+                frames = error["frames"]
+                break
+    key_frames: list[str] = []
+    for f in (frames or [])[:3]:
+        if isinstance(f, dict):
+            key_frames.append(
+                f"{f.get('file', '')}:{f.get('line', '')}:{f.get('function', '')}"
+            )
+        else:
+            key_frames.append(str(f))
+
+    # error-surface：无 exception 字段时，把 errors 条目的 type/message/fingerprint
+    # 纳入指纹（结构化而非整串序列化），保持"不同错误不同指纹"的同时去除 request_id 噪声
+    error_surface: list[str] = []
+    for error in context.get("errors", []) or []:
+        if isinstance(error, dict):
+            error_surface.append(
+                f"{error.get('type') or error.get('exception_type') or ''}"
+                f":{error.get('message') or error.get('msg') or ''}"
+                f":{error.get('fingerprint') or ''}"
+            )
+        else:
+            error_surface.append(str(error))
+
     key_parts = [
-        context.get("exception", {}).get("fingerprint", ""),
-        context.get("request_id", ""),
-        str(context.get("errors", "")),
+        fingerprint or "",
+        exc_type,
+        message,
+        "|".join(key_frames),
+        "|".join(error_surface),
     ]
     return hashlib.sha256("|".join(key_parts).encode()).hexdigest()[:16]
 

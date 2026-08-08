@@ -121,8 +121,12 @@ async def run_verify_loop(
     final_verdict: VerifyVerdict = VerifyVerdict.FAILED
     kb_writeback: Optional[bool] = None
 
-    # 单轮 DAG 执行超时（秒）：0 表示不设单轮超时（向后兼容）
+    # 单轮 DAG 执行超时（秒）：0 表示继承 agent_timeout（FIX: P1-9f 始终有 watchdog，
+    # 避免"无单轮超时"时最差 ≈ 轮数 × (repair 90s + 3 并行各 90s) 卡死）
     round_timeout = float(getattr(settings, "agent_verify_loop_round_timeout", 0) or 0)
+    if round_timeout <= 0:
+        round_timeout = float(getattr(settings, "agent_timeout", 90) or 90)
+        logger.debug("verify_loop round_timeout 未配置，继承 agent_timeout=%.1fs", round_timeout)
 
     for i in range(1, max_iterations + 1):
         if round_timeout > 0:

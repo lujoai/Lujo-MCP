@@ -185,8 +185,9 @@ class TestCoordinatorPhase2Dag:
         assert result["security_review"] is None
         # git 仍执行（不依赖 repair_plan）
         assert result["git_attribution"]["attribution"] == "ok"
-        # dag_degraded：仅 0 个 FAILED（test/security 是 SKIPPED 不算 FAILED）
-        assert result["dag_degraded"] is False
+        # FIX: P1-9g repair 层失败也计入 degraded（此前 repair 失败不计入，
+        # 整个 DAG 失效却被报告健康）—— 本场景 repair 失败 → degraded=True
+        assert result["dag_degraded"] is True
 
     @pytest.mark.asyncio
     async def test_phase2_parallel_failure_triggers_dag_degraded(self, monkeypatch):

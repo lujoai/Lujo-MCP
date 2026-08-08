@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from app import __version__
 from app.config import settings
+from app.auth.key_rotation import auth_enabled
 from app.utils.logging import setup_logging
 from app.middleware import setup_middleware
 from app.error_handlers import setup_error_handlers
@@ -35,11 +36,14 @@ logger = logging.getLogger("ai-debug-mcp")
 def validate_startup_configuration(host: str | None = None, api_key: str | None = None) -> None:
     """拒绝外网监听 + 无鉴权的危险启动方式。"""
     bind_host = host if host is not None else settings.host
-    bind_api_key = api_key if api_key is not None else settings.api_key
-    if "0.0.0.0" in str(bind_host) and not bind_api_key:
+    # FIX: P1-5 与中间件 auth_enabled() 语义统一：
+    # 显式传入的 api_key 参数优先（兼容旧调用），否则按 API_KEYS 解析出的有效 key 列表判定，
+    # 避免"只配 API_KEYS 多 key、未配 API_KEY"的合法部署被误拒。
+    auth_on = bool(api_key) if api_key is not None else auth_enabled()
+    if "0.0.0.0" in str(bind_host) and not auth_on:
         raise RuntimeError(
-            "Refusing to start: host contains 0.0.0.0 but API_KEY is empty. "
-            "Set API_KEY before exposing the service."
+            "Refusing to start: host contains 0.0.0.0 but no API key is configured. "
+            "Set API_KEY or API_KEYS before exposing the service."
         )
 
 
@@ -328,13 +332,25 @@ def internal_health():
     }
 
 
+# FIX: P0-4 给 HTML/JS 响应加 CSP 头。
+# 页面使用内联 <script>，故 script-src 需放行 'unsafe-inline'；
+# default-src 'self' 仍阻止外域资源/脚本加载（纵深防御，主防线为 esc() 转义）。
+_CSP_HEADER = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+
+
+def _html_response(content: str, status_code: int = 200) -> HTMLResponse:
+    resp = HTMLResponse(content, status_code=status_code)
+    resp.headers["Content-Security-Policy"] = _CSP_HEADER
+    return resp
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     """Web 控制台 —— Trace / Verify 可视化"""
     dashboard_path = pathlib.Path(__file__).parent / "web" / "dashboard.html"
     if dashboard_path.exists():
-        return HTMLResponse(dashboard_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Dashboard not found</h1>", status_code=404)
+        return _html_response(dashboard_path.read_text(encoding="utf-8"))
+    return _html_response("<h1>Dashboard not found</h1>", status_code=404)
 
 
 @app.get("/demo", response_class=HTMLResponse)
@@ -342,8 +358,8 @@ def demo():
     """网络捕获演示页面"""
     demo_path = pathlib.Path(__file__).parent / "web" / "network_capture_demo.html"
     if demo_path.exists():
-        return HTMLResponse(demo_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Demo page not found</h1>", status_code=404)
+        return _html_response(demo_path.read_text(encoding="utf-8"))
+    return _html_response("<h1>Demo page not found</h1>", status_code=404)
 
 
 @app.get("/demo/silent-failure", response_class=HTMLResponse)
@@ -351,8 +367,8 @@ def demo_silent_failure():
     """静默失败检测演示页面"""
     demo_path = pathlib.Path(__file__).parent / "web" / "silent_failure_demo.html"
     if demo_path.exists():
-        return HTMLResponse(demo_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Demo page not found</h1>", status_code=404)
+        return _html_response(demo_path.read_text(encoding="utf-8"))
+    return _html_response("<h1>Demo page not found</h1>", status_code=404)
 
 
 @app.get("/ai-debug.js")
@@ -362,7 +378,7 @@ def ai_debug_js():
     if sdk_path.exists():
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(sdk_path.read_text(encoding="utf-8"), media_type="application/javascript")
-    return HTMLResponse("<h1>SDK not found</h1>", status_code=404)
+    return _html_response("<h1>SDK not found</h1>", status_code=404)
 
 
 @app.post("/debug")

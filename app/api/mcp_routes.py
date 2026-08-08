@@ -15,7 +15,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.config import settings
-from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INTERNAL_ERROR
+from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INVALID_PARAMS, INTERNAL_ERROR
 from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES
 from app.mcp.transports.session import registry
 from app.mcp.transports.sse import hub
@@ -90,13 +90,25 @@ async def mcp_post(request: Request):
 
     # ── RBAC：tools/call 工具级角色门控 ──
     if method == "tools/call":
-        tool_name = parsed.get("params", {}).get("name", "")
+        # FIX: P1-9i params 非 dict（list/str/null）时返回 -32602，避免 AttributeError → 500
+        mcp_params = parsed.get("params")
+        if not isinstance(mcp_params, dict):
+            return JSONResponse(
+                make_error(req_id, INVALID_PARAMS, "Invalid params"),
+                status_code=400,
+            )
+        tool_name = mcp_params.get("name", "")
         required_roles = TOOL_ROLE_REQUIREMENTS.get(tool_name)
         if required_roles is None:
             # 未在 TOOL_ROLE_REQUIREMENTS 注册的工具默认需要 admin 角色（fail-closed）
             required_roles = ("admin",)
             logger.warning("工具 '%s' 未在 TOOL_ROLE_REQUIREMENTS 注册，默认要求 admin 角色", tool_name)
-        role = getattr(request.state, "role", "admin")
+        # FIX: P1-7 语义修正 —— 与 app/auth/rbac.py require_role 保持一致：
+        # 鉴权未启用（无 API Key，role 未注入）且 rbac_enabled=False 时向后
+        # 兼容放行为 admin；rbac_enabled=True 但无 role 时 fail-closed 为 viewer。
+        role = getattr(request.state, "role", None)
+        if role is None:
+            role = "admin" if not settings.rbac_enabled else "viewer"
         if role not in required_roles:
             return JSONResponse(
                 make_error(req_id, INVALID_REQUEST,

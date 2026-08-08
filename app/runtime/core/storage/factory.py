@@ -30,6 +30,21 @@ def _validate_backend() -> None:
         )
 
 
+def _raise_async_mix(feature: str) -> None:
+    """FIX: P1-4 pg_async_enabled=True 时同步 getter fail-fast。
+
+    asyncpg store 的方法均为 async，同步调用（不带 await）不会执行函数体、
+    只会返回 coroutine 对象导致数据静默丢失。开启 pg_async_enabled 后，
+    同步存储用户必须走 async 版本，否则启动/首次调用即抛配置错误，
+    杜绝"部分丢部分写"的混合行为。
+    """
+    raise RuntimeError(
+        f"{feature}: pg_async_enabled=True 要求全链路 async 调用，"
+        f"同步 getter 不可用（防止 coroutine 未 await 导致数据静默丢失）。"
+        f"请把调用链迁移到 async 版本，或设置 PG_ASYNC_ENABLED=false 保持同步行为。"
+    )
+
+
 def get_trace_store() -> TraceStorage:
     global _trace_store
     if _trace_store is None:
@@ -38,12 +53,8 @@ def get_trace_store() -> TraceStorage:
             try:
                 # Phase 3.1：feature flag 开启时走 asyncpg 异步实现（与 psycopg2 同步并存）
                 if settings.pg_async_enabled:
-                    from app.runtime.core.storage.async_pg_store import AsyncPGTraceStore
-                    _trace_store = AsyncPGTraceStore()
-                    logger.info(
-                        "trace_store initialized: backend=%s, async=enabled (asyncpg)",
-                        settings.storage_backend,
-                    )
+                    # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
+                    _raise_async_mix("trace_store")
                 else:
                     from app.runtime.core.storage.pg_store import PGTraceStore
                     _trace_store = PGTraceStore()
@@ -74,12 +85,8 @@ def get_session_store() -> SessionStorage:
             try:
                 # Phase 3.1：feature flag 开启时走 asyncpg 异步实现（与 psycopg2 同步并存）
                 if settings.pg_async_enabled:
-                    from app.runtime.core.storage.async_pg_store import AsyncPGSessionStore
-                    _session_store = AsyncPGSessionStore()
-                    logger.info(
-                        "session_store initialized: backend=%s, async=enabled (asyncpg)",
-                        settings.storage_backend,
-                    )
+                    # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
+                    _raise_async_mix("session_store")
                 else:
                     from app.runtime.core.storage.pg_store import PGSessionStore
                     _session_store = PGSessionStore()
@@ -110,12 +117,8 @@ def get_error_store() -> ErrorStorage:
         if settings.storage_backend == "postgresql":
             try:
                 if settings.pg_async_enabled:
-                    from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
-                    _error_store = AsyncPGErrorStore()
-                    logger.info(
-                        "error_store initialized: backend=%s, async=enabled (asyncpg)",
-                        settings.storage_backend,
-                    )
+                    # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
+                    _raise_async_mix("error_store")
                 else:
                     from app.runtime.core.storage.pg_store import PGErrorStore
                     _error_store = PGErrorStore()
@@ -146,12 +149,8 @@ def get_spec_store() -> SpecStorage:
         if settings.storage_backend == "postgresql":
             try:
                 if settings.pg_async_enabled:
-                    from app.runtime.core.storage.async_pg_store import AsyncPGSpecStore
-                    _spec_store = AsyncPGSpecStore()
-                    logger.info(
-                        "spec_store initialized: backend=%s, async=enabled (asyncpg)",
-                        settings.storage_backend,
-                    )
+                    # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
+                    _raise_async_mix("spec_store")
                 else:
                     from app.runtime.core.storage.pg_store import PGSpecStore
                     _spec_store = PGSpecStore()

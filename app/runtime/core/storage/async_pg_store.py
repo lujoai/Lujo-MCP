@@ -40,83 +40,19 @@ import asyncpg
 from app.config import settings
 from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage
 from app.runtime.core.storage._pg_errors import sanitize_pg_error
+from app.runtime.core.storage.ddl import (  # FIX: P0-5 DDL 单源，消除与 pg_store/migrations 分叉
+    DDL_TRACES,
+    DDL_SESSIONS,
+    DDL_ERRORS,
+    DDL_SPECS,
+    DDL_TRACES_ARCHIVE,
+)
 
 logger = logging.getLogger("ai-debug-mcp.storage.async_pg")
 
 
-# ── 建表 DDL（与 pg_store.py 保持一致，确保表结构相同） ──
-DDL_TRACES = """
-CREATE TABLE IF NOT EXISTS traces (
-    id          BIGSERIAL PRIMARY KEY,
-    request_id  TEXT        NOT NULL,
-    timestamp   DOUBLE PRECISION NOT NULL,
-    step        TEXT        NOT NULL,
-    data        JSONB
-);
-CREATE INDEX IF NOT EXISTS idx_traces_rid ON traces(request_id);
-CREATE INDEX IF NOT EXISTS idx_traces_ts  ON traces(timestamp);
-"""
-
-DDL_SESSIONS = """
-CREATE TABLE IF NOT EXISTS sessions (
-    session_id  TEXT PRIMARY KEY,
-    created_at  DOUBLE PRECISION NOT NULL,
-    last_active DOUBLE PRECISION NOT NULL,
-    metadata    JSONB
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_la ON sessions(last_active);
-"""
-
-# Phase 2.3：errors 表持久化聚合（按 fingerprint+session_id upsert，冲突时 occurrence_count+=1）
-DDL_ERRORS = """
-CREATE TABLE IF NOT EXISTS errors (
-    id                  BIGSERIAL PRIMARY KEY,
-    error_id            TEXT,
-    fingerprint         TEXT,
-    exception_type      TEXT,
-    message             TEXT,
-    frames              JSONB,
-    frame_count         INTEGER DEFAULT 0,
-    traceback           TEXT,
-    source              TEXT,
-    session_id          TEXT,
-    occurrence_count    INTEGER DEFAULT 1,
-    first_seen          DOUBLE PRECISION,
-    last_seen           DOUBLE PRECISION,
-    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_errors_fp_session ON errors(fingerprint, session_id);
-CREATE INDEX IF NOT EXISTS idx_errors_error_id ON errors(error_id);
-"""
-
-# Phase 2.4：specs 表独立查询（消除 N+1 扫描）
-DDL_SPECS = """
-CREATE TABLE IF NOT EXISTS specs (
-    id          TEXT PRIMARY KEY,
-    kind        TEXT,
-    target      TEXT,
-    expect      JSONB,
-    created_at  DOUBLE PRECISION,
-    updated_at  DOUBLE PRECISION
-);
-CREATE INDEX IF NOT EXISTS idx_specs_kind ON specs(kind);
-CREATE INDEX IF NOT EXISTS idx_specs_target ON specs(target);
-"""
-
-# Phase 5 P3-2：traces 归档表（结构同主表，用于冷数据归档）
-DDL_TRACES_ARCHIVE = """
-CREATE TABLE IF NOT EXISTS traces_archive (
-    id          BIGINT,
-    request_id  TEXT        NOT NULL,
-    timestamp   DOUBLE PRECISION NOT NULL,
-    step        TEXT        NOT NULL,
-    data        JSONB,
-    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_traces_archive_rid ON traces_archive(request_id);
-CREATE INDEX IF NOT EXISTS idx_traces_archive_ts  ON traces_archive(timestamp);
-"""
+# ── 建表 DDL ──
+# FIX: P0-5 DDL 已抽取到 app/runtime/core/storage/ddl.py（与 pg_store 共享单源）
 
 
 def _month_partition_name(year: int, month: int) -> str:
@@ -264,6 +200,23 @@ async def _create_partition_for_month(conn, year: int, month: int) -> bool:
 async def _ensure_partitions(conn) -> int:
     """确保当月及未来 N 个月的分区存在。返回新创建的分区数量。"""
     if not settings.pg_partition_enabled:
+        return 0
+
+    # FIX: P1-9c 若 traces 已是普通表（relkind='r'），直接建分区必然报
+    # "is not partitioned"，导致每次启动崩溃。检测到非分区表时跳过建分区
+    # 并告警（保持原表不变，符合"已存在普通表不转换"的设计注释）。
+    row = await conn.fetchrow(
+        "SELECT c.relkind FROM pg_class c "
+        "JOIN pg_namespace n ON c.relnamespace = n.oid "
+        "WHERE c.relname = $1 AND n.nspname = current_schema()",
+        "traces",
+    )
+    if row is not None and row["relkind"] != "p":
+        logger.warning(
+            "PG partition enabled 但 traces 表已存在且非分区表（relkind=%s），"
+            "跳过建分区保持原表不变；如需分区请手动 ALTER 转换或重建库",
+            row["relkind"],
+        )
         return 0
 
     from datetime import datetime, timezone
@@ -731,8 +684,15 @@ class AsyncPGSpecStore(SpecStorage):
                 conditions.append(f"kind = ${len(params) + 1}")
                 params.append(kind)
             if target:
-                conditions.append(f"target LIKE ${len(params) + 1}")
-                params.append(f"%{target}%")
+                # FIX: P2 LIKE 通配符转义 —— 与 pg_store.list_specs 保持一致，
+                # 用户输入含 %/_ 时按字面量匹配
+                escaped = (
+                    target.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                conditions.append(f"target LIKE ${len(params) + 1} ESCAPE '\\'")
+                params.append(f"%{escaped}%")
             if conditions:
                 sql += " WHERE " + " AND ".join(conditions)
             sql += " ORDER BY updated_at DESC"

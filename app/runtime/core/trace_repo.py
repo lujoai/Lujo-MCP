@@ -313,12 +313,12 @@ def save_network_record(
     payload["request_id"] = request_id
     payload["timestamp"] = payload.get("timestamp") or time.time()
     payload["direction"] = payload.get("direction") or "outbound"
-    # 入库前脱敏
-    payload["url"] = redact(payload.get("url"))
-    payload["request_body"] = redact(payload.get("request_body"))
-    payload["response_body"] = redact(payload.get("response_body"))
+    # 入库前脱敏（FIX: P1-6 request/response body 可能是 dict/list，递归脱敏）
+    payload["url"] = _redact_nested(payload.get("url"))
+    payload["request_body"] = _redact_nested(payload.get("request_body"))
+    payload["response_body"] = _redact_nested(payload.get("response_body"))
     if extra:
-        payload["extra"] = extra
+        payload["extra"] = _redact_nested(extra)
 
     add_log(key, _STEP_NETWORK, payload)
     return record_id
@@ -346,11 +346,11 @@ def save_ui_event(
     payload["trace_id"] = trace_id
     payload["timestamp"] = payload.get("timestamp") or time.time()
     payload["event_type"] = payload.get("event_type") or "click"
-    # 入库前脱敏
-    payload["route_path"] = redact(payload.get("route_path"))
-    payload["payload_json"] = redact(payload.get("payload_json"))
+    # 入库前脱敏（FIX: P1-6 payload_json 可能是 dict/list，递归脱敏）
+    payload["route_path"] = _redact_nested(payload.get("route_path"))
+    payload["payload_json"] = _redact_nested(payload.get("payload_json"))
     if extra:
-        payload["extra"] = extra
+        payload["extra"] = _redact_nested(extra)
 
     add_log(key, _STEP_UI, payload)
     return event_id
@@ -382,11 +382,12 @@ def save_console_log(
         "request_id": request_id,
         "timestamp": time.time(),
         "level": level or "info",
-        "message": redact(message or ""),
+        # FIX: P1-6 message 可能含敏感键值，统一递归脱敏
+        "message": _redact_nested(message),
         "source": source,
     }
     if extra:
-        payload["extra"] = extra
+        payload["extra"] = _redact_nested(extra)
 
     add_log(key, _STEP_CONSOLE, payload)
     return record_id

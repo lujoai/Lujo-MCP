@@ -136,14 +136,22 @@ async function loadTraces() {
       return;
     }
     list.innerHTML = data.traces.map(t => `
-      <div class="trace-item" data-tid="${t.trace_id}" onclick="selectTrace('${t.trace_id}')">
+      <div class="trace-item" data-tid="${esc(t.trace_id)}">
         <div class="info">
           <div class="type">${esc(t.type)} ${t.has_silent_failure ? '<span class="badge badge-silent">SILENT</span>' : ''} ${t.verify_count ? '<span class="badge badge-verify">verify×'+t.verify_count+'</span>' : ''}</div>
           <div class="msg">${esc(t.message)} · ${formatTime(t.timestamp)} · ×${t.occurrence_count}</div>
         </div>
-        <span class="badge ${t.has_silent_failure ? 'badge-silent' : 'badge-error'}">${t.trace_kind}</span>
+        <span class="badge ${t.has_silent_failure ? 'badge-silent' : 'badge-error'}">${esc(t.trace_kind)}</span>
       </div>
     `).join('');
+    // FIX: P0-4 去掉内联 onclick，改用事件委托（trace_id 经 esc 转义后做属性值）
+    if (!list.dataset.delegated) {
+      list.dataset.delegated = '1';
+      list.addEventListener('click', (ev) => {
+        const item = ev.target.closest('.trace-item');
+        if (item && item.dataset.tid) selectTrace(item.dataset.tid);
+      });
+    }
   } catch(e) {
     list.innerHTML = '<div class="loading">Failed to load traces</div>';
   }
@@ -152,7 +160,7 @@ async function loadTraces() {
 async function selectTrace(tid) {
   // highlight active
   document.querySelectorAll('.trace-item').forEach(el => el.classList.remove('active'));
-  const el = document.querySelector(`[data-tid="${tid}"]`);
+  const el = document.querySelector(`[data-tid="${CSS.escape(tid)}"]`);
   if (el) el.classList.add('active');
 
   const detail = document.getElementById('detail');
@@ -173,7 +181,7 @@ async function selectTrace(tid) {
       html += `<div class="value">${esc(t.exception.type)}: ${esc(t.exception.message)}</div>`;
       if (t.exception.frames && t.exception.frames.length) {
         html += '<div class="code-snippet">' + t.exception.frames.map(f =>
-          `${f.file}:${f.line} in ${f.function}`
+          `${esc(f.file)}:${esc(f.line)} in ${esc(f.function)}`
         ).join('\n') + '</div>';
       }
       html += '</div>';
@@ -229,7 +237,9 @@ async function selectTrace(tid) {
 
 function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // FIX: P0-4 补引号转义，esc() 同时用于 HTML 文本与属性上下文
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ── v0.4.0: Quality Report 渲染 ──

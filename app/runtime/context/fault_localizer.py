@@ -206,10 +206,16 @@ def localize(
         logger.warning("static_analyzer.analyze failed, degrade to position-only: %s", exc)
         static_results = []
 
-    # 建立 帧→FaultLocation 映射（analyze 与 frames 顺序一致）
+    # 建立 帧→FaultLocation 映射。
+    # FIX: P1-9a 必须按 FaultLocation.frame_index 关联原始帧（analyze 会跳过部分帧，
+    # 结果列表下标 ≠ 输入 frames 下标），否则张冠李戴。
     static_by_index: dict[int, Optional[static_analyzer.FaultLocation]] = {}
     for i, fl in enumerate(static_results):
-        static_by_index[i] = fl
+        if fl.frame_index is not None:
+            static_by_index[fl.frame_index] = fl
+        else:
+            # 兼容旧调用方/mock（未设置 frame_index 时回退顺序映射）
+            static_by_index[i] = fl
 
     total = len(frames)
     candidates: list[SuspiciousFrame] = []

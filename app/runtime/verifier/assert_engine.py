@@ -60,7 +60,9 @@ def _check_api(actual: dict, expect: dict, diffs: list) -> None:
     if "status" in expect:
         exp_status = expect["status"]
         act_status = actual.get("status_code")
-        if act_status != exp_status:
+        # FIX: P2 值类型归一 —— JSON 反序列化后 status 可能是 str("200")
+        # 或 int(200)，归一化后比较
+        if not _values_equal(act_status, exp_status):
             diffs.append({"field": "status_code", "expected": exp_status, "actual": act_status})
 
     # body_rules: { "field.path": expected_value }
@@ -68,7 +70,7 @@ def _check_api(actual: dict, expect: dict, diffs: list) -> None:
     actual_body = actual.get("body") or {}
     for field_path, expected_val in body_rules.items():
         actual_val = _get_nested_value(actual_body, field_path)
-        if actual_val != expected_val:
+        if not _values_equal(actual_val, expected_val):
             diffs.append({"field": f"body.{field_path}", "expected": expected_val, "actual": actual_val})
 
 
@@ -78,7 +80,7 @@ def _check_ui(actual: dict, expect: dict, diffs: list) -> None:
     actual_changes = actual.get("state_changes") or {}
     for key, expected_val in state_change.items():
         actual_val = actual_changes.get(key)
-        if actual_val != expected_val:
+        if not _values_equal(actual_val, expected_val):
             diffs.append({"field": f"state_change.{key}", "expected": expected_val, "actual": actual_val})
 
 
@@ -87,9 +89,13 @@ def _check_rule(actual: dict, expect: dict, diffs: list) -> None:
     rules = expect.get("rules") or []
     for rule in rules:
         field = rule.get("field", "")
+        # FIX: P2 expected=None 语义 —— 无 expected 键表示"不检查"（跳过），
+        # 显式 expected=None 表示期望实际值为 None/缺失
+        if "expected" not in rule:
+            continue
         expected_val = rule.get("expected")
         actual_val = _get_nested_value(actual, field)
-        if actual_val != expected_val:
+        if not _values_equal(actual_val, expected_val):
             diffs.append({"field": field, "expected": expected_val, "actual": actual_val})
 
 
@@ -120,6 +126,35 @@ def _judge_silent_failure(matched: bool, actual: dict) -> bool:
 
 
 # ── 工具函数 ──
+
+def _values_equal(a: Any, b: Any) -> bool:
+    """值相等比较，含类型归一。
+
+    FIX: P2 值类型归一 —— JSON 反序列化/不同来源可能产生 "200"(str) vs
+    200(int)、"1.5"(str) vs 1.5(float) 的错配，比较前把数值字符串归一到数值。
+    bool 是 int 子类，显式排除避免 True == 1 误判。
+    """
+    if a == b:
+        return True
+    if a is None or b is None:
+        return False
+
+    def _to_number(v: Any):
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, (int, float, str)):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    num_a = _to_number(a)
+    num_b = _to_number(b)
+    if num_a is not None and num_b is not None:
+        return num_a == num_b
+    return False
+
 
 def _get_nested_value(obj: Any, path: str) -> Any:
     """

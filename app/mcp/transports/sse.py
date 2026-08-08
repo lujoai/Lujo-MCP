@@ -19,8 +19,21 @@ class _Subscription:
 class SSEHub:
     """按 session 维护 asyncio.Queue 列表，支持跨线程发布"""
 
+    # FIX: P1-10a 每订阅队列有界，防止慢消费客户端导致无界内存增长
+    _QUEUE_MAXSIZE = 256
+
     def __init__(self):
         self._queues: Dict[str, List[_Subscription]] = {}
+
+    @staticmethod
+    def _publish_locked(q: asyncio.Queue, message: dict) -> None:
+        """在事件循环线程内执行：队列满时丢最旧一条，再入队（参考 dashboard_events）。"""
+        if q.full():
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        q.put_nowait(message)
 
     def subscribe(self, session_id: str) -> asyncio.Queue:
         """订阅 SSE 流。
@@ -34,7 +47,8 @@ class SSEHub:
             raise PermissionError(f"无效或未注册的 session_id: {session_id}")
 
         loop = asyncio.get_running_loop()
-        q: asyncio.Queue = asyncio.Queue()
+        # FIX: P1-10a 有界队列（maxsize=256），满时由 _publish_locked 丢最旧
+        q: asyncio.Queue = asyncio.Queue(maxsize=self._QUEUE_MAXSIZE)
         self._queues.setdefault(session_id, []).append(_Subscription(queue=q, loop=loop))
         return q
 
@@ -59,7 +73,10 @@ class SSEHub:
         delivered = False
         for sub in list(qs):
             try:
-                sub.loop.call_soon_threadsafe(sub.queue.put_nowait, message)
+                # FIX: P1-10a 满时丢最旧由 _publish_locked 在 loop 线程内原子处理
+                sub.loop.call_soon_threadsafe(
+                    SSEHub._publish_locked, sub.queue, message
+                )
                 delivered = True
             except RuntimeError:
                 logger.warning("SSE 发布失败：事件循环不可用，session_id=%s", session_id)

@@ -27,6 +27,10 @@ class QueueFullError(Exception):
 class RepairQueue:
     """有界队列 + K 常驻消费协程的修复任务队列。"""
 
+    # FIX: P1-3 _jobs 只增不减，enqueue 时对超过 TTL 的终态记录做清理
+    _JOB_TTL_SECONDS = 3600
+    _JOB_MAX_ENTRIES = 1000
+
     def __init__(self, maxsize: int, concurrency: int) -> None:
         self._maxsize = maxsize
         self._concurrency = concurrency
@@ -52,6 +56,8 @@ class RepairQueue:
                 "created_at": time.time(),
                 "finished_at": None,
             }
+            # FIX: P1-3 终态记录 TTL 清理，防止 _jobs 无限增长
+            self._evict_stale_jobs_locked()
         try:
             self._queue.put_nowait((job_id, context, model))
         except asyncio.QueueFull:
@@ -60,6 +66,20 @@ class RepairQueue:
                 self._jobs.pop(job_id, None)
             raise QueueFullError(job_id)
         return job_id
+
+    def _evict_stale_jobs_locked(self) -> None:
+        """清理超时且已终态（done/failed/rejected）的 job 记录（须持 _jobs_lock）。"""
+        if len(self._jobs) <= self._JOB_MAX_ENTRIES:
+            return
+        cutoff = time.time() - self._JOB_TTL_SECONDS
+        stale = [
+            jid
+            for jid, job in self._jobs.items()
+            if job["status"] in ("done", "failed", "rejected")
+            and (job.get("finished_at") or 0) < cutoff
+        ]
+        for jid in stale:
+            self._jobs.pop(jid, None)
 
     async def _worker(self) -> None:
         """常驻消费协程：从队列取任务 → 信号量限并发 → 调 Coordinator.run。
@@ -84,6 +104,13 @@ class RepairQueue:
                             self._jobs[job_id]["result"] = result
                             self._jobs[job_id]["finished_at"] = time.time()
                 except asyncio.CancelledError:
+                    # FIX: P1-3 worker 被取消时，先把 in-flight job 标记 failed，
+                    # 再 re-raise，避免 _jobs 永久卡 running
+                    async with self._jobs_lock:
+                        if job_id in self._jobs and self._jobs[job_id]["status"] == "running":
+                            self._jobs[job_id]["status"] = "failed"
+                            self._jobs[job_id]["error"] = "cancelled (drain timeout)"
+                            self._jobs[job_id]["finished_at"] = time.time()
                     raise
                 except Exception as e:
                     logger.exception("repair job %s failed", job_id)
@@ -117,9 +144,24 @@ class RepairQueue:
         try:
             await asyncio.wait_for(self._queue.join(), timeout=timeout)
         except asyncio.TimeoutError:
-            unfinished = self._queue.qsize()
+            # FIX: P1-3 排空超时：清空队列残留并标记 rejected，
+            # 否则这些 item 永远无人消费，后续 enqueue 的 job 也永不执行
+            rejected = 0
+            while True:
+                try:
+                    job_id, _ctx, _model = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                async with self._jobs_lock:
+                    if job_id in self._jobs and self._jobs[job_id]["status"] == "pending":
+                        self._jobs[job_id]["status"] = "rejected"
+                        self._jobs[job_id]["error"] = "rejected (drain timeout)"
+                        self._jobs[job_id]["finished_at"] = time.time()
+                        rejected += 1
+                self._queue.task_done()
+            unfinished = rejected
             logger.warning(
-                "repair queue drain timed out: %d jobs unfinished, cancelling workers",
+                "repair queue drain timed out: %d jobs rejected, cancelling workers",
                 unfinished,
             )
 

@@ -267,3 +267,55 @@ class TestPrometheusEndpointBackwardCompat:
         assert "http_errors_total" in result
         assert "http_request_duration_seconds_sum" in result
         assert "http_request_duration_seconds_count" in result
+
+
+class TestMetricCardinalityBounds:
+    """FIX: P1-10b 指标 key 无界 —— 未命中路由归一化 + 上限裁剪"""
+
+    def teardown_method(self):
+        import app.observability as obs_module
+
+        obs_module._request_total.clear()
+        obs_module._error_total.clear()
+        obs_module._latency_sum.clear()
+        obs_module._latency_count.clear()
+
+    def test_unmatched_route_normalized_to_404_other(self, monkeypatch):
+        """未命中已注册路由（scope 无 route）时 path 归一化为 404-other"""
+        from app.observability import MetricsMiddleware
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+
+        async def mock_call_next(req):
+            return mock_response
+
+        middleware = MetricsMiddleware(MagicMock())
+        import asyncio
+        asyncio.run(
+            middleware.dispatch(
+                # scope 无 route 键 → 模拟未命中路由的原始请求
+                MagicMock(method="GET", scope={}),
+                mock_call_next,
+            )
+        )
+
+        import app.observability as obs_module
+        # 高基数动态路径不会进指标表，统一为 404-other
+        assert ("GET", "404-other", 404) in obs_module._request_total
+        assert "404-other" in obs_module._latency_sum
+
+    def test_metric_tables_trimmed_over_limit(self, monkeypatch):
+        """指标表超上限时清空重置，防止高基数 key 撑爆内存"""
+        import app.observability as obs_module
+
+        # 直接把表填到超限（须持锁，与生产写路径一致）
+        limit = obs_module._MAX_METRIC_KEYS
+        with obs_module._counter_lock:
+            for i in range(limit + 10):
+                obs_module._request_total[("GET", f"/path/{i}", 200)] = 1
+
+        with obs_module._counter_lock:
+            obs_module._trim_metric_tables_if_needed()
+
+        assert len(obs_module._request_total) == 0

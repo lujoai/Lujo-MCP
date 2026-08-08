@@ -68,6 +68,9 @@ class FaultLocation:
     # 调用链: ["process_user", "validate_input", "handle_request"]
     suspicious_inputs: list[dict[str, str]] = field(default_factory=list)
     # 可疑输入: [{"variable": "user_id", "reason": "从 dict.get() 获取后未校验 None 直接使用"}]
+    # FIX: P1-9a 记录在输入 frames 中的原始下标。部分帧因文件缺失/语法错误被跳过时，
+    # 结果列表长度 < 输入长度，调用方必须按 frame_index 关联，不能按下标顺序映射。
+    frame_index: Optional[int] = None
 
 
 # ── 公共入口 ──
@@ -82,10 +85,12 @@ def analyze(stacktrace_frames: list[dict[str, Any]]) -> list[FaultLocation]:
         return []
 
     results: list[FaultLocation] = []
-    for frame in stacktrace_frames:
+    for i, frame in enumerate(stacktrace_frames):
         try:
             loc = _analyze_frame(frame)
             if loc is not None:
+                # FIX: P1-9a 记录原始下标，供调用方正确关联（结果可能少于输入帧数）
+                loc.frame_index = i
                 results.append(loc)
         except Exception:
             logger.warning(
@@ -192,8 +197,15 @@ def _analyze_frame(frame: dict[str, Any]) -> Optional[FaultLocation]:
 
 
 def _resolve_path(file_path: str) -> Optional[str]:
-    """解析文件路径（支持相对路径和路径映射）。"""
+    """解析文件路径（支持相对路径和路径映射）。
+
+    SEC-01（LFI 防护）：解析结果必须经过 ``os.path.realpath`` 归一化，
+    并落在允许读取的根目录（whitelist_path_prefix，空则收敛到项目根/CWD）内，
+    否则拒绝并返回 None。避免 ``/app/../../etc/passwd`` 等路径穿越。
+    """
+    # FIX: P0-2 复用 code_locator 的白名单校验，消除任意文件读取
     from app.config import settings
+    from app.runtime.collectors.code_locator import _is_allowed
 
     raw = (settings.source_path_map or "").strip()
     if raw:
@@ -203,16 +215,18 @@ def _resolve_path(file_path: str) -> Optional[str]:
             remote, local = pair.split(":", 1)
             remote, local = remote.strip(), local.strip()
             if remote and file_path.startswith(remote):
-                return local + file_path[len(remote):]
+                candidate = os.path.realpath(local + file_path[len(remote):])
+                return candidate if _is_allowed(candidate) else None
 
     # 尝试 CWD 相对路径
-    cwd_path = os.path.join(os.getcwd(), file_path)
-    if os.path.isfile(cwd_path):
-        return os.path.abspath(cwd_path)
+    cwd_path = os.path.realpath(os.path.join(os.getcwd(), file_path))
+    if os.path.isfile(cwd_path) and _is_allowed(cwd_path):
+        return cwd_path
 
     # 尝试绝对路径
-    if os.path.isfile(file_path):
-        return os.path.abspath(file_path)
+    abs_path = os.path.realpath(file_path)
+    if os.path.isfile(abs_path) and _is_allowed(abs_path):
+        return abs_path
 
     return None
 

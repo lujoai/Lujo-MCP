@@ -157,7 +157,10 @@ def _score_code_snippet(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) 
 def _score_runtime(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> DimensionScore:
     """RUNTIME 维度：运行时快照是否存在。"""
     runtime = debug_ctx.get("runtime")
-    if runtime and isinstance(runtime, dict) and runtime.get("pid"):
+    # FIX: P1-9b 真实快照结构为 runtime.process.pid / runtime.system.*，
+    # 原实现读 runtime.get("pid") 恒为空，导致 RUNTIME 维度恒 0 分。
+    process = (runtime or {}).get("process") if isinstance(runtime, dict) else None
+    if process and isinstance(process, dict) and process.get("pid"):
         return DimensionScore(present=True, score=1.0, reason="运行时快照已采集")
     return DimensionScore(present=False, score=0.0, reason="无运行时快照（可能采集已关闭）")
 
@@ -323,18 +326,22 @@ def _extract_evidence(
     # 4. 运行时证据
     runtime = debug_ctx.get("runtime")
     if runtime and isinstance(runtime, dict):
-        evidence.append(
-            EvidenceItem(
-                type=EvidenceType.RUNTIME_STATE,
-                description=(
-                    f"运行时状态：CPU {runtime.get('cpu_percent', '?')}%，"
-                    f"内存 {runtime.get('memory_mb', '?')}MB，"
-                    f"线程 {runtime.get('thread_count', '?')} 个"
-                ),
-                source="runtime_collector",
-                relevance=RelevanceLevel.LOW,
+        # FIX: P1-9b 对齐真实快照结构 runtime.process.* / runtime.system.*
+        process = runtime.get("process") or {}
+        system = runtime.get("system") or {}
+        if isinstance(process, dict) and isinstance(system, dict):
+            evidence.append(
+                EvidenceItem(
+                    type=EvidenceType.RUNTIME_STATE,
+                    description=(
+                        f"运行时状态：CPU {system.get('cpu_percent', process.get('cpu_percent', '?'))}%，"
+                        f"内存 {process.get('memory_rss_mb', '?')}MB，"
+                        f"线程 {process.get('num_threads', '?')} 个"
+                    ),
+                    source="runtime_collector",
+                    relevance=RelevanceLevel.LOW,
+                )
             )
-        )
 
     # 5. 网络证据
     network = debug_ctx.get("network_trace")

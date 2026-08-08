@@ -186,8 +186,32 @@ class Coordinator:
             elif result.status == AgentStatus.FAILED:
                 parallel_failures += 1
 
-        # DAG 降级信号：并行节点失败数达阈值时标记，供调用方观测
-        dag_degraded = parallel_failures >= settings.agent_dag_failure_threshold
+        # DAG 降级信号：repair 层失败 或 并行节点失败数达阈值时标记（FIX: P1-9g，
+        # 修复前 repair 失败不计入，整个 DAG 失效却被报告健康）。
+        repair_failed = (
+            repair_result is None
+            or repair_result.status != AgentStatus.SUCCESS
+        )
+        dag_degraded = (
+            repair_failed
+            or parallel_failures >= settings.agent_dag_failure_threshold
+        )
+
+        if dag_degraded:
+            # FIX: P1-9g degraded 必须告警（此前无任何消费方/日志，静默健康）
+            skipped = sum(
+                1
+                for r in parallel_results.values()
+                if isinstance(r, AgentResult) and r.status == AgentStatus.SKIPPED
+            )
+            logger.warning(
+                "Coordinator DAG degraded: repair_failed=%s, "
+                "parallel_failures=%d/%d, skipped=%d",
+                repair_failed,
+                parallel_failures,
+                len(PHASE2_PARALLEL_NODES),
+                skipped,
+            )
 
         return {
             "repair_plan": repair_plan,
@@ -217,9 +241,31 @@ class Coordinator:
         if not tasks:
             return {}
 
-        raw_results = await asyncio.gather(
-            *[t[1] for t in tasks], return_exceptions=True
-        )
+        # FIX: P2 agent_dag_parallel_timeout 接入 —— 此前并行 Agent 无超时，
+        # 卡死的 Agent 无限拖住整个 DAG；0 表示继承 agent_timeout（向后兼容）
+        timeout = settings.agent_dag_parallel_timeout or settings.agent_timeout
+        try:
+            raw_results = await asyncio.wait_for(
+                asyncio.gather(*[t[1] for t in tasks], return_exceptions=True),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Coordinator DAG: parallel agents timeout after %ss, "
+                "marking all nodes FAILED",
+                timeout,
+            )
+            return {
+                name: AgentResult(
+                    agent_name=name,
+                    status=AgentStatus.FAILED,
+                    output={},
+                    error=f"DAG parallel timeout after {timeout}s",
+                    started_at=0.0,
+                    finished_at=BaseAgent._now(),
+                )
+                for name, _ in tasks
+            }
 
         results: dict[str, AgentResult] = {}
         for (node_name, _), raw in zip(tasks, raw_results):

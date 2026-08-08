@@ -92,11 +92,17 @@ def _dc(**overrides):
         "ui_events": None,
         "spec_diffs": None,
         "related_specs": [],
+        # FIX: P1-9b 真实快照结构为 runtime.process.* / runtime.system.*
         "runtime": {
-            "pid": 1234,
-            "cpu_percent": 12.5,
-            "memory_mb": 256.0,
-            "thread_count": 8,
+            "timestamp": 1.0,
+            "python": {"version": "3.12"},
+            "system": {"cpu_percent": 12.5},
+            "process": {
+                "pid": 1234,
+                "cpu_percent": 12.5,
+                "memory_rss_mb": 256.0,
+                "num_threads": 8,
+            },
         },
     }
     base.update(overrides)

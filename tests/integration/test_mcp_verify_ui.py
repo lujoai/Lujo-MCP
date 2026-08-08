@@ -108,8 +108,16 @@ class _FakeBrowser:
     def __init__(self):
         self.page = _FakePage()
 
+    def new_context(self):
+        # Playwright 推荐 API：browser.new_context() -> context.new_page()
+        return self
+
     def new_page(self):
         return self.page
+
+    def route(self, pattern, handler):
+        # P0-3 SSRF 守卫：在 context 上注册逐跳 URL 安全检查，mock 无网络行为
+        return None
 
     def close(self):
         return None

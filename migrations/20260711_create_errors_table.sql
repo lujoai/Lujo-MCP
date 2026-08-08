@@ -1,18 +1,36 @@
--- 本表由 pg_store.py 的 upsert_error 方法使用（app/mcp/core/errors.py 记录异常聚合），
--- 与 traces 表 step 字段并存，用于异常指纹聚合/根因排序/历史查询。
+-- errors 表（异常聚合）：本文件与 app/runtime/core/storage/ddl.py 的 DDL_ERRORS 保持一致。
+-- 历史背景（P0-5）：旧迁移使用 trace_id/stack/file/line 列，与代码（error_id/frames/frame_count/
+-- traceback/source/session_id + 唯一索引 uq_errors_fp_session）完全不一致，导致 PG 后端 errors/specs
+-- 静默失效。2026-08 起以代码 DDL 为准重建；下方兼容段对已按旧 schema 建库的环境补齐缺失列。
+
 CREATE TABLE IF NOT EXISTS errors (
     id                  BIGSERIAL PRIMARY KEY,
-    trace_id            TEXT,
+    error_id            TEXT,
+    fingerprint         TEXT,
     exception_type      TEXT,
     message             TEXT,
-    stack               TEXT,
-    file                TEXT,
-    line                INTEGER,
-    fingerprint         TEXT,
+    frames              JSONB,
+    frame_count         INTEGER DEFAULT 0,
+    traceback           TEXT,
+    source              TEXT,
+    session_id          TEXT,
     occurrence_count    INTEGER DEFAULT 1,
+    first_seen          DOUBLE PRECISION,
+    last_seen           DOUBLE PRECISION,
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_errors_trace_id ON errors(trace_id);
-CREATE INDEX IF NOT EXISTS idx_errors_fingerprint ON errors(fingerprint);
-CREATE INDEX IF NOT EXISTS idx_errors_created_at ON errors(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_errors_fp_session ON errors(fingerprint, session_id);
+CREATE INDEX IF NOT EXISTS idx_errors_error_id ON errors(error_id);
+
+-- ── 旧 schema 兼容（幂等）──
+-- 已按旧迁移建库的环境缺少 error_id/frames/frame_count/traceback/source/session_id/
+-- first_seen/last_seen 列，逐列补齐；旧列 trace_id/stack/file/line 保留但代码不再读写。
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS error_id TEXT;
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS frames JSONB;
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS frame_count INTEGER DEFAULT 0;
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS traceback TEXT;
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS session_id TEXT;
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS first_seen DOUBLE PRECISION;
+ALTER TABLE errors ADD COLUMN IF NOT EXISTS last_seen DOUBLE PRECISION;

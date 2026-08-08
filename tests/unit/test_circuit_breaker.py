@@ -14,10 +14,8 @@ class TestCircuitBreakerConfig:
         assert hasattr(settings, "circuit_breaker_enabled")
         assert hasattr(settings, "cb_llm_max_failures")
         assert hasattr(settings, "cb_llm_reset_timeout")
-        assert hasattr(settings, "cb_llm_window_size")
         assert hasattr(settings, "cb_pg_max_failures")
         assert hasattr(settings, "cb_pg_reset_timeout")
-        assert hasattr(settings, "cb_pg_window_size")
 
     def test_config_defaults(self):
         """默认配置值正确"""
@@ -26,10 +24,8 @@ class TestCircuitBreakerConfig:
         assert settings.circuit_breaker_enabled is False
         assert settings.cb_llm_max_failures == 5
         assert settings.cb_llm_reset_timeout == 30
-        assert settings.cb_llm_window_size == 60
         assert settings.cb_pg_max_failures == 3
         assert settings.cb_pg_reset_timeout == 15
-        assert settings.cb_pg_window_size == 60
 
 
 class TestLLMCircuitBreaker:

@@ -135,6 +135,9 @@ class RepairAgent(BaseAgent):
             "prior_analysis": repair_ctx.get("prior_analysis"),
             "vector_recall": repair_ctx.get("vector_recall", []),
             "git_context": repair_ctx.get("git_context", []),
+            # FIX: P1-9f 上一轮 verify_loop 注入的 repair_plan，供迭代轮复用收敛；
+            # 无上一轮（首轮）时为 None，保持与原行为一致
+            "prior_repair_plan": repair_ctx.get("repair_plan"),
         }
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
         return [

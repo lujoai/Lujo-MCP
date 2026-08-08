@@ -13,6 +13,13 @@ import psycopg2.errors
 from app.config import settings
 from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage
 from app.runtime.core.storage._pg_errors import sanitize_pg_error
+from app.runtime.core.storage.ddl import (  # FIX: P0-5 DDL 单源，消除与 async_pg_store/migrations 分叉
+    DDL_TRACES,
+    DDL_SESSIONS,
+    DDL_ERRORS,
+    DDL_SPECS,
+    DDL_TRACES_ARCHIVE,
+)
 
 logger = logging.getLogger("ai-debug-mcp.storage.pg")
 
@@ -106,79 +113,34 @@ def close_pool() -> None:
             _pool = None
 
 
+def _get_conn(timeout: float = 5.0):
+    """从连接池取连接；池耗尽时等待有界时间，超时抛 PoolError。
+
+    FIX: P1-9d ThreadedConnectionPool.getconn() 无超时参数，全占用时
+    永久阻塞；配合 _execute_with_retry 的重试会进一步加剧。统一经本函数
+    获取连接，超时抛可识别的 PoolError，由上层计入熔断/降级路径
+    （storage_fallback_to_memory）。
+    """
+    pool = _get_pool()
+    deadline = time.time() + timeout
+    while True:
+        try:
+            # FIX: P1-9d 取连接必须是 pool.getconn()（此前误写成递归调用
+            # 自身 _get_conn()，池耗尽时无限递归 RecursionError）
+            return pool.getconn()
+        except psycopg2.pool.PoolError:
+            if time.time() >= deadline:
+                logger.error(
+                    "PG 连接池耗尽，等待 %.1fs 超时（maxconn=%d）",
+                    timeout,
+                    settings.pg_max_connections,
+                )
+                raise
+            time.sleep(0.05)
+
+
 # ── 建表 DDL ──
-DDL_TRACES = """
-CREATE TABLE IF NOT EXISTS traces (
-    id          BIGSERIAL PRIMARY KEY,
-    request_id  TEXT        NOT NULL,
-    timestamp   DOUBLE PRECISION NOT NULL,
-    step        TEXT        NOT NULL,
-    data        JSONB
-);
-CREATE INDEX IF NOT EXISTS idx_traces_rid ON traces(request_id);
-CREATE INDEX IF NOT EXISTS idx_traces_ts  ON traces(timestamp);
-"""
-
-DDL_SESSIONS = """
-CREATE TABLE IF NOT EXISTS sessions (
-    session_id  TEXT PRIMARY KEY,
-    created_at  DOUBLE PRECISION NOT NULL,
-    last_active DOUBLE PRECISION NOT NULL,
-    metadata    JSONB
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_la ON sessions(last_active);
-"""
-
-# Phase 2.3：errors 表持久化聚合（按 fingerprint+session_id upsert，冲突时 occurrence_count+=1）
-DDL_ERRORS = """
-CREATE TABLE IF NOT EXISTS errors (
-    id                  BIGSERIAL PRIMARY KEY,
-    error_id            TEXT,
-    fingerprint         TEXT,
-    exception_type      TEXT,
-    message             TEXT,
-    frames              JSONB,
-    frame_count         INTEGER DEFAULT 0,
-    traceback           TEXT,
-    source              TEXT,
-    session_id          TEXT,
-    occurrence_count    INTEGER DEFAULT 1,
-    first_seen          DOUBLE PRECISION,
-    last_seen           DOUBLE PRECISION,
-    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_errors_fp_session ON errors(fingerprint, session_id);
-CREATE INDEX IF NOT EXISTS idx_errors_error_id ON errors(error_id);
-"""
-
-# Phase 2.4：specs 表独立查询（消除 N+1 扫描）
-DDL_SPECS = """
-CREATE TABLE IF NOT EXISTS specs (
-    id          TEXT PRIMARY KEY,
-    kind        TEXT,
-    target      TEXT,
-    expect      JSONB,
-    created_at  DOUBLE PRECISION,
-    updated_at  DOUBLE PRECISION
-);
-CREATE INDEX IF NOT EXISTS idx_specs_kind ON specs(kind);
-CREATE INDEX IF NOT EXISTS idx_specs_target ON specs(target);
-"""
-
-# Phase 5 P3-2：traces 归档表（结构同主表，用于冷数据归档）
-DDL_TRACES_ARCHIVE = """
-CREATE TABLE IF NOT EXISTS traces_archive (
-    id          BIGINT,
-    request_id  TEXT        NOT NULL,
-    timestamp   DOUBLE PRECISION NOT NULL,
-    step        TEXT        NOT NULL,
-    data        JSONB,
-    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_traces_archive_rid ON traces_archive(request_id);
-CREATE INDEX IF NOT EXISTS idx_traces_archive_ts  ON traces_archive(timestamp);
-"""
+# FIX: P0-5 DDL 已抽取到 app/runtime/core/storage/ddl.py（与 async_pg_store 共享单源）
 
 
 def _month_partition_name(year: int, month: int) -> str:
@@ -231,6 +193,25 @@ def _ensure_partitions(conn) -> int:
     仅在 settings.pg_partition_enabled=True 时生效。
     """
     if not settings.pg_partition_enabled:
+        return 0
+
+    # FIX: P1-9c 若 traces 已是普通表（relkind='r'），直接建分区必然报
+    # "is not partitioned"，导致每次启动崩溃。检测到非分区表时跳过建分区
+    # 并告警（保持原表不变，符合"已存在普通表不转换"的设计注释）。
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT c.relkind FROM pg_class c "
+        "JOIN pg_namespace n ON c.relnamespace = n.oid "
+        "WHERE c.relname = %s AND n.nspname = current_schema()",
+        ("traces",),
+    )
+    row = cur.fetchone()
+    if row is not None and row[0] != "p":
+        logger.warning(
+            "PG partition enabled 但 traces 表已存在且非分区表（relkind=%s），"
+            "跳过建分区保持原表不变；如需分区请手动 ALTER 转换或重建库",
+            row[0],
+        )
         return 0
 
     from datetime import datetime, timezone
@@ -293,7 +274,7 @@ def _ensure_init():
         if _initialized:
             return
         pool = _get_pool()
-        conn = pool.getconn()
+        conn = _get_conn()
         try:
             cur = conn.cursor()
             # P3-1：分区模式下用分区表替代普通表
@@ -387,7 +368,7 @@ def _execute_with_retry(
                         pool.putconn(conn, close=True)
                     except Exception:
                         pass
-                    conn = pool.getconn()
+                    conn = _get_conn()
                     logger.warning(f"PG 操作重试 ({attempt + 1}/{max_retries}): {e}")
                     time.sleep(0.1)
                 else:
@@ -447,7 +428,7 @@ def _query_with_retry(
                         pool.putconn(conn, close=True)
                     except Exception:
                         pass
-                    conn = pool.getconn()
+                    conn = _get_conn()
                     logger.warning(f"PG 查询重试 ({attempt + 1}/{max_retries}): {e}")
                     time.sleep(0.1)
                 else:
@@ -478,7 +459,7 @@ class PGTraceStore(TraceStorage):
         """真实探活：SELECT 1。失败返回 False 而非抛异常（A1）。"""
         try:
             _ensure_init()
-            conn = _get_pool().getconn()
+            conn = _get_conn()
             try:
                 cur = conn.cursor()
                 cur.execute("SELECT 1")
@@ -491,7 +472,7 @@ class PGTraceStore(TraceStorage):
             return False
 
     def _conn(self):
-        return _get_pool().getconn()
+        return _get_conn()
 
     def _put(self, conn):
         if conn is not None and not conn.closed:
@@ -619,7 +600,7 @@ class PGSessionStore(SessionStorage):
         _ensure_init()
 
     def _conn(self):
-        return _get_pool().getconn()
+        return _get_conn()
 
     def _put(self, conn):
         if conn is not None and not conn.closed:
@@ -734,7 +715,7 @@ class PGErrorStore(ErrorStorage):
         """
         _ensure_init()
         pool = _get_pool()
-        conn = pool.getconn()
+        conn = _get_conn()
         try:
             frames = record_data.get("frames")
             frames_json = (
@@ -791,7 +772,7 @@ class PGSpecStore(SpecStorage):
         """upsert 一条 spec 到 specs 表（按 id 去重）。"""
         _ensure_init()
         pool = _get_pool()
-        conn = pool.getconn()
+        conn = _get_conn()
         try:
             expect = spec.get("expect") or {}
             expect_json = json.dumps(expect, ensure_ascii=False, default=str)
@@ -824,7 +805,7 @@ class PGSpecStore(SpecStorage):
         """从 specs 表读取一条 spec。"""
         _ensure_init()
         pool = _get_pool()
-        conn = pool.getconn()
+        conn = _get_conn()
         try:
             row = _query_with_retry(
                 conn,
@@ -855,7 +836,7 @@ class PGSpecStore(SpecStorage):
         """从 specs 表读取所有 spec（可按 kind/target 过滤），按 updated_at 倒序。"""
         _ensure_init()
         pool = _get_pool()
-        conn = pool.getconn()
+        conn = _get_conn()
         try:
             sql = (
                 "SELECT id, kind, target, expect, created_at, updated_at FROM specs"
@@ -866,8 +847,15 @@ class PGSpecStore(SpecStorage):
                 conditions.append("kind = %s")
                 params.append(kind)
             if target:
-                conditions.append("target LIKE %s")
-                params.append(f"%{target}%")
+                # FIX: P2 LIKE 通配符转义 —— 用户输入含 %/_ 时被当通配符
+                # 误匹配，转义后结合 ESCAPE 按字面量匹配
+                escaped = (
+                    target.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                conditions.append("target LIKE %s ESCAPE '\\'")
+                params.append(f"%{escaped}%")
             if conditions:
                 sql += " WHERE " + " AND ".join(conditions)
             sql += " ORDER BY updated_at DESC"
@@ -891,7 +879,7 @@ class PGSpecStore(SpecStorage):
         """从 specs 表删除一条 spec，返回是否删除成功。"""
         _ensure_init()
         pool = _get_pool()
-        conn = pool.getconn()
+        conn = _get_conn()
         try:
             conn, rowcount = _execute_with_retry(
                 conn,

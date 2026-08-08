@@ -14,7 +14,20 @@ import os
 
 import pytest
 
+from app.config import settings
 from app.runtime.collectors.static_analyzer import analyze
+
+
+@pytest.fixture(autouse=True)
+def _allow_tmp_source_paths(monkeypatch, tmp_path):
+    """P0-2 LFI 修复后白名单默认收敛到项目根/CWD；测试在 tmp_path 写源码，
+    需把 tmp_path 加入 whitelist_path_prefix 才能被静态分析器读取。"""
+    prefix = (settings.whitelist_path_prefix or "").strip()
+    roots = [p.strip() for p in prefix.split(",") if p.strip()]
+    if not roots:
+        roots = [os.path.abspath(os.getcwd())]
+    roots.append(str(tmp_path))
+    monkeypatch.setattr(settings, "whitelist_path_prefix", ",".join(roots))
 
 
 def _write_source(tmp_path: pytest.TempPathFactory, source: str) -> str:
@@ -116,3 +129,47 @@ def test_frame_missing_function_returns_none(tmp_path):
     path = _write_source(tmp_path, _SOURCE)
     frames = [{"file": path, "function": "not_defined", "line": 1}]
     assert analyze(frames) == []
+
+
+def test_resolve_path_rejects_traversal_and_absolute_outside(tmp_path, monkeypatch):
+    """FIX: P0-2 任意文件读取（LFI）—— 白名单外路径（../穿越 / 绝对路径）
+    必须被 _resolve_path 拒绝返回 None。"""
+    from app.runtime.collectors.static_analyzer import _resolve_path
+
+    # 白名单收敛到 tmp_path，任何位于其外的路径均拒绝
+    monkeypatch.setattr(settings, "whitelist_path_prefix", str(tmp_path))
+    monkeypatch.setattr(settings, "source_path_map", "")
+
+    assert _resolve_path("/etc/passwd") is None
+    assert _resolve_path("../../../../etc/passwd") is None
+    assert _resolve_path(os.path.join(str(tmp_path), "..", "outside.py")) is None
+
+
+def test_resolve_path_allows_whitelisted_file(tmp_path, monkeypatch):
+    """白名单内的源码文件仍可正常解析。"""
+    from app.runtime.collectors.static_analyzer import _resolve_path
+
+    path = _write_source(tmp_path, _SOURCE)
+    monkeypatch.setattr(settings, "whitelist_path_prefix", str(tmp_path))
+    monkeypatch.setattr(settings, "source_path_map", "")
+
+    resolved = _resolve_path(path)
+    assert resolved is not None
+    assert os.path.realpath(resolved) == os.path.realpath(path)
+
+
+def test_resolve_path_source_map_traversal_rejected(tmp_path, monkeypatch):
+    """FIX: P0-2 source_path_map 分支同样受白名单约束 —— 映射目标拼接出
+    /app/../../etc/passwd 式穿越必须拒绝。"""
+    from app.runtime.collectors.static_analyzer import _resolve_path
+
+    monkeypatch.setattr(settings, "whitelist_path_prefix", str(tmp_path))
+    # 映射远端 /app → 本地 tmp_path，目标含 ../ 穿越到白名单外
+    monkeypatch.setattr(
+        settings,
+        "source_path_map",
+        f"/app:{os.path.join(str(tmp_path), '..')}",
+    )
+
+    assert _resolve_path("/app/../../../etc/passwd") is None
+    assert _resolve_path("/app/module.py") is None

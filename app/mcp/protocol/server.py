@@ -14,6 +14,7 @@ from app.mcp.protocol.jsonrpc import (
     INTERNAL_ERROR,
     PARSE_ERROR,
     INVALID_REQUEST,
+    INVALID_PARAMS,
     JSONParseError,
     InvalidRequestError,
     parse_request,
@@ -98,7 +99,10 @@ def _handle_tools_list(req: JSONRPCRequest) -> dict:
 
 async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     """处理 tools/call"""
-    params = req.params or {}
+    # FIX: P1-9i params 非 dict（list/str/null）时返回 -32602，避免 AttributeError → 500
+    if not isinstance(req.params, dict):
+        return make_error(req.id, INVALID_PARAMS, "Invalid params")
+    params = req.params
     tool_name = params.get("name", "")
     arguments = params.get("arguments", {})
 

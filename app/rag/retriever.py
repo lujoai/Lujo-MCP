@@ -144,7 +144,9 @@ def _message_similarity_hits(
         inter = len(query_tokens & entry_tokens)
         union = len(query_tokens | entry_tokens)
         score = inter / union if union else 0.0
-        if score <= 0:
+        # FIX: P2 debug_experience_min_score 接入 —— 此前预留配置从未被消费，
+        # 低于阈值的 Jaccard 候选不返回（默认 0.0 = 仅过滤无重叠结果，保持原行为）
+        if score <= settings.debug_experience_min_score:
             continue
         rec.source = "message_similarity"
         _add_hit(hits, rec, score)
@@ -167,7 +169,8 @@ def _vector_hits(
         return
     pairs = get_vector_store().search(query, top_k)
     for doc, score in pairs:
-        if score <= 0:
+        # FIX: P2 debug_experience_min_score 接入 —— 低于阈值的向量召回不返回
+        if score <= settings.debug_experience_min_score:
             continue
         rec = DebugExperienceRecord.from_kb_entry(doc)
         rec.source = "vector"

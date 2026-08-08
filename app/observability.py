@@ -124,6 +124,29 @@ def _sanitize_label(value: str) -> str:
     return re.sub(r'[\n\r\t\x00-\x1f]', '', value)
 
 
+# FIX: P1-10b 指标表上限，防止高基数 key 撑爆内存
+_MAX_METRIC_KEYS = 5000
+
+
+def _trim_metric_tables_if_needed() -> None:
+    """指标表超上限时清空重置（须持 _counter_lock）。"""
+    if (
+        len(_request_total) > _MAX_METRIC_KEYS
+        or len(_error_total) > _MAX_METRIC_KEYS
+        or len(_latency_sum) > _MAX_METRIC_KEYS
+    ):
+        logger.warning(
+            "指标表超上限，清空重置 (request_total=%d, error_total=%d, latency=%d)",
+            len(_request_total),
+            len(_error_total),
+            len(_latency_sum),
+        )
+        _request_total.clear()
+        _error_total.clear()
+        _latency_sum.clear()
+        _latency_count.clear()
+
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     """记录每个请求的指标（计数 + 延迟）"""
 
@@ -131,8 +154,12 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         start = time.time()
         method = request.method
         route = request.scope.get("route")
-        path = getattr(route, "path", request.url.path) if route else request.url.path
-        path = _sanitize_label(path)
+        if route is not None and getattr(route, "path", None):
+            path = _sanitize_label(route.path)
+        else:
+            # FIX: P1-10b 未命中已注册路由时统一 "404-other"，
+            # 否则完整 URL（含用户可控动态路径）会撑爆指标 key 表
+            path = "404-other"
 
         try:
             response = await call_next(request)
@@ -145,6 +172,8 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
             # ── 写入内存存储（向后兼容 /metrics 端点）──
             with _counter_lock:
+                # FIX: P1-10b 写入前裁剪，防止高基数 key 无限增长
+                _trim_metric_tables_if_needed()
                 _request_total[(method, path, status)] += 1
                 if status >= 500:
                     _error_total[(method, path)] += 1

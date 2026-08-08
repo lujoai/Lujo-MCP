@@ -1,4 +1,5 @@
 """SSEHub 线程安全测试 —— 验证跨线程并发访问无竞态"""
+import asyncio
 import threading
 import pytest
 from app.mcp.transports.sse import SSEHub, _CLOSE_EVENT
@@ -103,3 +104,28 @@ async def test_is_close_event(hub):
     """is_close_event 正确识别关闭信号"""
     assert hub.is_close_event(_CLOSE_EVENT)
     assert not hub.is_close_event({"msg": "hello"})
+
+
+@pytest.mark.asyncio
+async def test_publish_drops_oldest_when_queue_full(hub, mock_session):
+    """FIX: P1-10a 有界队列 —— 超过 maxsize 时丢最旧一条，防止慢消费客户端无界增长"""
+    q = hub.subscribe(mock_session)
+
+    total = SSEHub._QUEUE_MAXSIZE + 50
+    for i in range(total):
+        hub.publish(mock_session, {"seq": i})
+        # 让事件循环执行 call_soon_threadsafe 排队的回调
+        await asyncio.sleep(0)
+
+    # 队列保持有界
+    assert q.qsize() == SSEHub._QUEUE_MAXSIZE
+
+    # 满时丢最旧：队首应是 total - maxsize，队尾是最后发布的消息
+    first = await q.get()
+    assert first["seq"] == total - SSEHub._QUEUE_MAXSIZE
+
+    tail = None
+    while not q.empty():
+        tail = q.get_nowait()
+    assert tail is not None
+    assert tail["seq"] == total - 1

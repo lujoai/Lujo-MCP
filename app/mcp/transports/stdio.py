@@ -69,7 +69,9 @@ async def run_stdio():
                 continue
             try:
                 req = parse_request(line)
-            except JSONParseError as e:
+            except (JSONParseError, UnicodeDecodeError, RecursionError) as e:
+                # FIX: P1-9h 畸形 UTF-8（孤立代理项 \ud800 等）会抛 UnicodeDecodeError，
+                # 递归过深抛 RecursionError —— 都按 PARSE_ERROR 返回，不得逃逸杀进程
                 _write_response(
                     make_error(None, PARSE_ERROR, str(e))
                 )

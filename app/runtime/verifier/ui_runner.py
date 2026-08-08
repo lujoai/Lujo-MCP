@@ -139,6 +139,34 @@ def is_safe_url(url: str) -> tuple[bool, str]:
     return assessment["allowed"], assessment["reason"]
 
 
+def _install_ssrf_guard(context) -> None:
+    """FIX: P0-3 在 Playwright context 上安装逐跳 SSRF 守卫。
+
+    初始 URL 的 inspect_url_security 只覆盖首跳；重定向后的每一跳 URL
+    默认不经过校验，攻击者可借 302/JS 跳转到内网地址绕过 SSRF 防护。
+    这里拦截 context 内所有网络请求，逐跳重新做安全检查，
+    任一跳到私网/回环/链路本地即 abort（fail-closed）。
+
+    残余风险说明：极端 DNS rebinding（TTL 极短、同一域名交替返回
+    公网/内网 IP）场景仍可能绕过，生产环境建议叠加网络层防护。
+    """
+    def handler(route):
+        request_url = route.request.url
+        assessment = inspect_url_security(request_url)
+        if not assessment["allowed"]:
+            logger.warning(
+                "SSRF guard: 拒绝请求 %s（rule=%s, reason=%s）",
+                request_url,
+                assessment["rule"],
+                assessment["reason"],
+            )
+            route.abort()
+            return
+        route.continue_()
+
+    context.route("**/*", handler)
+
+
 _PLAYWRIGHT_AVAILABLE = False
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout  # noqa: F401
@@ -215,83 +243,89 @@ def run_ui_verification(spec: dict, timeout_ms: int = 30000) -> dict:
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.set_default_timeout(timeout_ms)
-
-            # 导航到目标页面
+            # FIX: P0-3 创建 context 并挂载逐跳 SSRF 守卫（拦截重定向/子资源请求）
+            # FIX: P2 browser.close() 移入 finally，保证异常/超时路径也关闭浏览器
             try:
-                page.goto(target_url, wait_until="domcontentloaded")
-            except Exception as e:
-                return {
-                    "matched": False,
-                    "diffs": [{"field": "navigation", "expected": target_url, "actual": str(e)}],
-                    "silent_failure": False,
-                    "security": security_summary,
-                    "failure_evidence": {
-                        "stage": "initial_navigation",
-                        "error_type": type(e).__name__,
-                        "reason": str(e),
-                        "url": target_url,
-                    },
-                }
+                context = browser.new_context()
+                _install_ssrf_guard(context)
+                page = context.new_page()
+                page.set_default_timeout(timeout_ms)
 
-            # 验证全局状态
-            if _has_verifiable_expectations(global_expect):
-                gd = _verify_state(page, global_expect)
-                if not gd.get("matched"):
-                    all_matched = False
-                if gd.get("diffs"):
-                    all_diffs.extend(gd["diffs"])
-                interaction_results.append({
-                    "action": "navigate",
-                    "selector": "",
-                    "matched": gd["matched"],
-                    "diffs": gd.get("diffs", []),
-                    "silent_failure": gd.get("silent_failure", False),
-                    "assertions": gd.get("assertions", []),
-                    "failure_evidence": gd.get("failure_evidence"),
-                })
-
-            # 遍历交互
-            for idx, intn in enumerate(interactions):
-                action = intn.get("action", "click")
-                selector = intn.get("selector", "")
-                value = intn.get("value", "")
-                expect = intn.get("expect") or {}
-
+                # 导航到目标页面
                 try:
-                    ir = _execute_interaction(
-                        page, action, selector, value, expect, timeout_ms, step_index=idx
-                    )
+                    page.goto(target_url, wait_until="domcontentloaded")
                 except Exception as e:
-                    ir = {
-                        "action": action,
-                        "selector": selector,
-                        "step_index": idx,
+                    return {
                         "matched": False,
-                        "diffs": [{"field": f"interactions[{idx}].{action}",
-                                    "expected": "success", "actual": str(e)}],
+                        "diffs": [{"field": "navigation", "expected": target_url, "actual": str(e)}],
                         "silent_failure": False,
+                        "security": security_summary,
                         "failure_evidence": {
-                            "stage": "interaction",
-                            "step_index": idx,
-                            "selector": selector,
+                            "stage": "initial_navigation",
                             "error_type": type(e).__name__,
                             "reason": str(e),
-                            "action": action,
-                            "url": page.url,
+                            "url": target_url,
                         },
                     }
 
-                if not ir.get("matched"):
-                    all_matched = False
-                if ir.get("diffs"):
-                    all_diffs.extend(ir["diffs"])
-                if "security" in ir:
-                    security_summary["interactions"].append(ir["security"])
-                interaction_results.append(ir)
+                # 验证全局状态
+                if _has_verifiable_expectations(global_expect):
+                    gd = _verify_state(page, global_expect)
+                    if not gd.get("matched"):
+                        all_matched = False
+                    if gd.get("diffs"):
+                        all_diffs.extend(gd["diffs"])
+                    interaction_results.append({
+                        "action": "navigate",
+                        "selector": "",
+                        "matched": gd["matched"],
+                        "diffs": gd.get("diffs", []),
+                        "silent_failure": gd.get("silent_failure", False),
+                        "assertions": gd.get("assertions", []),
+                        "failure_evidence": gd.get("failure_evidence"),
+                    })
 
-            browser.close()
+                # 遍历交互
+                for idx, intn in enumerate(interactions):
+                    action = intn.get("action", "click")
+                    selector = intn.get("selector", "")
+                    value = intn.get("value", "")
+                    expect = intn.get("expect") or {}
+
+                    try:
+                        ir = _execute_interaction(
+                            page, action, selector, value, expect, timeout_ms, step_index=idx
+                        )
+                    except Exception as e:
+                        ir = {
+                            "action": action,
+                            "selector": selector,
+                            "step_index": idx,
+                            "matched": False,
+                            "diffs": [{"field": f"interactions[{idx}].{action}",
+                                        "expected": "success", "actual": str(e)}],
+                            "silent_failure": False,
+                            "failure_evidence": {
+                                "stage": "interaction",
+                                "step_index": idx,
+                                "selector": selector,
+                                "error_type": type(e).__name__,
+                                "reason": str(e),
+                                "action": action,
+                                "url": page.url,
+                            },
+                        }
+
+                    if not ir.get("matched"):
+                        all_matched = False
+                    if ir.get("diffs"):
+                        all_diffs.extend(ir["diffs"])
+                    if "security" in ir:
+                        security_summary["interactions"].append(ir["security"])
+                    interaction_results.append(ir)
+            finally:
+                # FIX: P2 browser.close() 移入 finally（含超时/异常路径）
+                browser.close()
 
     except Exception as e:
         logger.exception("Playwright 执行异常")

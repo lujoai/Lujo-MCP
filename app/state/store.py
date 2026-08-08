@@ -69,12 +69,17 @@ class MemoryStateStore(StateStore):
         with self._lock:
             self._data[key] = self._data.get(key, 0) + by
             self._evict_if_needed()
-            return int(self._data[key])
+            # FIX: P1-10c 驱逐可能命中刚写入的 key（有界性权衡：高基数下丢最旧），
+            # 返回时用 .get 防御避免 KeyError
+            return int(self._data.get(key, 0))
 
     def incr_float(self, key: str, by: float) -> float:
         with self._lock:
             self._data[key] = self._data.get(key, 0.0) + by
-            return float(self._data[key])
+            # FIX: P1-10c incr_float 也触发驱逐（此前只有 allow/incr 触发，
+            # 纯 incr_float 高频 key 可绕过上限）
+            self._evict_if_needed()
+            return float(self._data.get(key, 0.0))
 
     def get(self, key: str) -> float:
         with self._lock:
@@ -85,10 +90,15 @@ class MemoryStateStore(StateStore):
             return [k for k in self._data if k.startswith(prefix)]
 
     def _evict_if_needed(self) -> None:
-        """当 _data 超过上限时，按 LRU（最旧 key）驱逐一半。"""
-        if len(self._data) < self._MAX_ENTRIES:
+        """当 _data 或 _timestamps 超过上限时，按插入序（最旧 key）驱逐一半。
+
+        FIX: P1-10c allow() 滑动窗口时间戳 key 只写入 _timestamps、从不进入
+        _data，此前只按 _data 长度驱逐 → 高基数限流键无限增长。现在两表
+        任一超限即合并驱逐，保证限流 key 同样受上限约束。
+        """
+        if len(self._data) < self._MAX_ENTRIES and len(self._timestamps) < self._MAX_ENTRIES:
             return
-        keys = list(self._data.keys())
+        keys = list(dict.fromkeys(list(self._data.keys()) + list(self._timestamps.keys())))
         drop = len(keys) // 2
         for k in keys[:drop]:
             self._data.pop(k, None)
