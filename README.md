@@ -157,7 +157,7 @@ LLM_PROVIDER=zhipu           # openai | zhipu | custom（智谱免 VPN）
 
 ```bash
 curl http://localhost:8000/
-# → {"status":"ok","service":"Lujo-MCP","version":"0.3.0"}
+# → {"status":"ok","service":"Lujo-MCP","version":"0.4.0-beta"}
 ```
 
 ## Demo 演示流程
@@ -202,15 +202,18 @@ Lujo-MCP/
 │   ├── api/                   # REST API 路由
 │   ├── agent/                 # AI Debug Agent 模块（Phase 1：BaseAgent ABC + RepairAgent + Coordinator + RepairQueue；Phase 2：GitAgent + TestAgent + SecurityAgent + DAG，共 11 文件）
 │   ├── llm/                   # LLM 分析模块
-│   ├── mcp/                   # MCP 核心模块
+│   ├── mcp/                   # MCP 传输层（Phase 0 解耦后仅保留协议/工具/传输）
 │   │   ├── tools/             # MCP 工具（HTTP 17 / stdio 17）
 │   │   ├── protocol/          # JSON-RPC 协议实现
-│   │   ├── core/              # 核心引擎 + 存储抽象
-│   │   ├── builders/          # 数据构建器
-│   │   ├── collectors/        # 数据采集器
-│   │   ├── verifier/          # 断言引擎
+│   │   └── transports/        # 传输层（stdio / Streamable HTTP / SSE）
+│   ├── runtime/               # 运行时核心（Phase 0 解耦，MCP 依赖 runtime）
+│   │   ├── core/              # 核心引擎（logs / errors / redaction / git / trace_repo）
+│   │   │   └── storage/       # 存储后端（pg_store / async_pg_store / memory / factory / ddl）
+│   │   ├── collectors/        # 数据采集器（stacktrace / network / static_analyzer）
+│   │   ├── context/           # 上下文构建（builder / fault_localizer）
+│   │   ├── verifier/          # 断言引擎（assert_engine / spec_store / ui_runner）
 │   │   ├── hooks/             # 异常钩子
-│   │   └── transports/        # 传输层
+│   │   └── state/             # 状态存储
 │   ├── middleware.py          # 中间件栈（安全栈）
 │   ├── middleware_network.py  # 网络采集中间件（可选）
 │   └── config.py              # 统一配置
