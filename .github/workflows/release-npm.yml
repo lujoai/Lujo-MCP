@@ -1,0 +1,138 @@
+name: Release npm
+
+# 触发：手动运行 + 打 tag（如 v0.4.0-beta.1）
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "发布版本号（如 0.4.0-beta.1）"
+        required: true
+        default: "0.4.0-beta.1"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # ── 矩阵构建：每个平台原生打 PyInstaller 单文件二进制 ──
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            suffix: win32-x64
+            artifact: lujo-mcp-server.exe
+          - os: ubuntu-latest
+            suffix: linux-x64
+            artifact: lujo-mcp-server
+          - os: macos-latest
+            suffix: osx-arm64
+            artifact: lujo-mcp-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: |
+          pip install -r requirements-locked.txt
+          pip install pyinstaller
+
+      - name: Build binary with PyInstaller
+        run: pyinstaller --clean -y packaging/lujo-mcp-server.spec
+
+      - name: Verify binary exists
+        run: |
+          ls -la dist/
+          test -f "dist/${{ matrix.artifact }}" || exit 1
+
+      - name: Upload platform binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: lujo-mcp-${{ matrix.suffix }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  # ── 组装平台包 + 发布到 npm ──
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@lujoai"
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # 从 tag vX.Y.Z 提取 X.Y.Z
+            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate platform package skeletons
+        run: node npm/scripts/gen-platform-packages.js "${{ steps.ver.outputs.value }}"
+
+      - name: Download all platform binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Place binaries into platform packages
+        shell: bash
+        run: |
+          set -e
+          declare -A map=(
+            [win32-x64]=lujo-mcp-server.exe
+            [linux-x64]=lujo-mcp-server
+            [osx-arm64]=lujo-mcp-server
+          )
+          for suffix in "${!map[@]}"; do
+            bin="artifacts/lujo-mcp-$suffix/${map[$suffix]}"
+            dest="npm/packages/lujo-mcp-$suffix/bin/${map[$suffix]}"
+            mkdir -p "$(dirname "$dest")"
+            cp "$bin" "$dest"
+            chmod +x "$dest"
+            echo "placed $dest"
+          done
+          ls -la npm/packages/*/bin/
+
+      - name: Publish platform packages
+        run: |
+          set -e
+          ver="${{ steps.ver.outputs.value }}"
+          for d in npm/packages/lujo-mcp-*; do
+            name=$(node -p "require('./$d/package.json').name")
+            echo "Publishing $name@$ver"
+            npm publish "$d" --access public
+          done
+
+      - name: Publish meta package
+        run: |
+          # 同步元包版本
+          node -e "
+            const fs=require('fs');
+            const p='npm/packages/lujo-mcp/package.json';
+            const j=JSON.parse(fs.readFileSync(p,'utf8'));
+            j.version='${{ steps.ver.outputs.value }}';
+            fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');
+          "
+          npm publish "npm/packages/lujo-mcp" --access public
+
+      - name: Tag npm release (optional success notice)
+        run: echo "Published lujo-mcp@${{ steps.ver.outputs.value }} to npm ✅"
