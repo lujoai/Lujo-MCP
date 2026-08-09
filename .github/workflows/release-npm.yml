@@ -118,7 +118,7 @@ jobs:
         run: |
           set -e
           ver="${{ steps.ver.outputs.value }}"
-          for d in npm/packages/lujo-mcp-*; do
+          for d in npm/packages/lujo-mcp-win32-x64 npm/packages/lujo-mcp-linux-x64 npm/packages/lujo-mcp-osx-arm64; do
             name=$(node -p "require('./$d/package.json').name")
             echo "Publishing $name@$ver"
             npm publish "$d" --access public
@@ -126,12 +126,17 @@ jobs:
 
       - name: Publish meta package
         run: |
-          # 同步元包版本
+          ver="${{ steps.ver.outputs.value }}"
           node -e "
             const fs=require('fs');
             const p='npm/packages/lujo-mcp/package.json';
             const j=JSON.parse(fs.readFileSync(p,'utf8'));
-            j.version='${{ steps.ver.outputs.value }}';
+            j.version='$ver';
+            if (j.optionalDependencies) {
+              for (const k of Object.keys(j.optionalDependencies)) {
+                j.optionalDependencies[k]='$ver';
+              }
+            }
             fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');
           "
           npm publish "npm/packages/lujo-mcp" --access public
