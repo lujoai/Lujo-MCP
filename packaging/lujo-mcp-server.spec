@@ -9,11 +9,18 @@
 """
 
 import os
+import sys
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# PyInstaller 通过 exec() 加载 spec，命名空间不含 __file__；
+# SPECPATH 是 PyInstaller 专门注入的变量——当前 spec 文件的所在目录。
+_spec_dir = os.path.abspath(SPECPATH)
+ROOT = os.path.abspath(os.path.join(_spec_dir, ".."))
+# 兜底：若解析后找不到 app 目录（例如 CI 中 cwd 就是项目根）就用当前工作目录。
+if not os.path.isdir(os.path.join(ROOT, "app")):
+    ROOT = os.getcwd()
 
 a = Analysis(
-    ["packaging/entry_stdio.py"],
+    [os.path.join(ROOT, "packaging", "entry_stdio.py")],
     pathex=[ROOT],
     binaries=[],
     datas=[
@@ -38,21 +45,45 @@ a = Analysis(
         "uvicorn.lifespan.on",
         "uvicorn.lifespan.off",
         "pydantic",
+        "pydantic.deprecated",
         "pydantic_settings",
+        "fastapi",
+        "fastapi.responses",
+        "starlette",
+        "starlette.middleware",
+        "starlette.middleware.base",
+        "starlette.requests",
+        "starlette.responses",
+        "mcp",
         "mcp.server",
         "mcp.server.stdio",
+        "mcp.server.sse",
+        "mcp.server.streamable_http",
         "mcp.types",
         "mcp.shared",
+        "mcp.shared.abc",
         "httpx",
+        "httpx._client",
+        "openai",
+        "openai.resources",
+        "openai.AsyncOpenAI",
+        "dotenv",
         "psutil",
         "asyncpg",
         "psycopg2",
         "psycopg2.extensions",
+        "redis",
+        "redis.asyncio",
+        "pybreaker",
         "qdrant_client",
         "opentelemetry",
         "opentelemetry.api",
         "opentelemetry.sdk",
+        "opentelemetry.sdk.trace",
+        "opentelemetry.sdk.resources",
         "opentelemetry.exporter.otlp.proto.grpc",
+        "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
+        "opentelemetry.proto",
     ],
     hookspath=[],
     hooksconfig={},
@@ -83,7 +114,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=sys.platform == "win32",
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,   # stdio MCP Server 需要控制台/标准流
