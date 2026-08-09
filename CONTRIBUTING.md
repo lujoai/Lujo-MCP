@@ -79,7 +79,7 @@ docs(readme): 更新测试基线为 672 passed
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/Lujo-MCP.git
+git clone https://github.com/lujoai/Lujo-MCP.git
 cd Lujo-MCP
 
 # 安装依赖

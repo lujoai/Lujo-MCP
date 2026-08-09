@@ -5,7 +5,7 @@
 
 ---
 
-## [Unreleased] - 2026-08-09
+## [Unreleased]
 
 > v0.4.0 开发中。M1 Quality Foundation、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归、P1 Debug Experience RAG（v0.4.0-beta）已完成；CODE_REVIEW_FIX_PROMPT 全量代码审查修复（P0×5 + P1×20 + P2）已完成；**npm 开箱即用分发（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布）已完成（2026-08-09，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）**。
 

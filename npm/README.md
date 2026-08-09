@@ -49,7 +49,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
    ```
 2. **生成平台包骨架**：
    ```bash
-   node npm/scripts/gen-platform-packages.js 0.4.0-beta.1
+   node npm/scripts/gen-platform-packages.js 0.4.0
    ```
 3. **把各平台二进制放入对应平台包**：
    `npm/packages/lujo-mcp-<suffix>/bin/lujo-mcp-server(.exe)`
@@ -68,6 +68,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 - 二进制由 PyInstaller 从 Python 源码打包，仍保留 Python 运行时体积（数十 MB），
   属预期代价；可用 UPX 进一步压缩。
 - 所有平台包发布后才能发布元包，否则 `npm install` 找不到对应平台二进制。
+
 ## CI 自动构建 + 发布
 
 已提供 [release-npm.yml](../.github/workflows/release-npm.yml)：
@@ -87,11 +88,11 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 
 ```bash
 # 方式一：手动触发（填版本号）
-gh workflow run release-npm.yml -f version=0.4.0-beta.1
+gh workflow run release-npm.yml -f version=0.4.0
 
 # 方式二：打 tag 自动触发（v 前缀）
-git tag v0.4.0-beta.1
-git push origin v0.4.0-beta.1
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 > 注意：只有打了 tag 或手动触发才会进入 `publish` 阶段；普通 push 不会发布。

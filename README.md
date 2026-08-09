@@ -120,7 +120,7 @@ npm install -g @lujoai/lujo-mcp
 一键拉起 PostgreSQL、Redis 和 App：
 
 ```bash
-git clone https://github.com/your-username/Lujo-MCP.git
+git clone https://github.com/lujoai/Lujo-MCP.git
 cd Lujo-MCP
 
 # 复制环境变量模板

@@ -138,7 +138,7 @@ Verifier 验证
 - ✅ 入库前脱敏（复合键名子串匹配 + 白名单）
 - ✅ /metrics 独立鉴权 toggle
 - ✅ CORS 可配置来源
-- ✅ **RBAC 角色分级**（AUDIT-2-13）：admin > developer > er 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 **33 条 REST 路由**（debug 14 + ingest 7 + dashboard 7 + spec 5）及 17 个 MCP 工具（`TOOL_ROLE_REQUIREMENTS` 字典门控）；未命中映射默认 viewer（fail-closed）
+- ✅ **RBAC 角色分级**（AUDIT-2-13）：admin > developer > viewer 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 **33 条 REST 路由**（debug 14 + ingest 7 + dashboard 7 + spec 5）及 17 个 MCP 工具（`TOOL_ROLE_REQUIREMENTS` 字典门控）；未命中映射默认 viewer（fail-closed）
 - ✅ **API_KEY 多 key 恒定时间比较轮换**（AUDIT-2-14）：`verify_api_key` 遍历所有 key 不短路 + `hmac.compare_digest` 防时序侧信道 + 单 key 向后兼容
 - ✅ **LFI/SSRF 防护**：路径白名单 + SSRF URL 白名单（IP/Localhost/Metadata 端点拒绝）
 

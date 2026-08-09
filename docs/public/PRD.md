@@ -236,7 +236,7 @@
 | 规范驱动采集 | `collectors/spec.py` + `tools/spec_api.py`（扫描/标签匹配/缓存/脱敏） | ✅ |
 | 规范注入上下文 | `build_debug_context` 注入 `related_specs`（前3帧去重限长） | ✅ |
 | 指纹去重聚合 | `core/errors.py` compute_fingerprint + occurrence_count（避免重复刷屏） | ✅ |
-| 双传输工具注册 | HTTP 15 工具 + stdio 15 工具 | ✅ |
+| 双传输工具注册 | HTTP 17 工具 + stdio 17 工具 | ✅ |
 
 > **已补齐**：Playwright 自动遍历（FR14，`ui_runner.py` + `verify_ui`）；浏览器 SDK TS（`browser-sdk/ai-debug.js`）；FR15 verify 自动断言+spec 存储（`assert_engine` + `spec_store` + `verify` 工具）。proj2 的 tenacity 评估为不适用，未迁移。
 
