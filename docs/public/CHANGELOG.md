@@ -5,9 +5,9 @@
 
 ---
 
-## [Unreleased] - 2026-08-08
+## [Unreleased] - 2026-08-09
 
-> v0.4.0 开发中。M1 Quality Foundation、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归、P1 Debug Experience RAG（v0.4.0-beta）已完成；CODE_REVIEW_FIX_PROMPT 全量代码审查修复（P0×5 + P1×20 + P2）已完成。
+> v0.4.0 开发中。M1 Quality Foundation、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归、P1 Debug Experience RAG（v0.4.0-beta）已完成；CODE_REVIEW_FIX_PROMPT 全量代码审查修复（P0×5 + P1×20 + P2）已完成；**npm 开箱即用分发（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布）已完成（2026-08-09，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）**。
 
 ### 新增
 
@@ -33,6 +33,12 @@
 - **Agent Verify Loop**（`app/agent/verify_loop.py`）：迭代修复闭环——三层开关（agent→multi→verify）+ 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回（M4）
 - **KB 验证写回**（`app/rag/knowledge_base.py`）：`record_verification()` 递增 `verify_count` / 提升 `case_confidence`，写入后同步向量库（M4）
 - **测试**（`tests/unit/test_quality.py`）：86 个用例覆盖 19 个测试类；`tests/unit/test_dashboard.py` 新增 6 个质量报告测试用例；`tests/unit/test_url_resolver.py`（M3）、`tests/unit/test_verify_loop.py`（M4）
+- **npm 开箱即用分发（2026-08-09）**：PyInstaller 单文件打包 + npm 元包 + 平台二进制包
+  - `packaging/lujo-mcp-server.spec` + `packaging/entry_stdio.py`：PyInstaller 单文件二进制打包（修复 `__file__` NameError、补充 hiddenimports、Windows 启用 UPX）
+  - `npm/packages/lujo-mcp`（元包）+ `bin/cli.js` / `bin/check.js` / `scripts/check-clean-bin.js`：`npm install -g @lujoai/lujo-mcp` 开箱即用，按系统自动安装对应平台二进制
+  - 平台包 `lujo-mcp-win32-x64` / `lujo-mcp-linux-x64` / `lujo-mcp-osx-arm64`（3 平台，optionalDependencies 自动选择）
+  - `.github/workflows/release-npm.yml`：GitHub Actions 矩阵构建（Windows/Linux/macOS 并行 PyInstaller 打包）+ 自动发布 npm（先平台包后元包）
+  - `npm/scripts/gen-platform-packages.js`：一键生成平台包 `package.json` 骨架
 
 #### 文档
 
@@ -44,12 +50,14 @@
   - §19.4 M2-M4 改进逻辑与评分推演（逐场景维度变化 + 综合评分推演汇总）
   - §19.5 架构稳定性约束（6 个禁止大改模块）
   - §19.6 v0.4.0 明确不做（7 项）
+- **README.md**：新增「方式零：npm 全局安装（开箱即用）」章节（`npm install -g @lujoai/lujo-mcp` + MCP 客户端配置示例）
+- **npm/README.md**：新增 npm 分发说明（发布结构、用户使用、发布流程、CI 自动构建 + 发布、token 配置）
 
 ### 修复
 
 #### 代码
 
-- **CODE_REVIEW_FIX_PROMPT 代码审查修复（2026-08-08，commit `8089525`）**：按 [CODE_REVIEW_FIX_PROMPT.md](../../CODE_REVIEW_FIX_PROMPT.md) 清单修复 P0×5 + P1-A×6 + P1-B×2 + P1-9×9 + P1-10×3 + P2 全部项 + 2 追加（回归测试），另修 2 个审查中发现 bug
+- **CODE_REVIEW_FIX_PROMPT 代码审查修复（2026-08-08，commit `8089525`）**：按内部代码审查修复清单修复 P0×5 + P1-A×6 + P1-B×2 + P1-9×9 + P1-10×3 + P2 全部项 + 2 追加（回归测试），另修 2 个审查中发现 bug
   - **P0 崩溃/安全漏洞（5）**：
     - `debug.py` 补 `import time`（`/api/debug/session`、`/api/debug/health` 端点必然 500）
     - `static_analyzer._resolve_path` LFI：`realpath` 归一化 + 允许前缀白名单校验，拒绝返回 None

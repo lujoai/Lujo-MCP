@@ -76,6 +76,7 @@ Verifier 验证
 | 工具注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
 | AI Debug Agent | [app/agent/](../../app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
 | 浏览器 SDK | [browser-sdk/ai-debug.js](../../browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
+| npm 分发 | [npm/packages/lujo-mcp](../../npm/packages/lujo-mcp) + [packaging/lujo-mcp-server.spec](../../packaging/lujo-mcp-server.spec) | PyInstaller 单文件打包 + npm 元包 + 3 平台二进制包（win32-x64/linux-x64/osx-arm64），`npm install -g @lujoai/lujo-mcp` 开箱即用 |
 
 ---
 
@@ -118,6 +119,7 @@ Verifier 验证
 - ⚠️ MCP HTTP notifications 已具备基础推送闭环，丰富通知类型仍待补齐
 - ✅ **Dashboard 实时 SSE 推送**（`DASH-SSE-001`，2026-07-30）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 10s 轮询兜底 + 断线重连）；`dashboard_sse_enabled=False` 默认关闭
 - ✅ MCP 工具双传输注册（HTTP / stdio 均由统一注册表动态导出，当前各 17 个，含 `repair_async`/`repair_result`）
+- ✅ **npm 开箱即用分发**（2026-08-09）：PyInstaller 单文件打包（`packaging/lujo-mcp-server.spec`）+ npm 元包 + 3 平台二进制包（win32-x64/linux-x64/osx-arm64），`npm install -g @lujoai/lujo-mcp` 即可使用；GitHub Actions 矩阵构建自动发布（`.github/workflows/release-npm.yml`）
 
 ### 稳定性与观测能力 ✅
 

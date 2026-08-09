@@ -14,9 +14,10 @@ Lujo-MCP 是一款面向开发者的智能调试平台，致力于解决以下�
 
 ## 当前状态（Current Status）
 
-**Lujo-MCP v0.4.0-beta**
+**Lujo-MCP v0.4.0**（npm `@lujoai/lujo-mcp@0.4.0` 已发布，开箱即用）
 
 Features:
+- npm 开箱即用分发（`npm install -g @lujoai/lujo-mcp`，无需配置 Python 环境）
 - Runtime Debug Context（真实运行现场采集）
 - Debug Experience RAG（历史调试经验检索增强）
 - Context Assembly（Agent 上下文构建与 RAG 解耦）

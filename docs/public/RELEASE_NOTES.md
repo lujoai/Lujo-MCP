@@ -1,6 +1,6 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.4.0-beta（2026-08-07）**。基于 v0.4.0（Debug Context Quality）主干，完成 P1 Debug Experience RAG（D1-D4）与文档冻结（D5）。
+> 最新版本：**v0.4.0（2026-08-09）**。基于 v0.4.0（Debug Context Quality）主干，完成 P1 Debug Experience RAG（D1-D4）、文档冻结（D5）与 **npm 开箱即用分发**（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）。
 > 测试基线：单元 891 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 代码审查修复与回归测试，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
@@ -13,9 +13,9 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.4.0-beta  
-**Release Date / 发布日期**: 2026-08-07  
-**Codename / 代号**: Debug Experience RAG — 让 AI Agent 理解真实 Bug 运行现场
+**Version / 版本**: v0.4.0  
+**Release Date / 发布日期**: 2026-08-09  
+**Codename / 代号**: Debug Experience RAG + npm 开箱即用分发 — 让 AI Agent 理解真实 Bug 运行现场，一条命令开箱即用
 
 ---
 
@@ -52,6 +52,11 @@ v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v
 - **Context Assembly 解耦（D3）**（`app/agent/context_assembler.py` + `app/config.py`）：新增 `_safe_debug_experience_recall()`（开关短路零调用 + 异常降级 + `asyncio.to_thread` 并发），`assemble()` 输出新增可选字段 `debug_experience`（默认 None）；`debug_experience_enabled` 默认 `False`，关闭状态零调用、零耗时
 - **Architecture Frozen（D5）**：六层架构（MCP → Transport/API → Runtime Context → Agent → RAG → Storage）与依赖规则冻结；允许 Agent → RAG，禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP
 
+#### npm 开箱即用分发（2026-08-09）
+- **PyInstaller 单文件打包**（`packaging/lujo-mcp-server.spec` + `packaging/entry_stdio.py`）：将 Python 服务打包为单文件二进制（修复 `__file__` NameError、补充 hiddenimports、Windows 启用 UPX）
+- **npm 元包 + 平台二进制包**（`npm/packages/lujo-mcp` + 3 平台包）：`npm install -g @lujoai/lujo-mcp` 开箱即用，无需配置 Python 环境；元包通过 optionalDependencies 按系统自动安装对应平台二进制（win32-x64 / linux-x64 / osx-arm64）
+- **GitHub Actions 自动构建发布**（`.github/workflows/release-npm.yml`）：三平台矩阵并行 PyInstaller 打包 + 自动发布 npm（先平台包后元包）
+
 ### 🔧 功能优化
 
 - **知识库召回率提升**：三级 fallback 显著提升相似错误模式的命中率（归一化指纹消除路径/UUID/数字噪声，类型级 Jaccard 处理跨类型相似）
@@ -62,7 +67,7 @@ v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v
 
 #### CODE_REVIEW_FIX_PROMPT 代码审查修复（2026-08-08）
 
-按 [CODE_REVIEW_FIX_PROMPT.md](../../CODE_REVIEW_FIX_PROMPT.md) 清单完成 P0×5 + P1×20 + P2 全部修复（commit `8089525`），含：
+按内部代码审查修复清单完成 P0×5 + P1×20 + P2 全部修复（commit `8089525`），含：
 
 - **P0 安全/崩溃**：`debug.py` 未导入 `time`（端点 500）；`static_analyzer` LFI 路径白名单；`ui_runner` SSRF 重定向逐跳守卫；`dashboard.html` 存储型 XSS（转义 + 事件委托）+ CSP 响应头；DDL 双源分叉收敛（`ddl.py` 共享常量，pg_store / async_pg_store / migrations 三处一致）
 - **P1 数据丢失/安全**：SDK 离线重试数据全丢、beacon 压缩失败、repair/analysis 队列残留、`pg_async_enabled` 混合行为 fail-fast、redact 递归脱敏全边界、RBAC 默认角色 fail-closed、analyzer 指纹去 request_id、fault_localizer 帧索引错位、`_get_conn` 无限递归 bug、SSE 有界队列、指标 key 归一化等
@@ -149,6 +154,11 @@ v0.4.0-beta is the **P1 Debug Experience RAG** milestone of Lujo-MCP. Building o
 - **Three-layer retrieval Retriever (D2)** (`app/rag/retriever.py`): `retrieve_debug_experience()` — L1 fingerprint exact (score 1.0) / L2 message normalize (score 0.95 + Jaccard) / L3 vector (only when `vector_store_enabled=True`); merge dedup + score sort + top_k; never raises, returns `[]` or prior successful results on any failure
 - **Context Assembly decoupling (D3)** (`app/agent/context_assembler.py` + `app/config.py`): new `_safe_debug_experience_recall()` (flag short-circuit zero-call + degradation + `asyncio.to_thread` concurrency); `assemble()` adds optional `debug_experience` field (default None); `debug_experience_enabled` defaults to `False` (zero call / zero overhead when off)
 - **Architecture Frozen (D5)**: six-layer architecture (MCP → Transport/API → Runtime Context → Agent → RAG → Storage) and dependency rules frozen; allows Agent → RAG, forbids Runtime → RAG/Agent/LLM/MCP and RAG → Agent/Runtime/LLM/MCP
+
+#### npm Out-of-the-Box Distribution (2026-08-09)
+- **PyInstaller single-file packaging** (`packaging/lujo-mcp-server.spec` + `packaging/entry_stdio.py`): packages the Python service into a single-file binary (fixes `__file__` NameError, expands hiddenimports, UPX on Windows)
+- **npm meta-package + platform binary packages** (`npm/packages/lujo-mcp` + 3 platform packages): `npm install -g @lujoai/lujo-mcp` works out of the box with no Python environment setup; the meta-package auto-selects the matching platform binary via optionalDependencies (win32-x64 / linux-x64 / osx-arm64)
+- **GitHub Actions auto build & publish** (`.github/workflows/release-npm.yml`): 3-platform matrix parallel PyInstaller build + auto-publish to npm (platform packages first, then meta-package)
 
 ### 🐛 Bug Fixes
 

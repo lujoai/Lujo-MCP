@@ -13,13 +13,11 @@ npm/
     │   ├── bin/cli.js            # 定位并 spawn 当前平台的二进制
     │   ├── bin/check.js          # postinstall 校验平台包是否就位
     │   └── scripts/check-clean-bin.js  # prepublishOnly 门禁
-    ├── lujo-mcp-win32-x64/       # 平台包 ×5
-    ├── lujo-mcp-win32-arm64/
+    ├── lujo-mcp-win32-x64/       # 平台包 ×3（CI 实际构建发布）
     ├── lujo-mcp-linux-x64/
-    ├── lujo-mcp-linux-arm64/
     └── lujo-mcp-osx-arm64/
 └── scripts/
-    └── gen-platform-packages.js  # 一键生成 5 个平台包的 package.json
+    └── gen-platform-packages.js  # 一键生成 3 个平台包的 package.json
 ```
 
 ## 用户使用
@@ -62,7 +60,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
    cd npm/packages/lujo-mcp && npm publish --access public
    ```
 
-> 版本号需在 `package.json`（元包 + 5 平台包 + gen 脚本入参）之间保持一致，
+> 版本号需在 `package.json`（元包 + 3 平台包 + gen 脚本入参）之间保持一致，
 > `postinstall` 会校验平台包版本与元包一致。
 
 ## 备注
@@ -76,7 +74,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 
 - **矩阵构建**：`windows-latest`(win32-x64) / `ubuntu-latest`(linux-x64) / `macos-latest`(osx-arm64)
   各自原生跑 PyInstaller 打出单文件二进制。
-- **自动发布**：下载各平台二进制 → 生成平台包骨架 → 放置二进制 → 先发布 5 个平台包
+- **自动发布**：下载各平台二进制 → 生成平台包骨架 → 放置二进制 → 先发布 3 个平台包
   → 再发布元包。
 
 **发布前需在仓库配置 npm token secret**：
