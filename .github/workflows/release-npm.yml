@@ -46,9 +46,11 @@ jobs:
           pip install pyinstaller
 
       - name: Build binary with PyInstaller
+        shell: bash
         run: pyinstaller --clean -y packaging/lujo-mcp-server.spec
 
       - name: Verify binary exists
+        shell: bash
         run: |
           ls -la dist/
           test -f "dist/${{ matrix.artifact }}" || exit 1
