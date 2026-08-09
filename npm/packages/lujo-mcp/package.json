@@ -5,9 +5,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Ljj041120/Lujo-MCP.git"
+    "url": "git+https://github.com/lujoai/Lujo-MCP.git"
   },
-  "homepage": "https://github.com/Ljj041120/Lujo-MCP",
+  "homepage": "https://github.com/lujoai/Lujo-MCP",
   "keywords": [
     "mcp",
     "model-context-protocol",
