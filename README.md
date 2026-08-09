@@ -87,6 +87,33 @@ Validation:
 
 ## 快速启动方式
 
+### 方式零：npm 全局安装（开箱即用）
+
+无需配置 Python 环境，一条命令安装：
+
+```bash
+# 国内用户如遇 404，可使用官方源：
+npm install -g @lujoai/lujo-mcp --registry=https://registry.npmjs.org/
+
+# 或直接使用（镜像同步完成后）：
+npm install -g @lujoai/lujo-mcp
+```
+
+安装完成后，在 MCP 客户端（Claude Desktop / Cursor / Trae 等）中配置：
+
+```json
+{
+  "mcpServers": {
+    "lujo-mcp": {
+      "command": "lujo-mcp-server",
+      "args": []
+    }
+  }
+}
+```
+
+> ⚠️ stdio 模式需在 MCP 客户端配置 `LLM_PROVIDER`、`OPENAI_API_KEY` 等环境变量。
+
 ### 方式一：Docker Compose（推荐）
 
 一键拉起 PostgreSQL、Redis 和 App：
