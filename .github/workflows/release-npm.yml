@@ -115,6 +115,8 @@ jobs:
           ls -la npm/packages/*/bin/
 
       - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
           ver="${{ steps.ver.outputs.value }}"
@@ -125,6 +127,8 @@ jobs:
           done
 
       - name: Publish meta package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           ver="${{ steps.ver.outputs.value }}"
           node -e "
