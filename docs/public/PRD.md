@@ -5,12 +5,12 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v5.8（v0.4.0 M5 全量回归交付） |
+| 文档版本 | v5.9（CODE_REVIEW_FIX_PROMPT 代码审查修复交付） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v0.4.0 |
+| 当前产品版本 | v0.4.0-beta |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-08-04 |
+| 最后更新 | 2026-08-08 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
@@ -34,6 +34,7 @@
 | v5.6 | 2026-08-03 | 架构委员会 | **v0.4.0 开发路线制定 + M1 Quality Foundation 交付**：(1) 架构委员会四轮评审（代码审计 / 技术架构 / 产品战略 / 开发路线），判定项目当前为「Beta 偏 Demo」，v0.4.0 唯一核心目标为「让 Debug Context 价值可量化、可证明」；(2) 制定 17 个任务、5 个 Milestone 的执行计划（M1 Quality System → M2 Debug Case Schema → M3 Fault Localization 2.0 → M4 Agent Verify Loop → M5 全量回归）；(3) M1 全部 6 个 Task 落地——`app/quality/` 模块（schemas + scorer 规则引擎，9 维度加权评分 + 证据提取 + 改进建议）、`context_assembler.py` 质量注入、`analyzer.py` LLM 增强（reasoning_chain + evidence_items）、Dashboard 质量报告卡片 + `/api/dashboard/trace/{tid}/quality` 独立端点；M3 Task 12（StaticAnalyzer，基于 `ast` 标准库函数级静态分析）同步落地；(4) 5 场景评分基线建立（平均综合 0.45），M2-M4 评分提升预期推演完成（平均 0.45→0.65）。详见 §12.2、DESIGN.md §19。测试基线 764 passed / 6 skipped / 0 failed。 |
 | v5.7 | 2026-08-04 | 架构委员会 | **M2-M4 交付**：(1) M2 Debug Case Schema——`debug_case.py` 标准 Schema + 三级指纹计算、`knowledge_base.py` 三级 fallback 匹配（L1 精确 → L1.5 归一化 → L2 类型级 Jaccard）+ 向量索引双写同步、`seed_data.py` 30 条种子知识；(2) M3 Fault Localization 2.0——`url_resolver.py` 无堆栈按方法+路径反查 handler、`static_analyzer.py` 新增 `analyze_handler` 无堆栈入口、`build_debug_context` 静默失败注入 `static_analysis` 字段；(3) M4 Agent Verify Loop——`verify_loop.py` 三层开关 + 四级判定（high_confidence/passed/partial/failed）+ 验证通过后 KB 写回（`record_verification` 递增 `verify_count` / 提升 `case_confidence`），Coordinator 在 `agent_verify_loop_enabled` 时走迭代闭环。详见 §12.2、DESIGN.md §19.4。测试基线 772 passed / 6 skipped / 0 failed。 |
 | v5.8 | 2026-08-04 | 架构委员会 | **M5 全量回归 + 文档同步交付**：(1) 修复合入 main 后两个测试回归——`test_static_analyzer.py` 移除已删除的 `analyze_source_code`/旧版 `analyze_handler(module_path=...)` API（无堆栈入口由 `test_url_resolver.py` 覆盖）、`test_security_agent_severity.py` 修正 `VALID_SEVERITY`（`unknown` 为哨兵值，改为断言无效值映射为 `unknown`）；(2) 全量回归验证——单元 792 passed / 6 skipped / 0 failed（不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed（需启动 uvicorn 服务器）；LLM 依赖用例（`test_coordinator.py`、`test_agent_repair_e2e.py`）在无有效 API Key 时 skip，属环境依赖非代码回归；(3) CHANGELOG/DESIGN/PRD 版本号与测试基线同步，产品版本 v0.3.0 → v0.4.0。v0.4.0 目标「让 Debug Context 价值可量化、可证明」达成。 |
+| v5.9 | 2026-08-08 | 架构委员会 | **CODE_REVIEW_FIX_PROMPT 代码审查修复交付**：按 `CODE_REVIEW_FIX_PROMPT.md` 清单完成 P0×5 + P1-A×6 + P1-B×2 + P1-9×9 + P1-10×3 + P2 全部项——P0：`debug.py` 补 `import time`（session/health 端点 500）、`static_analyzer` LFI 路径白名单（realpath + 允许前缀）、`ui_runner` SSRF 重定向逐跳守卫、`dashboard.html` 存储型 XSS（esc 补引号转义 + 事件委托去内联 onclick）+ `main.py` dashboard 响应加 CSP 头、DDL 双源分叉收敛（`app/runtime/core/storage/ddl.py` 共享常量，pg_store / async_pg_store / migrations 三处一致）；P1：SDK 离线重试数据全丢、beacon 压缩失败、repair/analysis 队列残留与 `_jobs` TTL 清理、`pg_async_enabled` 混合行为 fail-fast、启动鉴权语义统一、redact 递归脱敏全边界、RBAC 默认角色 fail-closed、analyzer 指纹去 request_id、fault_localizer 帧索引错位、scorer runtime 嵌套键、分区表检测、PG 池 `_get_conn` 无限递归 bug 与超时、errors 同指纹节流、verify_loop 超时/语义、dag_degraded 计入 repair 失败、stdio 畸形输入、params 非 dict、SSE 有界队列、metrics 归一化、state.store 限流键驱逐；P2：spec_store 缓存/LIKE/delete/get 回源、ui_runner `browser.close()` finally、assert_engine 值类型归一、死配置收敛（`cb_*`/`qdrant_connect_timeout` 移除）、版本号 `0.4.0-beta` 对齐、Dockerfile 非 root + `requirements-locked.txt`。另修 2 个审查 bug（P1-7 RBAC 语义回归、`test_mcp_verify_ui` `_FakeBrowser` mock 脱节）。新增 `test_state_store`/`test_ddl_consistency`/`test_debug_endpoints` 回归测试。单元测试 891 passed / 6 skipped / 0 failed。产品版本 v0.4.0 → v0.4.0-beta。 |
 
 ---
 

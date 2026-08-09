@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
 > 最新版本：**v0.4.0-beta（2026-08-07）**。基于 v0.4.0（Debug Context Quality）主干，完成 P1 Debug Experience RAG（D1-D4）与文档冻结（D5）。
-> 测试基线：单元 874 passed / 6 skipped / 0 failed（不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
+> 测试基线：单元 891 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 代码审查修复与回归测试，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
@@ -23,7 +23,7 @@
 
 ### 📋 版本概述
 
-v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v0.4.0（Debug Context Quality）主干之上，通过 Debug Experience 数据链路（D1）、三层检索 Retriever（D2）、Context Assembler 解耦（D3）、全量验证（D4）与文档冻结（D5），让 AI Agent 不仅能读取代码，还能复用历史调试经验理解真实 Bug 运行现场。测试基线提升至 **874 passed / 6 skipped / 0 failed**，无回归，并完成架构依赖方向冻结（Architecture Frozen）。
+v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v0.4.0（Debug Context Quality）主干之上，通过 Debug Experience 数据链路（D1）、三层检索 Retriever（D2）、Context Assembler 解耦（D3）、全量验证（D4）与文档冻结（D5），让 AI Agent 不仅能读取代码，还能复用历史调试经验理解真实 Bug 运行现场。测试基线提升至 **891 passed / 6 skipped / 0 failed**（含 CODE_REVIEW_FIX_PROMPT 修复与回归测试），无回归，并完成架构依赖方向冻结（Architecture Frozen）。
 
 ### ✨ 新增功能
 
@@ -59,6 +59,16 @@ v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v
 - **长期经验沉淀**：Agent Verify Loop 使调试经验随系统运行持续积累，`verify_count` / `case_confidence` 反哺知识库质量
 
 ### 🐛 问题修复
+
+#### CODE_REVIEW_FIX_PROMPT 代码审查修复（2026-08-08）
+
+按 [CODE_REVIEW_FIX_PROMPT.md](../../CODE_REVIEW_FIX_PROMPT.md) 清单完成 P0×5 + P1×20 + P2 全部修复（commit `8089525`），含：
+
+- **P0 安全/崩溃**：`debug.py` 未导入 `time`（端点 500）；`static_analyzer` LFI 路径白名单；`ui_runner` SSRF 重定向逐跳守卫；`dashboard.html` 存储型 XSS（转义 + 事件委托）+ CSP 响应头；DDL 双源分叉收敛（`ddl.py` 共享常量，pg_store / async_pg_store / migrations 三处一致）
+- **P1 数据丢失/安全**：SDK 离线重试数据全丢、beacon 压缩失败、repair/analysis 队列残留、`pg_async_enabled` 混合行为 fail-fast、redact 递归脱敏全边界、RBAC 默认角色 fail-closed、analyzer 指纹去 request_id、fault_localizer 帧索引错位、`_get_conn` 无限递归 bug、SSE 有界队列、指标 key 归一化等
+- **P2**：spec_store 缓存/LIKE/delete/get 回源、assert_engine 值类型归一、死配置收敛（`cb_*`/`qdrant_connect_timeout` 移除）、版本号 `0.4.0-beta` 对齐、Dockerfile 非 root + 锁定依赖
+- **回归测试**：新增 `test_state_store.py` / `test_ddl_consistency.py` / `test_debug_endpoints.py` + 扩充 jsonrpc / otel / sse_hub / static_analyzer / url_resolver 用例
+- **验证**：`pytest tests/unit/` = **891 passed / 6 skipped / 0 failed**（零回归）
 
 #### 合入 main 后测试回归（M5）
 - **`test_static_analyzer.py`**：移除已删除的 `analyze_source_code` / 旧版 `analyze_handler(module_path=...)` API 用例，仅保留当前 `analyze()` 用例（无堆栈入口由 `test_url_resolver.py` 覆盖）
@@ -101,7 +111,7 @@ v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v
    ```
 5. **验证**
    ```bash
-   pytest tests/unit/ -q   # 单元 874 passed / 6 skipped / 0 failed
+   pytest tests/unit/ -q   # 单元 891 passed / 6 skipped / 0 failed
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000  # 启动后跑 e2e
    ```
 
@@ -111,7 +121,7 @@ v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v
 
 ### 📋 Release Overview
 
-v0.4.0-beta is the **P1 Debug Experience RAG** milestone of Lujo-MCP. Building on the v0.4.0 (Debug Context Quality) trunk, it delivers the Debug Experience data pipeline (D1), three-layer retrieval Retriever (D2), Context Assembler decoupling (D3), full validation (D4), and document freeze (D5), enabling AI Agents to reuse historical debugging experience and understand real bug runtime context. Test baseline improved to **874 passed / 6 skipped / 0 failed** with no regression, and the architectural dependency directions are now frozen (Architecture Frozen).
+v0.4.0-beta is the **P1 Debug Experience RAG** milestone of Lujo-MCP. Building on the v0.4.0 (Debug Context Quality) trunk, it delivers the Debug Experience data pipeline (D1), three-layer retrieval Retriever (D2), Context Assembler decoupling (D3), full validation (D4), and document freeze (D5), enabling AI Agents to reuse historical debugging experience and understand real bug runtime context. Test baseline improved to **891 passed / 6 skipped / 0 failed** (including CODE_REVIEW_FIX_PROMPT fixes and regression tests) with no regression, and the architectural dependency directions are now frozen (Architecture Frozen).
 
 ### ✨ New Features
 
@@ -165,7 +175,7 @@ v0.4.0-beta is the **P1 Debug Experience RAG** milestone of Lujo-MCP. Building o
 2. `pip install -r requirements.txt`
 3. Optional: enable `AGENT_VERIFY_LOOP_ENABLED=true` in `.env`
 4. `python -m app.main`
-5. Verify: `pytest tests/unit/ -q` (874 passed / 6 skipped / 0 failed)
+5. Verify: `pytest tests/unit/ -q` (891 passed / 6 skipped / 0 failed)
 
 ---
 
