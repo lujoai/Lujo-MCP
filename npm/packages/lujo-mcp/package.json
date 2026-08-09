@@ -31,9 +31,7 @@
   },
   "optionalDependencies": {
     "@lujoai/lujo-mcp-win32-x64": "0.4.0-beta.1",
-    "@lujoai/lujo-mcp-win32-arm64": "0.4.0-beta.1",
     "@lujoai/lujo-mcp-linux-x64": "0.4.0-beta.1",
-    "@lujoai/lujo-mcp-linux-arm64": "0.4.0-beta.1",
     "@lujoai/lujo-mcp-osx-arm64": "0.4.0-beta.1"
   }
 }

@@ -19,11 +19,10 @@ if (!version) {
 }
 
 // [node platform, node arch, pyinstaller artifact name, package suffix]
+// 仅包含 CI 实际构建并发布的平台；新增平台需同步 CI build 矩阵与元包 optionalDependencies。
 const platforms = [
   { platform: 'win32', arch: 'x64', exe: 'lujo-mcp-server.exe', suffix: 'win32-x64' },
-  { platform: 'win32', arch: 'arm64', exe: 'lujo-mcp-server.exe', suffix: 'win32-arm64' },
   { platform: 'linux', arch: 'x64', exe: 'lujo-mcp-server', suffix: 'linux-x64' },
-  { platform: 'linux', arch: 'arm64', exe: 'lujo-mcp-server', suffix: 'linux-arm64' },
   { platform: 'darwin', arch: 'arm64', exe: 'lujo-mcp-server', suffix: 'osx-arm64' },
 ];
 
