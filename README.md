@@ -33,7 +33,7 @@ Validation:
 - **调试上下文构建** — 将原始追踪日志转换为 AI 可理解的结构化上下文
 - **异常堆栈捕获** — 捕获异常调用栈、局部变量、源码行号
 - **运行时快照** — 采集系统/进程/解释器状态（CPU、内存、线程等）
-- **LLM 智能分析** — 对接智谱 GLM-4.5-Air / OpenAI（AsyncOpenAI 异步调用），自动分析错误根因并给出修复建议
+- **LLM 智能分析** — 对接智谱 / OpenAI（AsyncOpenAI 异步调用），默认免费模型 GLM-4.7-Flash，自动分析错误根因并给出修复建议
 - **异步分析削峰队列** — P3-6 有界 `asyncio.Queue(maxsize=N)` + K 常驻消费协程 + `asyncio.Semaphore(K)` 对齐 LLM RPM/TPM；队列满返回 429；优雅停机 drain；新增 `POST /api/debug/analyze/async` + `GET /api/debug/analyze/result/{job_id}`
 - **多级缓存** — L1(LRU) + L2(Redis) 多级缓存，减少重复 LLM 调用
 - **指纹知识库** — 基于错误指纹复用历史分析结论，命中时优先返回，并在 LLM 成功后自动沉淀
@@ -168,9 +168,23 @@ python -m app.main
 ```
 LLM_PROVIDER=zhipu                          # openai | zhipu | custom
 OPENAI_API_KEY=your-zhipu-or-openai-key
-LLM_MODEL=gpt-4o                            # 或 glm-4.5-air
+LLM_MODEL=glm-4.7-flash                     # 智谱免费模型；也可换 gpt-4o 等
 LLM_FALLBACK_MODEL=glm-4-flash
 ```
+
+> **自定义你自己的 API（开箱即用，零代码改动）**
+> 项目通过环境变量解耦 LLM provider，任何人都能填自己的 Key 和模型：
+>
+> | 变量 | 说明 | 示例 |
+> | --- | --- | --- |
+> | `LLM_PROVIDER` | 厂商：`openai` / `zhipu` / `custom` | `zhipu` |
+> | `OPENAI_API_KEY` | 你的 API Key（变量名沿用 OpenAI SDK 约定） | `your-key` |
+> | `LLM_MODEL` | 模型名，任意兼容端点支持的模型 | `glm-4.7-flash` |
+> | `LLM_BASE_URL` | 自定义端点（留空则按 provider 自动选） | `https://my-proxy.example.com/v1` |
+>
+> - **智谱（免费）**：`LLM_PROVIDER=zhipu` 时 base_url 自动设为 `https://open.bigmodel.cn/api/paas/v4/`，模型填 `glm-4.7-flash`（免费纯文本）即可，无需付费。
+> - **自建 / 第三方兼容端点**：`LLM_PROVIDER=custom` 并填 `LLM_BASE_URL` + `LLM_MODEL`，即可接入任意 OpenAI 兼容服务（如本地 Ollama、vLLM、代理网关）。
+> - **OpenAI**：`LLM_PROVIDER=openai`，模型填 `gpt-4o` 等。
 
 生产部署额外配置（业务代码零改动）：
 
