@@ -54,6 +54,9 @@ RESUME.md
 # 内部开发文档（整个目录不推 GitHub）
 docs/internal/
 
+# 打包分发产物（不推 GitHub）
+release-assets/
+
 # 本地测试产物/脚本（不推 GitHub）
 handoff.md
 _pytest_full.txt
