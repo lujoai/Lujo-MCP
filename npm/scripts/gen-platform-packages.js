@@ -6,7 +6,7 @@
 //   bin/lujo-mcp-server(.exe)  — the actual binary (added at build time)
 //
 // Usage:
-//   node npm/scripts/gen-platform-packages.js 0.4.0-beta.1
+//   node npm/scripts/gen-platform-packages.js 0.4.1-beta
 //   # then place each built binary into the matching package's bin/ directory.
 'use strict';
 const fs = require('fs');

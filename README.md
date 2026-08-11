@@ -202,6 +202,54 @@ curl http://localhost:8000/
 # → {"status":"ok","service":"Lujo-MCP","version":"0.4.1-beta"}
 ```
 
+## MCP Client 接入（MCP Client Setup）
+
+Lujo-MCP 作为 MCP Server，通过 **stdio**（进程管道）或 **Streamable HTTP**（`/mcp` 端点）为 AI Agent（Claude / Cursor / Trae 等）提供真实运行现场。两种模式配置模板如下：
+
+**stdio 配置模板**（默认推荐，进程内通信）
+
+```json
+{
+  "mcpServers": {
+    "lujo": {
+      "command": "lujo-mcp-server",
+      "args": []
+    }
+  }
+}
+```
+
+> 未安装 npm 包时，也可改用源码方式：`"command": "python", "args": ["-m", "app.mcp_server"]`，并把工作目录指向仓库根目录。
+
+**HTTP 配置模板**（先启动服务 `python -m app.main` 或 `docker compose up -d`）
+
+```json
+{
+  "mcpServers": {
+    "lujo": {
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+- 配置位置：`claude_desktop_config.json`（应用菜单 Settings → Developer → Edit Config）
+- 填入上述 stdio 或 HTTP 配置模板中的 `mcpServers` 段
+
+### Cursor
+
+- 配置位置：项目根 `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json`
+- 填入 `mcpServers` 段；HTTP 模式需先启动 Lujo-MCP 服务
+
+### Trae
+
+- 配置位置：MCP 管理面板（模型配置 → MCP Server → 添加）
+- 填入 stdio 或 HTTP 配置
+
+> ⚠️ stdio 模式需在 MCP 客户端环境变量中配置 `LLM_PROVIDER`、`OPENAI_API_KEY` 等（见下方「环境变量配置」）。接入后即可通过工具枚举获得 `get_debug_context` / `get_stacktrace` / `get_runtime_snapshot` / `search_logs` / `list_recent_traces` 等 17 个工具。
+
 ## Demo 演示流程
 
 1. **启动服务**：`docker compose up -d` 或 `python -m app.main`
@@ -209,6 +257,46 @@ curl http://localhost:8000/
 3. **点击测试按钮**：测试 XHR/fetch 请求捕获、网络错误自动上报、FormData/Blob 请求、采样率控制等
 4. **按需验证静默失败 Demo**：当前仓库提供 `app/web/silent_failure_demo.html` 作为本地演示页，用于手动验证 UI 静默失败自动检测
 5. **查看 AI 调试**：打开 `http://localhost:8000/dashboard` 查看追踪记录和 AI 分析结果
+
+### AI 调用 MCP 工具获取 Debug Context
+
+接入后，宿主 AI（Claude / Cursor / Trae）可在调试对话中直接调用 MCP 工具，拿到真实运行现场辅助定位：
+
+```text
+你（AI Agent）：调用 lujo.get_debug_context
+参数：{ "trace_id": "t_20260811_...", "include_stacktrace": true }
+
+返回（Debug Context）：
+- exception_type / message        # 异常类型与信息
+- stacktrace                       # 调用栈（含源码行号）
+- runtime_snapshot                 # 系统/进程/解释器状态
+- git_context                      # 当前提交 / 分支 / 变更
+- network_trace / ui_events        # 前端请求与交互事件
+- debug_experience                 # 历史调试经验（Debug Experience RAG）
+```
+
+AI Agent 据此判断根因并给出修复建议，无需手动翻日志、拼提示词。
+
+## Benchmark（Phase 3 D6）
+
+Lujo-MCP 内置 Benchmark 框架（`benchmark/`），用 5 个标准 Debug Case（api_500 / frontend_blank / db_error / auth_403 / perf_slow）对比「无上下文」与「带 Lujo Context」两类输入下的 AI Debug 能力（EvaluationMetrics：命中率 / 定位精度 / 修复质量 / 耗时）。
+
+```bash
+python -m benchmark.runner list   # 列出用例
+python -m benchmark.runner show api_500   # 查看单个用例
+python -m benchmark.runner quality        # QualityScorer 旁证评估
+```
+
+> Benchmark 与 QualityScorer 是两个独立体系：前者度量外部 AI 在 Debug Context 加持下的能力提升，后者度量 Lujo-MCP 自身 Context 的完整度/可信度。Roadmap 见下文。
+
+## Roadmap
+
+> 只做规划，不包含 Auto Repair / Agent 自主修复 / 自动 Patch 等能力承诺。
+
+- **More Debug Experience** — 扩充种子知识库与检索策略，提升 Debug Experience RAG 覆盖率
+- **Better Context Collection** — 增强 UI Events / Network Trace 采集精度与采样控制
+- **Enterprise Integration** — 认证（SSO/API Key 轮换）、审计、多实例观测集成
+- **More MCP Transports** — 持续跟进 MCP 协议新能力（notifications / sampling）
 
 ## 真实交付状态摘要
 
