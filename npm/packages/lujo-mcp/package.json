@@ -1,20 +1,32 @@
 {
   "name": "@lujoai/lujo-mcp",
   "version": "0.4.1-beta",
-  "description": "Lujo-MCP — AI 智能调试 MCP Server（桌面/浏览器自动化无关）。平台二进制通过 optionalDependencies 自动选择，开箱即用。",
+  "description": "Lujo-MCP — MCP Runtime Debugging Context Server for AI coding agents. Gives Claude, Cursor, Trae and any MCP-compatible client real runtime debugging context: browser errors, console logs, network failures, UI interaction traces and session context. Zero-config, install via npm.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lujoai/Lujo-MCP.git"
   },
   "homepage": "https://github.com/lujoai/Lujo-MCP",
+  "bugs": {
+    "url": "https://github.com/lujoai/Lujo-MCP/issues"
+  },
   "keywords": [
     "mcp",
     "model-context-protocol",
-    "debug",
-    "ai-debug",
+    "ai-agent",
+    "ai-coding",
+    "ai-debugging",
     "debugging",
-    "lujo"
+    "runtime-debugging",
+    "browser-debugging",
+    "javascript-error-tracking",
+    "developer-tools",
+    "observability",
+    "claude",
+    "cursor",
+    "llm",
+    "developer-productivity"
   ],
   "engines": {
     "node": ">=16"

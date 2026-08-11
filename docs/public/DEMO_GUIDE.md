@@ -1,4 +1,4 @@
-# AI Debug MCP Demo 演示指南
+# Lujo-MCP Demo 演示指南
 
 本文档介绍如何启动项目并展示核心功能。
 
