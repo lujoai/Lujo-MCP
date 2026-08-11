@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
 > 最新版本：**v0.4.0（2026-08-09）**。基于 v0.4.0（Debug Context Quality）主干，完成 P1 Debug Experience RAG（D1-D4）、文档冻结（D5）与 **npm 开箱即用分发**（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）。
-> 测试基线：单元 891 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 代码审查修复与回归测试，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
+> 测试基线：单元 908 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 代码审查修复与回归测试 + stacktrace 工具与存储工厂边界测试 17 项，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
@@ -25,7 +25,7 @@
 
 #### 📋 版本概述
 
-v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v0.4.0（Debug Context Quality）主干之上，通过 Debug Experience 数据链路（D1）、三层检索 Retriever（D2）、Context Assembler 解耦（D3）、全量验证（D4）与文档冻结（D5），让 AI Agent 不仅能读取代码，还能复用历史调试经验理解真实 Bug 运行现场。测试基线提升至 **891 passed / 6 skipped / 0 failed**（含 CODE_REVIEW_FIX_PROMPT 修复与回归测试），无回归，并完成架构依赖方向冻结（Architecture Frozen）。
+v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v0.4.0（Debug Context Quality）主干之上，通过 Debug Experience 数据链路（D1）、三层检索 Retriever（D2）、Context Assembler 解耦（D3）、全量验证（D4）与文档冻结（D5），让 AI Agent 不仅能读取代码，还能复用历史调试经验理解真实 Bug 运行现场。测试基线提升至 **908 passed / 6 skipped / 0 failed**（含 CODE_REVIEW_FIX_PROMPT 修复与回归测试 + stacktrace 工具与存储工厂边界测试 17 项），无回归，并完成架构依赖方向冻结（Architecture Frozen）。
 
 #### ✨ 新增功能
 
@@ -128,7 +128,7 @@ v0.4.0-beta 是 Lujo-MCP 的 **P1 Debug Experience RAG** 里程碑版本。在 v
 
 #### 📋 Release Overview
 
-v0.4.0-beta is the **P1 Debug Experience RAG** milestone of Lujo-MCP. Building on the v0.4.0 (Debug Context Quality) trunk, it delivers the Debug Experience data pipeline (D1), three-layer retrieval Retriever (D2), Context Assembler decoupling (D3), full validation (D4), and document freeze (D5), enabling AI Agents to reuse historical debugging experience and understand real bug runtime context. Test baseline improved to **891 passed / 6 skipped / 0 failed** (including CODE_REVIEW_FIX_PROMPT fixes and regression tests) with no regression, and the architectural dependency directions are now frozen (Architecture Frozen).
+v0.4.0-beta is the **P1 Debug Experience RAG** milestone of Lujo-MCP. Building on the v0.4.0 (Debug Context Quality) trunk, it delivers the Debug Experience data pipeline (D1), three-layer retrieval Retriever (D2), Context Assembler decoupling (D3), full validation (D4), and document freeze (D5), enabling AI Agents to reuse historical debugging experience and understand real bug runtime context. Test baseline improved to **908 passed / 6 skipped / 0 failed** (including CODE_REVIEW_FIX_PROMPT fixes and regression tests plus 18 stacktrace/storage-factory boundary tests) with no regression, and the architectural dependency directions are now frozen (Architecture Frozen).
 
 #### ✨ New Features
 

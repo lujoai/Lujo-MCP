@@ -39,6 +39,7 @@
   - 平台包 `lujo-mcp-win32-x64` / `lujo-mcp-linux-x64` / `lujo-mcp-osx-arm64`（3 平台，optionalDependencies 自动选择）
   - `.github/workflows/release-npm.yml`：GitHub Actions 矩阵构建（Windows/Linux/macOS 并行 PyInstaller 打包）+ 自动发布 npm（先平台包后元包）
   - `npm/scripts/gen-platform-packages.js`：一键生成平台包 `package.json` 骨架
+- **测试补齐（2026-08-11）**：新增 `tests/unit/test_stacktrace_api.py`（9 用例，`stacktrace` MCP 工具 handler/`get_stacktrace` 各分支与边界）+ `tests/unit/test_factory.py`（8 用例，存储工厂后端校验 fail-fast、error/spec no-op、async 混合 fail-fast、PG 失败 fallback 与 fail-fast 双路径）；测试基线 891 → 908
 
 #### 文档
 
@@ -95,7 +96,7 @@
 - **CHANGELOG.md**：测试基线更新为 M5 全量回归结果（单元 792 + e2e 10）
 - **CHANGELOG.md**：测试基线更新为 CODE_REVIEW_FIX_PROMPT 修复后全量回归结果（单元 891 + e2e 10）
 
-> 测试基线：单元 891 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 修复与回归测试，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed（需启动 uvicorn 服务器）。`test_coordinator.py`、`test_agent_repair_e2e.py` 依赖有效 API Key，无 Key 时 skip，属环境依赖非代码回归。
+> 测试基线：单元 908 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 修复与回归测试 + stacktrace 工具与存储工厂边界测试 17 项，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed（需启动 uvicorn 服务器）。`test_coordinator.py`、`test_agent_repair_e2e.py` 依赖有效 API Key，无 Key 时 skip，属环境依赖非代码回归。
 
 ---
 
