@@ -1,9 +1,11 @@
 """MCP 堆栈追踪工具 —— 获取异常调用栈"""
 
 import sys
+import time
 from app.runtime.collectors.stacktrace import capture_exception, format_trace_for_ai
 from app.runtime.collectors.code_locator import get_snippets_for_frames
 from app.runtime.core.logs import get_logs
+from app.mcp.observability import observe_context, attach_metadata
 
 TOOL_DEF = {
     "name": "stacktrace",
@@ -72,6 +74,7 @@ def get_stacktrace(trace_id: str | None = None) -> dict:
     """
     from app.runtime.core.errors import get_by_id, get_latest
 
+    _start = time.perf_counter()
     err = get_by_id(trace_id) if trace_id else get_latest()
     if err is None:
         exc_info = sys.exc_info()
@@ -93,9 +96,16 @@ def get_stacktrace(trace_id: str | None = None) -> dict:
         "frames": frames,
         "frame_count": err.get("frame_count", len(frames)),
     }
-    return {
+    output = {
         "error_id": err.get("error_id"),
         "exception": exception,
         "code_snippets": code_snippets,
         "ai_summary": format_trace_for_ai(exception),
     }
+    # Phase 3 D5：注入可观测 metadata（仅描述 Context，向后兼容）
+    trace_obs = observe_context(
+        request_id=trace_id or "",
+        context=output,
+        response_duration=time.perf_counter() - _start,
+    )
+    return attach_metadata(output, trace_obs)

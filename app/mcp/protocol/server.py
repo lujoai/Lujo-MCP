@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 
 from app import __version__
 from app.config import settings
@@ -111,12 +112,20 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         return make_error(req.id, METHOD_NOT_FOUND, f"未知工具: {tool_name}")
 
     timeout = settings.tool_timeout_seconds
+    _tool_start = time.monotonic()
     try:
         handler = tool["handler"]
         if asyncio.iscoroutinefunction(handler):
             result = await asyncio.wait_for(handler(arguments), timeout=timeout)
         else:
             result = await asyncio.wait_for(asyncio.to_thread(handler, arguments), timeout=timeout)
+        _elapsed = time.monotonic() - _tool_start
+        try:
+            _size = len(json.dumps(result, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            _size = 0
+        # Phase 3 D5：记录 Tool 响应耗时/大小（仅日志，不修改协议响应、不打印敏感负载）
+        logger.info("MCP HTTP tool=%s response_ms=%.1f response_size=%d", tool_name, _elapsed * 1000, _size)
         return make_response(req.id, {
             "content": [
                 {

@@ -28,6 +28,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 from collections.abc import Callable
 
 from mcp.server import Server
@@ -143,6 +144,7 @@ async def list_tools() -> list[Tool]:#async声明函数是可以等待的
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    _tool_start = time.monotonic()
     try:
         tool = _tool_registry.get(name)
         if tool is None:
@@ -155,6 +157,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     except Exception as e:
         logger.error(str(e), exc_info=True)
         result = {"error": "Tool execution failed"}
+
+    # Phase 3 D5：记录 Tool 响应耗时（仅日志，不修改协议响应、不打印敏感负载）
+    _elapsed = time.monotonic() - _tool_start
+    try:
+        _size = len(json.dumps(result, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        _size = 0
+    logger.info(
+        "MCP tool=%s response_ms=%.1f response_size=%d",
+        name, _elapsed * 1000, _size,
+    )
 
     return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
 
