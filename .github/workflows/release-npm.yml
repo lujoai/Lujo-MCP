@@ -123,7 +123,7 @@ jobs:
           for d in npm/packages/lujo-mcp-win32-x64 npm/packages/lujo-mcp-linux-x64 npm/packages/lujo-mcp-osx-arm64; do
             name=$(node -p "require('./$d/package.json').name")
             echo "Publishing $name@$ver"
-            npm publish "$d" --access public
+            npm publish "$d" --access public --tag beta
           done
 
       - name: Publish meta package
@@ -143,7 +143,7 @@ jobs:
             }
             fs.writeFileSync(p, JSON.stringify(j,null,2)+'\n');
           "
-          npm publish "npm/packages/lujo-mcp" --access public
+          npm publish "npm/packages/lujo-mcp" --access public --tag beta
 
       - name: Tag npm release (optional success notice)
         run: echo "Published lujo-mcp@${{ steps.ver.outputs.value }} to npm ✅"
