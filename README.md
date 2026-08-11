@@ -14,7 +14,7 @@ Lujo-MCP 是一款面向开发者的智能调试平台，致力于解决以下�
 
 ## 当前状态（Current Status）
 
-**Lujo-MCP v0.4.0**（npm `@lujoai/lujo-mcp@0.4.0` 已发布，开箱即用）
+**Lujo-MCP v0.4.1-beta**（npm `@lujoai/lujo-mcp@0.4.1-beta`，开箱即用）
 
 Features:
 - npm 开箱即用分发（`npm install -g @lujoai/lujo-mcp`，无需配置 Python 环境）
@@ -24,7 +24,7 @@ Features:
 - Architecture Frozen（依赖方向冻结：允许 Agent → RAG，禁止 Runtime → RAG/Agent/LLM/MCP、RAG → Agent/Runtime/LLM/MCP）
 
 Validation:
-- 908 passed / 6 skipped / 0 failed（无回归）
+- 927 passed / 6 skipped / 0 failed（无回归）
 
 ## 核心功能
 
@@ -199,7 +199,7 @@ LLM_PROVIDER=zhipu           # openai | zhipu | custom（智谱免 VPN）
 
 ```bash
 curl http://localhost:8000/
-# → {"status":"ok","service":"Lujo-MCP","version":"0.4.0-beta"}
+# → {"status":"ok","service":"Lujo-MCP","version":"0.4.1-beta"}
 ```
 
 ## Demo 演示流程
@@ -223,7 +223,7 @@ curl http://localhost:8000/
 | 指标 | 状态 |
 |------|------|
 | MCP 工具数 | HTTP 17 / stdio 17（新增 `repair_async` / `repair_result`，FR19） |
-| 测试基线 | 单元 `908 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 48 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 17 项 + stacktrace 工具与存储工厂边界 17 项） |
+| 测试基线 | 单元 `927 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 48 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 17 项 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项） |
 | 存储后端 | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境 |
 | 稳定性能力 | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证 |
 | 安全能力 | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护 |

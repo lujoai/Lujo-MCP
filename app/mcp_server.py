@@ -36,6 +36,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from app.config import settings
+from app import __version__
 from app.runtime.hooks.exception_hook import install_global_hook, uninstall_global_hook
 from app.mcp.protocol.server import _tool_registry
 from app.mcp.tools import register_all_tools
@@ -44,7 +45,7 @@ logging.basicConfig(level=logging.INFO, stream=None, force=True)  # stdio模式�
 logger = logging.getLogger("ai-debug-mcp")
 
 register_all_tools()
-server = Server("ai-debug-mcp")
+server = Server("ai-debug-mcp", version=__version__)
 
 # ── stdio 生命周期资源回收 ──
 # 由 finally / atexit / signal handler 触发，幂等。

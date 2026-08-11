@@ -178,7 +178,7 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **908 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **927 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项）
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -239,7 +239,7 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **908 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **927 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项）。
 
 **当前优先级**：
 

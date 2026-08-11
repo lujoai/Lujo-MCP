@@ -1,13 +1,13 @@
 name: Release npm
 
-# 触发：手动运行 + 打 tag（如 v0.4.0-beta.1）
+# 触发：手动运行 + 打 tag（如 v0.4.1-beta）
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号（如 0.4.0-beta.1）"
+        description: "发布版本号（如 0.4.1-beta）"
         required: true
-        default: "0.4.0-beta.1"
+        default: "0.4.1-beta"
   push:
     tags:
       - "v*"

@@ -7,11 +7,15 @@
 
 ## [Unreleased]
 
-> v0.4.0 开发中。M1 Quality Foundation、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归、P1 Debug Experience RAG（v0.4.0-beta）已完成；CODE_REVIEW_FIX_PROMPT 全量代码审查修复（P0×5 + P1×20 + P2）已完成；**npm 开箱即用分发（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布）已完成（2026-08-09，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）**。
+> v0.4.1-beta 开发中。M1 Quality Foundation、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归、P1 Debug Experience RAG（v0.4.0-beta）已完成；CODE_REVIEW_FIX_PROMPT 全量代码审查修复（P0×5 + P1×20 + P2）已完成；**npm 开箱即用分发（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布）已完成（2026-08-09，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）**；**Phase 3 D5 MCP 可观测性 + D6 Benchmark 框架 + D7 Release 准备（2026-08-11，版本统一 `0.4.1-beta`，测试基线 927）已完成**。
 
 ### 新增
 
 #### 代码
+
+- **MCP Debug Context 可观测性**（Phase 3 D5，2026-08-11）：`app/mcp/observability.py` 新增 `DebugContextTrace`（记录 request_id / Runtime Context 可用性与大小 / Debug Experience 开关与命中数 / Context 构建耗时 / Tool 响应耗时）+ `observe_context` / `attach_metadata`；context/debug/stacktrace 工具成功分支注入可选 `metadata` 字段（向后兼容）；stdio+HTTP 传输层记录 tool 响应耗时/大小（仅日志，不打印敏感负载）
+- **Benchmark 框架**（Phase 3 D6，2026-08-11）：`benchmark/` 新增 `schemas.py`（`BenchmarkCase` / `EvaluationMetrics`）+ `cases.py`（5 个手写 fixture：api_500 / frontend_blank / db_error / auth_403 / perf_slow）+ `runner.py`（CLI：list / show / quality 旁证）；验证 MCP Debug Context 是否提升外部 AI Debug 能力（与 QualityScorer 两个体系分离）
+- **MCP stdio 冒烟验证脚本**（Phase 3 D7）：`scripts/mcp_smoke_test.py` —— 验证 stdio 启动 → initialize 握手 → tools/list 枚举 → 工具调用往返；`app/mcp_server.py` 的 `Server(...)` 传入 `version=__version__` 对齐 serverInfo 版本
 
 - **Quality System 核心框架**（`app/quality/`）
   - `schemas.py`：`QualityReport` / `ContextCompleteness` / `AnalysisConfidence` / `EvidenceItem` / `DimensionScore` 数据模型
@@ -96,7 +100,7 @@
 - **CHANGELOG.md**：测试基线更新为 M5 全量回归结果（单元 792 + e2e 10）
 - **CHANGELOG.md**：测试基线更新为 CODE_REVIEW_FIX_PROMPT 修复后全量回归结果（单元 891 + e2e 10）
 
-> 测试基线：单元 908 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 修复与回归测试 + stacktrace 工具与存储工厂边界测试 17 项，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed（需启动 uvicorn 服务器）。`test_coordinator.py`、`test_agent_repair_e2e.py` 依赖有效 API Key，无 Key 时 skip，属环境依赖非代码回归。
+> 测试基线：单元 927 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 修复与回归测试 + stacktrace 工具与存储工厂边界测试 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed（需启动 uvicorn 服务器）。`test_coordinator.py`、`test_agent_repair_e2e.py` 依赖有效 API Key，无 Key 时 skip，属环境依赖非代码回归。
 
 ---
 
