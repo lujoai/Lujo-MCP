@@ -100,4 +100,4 @@ AI 不再需要你手动翻日志、拼提示词，就能给出基于**真实运
 4. 打开 Dashboard：`http://localhost:8000/dashboard` 查看追踪记录与 AI 分析
 5. 在 MCP 客户端（Claude / Cursor / Trae）中调用 `get_debug_context`，体验 AI 拿到真实运行现场
 
-> 详细操作见 [Demo 演示流程](../README.md) 与 [DEMO_GUIDE.md](./DEMO_GUIDE.md)。
+> 详细操作见 [Demo 演示流程](../../README.md) 与 [DEMO_GUIDE.md](./DEMO_GUIDE.md)。
