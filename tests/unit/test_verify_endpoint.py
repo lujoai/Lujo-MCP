@@ -108,3 +108,41 @@ class TestVerifyEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body["matched"] is True
+
+
+class TestVerifySchemaValidation:
+    """P2-2: Pydantic Request Model schema validation 测试"""
+
+    def test_verify_extra_fields_ignored(self, client):
+        """旧客户端发送多余字段不应触发 422（extra=ignore）"""
+        resp = client.post("/api/debug/verify", json={
+            "actual": {"status_code": 200, "body": {}},
+            "spec": {"kind": "api", "expect": {"status": 200}},
+            "unknown_field": "should_be_ignored",
+            "__proto__": "pollution_attempt",
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["matched"] is True
+
+    def test_verify_missing_actual_returns_422(self, client):
+        """缺少必填字段 actual 应返回 422"""
+        resp = client.post("/api/debug/verify", json={
+            "spec": {"kind": "api", "expect": {"status": 200}},
+        })
+        assert resp.status_code == 422
+
+    def test_verify_ui_extra_fields_ignored(self, client):
+        """verify/ui 旧客户端发送多余字段不应触发 422"""
+        resp = client.post("/api/debug/verify/ui", json={
+            "spec": {"kind": "ui", "target": "http://localhost", "expect": {}},
+            "unknown_field": "ignored",
+        })
+        # handler 内部会因 playwright 未安装或 spec 格式返回错误，
+        # 但不应是 422 schema validation 错误
+        assert resp.status_code != 422
+
+    def test_verify_ui_missing_all_optional_no_422(self, client):
+        """verify/ui 所有字段可选，空对象不应 422"""
+        resp = client.post("/api/debug/verify/ui", json={})
+        assert resp.status_code != 422

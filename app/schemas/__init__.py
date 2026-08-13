@@ -13,6 +13,13 @@ class TraceEntry(BaseModel):
 
 # ── 调试上下文 ──
 class DebugContext(BaseModel):
+    """Runtime Debug Context — build_debug_context() 的正式数据模型。
+
+    v0.5: 对齐 build_debug_context() 实际输出的 20 个字段。
+    新增字段全部 Optional + default，向后兼容旧数据。
+    extra="allow" 支持未来扩展字段无需改 schema。
+    """
+    # ── 基础字段（v0.4 已有，保持不变）──
     request_id: str
     flow: list[str] = Field(default_factory=list)
     input: Optional[Any] = None
@@ -20,6 +27,29 @@ class DebugContext(BaseModel):
     errors: list[Any] = Field(default_factory=list)
     exception: Optional[dict] = None
     runtime: Optional[dict] = None
+
+    # ── v0.5 新增：Trace 元数据 ──
+    trace_id: Optional[str] = None
+    trace_kind: Optional[str] = None
+    source: Optional[str] = None
+    extra: dict = Field(default_factory=dict)
+
+    # ── v0.5 新增：源码 & 分析证据 ──
+    code_snippets: Optional[list[dict]] = None
+    static_analysis: Optional[dict] = None
+    git_blame: Optional[list[dict]] = None
+    recent_diffs: Optional[list[dict]] = None
+    related_specs: Optional[list[dict]] = None
+
+    # ── v0.5 新增：运行时证据链 ──
+    network_trace: Optional[list[dict]] = None
+    ui_events: Optional[list[dict]] = None
+    spec_diffs: Optional[list[dict]] = None
+
+    # ── v0.5 新增：故障定位 ──
+    fault_localization: Optional[dict] = None
+
+    model_config = {"extra": "allow"}
 
 
 # ── 请求模型 ──
@@ -146,3 +176,32 @@ class VerifyResult(BaseModel):
     trace_id: Optional[str] = None
     spec_diffs: Optional[list[DiffItem]] = None
     interactions: Optional[list[dict]] = None
+
+
+# ── Verify 请求模型（P2-2: API Schema Validation）──
+class VerifyRequest(BaseModel):
+    """POST /api/debug/verify 请求体。
+
+    actual 为必填字段；spec 与 spec_id 二选一（由 handler 内部逻辑处理）。
+    extra="ignore" 保证旧客户端发送的多余字段不会触发 422。
+    """
+    actual: dict
+    spec: dict | None = None
+    spec_id: str | None = None
+    trace_id: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+
+class VerifyUiRequest(BaseModel):
+    """POST /api/debug/verify/ui 请求体。
+
+    spec 与 spec_id 二选一（由 handler 内部逻辑处理）。
+    timeout_ms 默认 30000ms。
+    extra="ignore" 保证旧客户端兼容。
+    """
+    spec: dict | None = None
+    spec_id: str | None = None
+    timeout_ms: int = 30000
+
+    model_config = {"extra": "ignore"}

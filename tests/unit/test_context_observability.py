@@ -170,8 +170,10 @@ class TestToolIntegration:
 
     def test_get_debug_context_available_injects_metadata(self, monkeypatch):
         from app.mcp.tools import debug_api
+        from app.schemas import DebugContext
         monkeypatch.setattr(
-            debug_api, "build_debug_context", lambda tid: {"trace_id": tid, "runtime": {}}
+            debug_api, "build_debug_context",
+            lambda tid: DebugContext(request_id=tid, trace_id=tid, runtime={})
         )
         result = debug_api.get_debug_context("t1")
         assert result["trace_id"] == "t1"

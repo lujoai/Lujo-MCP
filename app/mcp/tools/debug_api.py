@@ -77,14 +77,17 @@ def get_debug_context(trace_id: str | None = None) -> dict:
         return {"message": "暂无捕获到的错误上下文"}
     build_duration = time.perf_counter() - start
 
+    # DebugContext → dict（供 observe_context / attach_metadata 使用）
+    ctx_dict = ctx.model_dump()
+
     # Phase 3 D5：注入可观测 metadata（仅描述 Context，向后兼容）
     trace_obs = observe_context(
         trace_id=trace_id or "",
-        context=ctx,
+        context=ctx_dict,
         context_build_duration=build_duration,
         response_duration=time.perf_counter() - start,
     )
-    return attach_metadata(ctx, trace_obs)
+    return attach_metadata(ctx_dict, trace_obs)
 
 
 def analyze_with_llm(trace_id: str | None = None) -> dict:
@@ -93,7 +96,7 @@ def analyze_with_llm(trace_id: str | None = None) -> dict:
     if ctx is None:
         return {"message": "暂无捕获到的错误上下文"}
     try:
-        return analyze(ctx)
+        return analyze(ctx.model_dump())
     except RuntimeError as e:
         logger.error(str(e), exc_info=True)
         return {"error": "Tool execution failed"}

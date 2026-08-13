@@ -27,23 +27,27 @@ def register_all_tools():
         repair_async_handler, repair_result_handler,
     )
 
-    register_tool(**debug_tool, handler=debug_handler)
-    register_tool(**context_tool, handler=context_handler)
-    register_tool(**trace_tool, handler=trace_handler)
-    register_tool(**stacktrace_tool, handler=stacktrace_handler)
-    register_tool(**NETWORK_INGEST_DEF, handler=ingest_network_handler)
-    register_tool(**NETWORK_TRACE_DEF, handler=get_network_trace_handler)
-    register_tool(**BLAME_DEF, handler=blame_handler)
-    register_tool(**RECENT_DIFF_DEF, handler=recent_diff_handler)
-    register_tool(**SILENT_FAILURE_DEF, handler=silent_failure_handler)
-    register_tool(**INGEST_ERROR_DEF, handler=ingest_error_handler)
-    register_tool(**INGEST_CONSOLE_DEF, handler=ingest_console_handler)
-    register_tool(**RELATED_SPECS_DEF, handler=related_specs_handler)
-    register_tool(**VERIFY_DEF, handler=verify_handler)
-    register_tool(**VERIFY_UI_DEF, handler=verify_ui_handler)
-    register_tool(**AUTO_TEST_DEF, handler=auto_test_handler)
-    register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler)
-    register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler)
+    # ── v0.5 Tool Category Metadata ──
+    # agent: 查询/分析类工具（由 AI Agent 调用）
+    # sdk:   数据采集类工具（由 Browser SDK 调用）
+    # experimental=true: 实验能力，可能变更
+    register_tool(**debug_tool, handler=debug_handler, category="agent")
+    register_tool(**context_tool, handler=context_handler, category="agent")
+    register_tool(**trace_tool, handler=trace_handler, category="agent")
+    register_tool(**stacktrace_tool, handler=stacktrace_handler, category="agent")
+    register_tool(**NETWORK_INGEST_DEF, handler=ingest_network_handler, category="sdk")
+    register_tool(**NETWORK_TRACE_DEF, handler=get_network_trace_handler, category="agent")
+    register_tool(**BLAME_DEF, handler=blame_handler, category="agent")
+    register_tool(**RECENT_DIFF_DEF, handler=recent_diff_handler, category="agent")
+    register_tool(**SILENT_FAILURE_DEF, handler=silent_failure_handler, category="sdk")
+    register_tool(**INGEST_ERROR_DEF, handler=ingest_error_handler, category="sdk")
+    register_tool(**INGEST_CONSOLE_DEF, handler=ingest_console_handler, category="sdk")
+    register_tool(**RELATED_SPECS_DEF, handler=related_specs_handler, category="agent")
+    register_tool(**VERIFY_DEF, handler=verify_handler, category="agent")
+    register_tool(**VERIFY_UI_DEF, handler=verify_ui_handler, category="agent")
+    register_tool(**AUTO_TEST_DEF, handler=auto_test_handler, category="agent", experimental=True)
+    register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler, category="agent", experimental=True)
+    register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler, category="agent", experimental=True)
 
 
 # ── MCP 工具角色需求映射（供 mcp_routes.py 在 tools/call 分发前消费）──

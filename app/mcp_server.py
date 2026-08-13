@@ -138,6 +138,8 @@ async def list_tools() -> list[Tool]:#async声明函数是可以等待的
             name=tool["name"],
             description=tool["description"],
             inputSchema=tool["inputSchema"],
+            category=tool.get("category"),
+            experimental=tool.get("experimental", False),
         )
         for tool in _tool_registry.values()
     ]

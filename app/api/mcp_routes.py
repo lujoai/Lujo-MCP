@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.config import settings
 from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INVALID_PARAMS, INTERNAL_ERROR
 from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES
-from app.mcp.transports.session import registry
+from app.mcp.transports.session import registry, SessionLimitExceeded
 from app.mcp.transports.sse import hub
 from app.mcp.tools import TOOL_ROLE_REQUIREMENTS
 
@@ -57,7 +57,13 @@ async def mcp_post(request: Request):
 
     # ── 会话建立/校验 ──
     if method == "initialize":
-        sess = registry.create() if not session_id or not registry.get(session_id) else registry.get(session_id)
+        try:
+            sess = registry.create() if not session_id or not registry.get(session_id) else registry.get(session_id)
+        except SessionLimitExceeded:
+            return JSONResponse(
+                make_error(req_id, INTERNAL_ERROR, "会话数已达上限，请稍后重试"),
+                status_code=503,
+            )
         session_id = sess.session_id
     else:
         if not session_id:

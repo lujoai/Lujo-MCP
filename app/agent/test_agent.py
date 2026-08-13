@@ -21,6 +21,7 @@ from typing import Any, Optional
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
+from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
 
 logger = logging.getLogger("ai-debug-mcp.agent.test")
 
@@ -34,7 +35,7 @@ SYSTEM_PROMPT = """你是一位资深的测试工程师。基于以下修复方�
   "coverage_note": "覆盖度说明：当前测试是否充分覆盖修复点"
 }
 
-只输出 JSON，不要包含其他文字。"""
+只输出 JSON，不要包含其他文字。""" + _INJECTION_GUARD
 
 REQUIRED_FIELDS = (
     "test_files",
@@ -149,5 +150,5 @@ class TestAgent(BaseAgent):
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": _wrap_evidence(user_content)},
         ]

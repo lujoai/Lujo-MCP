@@ -2,6 +2,7 @@
 
 import logging
 
+from app.schemas import DebugContext
 from app.runtime.context.fault_localizer import localize, to_payload
 
 logger = logging.getLogger("ai-debug-mcp.context")
@@ -43,11 +44,11 @@ def build_context(request_id: str, logs: list) -> dict:
     }
 
 
-def build_debug_context(trace_id: str | None = None, include_runtime: bool = True) -> dict | None:
+def build_debug_context(trace_id: str | None = None, include_runtime: bool = True) -> DebugContext | None:
     """一次性组装完整调试上下文（M8）：异常帧 + 源码片段 + git 归因 + 网络链 + UI 事件 + 运行时。
 
     复用 trace_repo(M2) / code_locator / git(M5) / runtime。
-    返回 dict（兼容 analyzer 的 exception/runtime 字段），无 trace 时返回 None。
+    返回 DebugContext（Pydantic model），无 trace 时返回 None。
     各子采集失败降级，不阻断整体构建。
     """
     from app.runtime.core import trace_repo
@@ -210,7 +211,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         except Exception:
             logger.warning("fault_localization 构建失败 (trace_id=%s)", tid)
 
-    return {
+    result = {
         "request_id": tid,
         "trace_id": tid,
         "trace_kind": trace.get("trace_kind", "exception"),
@@ -237,6 +238,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "runtime": runtime,
         "fault_localization": fault_localization,
     }
+    return DebugContext(**result)
 
 
 def _extract_request_target(trace: dict) -> tuple[str | None, str | None]:

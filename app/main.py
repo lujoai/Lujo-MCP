@@ -1,10 +1,12 @@
 """
 ai-debug-mcp — 基于 MCP 协议的 AI 智能调试服务
 """
+import ipaddress
 import logging
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from app import __version__
@@ -297,9 +299,54 @@ def health():
     return {"status": status}
 
 
+def _is_internal_ip(request: Request) -> bool:
+    """判断请求是否来自内网（回环/私网/链路本地）。
+
+    用于 /internal/* 端点的访问控制：仅允许内网访问，
+    外网请求一律 403，防止内部配置信息泄露。
+    """
+    client_host = request.client.host if request.client else ""
+    if not client_host:
+        return False
+    try:
+        addr = ipaddress.ip_address(client_host)
+        return addr.is_loopback or addr.is_private or addr.is_link_local
+    except ValueError:
+        return False
+
+
 @app.get("/internal/health")
-def internal_health():
-    """详细健康检查 —— 仅集群内访问，暴露完整配置信息"""
+def internal_health(request: Request):
+    """详细健康检查 —— 仅集群内访问，暴露完整配置信息。
+
+    安全控制：
+    1) 内网 IP（回环/私网/链路本地）直接放行。
+    2) 外网 IP 需携带有效 API Key（Bearer/X-API-Key），复用 key_rotation 校验。
+    3) 鉴权未启用时，仅允许内网 IP 访问（fail-closed，防外网裸奔）。
+    """
+    from app.auth.key_rotation import auth_enabled, verify_api_key
+
+    is_internal = _is_internal_ip(request)
+    if not is_internal:
+        if not auth_enabled():
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Forbidden: /internal/health requires internal network or API key"},
+            )
+        auth_header = request.headers.get("Authorization", "")
+        api_key_header = request.headers.get("X-API-Key", "")
+        if auth_header.startswith("Bearer "):
+            provided_key = auth_header[7:]
+        elif api_key_header:
+            provided_key = api_key_header
+        else:
+            provided_key = ""
+        if not verify_api_key(provided_key):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Forbidden: invalid API key for /internal/health"},
+            )
+
     llm_ok = bool(settings.openai_api_key)
 
     storage_ok = True

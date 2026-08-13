@@ -49,12 +49,17 @@ def register_tool(
     handler: callable,
     **kwargs,
 ):
-    """注册一个 MCP 工具。inputSchema 等额外字段通过 kwargs 透传。"""
+    """注册一个 MCP 工具。inputSchema 等额外字段通过 kwargs 透传。
+
+    v0.5: 支持 category 和 experimental 元数据（可选，向后兼容）。
+    """
     _tool_registry[name] = {
         "name": name,
         "description": description,
         "inputSchema": kwargs.get("inputSchema", {}),
         "handler": handler,
+        "category": kwargs.get("category"),
+        "experimental": kwargs.get("experimental", False),
     }
 
 
@@ -90,9 +95,19 @@ def _handle_initialize(req: JSONRPCRequest) -> dict:
 
 
 def _handle_tools_list(req: JSONRPCRequest) -> dict:
-    """处理 tools/list"""
+    """处理 tools/list
+
+    v0.5: 响应中包含 category 和 experimental 元数据。
+    旧 MCP 客户端可忽略这些额外字段（JSON 语义安全）。
+    """
     tools = [
-        {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "inputSchema": t["inputSchema"],
+            "category": t.get("category"),
+            "experimental": t.get("experimental", False),
+        }
         for t in _tool_registry.values()
     ]
     return make_response(req.id, {"tools": tools})

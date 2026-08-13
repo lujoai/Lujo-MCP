@@ -16,7 +16,7 @@ from app.runtime.collectors.stacktrace import capture_exception
 from app.llm.analyzer import analyze, analyze_stream_async
 from app.llm.analysis_queue import get_analysis_queue, QueueFullError
 from app.agent.repair_queue import get_repair_queue, QueueFullError as RepairQueueFullError
-from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse
+from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse, VerifyRequest, VerifyUiRequest
 from app.auth.rbac import require_role
 
 logger = logging.getLogger("ai-debug-mcp.api")
@@ -318,7 +318,7 @@ def list_sessions():
 
 
 @router.post("/verify", dependencies=[Depends(require_role("admin", "developer"))])
-def debug_verify(body: dict):
+def debug_verify(req: VerifyRequest):
     """比对实际结果 vs 期望规范，自动检测静默失败。
 
     请求体：
@@ -330,14 +330,14 @@ def debug_verify(body: dict):
     from app.mcp.tools.verify_api import verify_handler
 
     try:
-        return verify_handler(body)
+        return verify_handler(req.model_dump())
     except Exception as e:
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/verify/ui", dependencies=[Depends(require_role("admin", "developer"))])
-def debug_verify_ui(body: dict):
+def debug_verify_ui(req: VerifyUiRequest):
     """按 UI 规范启动 Playwright 自动遍历页面并验证交互结果（FR14）。
 
     请求体：
@@ -348,7 +348,7 @@ def debug_verify_ui(body: dict):
     from app.mcp.tools.verify_ui_api import verify_ui_handler
 
     try:
-        return verify_ui_handler(body)
+        return verify_ui_handler(req.model_dump())
     except Exception as e:
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")

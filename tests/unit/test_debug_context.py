@@ -35,36 +35,36 @@ def test_build_debug_context_injects_all_sections():
     ctx = build_debug_context(tid)
 
     assert ctx is not None
-    assert ctx["trace_id"] == tid
-    assert ctx["trace_kind"] == "exception"
+    assert ctx.trace_id == tid
+    assert ctx.trace_kind == "exception"
     # 兼容 analyzer 的字段
-    assert ctx["exception"]["type"] == "ValueError"
-    assert ctx["exception"]["frames"][0]["file"] == "app/config.py"
-    assert ctx["runtime"] is not None
+    assert ctx.exception["type"] == "ValueError"
+    assert ctx.exception["frames"][0]["file"] == "app/config.py"
+    assert ctx.runtime is not None
     # 源码片段命中
-    assert ctx["code_snippets"]
-    assert ctx["code_snippets"][0]["found"] is True
+    assert ctx.code_snippets
+    assert ctx.code_snippets[0]["found"] is True
     # 网络链 / UI 事件注入
-    assert ctx["network_trace"] is not None
-    assert ctx["network_trace"][0]["method"] == "GET"
-    assert ctx["ui_events"] is not None
-    assert ctx["ui_events"][0]["event_type"] == "click"
+    assert ctx.network_trace is not None
+    assert ctx.network_trace[0]["method"] == "GET"
+    assert ctx.ui_events is not None
+    assert ctx.ui_events[0]["event_type"] == "click"
     # git 归因字段存在（可能为 None/list，取决于 git 可用性）
-    assert "git_blame" in ctx
-    assert "recent_diffs" in ctx
+    assert hasattr(ctx, "git_blame")
+    assert hasattr(ctx, "recent_diffs")
 
 
 def test_build_debug_context_without_runtime():
     tid = trace_repo.save_trace("E", "m", [])
     ctx = build_debug_context(tid, include_runtime=False)
     assert ctx is not None
-    assert ctx["runtime"] is None
+    assert ctx.runtime is None
 
 
 def test_build_debug_context_silent_failure_trace_kind():
     tid = trace_repo.save_trace("SilentFailure", "no response", [], trace_kind="silent_failure")
     ctx = build_debug_context(tid)
-    assert ctx["trace_kind"] == "silent_failure"
+    assert ctx.trace_kind == "silent_failure"
 
 
 def test_build_debug_context_redacts_network_and_ui():
@@ -72,8 +72,8 @@ def test_build_debug_context_redacts_network_and_ui():
     trace_repo.save_network_record({"url": "http://x/?token=secret"}, trace_id=tid)
     trace_repo.save_ui_event({"payload_json": 'password = "pw"'}, trace_id=tid)
     ctx = build_debug_context(tid)
-    assert "secret" not in ctx["network_trace"][0]["url"]
-    assert "pw" not in ctx["ui_events"][0]["payload_json"]
+    assert "secret" not in ctx.network_trace[0]["url"]
+    assert "pw" not in ctx.ui_events[0]["payload_json"]
 
 
 def test_build_debug_context_includes_related_specs_key():
@@ -83,9 +83,9 @@ def test_build_debug_context_includes_related_specs_key():
         frames=[{"file": "app/config.py", "line": 1, "function": "Settings"}],
     )
     ctx = build_debug_context(tid)
-    assert "related_specs" in ctx
+    assert hasattr(ctx, "related_specs")
     # 值为 list 或 None（取决于项目是否存在匹配规范）
-    assert ctx["related_specs"] is None or isinstance(ctx["related_specs"], list)
+    assert ctx.related_specs is None or isinstance(ctx.related_specs, list)
 
 
 def test_build_debug_context_injects_spec_diffs():
@@ -102,10 +102,10 @@ def test_build_debug_context_injects_spec_diffs():
 
     ctx = build_debug_context(tid)
     assert ctx is not None
-    assert ctx["spec_diffs"] is not None
-    assert len(ctx["spec_diffs"]) == 1
-    assert ctx["spec_diffs"][0]["matched"] is False
-    assert ctx["spec_diffs"][0]["silent_failure"] is True
+    assert ctx.spec_diffs is not None
+    assert len(ctx.spec_diffs) == 1
+    assert ctx.spec_diffs[0]["matched"] is False
+    assert ctx.spec_diffs[0]["silent_failure"] is True
 
 
 def test_build_debug_context_spec_diffs_none_when_no_verify():
@@ -113,7 +113,7 @@ def test_build_debug_context_spec_diffs_none_when_no_verify():
     tid = trace_repo.save_trace("E", "m", [])
     ctx = build_debug_context(tid)
     assert ctx is not None
-    assert ctx["spec_diffs"] is None
+    assert ctx.spec_diffs is None
 
 
 def test_build_debug_context_includes_fault_localization():
@@ -125,7 +125,7 @@ def test_build_debug_context_includes_fault_localization():
     )
     ctx = build_debug_context(tid)
     assert ctx is not None
-    fl = ctx["fault_localization"]
+    fl = ctx.fault_localization
     assert fl is not None
     assert "suspicious_frames" in fl
     assert "method" in fl
@@ -138,7 +138,7 @@ def test_build_debug_context_fault_localization_none_when_no_frames():
     tid = trace_repo.save_trace("E", "m", [])
     ctx = build_debug_context(tid)
     assert ctx is not None
-    assert ctx["fault_localization"] is None
+    assert ctx.fault_localization is None
 
 
 def test_build_debug_context_fault_localizer_error_degrades(monkeypatch):
@@ -159,8 +159,8 @@ def test_build_debug_context_fault_localizer_error_degrades(monkeypatch):
 
     assert ctx is not None
     # 原有 Debug Context 正常返回，不被 localizer 异常影响
-    assert ctx["exception"]["type"] == "ValueError"
-    assert ctx["exception"]["frames"] == [{"file": "app/config.py", "line": 9, "function": "Settings"}]
-    assert "runtime" in ctx
-    assert "code_snippets" in ctx
-    assert ctx["fault_localization"] is None
+    assert ctx.exception["type"] == "ValueError"
+    assert ctx.exception["frames"] == [{"file": "app/config.py", "line": 9, "function": "Settings"}]
+    assert hasattr(ctx, "runtime")
+    assert hasattr(ctx, "code_snippets")
+    assert ctx.fault_localization is None

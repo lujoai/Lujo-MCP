@@ -13,6 +13,7 @@ from typing import Any, Optional
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
+from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
 
 logger = logging.getLogger("ai-debug-mcp.agent.repair")
 
@@ -29,7 +30,7 @@ SYSTEM_PROMPT = """你是一位资深的代码修复工程师。基于以下调�
   "rationale": "修复思路的推理过程"
 }
 
-只输出 JSON，不要包含其他文字。"""
+只输出 JSON，不要包含其他文字。""" + _INJECTION_GUARD
 
 REQUIRED_FIELDS = (
     "patch",
@@ -142,5 +143,5 @@ class RepairAgent(BaseAgent):
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": _wrap_evidence(user_content)},
         ]

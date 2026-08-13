@@ -5,9 +5,48 @@
 
 ---
 
+## [0.5.0] — 2026-08-13
+
+> v0.5.0 工程质量加固与 Runtime 数据契约对齐。测试基线 992 passed / 6 skipped / 0 failed。
+
+### 新增
+
+#### 代码
+
+- **DebugContext Schema Alignment**：`DebugContext` Pydantic model 从 7 字段扩展至 20 字段，对齐 `build_debug_context()` 实际输出；新增字段全部 Optional + default，`model_config = {"extra": "allow"}` 支持未来扩展
+- **DebugContext Runtime Integration**：`build_debug_context()` 返回类型从 `dict | None` 升级为 `DebugContext | None`；所有调用方（MCP tools / Dashboard API）通过 `.model_dump()` 适配，外部 JSON 结构不变
+- **MCP Tool Category Metadata**：`tools/list` 响应为每个工具新增 `category`（agent / sdk）和 `experimental`（bool）字段；HTTP 与 stdio 传输层均支持；旧 MCP 客户端可忽略额外字段
+- **Prompt Injection 防护**（P2-1）：LLM analyzer 与 Agent 层引入 `_INJECTION_GUARD` 安全边界声明 + `_wrap_evidence()` XML 标签隔离，防止 Debug Context 中的恶意指令文本诱导 LLM
+- **API Schema Validation**（P2-2）：`/verify` 和 `/verify/ui` 端点从 `body: dict` 改为 Pydantic 模型（`VerifyRequest` / `VerifyUiRequest`），`extra="ignore"` 保证旧客户端兼容
+- **Session 安全加固**：MCP 会话表新增 `_MAX_SESSIONS` 上限（10,000）+ LRU 驱逐 + `SessionLimitExceeded` 503 响应；`/internal/health` 端点新增内网 IP 鉴权（外网需 API Key）
+
+#### 测试
+
+- `tests/unit/test_debug_context_schema.py`（14 tests）— DebugContext 字段存在性、向后兼容、unknown field、`model_dump(exclude_none=True)`
+- `tests/unit/test_debug_context_integration.py`（14 tests）— 返回类型验证、MCP/Dashboard JSON 结构不变、model_dump 等价性
+- `tests/unit/test_tool_category_metadata.py`（17 tests）— tools/list metadata、tool name/inputSchema 不变、分类映射、experimental 标记、向后兼容
+
+### 变更
+
+- `app/runtime/context/builder.py`：`build_debug_context()` 返回 `DebugContext(**result)` 而非裸 dict
+- `app/mcp/tools/debug_api.py`：`get_debug_context()` / `analyze_with_llm()` 适配 `.model_dump()`
+- `app/api/dashboard.py`：`get_trace_detail()` / `get_trace_quality()` 适配 `.model_dump()`
+- `app/mcp/protocol/server.py`：`register_tool()` 存储 category/experimental；`_handle_tools_list()` 响应包含 metadata
+- `app/mcp/tools/__init__.py`：`register_all_tools()` 中 17 个工具标注 category 和 experimental
+- `app/mcp_server.py`：stdio `list_tools()` 传入 category/experimental
+
+### 兼容性
+
+- **MCP Client**：`tools/list` 新增 `category`/`experimental` 字段，旧客户端可忽略（JSON 语义安全）
+- **API Client**：`/verify` 端点 Pydantic 模型替换 dict，`extra="ignore"` 不拒绝多余字段
+- **DebugContext JSON**：`model_dump()` 产出与原始 dict 等价的 20 字段结构，外部 JSON 不变
+- **无 Breaking Change**：所有新增字段 Optional + default，旧数据可 validate
+
+---
+
 ## [Unreleased]
 
-> v0.4.1-beta 开发中。M1 Quality Foundation、M2 知识库三级 fallback、M3 无堆栈定位、M4 Agent Verify Loop、M5 全量回归、P1 Debug Experience RAG（v0.4.0-beta）已完成；CODE_REVIEW_FIX_PROMPT 全量代码审查修复（P0×5 + P1×20 + P2）已完成；**npm 开箱即用分发（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布）已完成（2026-08-09，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）**；**Phase 3 D5 MCP 可观测性 + D6 Benchmark 框架 + D7 Release 准备（2026-08-11，版本统一 `0.4.1-beta`，测试基线 927）已完成**。
+> v0.5.0 已发布（2026-08-13）。下一版本 v0.5.1 规划中（Source Map 解析 + Browser SDK 增强）。
 
 ### 新增
 

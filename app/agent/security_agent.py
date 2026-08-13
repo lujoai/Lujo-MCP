@@ -21,6 +21,7 @@ from typing import Any, Optional
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
+from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
 
 logger = logging.getLogger("ai-debug-mcp.agent.security")
 
@@ -42,7 +43,7 @@ SYSTEM_PROMPT = """你是一位资深的安全工程师。审查以下修复方�
 }
 
 若修复方案无明显安全风险，risks 返回空数组，overall_severity 返回 "none"。
-只输出 JSON，不要包含其他文字。"""
+只输出 JSON，不要包含其他文字。""" + _INJECTION_GUARD
 
 VALID_SEVERITY = {"high", "medium", "low", "none"}
 VALID_CATEGORIES = {
@@ -189,5 +190,5 @@ class SecurityAgent(BaseAgent):
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": _wrap_evidence(user_content)},
         ]

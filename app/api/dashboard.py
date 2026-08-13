@@ -260,18 +260,19 @@ def get_trace_detail(trace_id: str):
         raise HTTPException(status_code=404, detail=f"找不到 trace {trace_id}")
 
     # v0.4.0: 注入质量报告（纯函数评分，不触发 LLM 调用）
-    quality_report = _safe_build_quality_report(ctx)
+    ctx_dict = ctx.model_dump()
+    quality_report = _safe_build_quality_report(ctx_dict)
 
     # 精简返回（去掉 runtime/network_trace 等大字段）
     return {
-        "trace_id": ctx.get("trace_id"),
-        "trace_kind": ctx.get("trace_kind"),
-        "exception": ctx.get("exception"),
-        "errors": ctx.get("errors"),
-        "spec_diffs": ctx.get("spec_diffs"),
-        "code_snippets": ctx.get("code_snippets"),
-        "source": ctx.get("source"),
-        "extra": ctx.get("extra"),
+        "trace_id": ctx_dict.get("trace_id"),
+        "trace_kind": ctx_dict.get("trace_kind"),
+        "exception": ctx_dict.get("exception"),
+        "errors": ctx_dict.get("errors"),
+        "spec_diffs": ctx_dict.get("spec_diffs"),
+        "code_snippets": ctx_dict.get("code_snippets"),
+        "source": ctx_dict.get("source"),
+        "extra": ctx_dict.get("extra"),
         "quality_report": quality_report,
     }
 
@@ -314,7 +315,7 @@ def get_trace_quality(trace_id: str):
     if ctx is None:
         raise HTTPException(status_code=404, detail=f"找不到 trace {trace_id}")
 
-    quality_report = _safe_build_quality_report(ctx)
+    quality_report = _safe_build_quality_report(ctx.model_dump())
     if quality_report is None:
         return {"trace_id": trace_id, "quality_report": None}
 
