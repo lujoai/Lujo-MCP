@@ -1,5 +1,4 @@
 """单元测试：Verify Loop 四级判定 + 综合评分 + 迭代闭环 + KB 写回（M4）。"""
-import pytest
 
 
 class TestVerifyVerdict:

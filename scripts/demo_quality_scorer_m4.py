@@ -8,7 +8,6 @@
   - M4：Verify Loop → case_confidence/verify_count 提升分析可信度
 """
 import copy
-import time
 from typing import Any
 
 from app.quality.scorer import evaluate
@@ -348,7 +347,7 @@ def main():
 
     # ── 详细：M4 改进后各场景评分 ──
     print(f"\n\n{'='*70}")
-    print(f"  M2-M4 改进后详细评分")
+    print("  M2-M4 改进后详细评分")
     print(f"{'='*70}")
     print(f"  {'场景':20s} {'完整度':>8s} {'可信度':>8s} {'综合':>8s} {'证据数':>6s}")
     print(f"  {'─'*20} {'─'*8} {'─'*8} {'─'*8} {'─'*6}")
@@ -364,7 +363,7 @@ def main():
 
     # ── PRD 预期对比 ──
     print(f"\n\n{'='*70}")
-    print(f"  与 PRD §12.2 预期对比")
+    print("  与 PRD §12.2 预期对比")
     print(f"{'='*70}")
     prd_expected = {
         "A-完整上下文": 0.90,
@@ -376,7 +375,6 @@ def main():
     print(f"  {'场景':20s} {'M1基线':>8s} {'M4实际':>8s} {'PRD预期':>8s} {'达成':>6s}")
     print(f"  {'─'*20} {'─'*8} {'─'*8} {'─'*8} {'─'*6}")
     for name, _, r_m4, _ in improvements:
-        m1 = r_m1.overall_score if (name == improvements[0][0]) else 0
         # re-evaluate for clarity
         m1_val = next(r_m1.overall_score for n, r_m1, _, _ in improvements if n == name)
         m4_val = r_m4.overall_score

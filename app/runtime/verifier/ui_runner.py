@@ -736,7 +736,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                         # 使用 evaluate 获取标签名
                         try:
                             tag_name = inp.evaluate("el => el.tagName.toLowerCase()")
-                        except:
+                        except Exception:
                             tag_name = "input"  # 默认值
                         
                         # 根据元素类型获取值

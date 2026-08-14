@@ -11,9 +11,8 @@
 import asyncio
 import json
 
-import pytest
 
-from app.mcp.protocol.server import _tool_registry, _handle_tools_list, register_tool
+from app.mcp.protocol.server import _tool_registry, _handle_tools_list
 from app.mcp.tools import register_all_tools
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
 

@@ -1,5 +1,4 @@
 """DebugExperienceRecord 单测：字段映射 / 空降级 / 向后兼容（P1 D1）。"""
-import pytest
 
 from app.rag.experience import DebugExperienceRecord
 

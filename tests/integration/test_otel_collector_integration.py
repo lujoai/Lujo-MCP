@@ -1,7 +1,6 @@
 """集成测试：OpenTelemetry OTLP exporter -> 本地 collector 端到端验证。"""
 
 import threading
-import time
 from concurrent import futures
 
 import grpc

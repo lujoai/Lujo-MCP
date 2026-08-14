@@ -127,8 +127,6 @@ def _call_chain_score(fault: Optional[static_analyzer.FaultLocation]) -> tuple[i
     """调用链信号：处于调用链汇聚点的帧更可能承接问题传播。"""
     if fault is None or not fault.call_chain:
         return 0, "no call chain signal"
-    # 调用链越长说明该帧是关键中转点
-    depth = min(len(fault.call_chain), 3)
     return _W_CALL_CHAIN, f"call chain hub: participates in {len(fault.call_chain)} calls"
 
 

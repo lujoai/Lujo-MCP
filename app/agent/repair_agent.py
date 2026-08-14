@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field

@@ -8,10 +8,10 @@
 - 场景 E：知识库精确命中（复用历史修复，跳过 LLM）
 """
 
-import json
 import time
 from typing import Any
 
+from app.quality.schemas import ContextDimension
 from app.quality.scorer import evaluate
 
 
@@ -381,12 +381,12 @@ def _print_report(scenario_name: str, scenario_desc: str, agent_ctx: dict[str, A
 
     # ── 改进建议 ──
     if report.suggestions:
-        print(f"\n  ── 改进建议 ──")
+        print("\n  ── 改进建议 ──")
         for s in report.suggestions:
             print(f"     💡 {s}")
     else:
-        print(f"\n  ── 改进建议 ──")
-        print(f"     ✨ 无需改进，上下文质量优秀")
+        print("\n  ── 改进建议 ──")
+        print("     ✨ 无需改进，上下文质量优秀")
 
     print(f"\n  ⏱️  评分时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(report.scored_at))}")
 
@@ -394,8 +394,6 @@ def _print_report(scenario_name: str, scenario_desc: str, agent_ctx: dict[str, A
 # ═══════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════
-
-from app.quality.schemas import ContextDimension
 
 _DIMENSION_LABELS_CN: dict[ContextDimension, str] = {
     ContextDimension.TRACE: "异常堆栈",
@@ -428,7 +426,7 @@ def main():
 
     # ── 汇总对比 ──
     print(f"\n\n{'='*70}")
-    print(f"  汇总对比")
+    print("  汇总对比")
     print(f"{'='*70}")
     print(f"  {'场景':20s} {'完整度':>8s} {'可信度':>8s} {'综合':>8s} {'证据数':>6s}")
     print(f"  {'─'*20} {'─'*8} {'─'*8} {'─'*8} {'─'*6}")

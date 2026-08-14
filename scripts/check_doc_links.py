@@ -111,7 +111,7 @@ def resolve_link(url: str, doc_path: Path) -> tuple[str, str, bool, str]:
         rel = str(target.relative_to(ROOT))
     except ValueError:
         rel = str(target)
-    return ("relative", rel, exists, "文件存在" if exists else f"文件不存在")
+    return ("relative", rel, exists, "文件存在" if exists else "文件不存在")
 
     # 不会到达
     return ("unknown", url, False, "未知链接类型")

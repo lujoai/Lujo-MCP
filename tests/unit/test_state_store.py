@@ -4,7 +4,6 @@
 key 只写入 _timestamps、从不进入 _data → 高基数限流键无限增长。修复后两表
 任一超限即合并驱逐；incr_float 也触发驱逐。
 """
-import pytest
 
 from app.state.store import MemoryStateStore
 

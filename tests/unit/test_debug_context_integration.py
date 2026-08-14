@@ -8,7 +8,6 @@
 """
 import json
 
-import pytest
 
 from app.schemas import DebugContext
 from app.runtime.core import trace_repo

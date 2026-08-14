@@ -173,7 +173,7 @@ def test_throttle_control(page: Page):
     # 检查发送时间
     print(f"Requests sent: {len(requests_sent)}")
     if len(requests_sent) >= 2:
-        print(f"First 2 requests sent within throttle window")
+        print("First 2 requests sent within throttle window")
     
     # 等待节流窗口结束
     time.sleep(5)
