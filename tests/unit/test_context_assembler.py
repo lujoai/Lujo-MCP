@@ -30,6 +30,13 @@ def _make_debug_context():
     }
 
 
+def _without_cache_flag(analysis):
+    """剔除缓存命中标记：cached 只表示 LLM 分析是否复用缓存，不属内容差异。"""
+    if isinstance(analysis, dict):
+        return {k: v for k, v in analysis.items() if k != "cached"}
+    return analysis
+
+
 class TestAssembleSuccess:
     """三个子装配都成功 → 完整 sources 结构。"""
 
@@ -273,7 +280,7 @@ class TestDebugExperienceRecall:
             result_on = await assembler.assemble(_make_debug_context())
 
         assert result_on["debug_context"] == result_off["debug_context"]
-        assert result_on["prior_analysis"] == result_off["prior_analysis"]
+        assert _without_cache_flag(result_on["prior_analysis"]) == _without_cache_flag(result_off["prior_analysis"])
         assert result_on["vector_recall"] == result_off["vector_recall"]
         assert result_on["git_context"] == result_off["git_context"]
         # 空结果 → None
