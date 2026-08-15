@@ -581,7 +581,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | --- | --- | --- |
 | ~~代码定位未接线~~ | ~~`get_debug_context` 不含片段~~ | §6 ✅ 已修复 |
 | ~~静默失败/前端自动化~~ | ~~FR13/FR14/FR15 待建~~ | ✅ 已实现 |
-| 厂商锁定 | 仅 OpenAI | 多 LLM provider 已支持（openai/zhipu/custom）|
+| 厂商锁定 | 仅 OpenAI | 多 LLM provider 已支持（openai/zhipu/deepseek/custom）|
 | memory 后端 | 重启即丢 | 生产用 postgresql 或 async_pg |
 | ~~PGStore API 误用~~ | ~~`conn.execute()` 不存在~~ | ✅ 已改用 `cur = conn.cursor(); cur.execute()` |
 | ~~data 字段非 dict 时崩溃~~ | ~~`json.loads` 失败 / `.get()` 报错~~ | ✅ `_parse_data` 安全解析 + 类型检查 |
@@ -882,7 +882,7 @@ sequenceDiagram
 | MCP 方法路由 | `protocol/server.py:132-137` | `_METHOD_MAP` 分发 |
 | 存储后端 | `core/storage/factory.py:31-42` | 环境变量选择 memory/postgresql |
 | 状态后端 | `state/store.py:121-131` | 环境变量选择 memory/redis |
-| LLM Provider | `analyzer.py:31-35` | 选择 openai/zhipu/custom |
+| LLM Provider | `analyzer.py:31-35` | 选择 openai/zhipu/deepseek/custom |
 | 规范类型 | `verifier/assert_engine.py:29-38` | `spec.kind` 分发 api/ui/rule |
 
 **缺失的分流：**

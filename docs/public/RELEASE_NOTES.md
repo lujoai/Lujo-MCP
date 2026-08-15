@@ -1,6 +1,6 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.5.1（2026-08-15）**。补齐前端调试盲区：Source Map 堆栈还原（minified JS 帧 → 原始源码位置，纯 Python VLQ 解码零新依赖）+ `resolve_stack` MCP 工具（工具数 18/18）+ Browser SDK 增强（column 保留 / release 透传）+ deepseek provider base_url 修复（LLM 分析链可用）。npm `latest` → `@lujoai/lujo-mcp@0.5.1`（workflow 直发 latest）。
+> 最新版本：**v0.5.1（2026-08-15，已完成开发待发布）**。补齐前端调试盲区：Source Map 堆栈还原（minified JS 帧 → 原始源码位置，纯 Python VLQ 解码零新依赖）+ `resolve_stack` MCP 工具（工具数 18/18）+ Browser SDK 增强（column 保留 / release 透传）+ deepseek provider base_url 修复（LLM 分析链可用）。npm `latest` 发布后将直发 `@lujoai/lujo-mcp@0.5.1`（workflow 直发 latest；当前 npm `latest` 仍为 0.5.0）。
 > 测试基线：单元 1087 passed / 6 skipped / 0 failed（含 v0.5.1 Source Map 94 项 + deepseek base_url 1 项）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
@@ -14,7 +14,7 @@
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
 **Version / 版本**: v0.5.1  
-**Release Date / 发布日期**: 2026-08-15  
+**Release Date / 发布日期**: 2026-08-15（待发布：未 push / tag / npm publish）  
 **Codename / 代号**: Source Map 堆栈还原 — Source Map Stack Resolution
 
 ---
@@ -39,6 +39,8 @@ v0.5.1 是 Lujo-MCP 的 **Source Map 堆栈还原** 版本：将前端 minified 
 #### 🐛 Bug 修复
 
 - **deepseek provider base_url 缺失**：`_PROVIDER_BASE_URLS`（analyzer + qdrant_vector_store）缺 deepseek 映射，`LLM_PROVIDER=deepseek` 且 `LLM_BASE_URL` 为空时回落 OpenAI 官方端点 → DeepSeek key 必然 401，LLM 分析链不可用。已补 `https://api.deepseek.com` + 新增 `test_resolve_base_url_deepseek`；实测真实调用返回结构化分析 JSON
+- **LLM 集成 e2e 测试配置隔离**（`tests/integration/test_agent_repair_e2e.py`）：本地 `.env` 打开 `AGENT_MULTI_AGENT_ENABLED` / `AGENT_VERIFY_LOOP_ENABLED` 会污染 e2e（误走 Verify Loop，30s 轮询超时）；fixture 隔离两开关走 Phase 1 单 Agent 链路，轮询超时对齐 `agent_timeout`（90s）。DeepSeek key 有效后 2 项真实 e2e 全绿
+- **git 子进程输出编码**（`app/runtime/core/git.py`）：Windows 上 `subprocess.run(text=True)` 默认按本地 gbk 解码 git 的 UTF-8 输出会抛 `UnicodeDecodeError`，导致 diff/blame 静默失败；显式 `encoding="utf-8"` + `errors="replace"` 兜底非法字节
 
 #### 🧪 测试
 
@@ -62,6 +64,8 @@ v0.5.1 is the **Source Map stack resolution** release of Lujo-MCP: it maps minif
 #### 🐛 Bug Fixes
 
 - **Missing deepseek provider base_url**: `_PROVIDER_BASE_URLS` (analyzer + qdrant_vector_store) lacked a deepseek mapping, so with `LLM_PROVIDER=deepseek` and empty `LLM_BASE_URL` the request fell back to the OpenAI endpoint and DeepSeek keys 401'd, breaking the LLM analysis chain. Added `https://api.deepseek.com` + `test_resolve_base_url_deepseek`; a real call now returns structured analysis JSON.
+- **LLM e2e test config isolation** (`tests/integration/test_agent_repair_e2e.py`): a local `.env` with `AGENT_MULTI_AGENT_ENABLED` / `AGENT_VERIFY_LOOP_ENABLED` set would pollute the e2e (routing into Verify Loop and timing out); the fixture now isolates both flags to the Phase 1 single-agent path and aligns the poll timeout to `agent_timeout` (90s). Both e2e tests pass with a valid DeepSeek key.
+- **git subprocess output encoding** (`app/runtime/core/git.py`): on Windows `subprocess.run(text=True)` decodes git's UTF-8 output as local gbk, raising `UnicodeDecodeError` and silently breaking diff/blame; explicit `encoding="utf-8"` + `errors="replace"`.
 
 #### 🧪 Tests
 

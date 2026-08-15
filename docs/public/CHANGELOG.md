@@ -46,7 +46,7 @@
 
 ## [Unreleased]
 
-> v0.5.0 已发布（2026-08-13）。v0.5.1 开发中：Source Map 解析（已落地，测试基线 992 → **1087 passed / 6 skipped / 0 failed**）+ Browser SDK 增强（column 保留 + release 透传已落地）。
+> v0.5.0 已发布（2026-08-13）。v0.5.1 已完成开发（待发布）：Source Map 解析（已落地，测试基线 992 → **1087 passed / 6 skipped / 0 failed**）+ Browser SDK 增强（column 保留 + release 透传已落地）+ deepseek provider base_url 修复 + LLM 集成 e2e 链路修复（DeepSeek key 有效后 2 项 e2e 全绿）。
 
 ### 新增
 
@@ -65,6 +65,8 @@
 
 - **deepseek provider base_url 缺失**（`app/llm/analyzer.py` + `app/rag/qdrant_vector_store.py`）：`_PROVIDER_BASE_URLS` 缺少 `"deepseek"` 映射，`LLM_PROVIDER=deepseek` 时 `_resolve_base_url()` 返回空 → openai SDK 回落 OpenAI 官方端点 → DeepSeek key 必然 401，LLM 分析链不可用。已补 `https://api.deepseek.com`，并新增 `test_resolve_base_url_deepseek` 用例；实测真实调用返回结构化分析 JSON
 - **`tests/unit/test_debug_context_integration.py`**：`test_analyze_with_llm_returns_dict` 增加环境隔离（monkeypatch 无 Key 快速回退）——本地 .env 若配置了不可达/无效 LLM 端点，真实 socket 连接挂起 + 重试会阻塞测试（环境依赖非代码回归）
+- **LLM 集成 e2e 测试配置隔离**（`tests/integration/test_agent_repair_e2e.py`）：本地 `.env` 若打开 `AGENT_MULTI_AGENT_ENABLED` / `AGENT_VERIFY_LOOP_ENABLED`，e2e 会误走 Verify Loop（最多 3 轮 × 多 Agent），30s 轮询必然超时；fixture 显式隔离两开关走受控 Phase 1 单 Agent 链路，轮询超时对齐 `agent_timeout`（90s）。DeepSeek key 有效后 2 项真实 e2e 全绿（此前无 key 时 skip）
+- **git 子进程输出编码**（`app/runtime/core/git.py`）：Windows 上 `subprocess.run(text=True)` 默认按本地 gbk 解码 git 的 UTF-8 输出会抛 `UnicodeDecodeError`，导致 diff/blame 静默失败；显式 `encoding="utf-8"` + `errors="replace"` 兜底非法字节
 
 #### 环境备注（非代码变更）
 

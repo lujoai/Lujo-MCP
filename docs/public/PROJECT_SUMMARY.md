@@ -88,7 +88,7 @@ Verifier 验证
 - ✅ 调试上下文构建（结构化 AI 可消费数据）
 - ✅ 异常堆栈捕获（sync + asyncio）
 - ✅ 运行时快照（psutil）
-- ✅ LLM 智能分析（openai/zhipu/custom）
+- ✅ LLM 智能分析（openai/zhipu/deepseek/custom）
 - ✅ 指纹知识库命中与自动沉淀（命中优先返回 + LLM 成功后自动写入）
 - ✅ 向量检索 RAG（Phase 7）：`VectorStore` ABC + `InProcessVectorStore`（Jaccard 零依赖）+ `QdrantVectorStore`（OpenAI/智谱 Embeddings 语义召回，uuid5 幂等 upsert）；精确指纹 miss 后向量召回 fallback；全链路降级容错
 - ✅ 规范驱动验证（assert_behavior 纯函数）
@@ -199,7 +199,7 @@ Verifier 验证
 
 ## 5. 当前开发阶段
 
-**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地；**v0.5.0 已发布（2026-08-13）**：工程质量加固 + Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；下一版本 v0.5.1 开发中（**Source Map 解析已落地**：纯 Python VLQ 解码 + 上传/磁盘双获取通道 + `resolve_stack` MCP 工具（18/18）+ QualityScorer/Benchmark A/B 实证，`sourcemap_enabled` 默认关闭；Browser SDK column 保留 + release 透传）
+**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地；**v0.5.0 已发布（2026-08-13）**：工程质量加固 + Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；下一版本 v0.5.1 已完成开发待发布（**Source Map 解析已落地**：纯 Python VLQ 解码 + 上传/磁盘双获取通道 + `resolve_stack` MCP 工具（18/18）+ QualityScorer/Benchmark A/B 实证，`sourcemap_enabled` 默认关闭；Browser SDK column 保留 + release 透传）
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -299,7 +299,7 @@ Verifier 验证
 
 ## 8. 关键设计决策
 
-1. **工厂模式**：存储层（memory/PG）、状态层（memory/Redis）、LLM provider（openai/zhipu/custom）都用工厂模式，一行配置切换
+1. **工厂模式**：存储层（memory/PG）、状态层（memory/Redis）、LLM provider（openai/zhipu/deepseek/custom）都用工厂模式，一行配置切换
 2. **规范驱动**：用期望规范作为 ground truth，`assert_behavior()` 纯函数自动比对，偏离即告警，支持 api/ui/rule 三种 kind
 3. **双传输**：HTTP 与 stdio 均复用 `register_all_tools()` + `_tool_registry`，避免工具面漂移和漏注册
 4. **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Trae/Codex/Claude
