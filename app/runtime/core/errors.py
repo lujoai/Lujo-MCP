@@ -23,7 +23,7 @@ _MAX = 200
 _recent: dict[str, deque] = {}
 _lock = threading.Lock()
 
-logger = logging.getLogger("ai-debug-mcp.errors")
+logger = logging.getLogger("lujo-mcp.errors")
 
 
 def _new_id() -> str:

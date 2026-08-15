@@ -31,7 +31,7 @@ from app.quality.schemas import (
     RelevanceLevel,
 )
 
-logger = logging.getLogger("ai-debug-mcp.quality.scorer")
+logger = logging.getLogger("lujo-mcp.quality.scorer")
 
 
 # ── 维度权重（总和为 1.0） ──

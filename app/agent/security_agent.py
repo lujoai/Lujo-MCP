@@ -23,7 +23,7 @@ from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
 from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
 
-logger = logging.getLogger("ai-debug-mcp.agent.security")
+logger = logging.getLogger("lujo-mcp.agent.security")
 
 SYSTEM_PROMPT = """你是一位资深的安全工程师。审查以下修复方案是否存在安全风险，重点关注：
 - LFI（任意文件读取）、SSRF（服务端请求伪造）

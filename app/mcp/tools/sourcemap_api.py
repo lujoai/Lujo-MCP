@@ -12,7 +12,7 @@ import logging
 from app.config import settings
 from app.runtime.collectors.sourcemap_store import resolve_frames_auto
 
-logger = logging.getLogger("ai-debug-mcp.tools.sourcemap")
+logger = logging.getLogger("lujo-mcp.tools.sourcemap")
 
 TOOL_DEF = {
     "name": "resolve_stack",

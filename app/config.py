@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     # 开启后使用 OTel SDK 记录指标，同时保留 /metrics Prometheus 文本端点向后兼容
     otel_enabled: bool = False
     # OTel 服务名（用于指标标签）
-    otel_service_name: str = "ai-debug-mcp"
+    otel_service_name: str = "lujo-mcp"
     # OTLP gRPC 导出端点（如 http://localhost:4317），为空则使用 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量
     otel_exporter_endpoint: str = ""
     # OTel 采样率（0.0-1.0）
@@ -346,7 +346,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = False
-    service_name: str = "ai-debug-mcp"
+    service_name: str = "lujo-mcp"
 
     def model_post_init(self, __context: object) -> None:
         from dotenv import dotenv_values

@@ -28,7 +28,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-logger = logging.getLogger("ai-debug-mcp.runtime.collectors.sourcemap")
+logger = logging.getLogger("lujo-mcp.runtime.collectors.sourcemap")
 
 # ── base64-VLQ 解码表 ──
 _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

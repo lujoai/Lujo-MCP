@@ -17,7 +17,7 @@ import logging
 
 from app.runtime.core.logs import add_log, get_logs, delete_logs
 
-logger = logging.getLogger("ai-debug-mcp.spec_store")
+logger = logging.getLogger("lujo-mcp.spec_store")
 _STEP_SPEC = "spec"
 
 # 主存：spec_id → spec dict

@@ -21,7 +21,7 @@ from app.runtime.core.storage.ddl import (  # FIX: P0-5 DDL 单源，消除与 a
     DDL_TRACES_ARCHIVE,
 )
 
-logger = logging.getLogger("ai-debug-mcp.storage.pg")
+logger = logging.getLogger("lujo-mcp.storage.pg")
 
 # ── 熔断器（P3-8）──
 try:

@@ -1,5 +1,5 @@
 """
-ai-debug-mcp — 基于 MCP 协议的 AI 智能调试服务
+lujo-mcp — 基于 MCP 协议的 AI 智能调试服务
 """
 import ipaddress
 import logging
@@ -32,7 +32,7 @@ from app.mcp.tools import register_all_tools
 
 register_all_tools()
 
-logger = logging.getLogger("ai-debug-mcp")
+logger = logging.getLogger("lujo-mcp")
 
 
 def validate_startup_configuration(host: str | None = None, api_key: str | None = None) -> None:

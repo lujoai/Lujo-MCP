@@ -20,7 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.metrics")
+logger = logging.getLogger("lujo-mcp.metrics")
 
 # ── 线程安全指标存储（向后兼容）──
 _counter_lock = threading.Lock()
@@ -85,7 +85,7 @@ def _init_otel():
         provider = MeterProvider(resource=resource, metric_readers=[reader])
         otel_metrics.set_meter_provider(provider)
 
-        meter = provider.get_meter("ai-debug-mcp")
+        meter = provider.get_meter("lujo-mcp")
 
         request_counter = meter.create_counter(
             "http_requests_total",

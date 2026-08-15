@@ -249,7 +249,7 @@ class TestProtocolVersionNegotiation:
             jsonrpc="2.0", id=1, method="initialize",
             params={"protocolVersion": "2099-01-01"},
         )
-        with caplog.at_level(logging.WARNING, logger="ai-debug-mcp.protocol"):
+        with caplog.at_level(logging.WARNING, logger="lujo-mcp.protocol"):
             resp = asyncio.run(dispatch(req))
         assert resp["result"]["protocolVersion"] == PROTOCOL_VERSION
         assert "2099-01-01" in caplog.text
@@ -261,7 +261,7 @@ class TestProtocolVersionNegotiation:
         req = JSONRPCRequest(
             jsonrpc="2.0", id=1, method="initialize", params={},
         )
-        with caplog.at_level(logging.WARNING, logger="ai-debug-mcp.protocol"):
+        with caplog.at_level(logging.WARNING, logger="lujo-mcp.protocol"):
             resp = asyncio.run(dispatch(req))
         assert resp["result"]["protocolVersion"] == PROTOCOL_VERSION
         assert "protocolVersion" in caplog.text

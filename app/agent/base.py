@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 
 from openai import APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
-logger = logging.getLogger("ai-debug-mcp.agent.base")
+logger = logging.getLogger("lujo-mcp.agent.base")
 
 
 class AgentStatus(str, Enum):

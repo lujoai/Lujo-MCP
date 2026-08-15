@@ -22,7 +22,7 @@ from app.schemas import (
 )
 from app.auth.rbac import require_role
 
-logger = logging.getLogger("ai-debug-mcp.api")
+logger = logging.getLogger("lujo-mcp.api")
 
 router = APIRouter(prefix="/api/debug", tags=["debug"])
 

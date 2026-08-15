@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List
 
-logger = logging.getLogger("ai-debug-mcp.mcp.sse")
+logger = logging.getLogger("lujo-mcp.mcp.sse")
 _CLOSE_EVENT = {"_sse_control": "close"}
 
 

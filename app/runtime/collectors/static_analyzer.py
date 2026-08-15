@@ -21,7 +21,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-logger = logging.getLogger("ai-debug-mcp.mcp.collectors.static_analyzer")
+logger = logging.getLogger("lujo-mcp.mcp.collectors.static_analyzer")
 
 # 调用链最大追溯深度
 _MAX_CALL_DEPTH = 5

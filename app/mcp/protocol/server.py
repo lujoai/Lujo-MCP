@@ -21,7 +21,7 @@ from app.mcp.protocol.jsonrpc import (
     parse_request,
 )
 
-logger = logging.getLogger("ai-debug-mcp.protocol")
+logger = logging.getLogger("lujo-mcp.protocol")
 
 # MCP 协议版本
 PROTOCOL_VERSION = "2024-11-05"

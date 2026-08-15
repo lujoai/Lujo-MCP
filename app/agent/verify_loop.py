@@ -31,7 +31,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.agent.verify_loop")
+logger = logging.getLogger("lujo-mcp.agent.verify_loop")
 
 
 class VerifyVerdict(str, Enum):

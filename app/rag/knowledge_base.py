@@ -26,7 +26,7 @@ from app.rag.debug_case import (
 )
 from app.rag.vector_store import get_vector_store
 
-logger = logging.getLogger("ai-debug-mcp.knowledge-base")
+logger = logging.getLogger("lujo-mcp.knowledge-base")
 
 DEFAULT_MAX_ENTRIES = 100
 EVICTION_POLICY = "lru"

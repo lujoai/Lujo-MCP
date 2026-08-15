@@ -7,7 +7,7 @@ from app.auth.rbac import require_role
 from app.runtime.verifier import spec_store
 from app.schemas import Spec, SpecListResponse
 
-logger = logging.getLogger("ai-debug-mcp.spec_api")
+logger = logging.getLogger("lujo-mcp.spec_api")
 
 router = APIRouter(prefix="/api", tags=["spec"])
 

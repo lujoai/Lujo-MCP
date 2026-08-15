@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from app.runtime.collectors import static_analyzer
 
-logger = logging.getLogger("ai-debug-mcp.runtime.context.fault_localizer")
+logger = logging.getLogger("lujo-mcp.runtime.context.fault_localizer")
 
 # ── 评分权重（V1 启发式初值，可调） ──
 _W_STACK_POSITION = 20      # 栈位置：靠近异常抛出点 / 靠近被调深层

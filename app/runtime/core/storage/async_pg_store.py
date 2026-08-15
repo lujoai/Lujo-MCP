@@ -48,7 +48,7 @@ from app.runtime.core.storage.ddl import (  # FIX: P0-5 DDL 单源，消除与 p
     DDL_TRACES_ARCHIVE,
 )
 
-logger = logging.getLogger("ai-debug-mcp.storage.async_pg")
+logger = logging.getLogger("lujo-mcp.storage.async_pg")
 
 
 # ── 建表 DDL ──

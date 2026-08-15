@@ -9,7 +9,7 @@ from app.runtime.collectors.runtime import collect_runtime_snapshot
 from app.llm.analyzer import analyze
 from app.mcp.observability import observe_context, attach_metadata
 
-logger = logging.getLogger("ai-debug-mcp.debug-tool")
+logger = logging.getLogger("lujo-mcp.debug-tool")
 
 TOOL_DEF = {
     "name": "debug",

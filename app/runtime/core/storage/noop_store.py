@@ -11,7 +11,7 @@ from typing import Optional
 
 from app.runtime.core.storage.base import ErrorStorage, SpecStorage
 
-logger = logging.getLogger("ai-debug-mcp.storage.noop")
+logger = logging.getLogger("lujo-mcp.storage.noop")
 
 
 class NoOpErrorStore(ErrorStorage):

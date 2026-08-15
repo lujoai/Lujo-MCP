@@ -21,7 +21,7 @@ from app.mcp.transports.session import registry, SessionLimitExceeded
 from app.mcp.transports.sse import hub
 from app.mcp.tools import TOOL_ROLE_REQUIREMENTS
 
-logger = logging.getLogger("ai-debug-mcp.api.mcp")
+logger = logging.getLogger("lujo-mcp.api.mcp")
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
 

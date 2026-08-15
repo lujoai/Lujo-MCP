@@ -7,7 +7,7 @@
 import time
 import logging
 
-logger = logging.getLogger("ai-debug-mcp.collectors.network")
+logger = logging.getLogger("lujo-mcp.collectors.network")
 
 _MAX_BODY_CHARS = 10 * 1024  # 10KB，与浏览器 SDK 截断阈值一致
 

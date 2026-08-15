@@ -18,7 +18,7 @@ from typing import Any
 
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.agent.assembler")
+logger = logging.getLogger("lujo-mcp.agent.assembler")
 
 
 class RepairContextAssembler:

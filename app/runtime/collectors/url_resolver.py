@@ -18,7 +18,7 @@ import re
 from typing import Any, Optional
 from fastapi.routing import APIRoute
 
-logger = logging.getLogger("ai-debug-mcp.mcp.collectors.url_resolver")
+logger = logging.getLogger("lujo-mcp.mcp.collectors.url_resolver")
 
 # 把 FastAPI 路径模板转成可匹配具体路径的正则（{param} → [^/]+）
 _PATH_PARAM_RE = re.compile(r"\{[^}]*\}")

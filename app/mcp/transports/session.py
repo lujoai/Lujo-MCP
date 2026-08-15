@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-logger = logging.getLogger("ai-debug-mcp.session")
+logger = logging.getLogger("lujo-mcp.session")
 
 # 会话表容量上限。超过时驱逐最旧会话；全活跃则拒绝新建。
 # 每个会话对象很小（~200B），10000 条 ≈ 2MB，不会造成内存压力。

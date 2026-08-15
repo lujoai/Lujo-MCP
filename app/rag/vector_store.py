@@ -20,7 +20,7 @@ from typing import Any
 
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.vector-store")
+logger = logging.getLogger("lujo-mcp.vector-store")
 
 # 非字母数字字符作为 token 分隔符（ASCII 字母数字被保留，其余字符作分隔）
 _TOKEN_SPLIT = re.compile(r"[^0-9A-Za-z]+")

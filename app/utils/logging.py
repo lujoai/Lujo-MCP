@@ -38,7 +38,7 @@ def setup_logging() -> None:
     """初始化全局日志配置"""
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
-    root = logging.getLogger("ai-debug-mcp")
+    root = logging.getLogger("lujo-mcp")
     root.setLevel(level)
 
     handler = logging.StreamHandler(sys.stdout)

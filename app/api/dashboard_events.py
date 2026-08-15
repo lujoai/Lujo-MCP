@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-logger = logging.getLogger("ai-debug-mcp.dashboard.sse")
+logger = logging.getLogger("lujo-mcp.dashboard.sse")
 
 # 关闭信号：close_all 投递给订阅者以促使其退出消费循环
 _CLOSE_EVENT = {"_dashboard_control": "close"}

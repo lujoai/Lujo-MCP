@@ -12,7 +12,7 @@ from app.auth.rbac import require_role
 from app.runtime.core import errors, logs
 from app.llm.analyzer import _get_redis_cache
 
-logger = logging.getLogger("ai-debug-mcp.dashboard")
+logger = logging.getLogger("lujo-mcp.dashboard")
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 

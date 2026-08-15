@@ -6,7 +6,7 @@ from app.config import settings
 from app.schemas import DebugContext
 from app.runtime.context.fault_localizer import localize, to_payload
 
-logger = logging.getLogger("ai-debug-mcp.context")
+logger = logging.getLogger("lujo-mcp.context")
 
 
 def build_context(request_id: str, logs: list) -> dict:

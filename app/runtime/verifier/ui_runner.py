@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.ui_runner")
+logger = logging.getLogger("lujo-mcp.ui_runner")
 
 
 def inspect_url_security(url: str) -> dict:

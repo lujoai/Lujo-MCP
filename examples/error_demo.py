@@ -1,5 +1,5 @@
 """
-错误演示脚本 —— 展示如何使用 ai-debug-mcp 捕获和分析错误
+错误演示脚本 —— 展示如何使用 lujo-mcp 捕获和分析错误
 """
 import sys
 import os

@@ -29,7 +29,7 @@ from app.rag.knowledge_base import (
 )
 from app.rag.vector_store import get_vector_store
 
-logger = logging.getLogger("ai-debug-mcp.rag.retriever")
+logger = logging.getLogger("lujo-mcp.rag.retriever")
 
 # fingerprint 精确命中：优先级最高
 _FINGERPRINT_SCORE = 1.0

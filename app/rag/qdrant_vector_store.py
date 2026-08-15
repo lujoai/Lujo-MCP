@@ -21,7 +21,7 @@ from typing import Any, Optional
 from app.config import settings
 from app.rag.vector_store import VectorStore, _serialize_doc
 
-logger = logging.getLogger("ai-debug-mcp.qdrant-vector-store")
+logger = logging.getLogger("lujo-mcp.qdrant-vector-store")
 
 # OpenAI embeddings API 单次最多 2048 个 input
 _EMBED_BATCH_SIZE = 2048

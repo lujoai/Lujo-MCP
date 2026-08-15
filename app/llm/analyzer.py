@@ -29,7 +29,7 @@ from app.rag.debug_case import (
 from app.rag.vector_store import get_vector_store
 from app.runtime.core.redaction import redact
 
-logger = logging.getLogger("ai-debug-mcp.llm")
+logger = logging.getLogger("lujo-mcp.llm")
 
 # ── 熔断器（P3-8）──
 try:

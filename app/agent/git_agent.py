@@ -20,7 +20,7 @@ from typing import Any
 
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 
-logger = logging.getLogger("ai-debug-mcp.agent.git")
+logger = logging.getLogger("lujo-mcp.agent.git")
 
 # 单次归因最多分析前 N 帧，避免串行 git 调用拖慢
 _MAX_FRAMES_TO_BLAME = 3

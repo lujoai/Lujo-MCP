@@ -20,7 +20,7 @@ from app.mcp.tools.console_api import tool_ingest_console
 from app.runtime.core.trace_repo import save_ui_event
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
-logger = logging.getLogger("ai-debug-mcp.ingest")
+logger = logging.getLogger("lujo-mcp.ingest")
 
 _MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
 

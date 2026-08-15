@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.state")
+logger = logging.getLogger("lujo-mcp.state")
 
 
 class StateStore(ABC):

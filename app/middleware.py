@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 from app.config import settings
 from app.state.store import get_state_store
 
-logger = logging.getLogger("ai-debug-mcp.middleware")
+logger = logging.getLogger("lujo-mcp.middleware")
 
 
 # ── API Key 鉴权中间件 ──

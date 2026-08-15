@@ -33,7 +33,7 @@ from app.agent.dag import (
 from app.agent.repair_agent import RepairAgent
 from app.config import settings
 
-logger = logging.getLogger("ai-debug-mcp.agent.coordinator")
+logger = logging.getLogger("lujo-mcp.agent.coordinator")
 
 
 class Coordinator:

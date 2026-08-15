@@ -23,7 +23,7 @@ from app.runtime.core.redaction import redact
 _installed = False
 _original_hook = None  # install 时保存，供 uninstall 恢复
 _original_asyncio_handler = None  # asyncio loop 的原 handler（可能为 None）
-logger = logging.getLogger("ai-debug-mcp.exception-hook")
+logger = logging.getLogger("lujo-mcp.exception-hook")
 
 
 def _redact_exception_data(data: dict) -> dict:

@@ -15,7 +15,7 @@ import time
 import uuid
 from typing import Any, Optional
 
-logger = logging.getLogger("ai-debug-mcp.llm.queue")
+logger = logging.getLogger("lujo-mcp.llm.queue")
 
 
 class QueueFullError(Exception):

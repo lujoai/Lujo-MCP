@@ -27,7 +27,7 @@ class TestHealthEndpoint:
         resp = client.get("/internal/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["service"] == "ai-debug-mcp"
+        assert data["service"] == "lujo-mcp"
         assert "version" in data
         assert data["status"] in ("ok", "degraded", "unhealthy")
 

@@ -12,7 +12,7 @@ from typing import Optional
 
 from app.runtime.core.redaction import redact
 
-logger = logging.getLogger("ai-debug-mcp.collectors.spec")
+logger = logging.getLogger("lujo-mcp.collectors.spec")
 
 # 显式优先识别的规范文件名
 SPEC_CANDIDATES = [

@@ -33,7 +33,7 @@ from app.runtime.collectors.sourcemap_resolver import (
     resolve_frame,
 )
 
-logger = logging.getLogger("ai-debug-mcp.runtime.collectors.sourcemap_store")
+logger = logging.getLogger("lujo-mcp.runtime.collectors.sourcemap_store")
 
 # artifact -> {"map": dict, "expires_at": float, "token": int}
 _uploads: OrderedDict[str, dict] = OrderedDict()

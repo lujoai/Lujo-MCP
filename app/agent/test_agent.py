@@ -23,7 +23,7 @@ from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
 from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
 
-logger = logging.getLogger("ai-debug-mcp.agent.test")
+logger = logging.getLogger("lujo-mcp.agent.test")
 
 SYSTEM_PROMPT = """你是一位资深的测试工程师。基于以下修复方案与调试上下文，生成可执行的验证策略。输出 JSON：
 

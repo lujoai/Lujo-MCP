@@ -13,7 +13,7 @@ from app.runtime.collectors.network import parse_network_records
 from app.runtime.collectors.ui_event import parse_ui_events
 from app.runtime.core.trace_repo import save_trace, save_ui_event, save_network_record
 
-logger = logging.getLogger("ai-debug-mcp.tools.silent_failure")
+logger = logging.getLogger("lujo-mcp.tools.silent_failure")
 
 SILENT_FAILURE_DEF = {
     "name": "ingest_silent_failure",

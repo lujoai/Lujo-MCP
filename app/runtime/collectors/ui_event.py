@@ -7,7 +7,7 @@
 import time
 import logging
 
-logger = logging.getLogger("ai-debug-mcp.collectors.ui_event")
+logger = logging.getLogger("lujo-mcp.collectors.ui_event")
 
 _MAX_PAYLOAD_CHARS = 10 * 1024  # 10KB
 

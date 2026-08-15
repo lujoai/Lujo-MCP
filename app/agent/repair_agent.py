@@ -15,7 +15,7 @@ from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
 from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
 
-logger = logging.getLogger("ai-debug-mcp.agent.repair")
+logger = logging.getLogger("lujo-mcp.agent.repair")
 
 
 SYSTEM_PROMPT = """你是一位资深的代码修复工程师。基于以下调试上下文、历史相似修复、git 近期改动，
