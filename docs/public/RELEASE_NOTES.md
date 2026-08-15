@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.5.0（2026-08-13）**。在 v0.4.0 主干之上完成工程质量和 Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固），npm `latest` → `@lujoai/lujo-mcp@0.5.0`。
-> 测试基线：单元 992 passed / 6 skipped / 0 failed（含 v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 新增 45 项；不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
+> 最新版本：**v0.5.1（2026-08-15）**。补齐前端调试盲区：Source Map 堆栈还原（minified JS 帧 → 原始源码位置，纯 Python VLQ 解码零新依赖）+ `resolve_stack` MCP 工具（工具数 18/18）+ Browser SDK 增强（column 保留 / release 透传）+ deepseek provider base_url 修复（LLM 分析链可用）。npm `latest` → `@lujoai/lujo-mcp@0.5.1`（workflow 直发 latest）。
+> 测试基线：单元 1087 passed / 6 skipped / 0 failed（含 v0.5.1 Source Map 94 项 + deepseek base_url 1 项）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
@@ -13,9 +13,59 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.5.0  
-**Release Date / 发布日期**: 2026-08-13  
-**Codename / 代号**: 工程质量加固 + Runtime 数据契约对齐 — Engineering Hardening & Runtime Contract Alignment
+**Version / 版本**: v0.5.1  
+**Release Date / 发布日期**: 2026-08-15  
+**Codename / 代号**: Source Map 堆栈还原 — Source Map Stack Resolution
+
+---
+
+## v0.5.1（2026-08-15）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.5.1 是 Lujo-MCP 的 **Source Map 堆栈还原** 版本：将前端 minified JS 堆栈帧还原为原始源码位置，补齐 Debug Context 前端盲区（此前 code_locator / static_analyzer / fault_localizer 三条证据链对 minified 帧全部失效）。新增 `resolve_stack` MCP 工具（18/18），Browser SDK 保留 column 并支持 `release` 透传；同时修复 deepseek provider base_url 缺失（此前 `LLM_PROVIDER=deepseek` 时 LLM 分析链 401 不可用）。全部新能力默认关闭、失败静默降级，无 Breaking Change。测试基线 992 → **1087 passed / 6 skipped / 0 failed**。
+
+#### ✨ 新增功能
+
+- **SM1 Source Map 解析核心**（`app/runtime/collectors/sourcemap_resolver.py`）：纯 Python base64-VLQ 解码 mappings（零新依赖）；`SourceMapParser` 按 (line, column) 二分查询最近段；`resolve_frame(s)` 产出 StackFrame 兼容还原帧（original 原位置 + resolved 标记）+ 源码片段（sourcesContent 优先，code_locator 白名单兜底）；LRU 解析缓存（mtime/token 指纹失效）；任何失败静默降级保留原始帧
+- **SM2 获取通道**（`sourcemap_store.py`，均默认关闭）：上传通道 `POST /api/debug/sourcemap`（TTL + LRU 容量驱逐）+ 磁盘约定通道（`SOURCEMAP_PATH_PREFIX` 白名单防 LFI）；自动选路：显式 artifact > 上传按帧文件名 > 磁盘
+- **SM3 集成与工具**：`DebugContext` 新增 `resolved_frames`（21 字段，向后兼容）；builder 还原命中后 code_snippets / fault_localization / git 归因 / 相关规范均改用还原帧，exception.frames 保留 minified 原帧；新 MCP 工具 `resolve_stack`（category=agent，experimental，RBAC 只读三级）；工具数 17 → **18 / 18**
+- **SM4 质量联动**：QualityScorer TRACE 维度还原加成（+0.3 封顶 1.0）+ sourcemap_resolver 证据项；Benchmark Case 6 `frontend_minified_sourcemap` + `frontend_sourcemap_ab()` A/B 对照（验证还原后 Quality 评分提升）
+- **Browser SDK 增强**（`ai-debug.js`）：`_parseStack` 保留 column（source map 精确定位必需）；新增可选 `release` 配置随错误 extra 透传（空 = 不发送，向后兼容）
+- **配置项**：`sourcemap_enabled`（默认 False）/ `sourcemap_path_prefix` / `sourcemap_upload_ttl_seconds`（3600）/ `sourcemap_max_uploads`（100）
+
+#### 🐛 Bug 修复
+
+- **deepseek provider base_url 缺失**：`_PROVIDER_BASE_URLS`（analyzer + qdrant_vector_store）缺 deepseek 映射，`LLM_PROVIDER=deepseek` 且 `LLM_BASE_URL` 为空时回落 OpenAI 官方端点 → DeepSeek key 必然 401，LLM 分析链不可用。已补 `https://api.deepseek.com` + 新增 `test_resolve_base_url_deepseek`；实测真实调用返回结构化分析 JSON
+
+#### 🧪 测试
+
+- 新增 95 项（Source Map 解析 94 项 + deepseek base_url 1 项），基线 992 → **1087 passed / 6 skipped / 0 failed**；工具数 / 字段数 / Case 数断言同步更新
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.5.1 is the **Source Map stack resolution** release of Lujo-MCP: it maps minified frontend JS stack frames back to original source locations, closing the frontend blind spot in Debug Context (previously all three evidence chains — code_locator / static_analyzer / fault_localizer — failed on minified frames). It adds the `resolve_stack` MCP tool (18/18), Browser SDK column preservation and optional `release` passthrough, and fixes the missing deepseek provider base_url (which made the LLM analysis chain fail with 401 when `LLM_PROVIDER=deepseek`). All new capabilities default off and degrade silently — no breaking changes. Test baseline improved to **1087 passed / 6 skipped / 0 failed**.
+
+#### ✨ New Features
+
+- **SM1 Source Map parser core** (`app/runtime/collectors/sourcemap_resolver.py`): pure-Python base64-VLQ mappings decoding (zero new deps); `SourceMapParser` binary-search nearest segment by (line, column); `resolve_frame(s)` yields StackFrame-compatible resolved frames (original position + resolved flag) with source snippets (sourcesContent first, code_locator whitelist fallback); LRU parse cache (mtime/token fingerprint invalidation); any failure silently degrades to original frames
+- **SM2 Acquisition channels** (`sourcemap_store.py`, all default off): upload channel `POST /api/debug/sourcemap` (TTL + LRU eviction) + on-disk convention channel (`SOURCEMAP_PATH_PREFIX` whitelist against LFI); auto-routing: explicit artifact > uploaded by frame filename > disk
+- **SM3 Integration & tool**: `DebugContext` adds `resolved_frames` (21 fields, backward compatible); builder switches code_snippets / fault_localization / git attribution / related specs to resolved frames on hit, keeping minified originals in `exception.frames`; new MCP tool `resolve_stack` (category=agent, experimental, read-only RBAC); tool count 17 → **18 / 18**
+- **SM4 Quality linkage**: QualityScorer TRACE dimension resolution bonus (+0.3 capped at 1.0) + sourcemap_resolver evidence item; Benchmark Case 6 `frontend_minified_sourcemap` + `frontend_sourcemap_ab()` A/B comparison (asserts Quality score improves after resolution)
+- **Browser SDK enhancement** (`ai-debug.js`): `_parseStack` keeps column (required for source-map precision); optional `release` config passthrough in error extra (empty = not sent, backward compatible)
+- **Config**: `sourcemap_enabled` (default False) / `sourcemap_path_prefix` / `sourcemap_upload_ttl_seconds` (3600) / `sourcemap_max_uploads` (100)
+
+#### 🐛 Bug Fixes
+
+- **Missing deepseek provider base_url**: `_PROVIDER_BASE_URLS` (analyzer + qdrant_vector_store) lacked a deepseek mapping, so with `LLM_PROVIDER=deepseek` and empty `LLM_BASE_URL` the request fell back to the OpenAI endpoint and DeepSeek keys 401'd, breaking the LLM analysis chain. Added `https://api.deepseek.com` + `test_resolve_base_url_deepseek`; a real call now returns structured analysis JSON.
+
+#### 🧪 Tests
+
+- 95 new tests (Source Map 94 + deepseek base_url 1), baseline 992 → **1087 passed / 6 skipped / 0 failed**; tool-count / field-count / case-count assertions updated.
 
 ---
 
