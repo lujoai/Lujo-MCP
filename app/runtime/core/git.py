@@ -44,6 +44,10 @@ def _git_cmd(args: list[str], cwd: Path) -> str | None:
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            # git 输出为 UTF-8；Windows 上 text=True 默认按本地 gbk 解码会 UnicodeDecodeError，
+            # 导致 diff/blame 静默失败。显式 utf-8 + errors=replace 兜底非法字节。
+            encoding="utf-8",
+            errors="replace",
             timeout=settings.git_timeout,
         )
         if result.returncode != 0:

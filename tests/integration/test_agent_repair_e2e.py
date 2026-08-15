@@ -23,10 +23,17 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture(autouse=True)
 def enable_agent(monkeypatch):
-    """强制开启 agent_enabled（测试用）。"""
+    """强制开启 agent_enabled，并隔离本地 .env 的多 Agent / Verify Loop 开关。
+
+    e2e 目标是验证「repair/async → repair/result」Phase 1 单 Agent 链路
+    （repair_plan / sources / agent_trace 结构），不应受本地 .env 中
+    AGENT_MULTI_AGENT_ENABLED / AGENT_VERIFY_LOOP_ENABLED 污染。
+    """
     monkeypatch.setattr(settings, "agent_enabled", True)
     monkeypatch.setattr(settings, "agent_queue_maxsize", 10)
     monkeypatch.setattr(settings, "agent_queue_workers", 1)
+    monkeypatch.setattr(settings, "agent_multi_agent_enabled", False)
+    monkeypatch.setattr(settings, "agent_verify_loop_enabled", False)
 
 
 @pytest.fixture
@@ -38,8 +45,12 @@ def fresh_repair_queue(monkeypatch):
     return rq.get_repair_queue()
 
 
-async def _enqueue_and_wait(queue, context, timeout=30):
-    """入队并轮询等待完成，返回最终 job。"""
+async def _enqueue_and_wait(queue, context, timeout=90):
+    """入队并轮询等待完成，返回最终 job。
+
+    timeout 对齐 settings.agent_timeout（默认 90s）：真实 LLM 链路
+    （prior_analysis + RepairAgent 两次调用，DeepSeek V4 默认思考模式）可能超过 30s。
+    """
     job_id = await queue.enqueue(context, model=None)
     await queue.start(1)
     try:
