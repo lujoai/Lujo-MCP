@@ -1,6 +1,6 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.5.1（2026-08-15，已完成开发待发布）**。补齐前端调试盲区：Source Map 堆栈还原（minified JS 帧 → 原始源码位置，纯 Python VLQ 解码零新依赖）+ `resolve_stack` MCP 工具（工具数 18/18）+ Browser SDK 增强（column 保留 / release 透传）+ deepseek provider base_url 修复（LLM 分析链可用）。npm `latest` 发布后将直发 `@lujoai/lujo-mcp@0.5.1`（workflow 直发 latest；当前 npm `latest` 仍为 0.5.0）。
+> 最新版本：**v0.5.2（2026-08-15）**。品牌统一：全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`（MCP server 名 / logger / OTel service name / 配置示例 / Browser SDK description），LICENSE 版权署名改为 LujoAI；v0.5.1 已发布（Source Map 堆栈还原 + `resolve_stack` 18/18 + deepseek provider base_url 修复）。npm `latest` → `@lujoai/lujo-mcp@0.5.2`。
 > 测试基线：单元 1087 passed / 6 skipped / 0 failed（含 v0.5.1 Source Map 94 项 + deepseek base_url 1 项）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
@@ -13,13 +13,40 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.5.1  
-**Release Date / 发布日期**: 2026-08-15（待发布：未 push / tag / npm publish）  
-**Codename / 代号**: Source Map 堆栈还原 — Source Map Stack Resolution
+**Version / 版本**: v0.5.2  
+**Release Date / 发布日期**: 2026-08-15  
+**Codename / 代号**: 品牌统一 — Rebrand to Lujo-MCP
+
+---
+
+## v0.5.2（2026-08-15）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.5.2 是 Lujo-MCP 的 **品牌统一** 版本：将全仓 `ai-debug-mcp` 标识统一为 `lujo-mcp`（MCP server 名、logger、OTel service name、配置示例、Browser SDK description、测试断言），LICENSE 版权署名改为 LujoAI。无功能变更、无 Breaking Change，测试基线不变（1087 passed / 6 skipped / 0 failed）。
+
+#### ✨ 变更
+
+- **MCP server 名**：`ai-debug-mcp` → `lujo-mcp`（initialize 握手 serverInfo）
+- **日志 logger 名**：全部 `logging.getLogger("ai-debug-mcp.*")` → `lujo-mcp.*`
+- **OTel**：`otel_service_name` / `service_name` → `lujo-mcp`
+- **配置示例 / SDK**：`mcp_config_example.json`、`browser-sdk/`（package.json + ai-debug.js）同步
+- **LICENSE**：`Copyright (c) 2026 LujoAI`
+- 测试断言同步更新（`test_api.py` / `test_otel.py` / `test_jsonrpc.py`）；删除本地 `.claude` 配置
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.5.2 is the **brand unification** release: all `ai-debug-mcp` identifiers are renamed to `lujo-mcp` (MCP server name, logger names, OTel service name, config samples, Browser SDK description, test assertions), and the LICENSE copyright now reads LujoAI. No feature changes, no breaking changes; test baseline unchanged (1087 passed / 6 skipped / 0 failed).
 
 ---
 
 ## v0.5.1（2026-08-15）
+
+> 状态：已发布（npm `latest` → `@lujoai/lujo-mcp@0.5.1`，2026-08-15）。
 
 ### 中文版本
 

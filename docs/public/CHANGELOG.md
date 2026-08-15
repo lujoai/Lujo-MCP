@@ -5,6 +5,19 @@
 
 ---
 
+## [Unreleased]
+
+> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。测试基线不变（1087 passed / 6 skipped / 0 failed）。
+
+### 变更
+
+#### 代码
+
+- **品牌统一（v0.5.2）**：MCP server 名 `ai-debug-mcp` → `lujo-mcp`（`app/mcp_server.py`）；全部 `logging.getLogger("ai-debug-mcp.*")` → `lujo-mcp.*`；`config.py` `otel_service_name` / `service_name` → `lujo-mcp`；`browser-sdk/`（package.json + ai-debug.js）、`mcp_config_example.json` 示例路径同步；对应测试断言更新（`test_api.py` / `test_otel.py` / `test_jsonrpc.py`）；删除本地 `.claude` 配置
+- **LICENSE**：版权署名 `ai-debug-mcp` → **LujoAI**
+
+---
+
 ## [0.5.0] — 2026-08-13
 
 > v0.5.0 工程质量加固与 Runtime 数据契约对齐。测试基线 992 passed / 6 skipped / 0 failed。
@@ -44,9 +57,9 @@
 
 ---
 
-## [Unreleased]
+## [0.5.1] — 2026-08-15
 
-> v0.5.0 已发布（2026-08-13）。v0.5.1 已完成开发（待发布）：Source Map 解析（已落地，测试基线 992 → **1087 passed / 6 skipped / 0 failed**）+ Browser SDK 增强（column 保留 + release 透传已落地）+ deepseek provider base_url 修复 + LLM 集成 e2e 链路修复（DeepSeek key 有效后 2 项 e2e 全绿）。
+> v0.5.1 已发布（2026-08-15）：Source Map 解析（测试基线 992 → **1087 passed / 6 skipped / 0 failed**）+ Browser SDK 增强（column 保留 + release 透传）+ deepseek provider base_url 修复 + LLM 集成 e2e 链路修复（DeepSeek key 有效后 2 项 e2e 全绿）。
 
 ### 新增
 

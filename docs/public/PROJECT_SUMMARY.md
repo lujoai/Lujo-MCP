@@ -245,7 +245,8 @@ Verifier 验证
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P1** | v0.5.1 迭代：Source Map 解析 + Browser SDK 增强 | 下一版本主线（见 CHANGELOG [Unreleased] / DEV_PLAN） |
+| ~~**P1**~~ ✅ | ~~v0.5.1/v0.5.2 迭代：Source Map 解析 + Browser SDK 增强 + 品牌统一~~ | ✅ 已完成（2026-08-15：Source Map 解析 + resolve_stack 18/18 + deepseek 修复 → npm 0.5.1；品牌统一 ai-debug-mcp → lujo-mcp → npm 0.5.2） |
+| **P1** | 后续版本迭代（Source Map 后续增强 / Browser SDK 压缩 e2e 落地） | 待规划（见 CHANGELOG [Unreleased] / DEV_PLAN） |
 | **P2** | Browser SDK 压缩 e2e 联调（`SDK-007`） | CI 交错任务，代码已完成仅验证，不占开发轨 |
 | ~~P3~~ ✅ | ~~Docker 容器化复现实验（`STAB-007`）~~ | ✅ 已完成（postgres/redis/app 三容器健康，/health、/api/debug/run、连接池均已验证） |
 | ~~P4~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
