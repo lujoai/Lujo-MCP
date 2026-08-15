@@ -154,6 +154,21 @@ class TestLLMProvider:
             settings.llm_provider = saved_provider
             settings.llm_base_url = saved_base_url
 
+    def test_resolve_base_url_deepseek(self):
+        """deepseek provider 自动使用 DeepSeek API 地址"""
+        from app.config import settings
+
+        saved_provider = settings.llm_provider
+        saved_base_url = settings.llm_base_url
+        try:
+            settings.llm_provider = "deepseek"
+            settings.llm_base_url = ""
+            from app.llm.analyzer import _resolve_base_url
+            assert _resolve_base_url() == "https://api.deepseek.com"
+        finally:
+            settings.llm_provider = saved_provider
+            settings.llm_base_url = saved_base_url
+
     def test_resolve_base_url_custom_overrides_provider(self):
         """显式 llm_base_url 覆盖 provider 默认值"""
         from app.config import settings

@@ -30,6 +30,7 @@ _EMBED_BATCH_SIZE = 2048
 _PROVIDER_BASE_URLS = {
     "openai": "",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4/",
+    "deepseek": "https://api.deepseek.com",
     "custom": "",
 }
 

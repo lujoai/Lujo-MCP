@@ -267,6 +267,7 @@ def _set_l1_only(fingerprint: str, result: dict) -> None:
 _PROVIDER_BASE_URLS = {
     "openai": "",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4/",
+    "deepseek": "https://api.deepseek.com",
     "custom": "",
 }
 

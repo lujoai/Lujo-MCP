@@ -20,10 +20,11 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ──
-    # provider: "openai" | "zhipu" | "custom"
-    # openai → 默认 https://api.openai.com/v1
-    # zhipu  → 自动设置 base_url = https://open.bigmodel.cn/api/paas/v4/，model 推荐 glm-4-flash
-    # custom → 需自行填写 llm_base_url
+    # provider: "openai" | "zhipu" | "deepseek" | "custom"
+    # openai   → 默认 https://api.openai.com/v1
+    # zhipu    → 自动设置 base_url = https://open.bigmodel.cn/api/paas/v4/，model 推荐 glm-4-flash
+    # deepseek → 自动设置 base_url = https://api.deepseek.com，model 推荐 deepseek-chat
+    # custom   → 需自行填写 llm_base_url
     llm_provider: str = "openai"
     openai_api_key: str = ""
     llm_model: str = "gpt-4o"
