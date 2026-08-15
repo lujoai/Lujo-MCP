@@ -73,6 +73,8 @@
     throttleWindowMs: 5000,            // 节流窗口（ms）
     maxBatchesPerWindow: 2,            // 每个节流窗口内最多发送批次数
     enableLocalStorageFallback: true,  // 超过重试次数后是否暂存 localStorage
+    // v0.5.1 Source Map 支持：发布标识，随错误 extra 透传（空 = 不发送，向后兼容）
+    release: "",
     localStorageKey: "ai-debug-pending-batches",  // localStorage 键名
     maxPendingBatches: 10,             // 最多暂存的批次数
   };
@@ -606,6 +608,7 @@
           session_id: _sessionId,
           url: global.location ? global.location.href : "",
           user_agent: navigator ? navigator.userAgent : "",
+          release: cfg.release || undefined,
         },
       });
       if (_onerror) _onerror.apply(this, arguments);
@@ -623,6 +626,7 @@
         extra: {
           session_id: _sessionId,
           url: global.location ? global.location.href : "",
+          release: cfg.release || undefined,
         },
       });
     });
@@ -636,11 +640,12 @@
       .filter(function (line) { return line.trim(); })
       .map(function (line) {
         var m = line.trim().match(/at\s+(.*?)\s+\(?(.+?):(\d+):(\d+)?\)?/);
-        if (m) return { file: m[2], line: parseInt(m[3]) || 0, function: m[1] || "" };
+        // v0.5.1: 保留 column（source map 精确定位必需；旧版丢弃了该值）
+        if (m) return { file: m[2], line: parseInt(m[3]) || 0, column: parseInt(m[4]) || 0, function: m[1] || "" };
         // Chrome format: at file:line:col
         var m2 = line.trim().match(/at\s+(.+?):(\d+):(\d+)/);
-        if (m2) return { file: m2[1], line: parseInt(m2[2]) || 0, function: "" };
-        return { file: "", line: 0, function: line.trim() };
+        if (m2) return { file: m2[1], line: parseInt(m2[2]) || 0, column: parseInt(m2[3]) || 0, function: "" };
+        return { file: "", line: 0, column: 0, function: line.trim() };
       });
   }
 
@@ -1344,6 +1349,7 @@
       extra: Object.assign({
         session_id: _sessionId,
         url: global.location ? global.location.href : "",
+        release: cfg.release || undefined,
       }, extra || {}),
     });
   }

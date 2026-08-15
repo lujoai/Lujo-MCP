@@ -26,6 +26,7 @@ def register_all_tools():
         REPAIR_ASYNC_DEF, REPAIR_RESULT_DEF,
         repair_async_handler, repair_result_handler,
     )
+    from app.mcp.tools.sourcemap_api import TOOL_DEF as sourcemap_tool, handler as sourcemap_handler
 
     # ── v0.5 Tool Category Metadata ──
     # agent: 查询/分析类工具（由 AI Agent 调用）
@@ -48,6 +49,7 @@ def register_all_tools():
     register_tool(**AUTO_TEST_DEF, handler=auto_test_handler, category="agent", experimental=True)
     register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler, category="agent", experimental=True)
     register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler, category="agent", experimental=True)
+    register_tool(**sourcemap_tool, handler=sourcemap_handler, category="agent", experimental=True)
 
 
 # ── MCP 工具角色需求映射（供 mcp_routes.py 在 tools/call 分发前消费）──
@@ -71,6 +73,7 @@ TOOL_ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "get_network_trace":    ("admin", "developer", "viewer"),
     "get_blame_for_frame":  ("admin", "developer", "viewer"),
     "get_recent_diff":      ("admin", "developer", "viewer"),
-    "get_related_specs":    ("admin", "developer", "viewer"),
+    "get_related_specs":      ("admin", "developer", "viewer"),
     "repair_result":        ("admin", "developer", "viewer"),
+    "resolve_stack":        ("admin", "developer", "viewer"),
 }

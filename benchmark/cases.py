@@ -280,13 +280,131 @@ _CASE_PERF = BenchmarkCase(
 )
 
 
-# 全部 5 个标准 Case
+# ── Case 6：前端 minified 堆栈 Source Map 还原（v0.5.1）──────────────
+
+# minified 帧与还原后的原始帧（还原后帧指向真实源码 src/orders/checkout.ts）
+_FRONTEND_MINIFIED_FRAMES = [
+    {
+        "file": "https://cdn.example.com/static/js/app.9f3b2c.js",
+        "line": 1,
+        "column": 48213,
+        "function": "t",
+    },
+    {
+        "file": "https://cdn.example.com/static/js/app.9f3b2c.js",
+        "line": 1,
+        "column": 92176,
+        "function": "a",
+    },
+]
+_FRONTEND_RESOLVED_FRAMES = [
+    {
+        "file": "src/orders/checkout.ts",
+        "line": 87,
+        "column": 12,
+        "function": "submitOrder",
+        "resolved": True,
+        "original": {
+            "file": "https://cdn.example.com/static/js/app.9f3b2c.js",
+            "line": 1,
+            "column": 48213,
+        },
+    },
+    {
+        "file": "src/api/client.ts",
+        "line": 23,
+        "column": 5,
+        "function": "postJson",
+        "resolved": True,
+        "original": {
+            "file": "https://cdn.example.com/static/js/app.9f3b2c.js",
+            "line": 1,
+            "column": 92176,
+        },
+    },
+]
+
+# 还原前（无 source map）：Debug Context 只有 minified 帧，源码片段全部 miss
+_FRONTEND_CONTEXT_BEFORE = {
+    "trace_id": "fe-sm-0001",
+    "trace_kind": "exception",
+    "exception": {
+        "type": "TypeError",
+        "message": "Cannot read properties of undefined (reading 'price')",
+        "frames": _FRONTEND_MINIFIED_FRAMES,
+        "frame_count": 2,
+    },
+    "code_snippets": [],
+    "runtime": None,
+    "fault_localization": None,
+}
+
+# 还原后（source map 命中）：resolved_frames + 原始源码片段 + 故障定位候选
+_FRONTEND_CONTEXT_AFTER = {
+    **_FRONTEND_CONTEXT_BEFORE,
+    "resolved_frames": _FRONTEND_RESOLVED_FRAMES,
+    "code_snippets": [
+        {
+            "file": "src/orders/checkout.ts",
+            "error_line": 87,
+            "found": True,
+            "snippet": ">>> 87: const total = items.reduce((s, i) => s + i.price, 0);",
+            "link": None,
+        },
+        {
+            "file": "src/api/client.ts",
+            "error_line": 23,
+            "found": True,
+            "snippet": ">>> 23: return fetch(url, { method: 'POST', body: JSON.stringify(data) });",
+            "link": None,
+        },
+    ],
+    "fault_localization": {
+        "suspicious_frames": [
+            {"file": "src/orders/checkout.ts", "line": 87, "function": "submitOrder"},
+        ],
+        "likely_cause_candidate": "submitOrder",
+    },
+}
+
+_CASE_FRONTEND_SOURCEMAP = BenchmarkCase(
+    case_id="frontend_minified_sourcemap",
+    title="前端 minified 堆栈：Source Map 还原前后对比",
+    category="frontend_sourcemap",
+    user_description=(
+        "生产环境点击『提交订单』报 TypeError: Cannot read properties of undefined "
+        "(reading 'price')，堆栈是压缩后的 app.9f3b2c.js:1:48213，看不到源码位置。"
+    ),
+    lujo_context=_FRONTEND_CONTEXT_AFTER,
+    expected_root_cause=(
+        "submitOrder（src/orders/checkout.ts:87）对 items 里的元素直接读 .price，"
+        "某个 item 为 undefined（后端返回的列表中含空元素），未做判空导致 TypeError。"
+    ),
+    expected_evidence=[
+        "resolved_frames 中 submitOrder @ src/orders/checkout.ts:87",
+        "code_snippets 中 checkout.ts:87 的 reduce 读取 i.price",
+        "original 字段保留 minified 原位置（app.9f3b2c.js:1:48213）可对账",
+    ],
+)
+
+
+def frontend_sourcemap_ab() -> dict[str, dict]:
+    """返回 Source Map 还原前后的两份 Debug Context（A/B 对照）。
+
+    用途：QualityScorer 旁证评分对比（解析前 vs 解析后完整度提升），
+    以及 Benchmark 主评分的额外对照组。纯数据，无 I/O。
+    """
+    return {"before": dict(_FRONTEND_CONTEXT_BEFORE), "after": dict(_FRONTEND_CONTEXT_AFTER)}
+
+
+# 全部 6 个标准 Case
 BENCHMARK_CASES: list[BenchmarkCase] = [
     _CASE_API_500,
     _CASE_FRONTEND_BLANK,
     _CASE_DB_ERROR,
     _CASE_AUTH_403,
     _CASE_PERF,
+    _CASE_FRONTEND_SOURCEMAP,
 ]
 
 # by case_id 索引
@@ -303,4 +421,4 @@ def list_cases() -> list[BenchmarkCase]:
     return list(BENCHMARK_CASES)
 
 
-__all__ = ["BENCHMARK_CASES", "BENCHMARK_INDEX", "get_case", "list_cases"]
+__all__ = ["BENCHMARK_CASES", "BENCHMARK_INDEX", "get_case", "list_cases", "frontend_sourcemap_ab"]

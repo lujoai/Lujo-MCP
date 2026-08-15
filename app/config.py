@@ -52,6 +52,18 @@ class Settings(BaseSettings):
     # 允许生成 file:// 链接的路径白名单前缀（逗号分隔），为空=不限制
     whitelist_path_prefix: str = ""
 
+    # ── Source Map 解析（v0.5.1）──
+    # 全局开关：开启后 build_debug_context / resolve_stack 尝试把前端 minified
+    # 堆栈帧还原为原始源码位置（上传通道 + 磁盘约定通道，均受此总开关控制）
+    sourcemap_enabled: bool = False
+    # 磁盘约定通道：帧文件 foo.js → <prefix>/foo.js.map；路径必须落在
+    # whitelist_path_prefix 允许根内（防 LFI）；空 = 禁用磁盘通道
+    sourcemap_path_prefix: str = ""
+    # 上传通道（POST /api/debug/sourcemap）：单份 map 的 TTL（秒），过期自动失效
+    sourcemap_upload_ttl_seconds: int = 3600
+    # 上传通道：最多缓存的 map 份数（超出按最旧 LRU 驱逐）；进程内存储，单机有效
+    sourcemap_max_uploads: int = 100
+
     # ── 存储 ──
     storage_backend: str = "memory"  # "memory" | "postgresql"
     # 内存存储容量上限（按 request_id 条数计），超限时按最旧条目 FIFO 淘汰，防 OOM

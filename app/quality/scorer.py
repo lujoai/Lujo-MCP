@@ -123,7 +123,21 @@ def _score_completeness(
 
 
 def _score_trace(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> DimensionScore:
-    """TRACE 维度：异常 + 堆栈帧是否存在。"""
+    """TRACE 维度：异常 + 堆栈帧是否存在（v0.5.1：source map 还原加成）。"""
+    base = _score_trace_base(debug_ctx)
+    # v0.5.1：minified 帧经 source map 还原后定位价值显著提升（原文件:行号可用）
+    resolved = debug_ctx.get("resolved_frames") or []
+    hits = [f for f in resolved if isinstance(f, dict) and f.get("resolved")]
+    if hits:
+        boosted = min(1.0, base.score + 0.3)
+        suffix = f"source map 已还原 {len(hits)} 帧至原始源码"
+        reason = f"{base.reason}；{suffix}" if base.present else suffix
+        return DimensionScore(present=True, score=boosted, reason=reason)
+    return base
+
+
+def _score_trace_base(debug_ctx: dict[str, Any]) -> DimensionScore:
+    """TRACE 维度基础分（v0.5.0 既有逻辑，不变）。"""
     exc = debug_ctx.get("exception")
     if not exc or not isinstance(exc, dict):
         return DimensionScore(present=False, score=0.0, reason="无异常信息")
@@ -283,6 +297,24 @@ def _extract_evidence(
                 relevance=RelevanceLevel.HIGH,
                 location=f"{top_frame.get('file', '')}:{top_frame.get('line', '')}",
                 detail={"frame_count": len(frames), "exc_type": exc.get("type")},
+            )
+        )
+
+    # 1b. Source Map 还原证据（v0.5.1）：minified 帧还原为原始源码是高价值定位证据
+    resolved = debug_ctx.get("resolved_frames") or []
+    hits = [f for f in resolved if isinstance(f, dict) and f.get("resolved")]
+    if hits:
+        top = hits[0]
+        evidence.append(
+            EvidenceItem(
+                type=EvidenceType.STACK_TRACE,
+                description=(
+                    f"source map 已还原 {len(hits)} 个 minified 帧至原始源码"
+                    f"（如 {top.get('file', '?')}:{top.get('line', '?')}）"
+                ),
+                source="sourcemap_resolver",
+                relevance=RelevanceLevel.HIGH,
+                location=f"{top.get('file', '')}:{top.get('line', '')}",
             )
         )
 

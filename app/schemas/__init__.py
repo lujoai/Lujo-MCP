@@ -49,6 +49,11 @@ class DebugContext(BaseModel):
     # ── v0.5 新增：故障定位 ──
     fault_localization: Optional[dict] = None
 
+    # ── v0.5.1 新增：Source Map 还原帧 ──
+    # 前端 minified 帧经 source map 还原后的原始源码帧（含 original 原位置与 resolved 标记）；
+    # 未启用/未命中时为 None，exception.frames 保持原始 minified 帧
+    resolved_frames: Optional[list[dict]] = None
+
     model_config = {"extra": "allow"}
 
 
@@ -203,5 +208,20 @@ class VerifyUiRequest(BaseModel):
     spec: dict | None = None
     spec_id: str | None = None
     timeout_ms: int = 30000
+
+    model_config = {"extra": "ignore"}
+
+
+# ── Source Map 上传请求模型（v0.5.1）──
+class SourcemapUploadRequest(BaseModel):
+    """POST /api/debug/sourcemap 请求体。
+
+    artifact 为 JS 产物标识（如 "app.9f3b2c.js"，也接受帧文件 basename 匹配）；
+    map 为完整 source map JSON 对象（至少含 mappings/sources）。
+    extra="ignore" 保证旧客户端兼容。
+    """
+    artifact: str
+    map: dict
+    release: str | None = None
 
     model_config = {"extra": "ignore"}

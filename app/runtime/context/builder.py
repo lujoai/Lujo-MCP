@@ -2,6 +2,7 @@
 
 import logging
 
+from app.config import settings
 from app.schemas import DebugContext
 from app.runtime.context.fault_localizer import localize, to_payload
 
@@ -106,11 +107,34 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     tid = trace["trace_id"]
     frames = trace.get("frames", []) or []
 
-    # 源码片段
-    code_snippets: list = []
-    if frames:
+    # v0.5.1 Source Map 还原：前端 minified 帧优先还原为原始源码位置（默认关闭，失败静默）。
+    # 还原命中后：code_snippets / fault_localization / git 归因 / 相关规范均改用还原帧。
+    resolved_frames = None
+    effective_frames = frames
+    sm_snippets: list = []
+    if frames and settings.sourcemap_enabled:
         try:
-            code_snippets = [s.model_dump() for s in get_snippets_for_frames(frames)]
+            from app.runtime.collectors.sourcemap_store import resolve_frames_auto
+
+            artifact = (trace.get("extra") or {}).get("artifact")
+            new_frames, sm_snippets = resolve_frames_auto(frames, artifact=artifact)
+            if any(f.get("resolved") for f in new_frames):
+                resolved_frames = new_frames
+                effective_frames = new_frames
+        except Exception:
+            logger.warning("source map 帧还原失败 (trace_id=%s)", tid)
+
+    # 源码片段（还原命中时：已还原帧用还原产物 snippets，未还原帧仍走 code_locator）
+    code_snippets: list = []
+    if effective_frames:
+        try:
+            if resolved_frames is not None:
+                rest = [f for f in resolved_frames if not f.get("resolved")]
+                code_snippets = sm_snippets + [
+                    s.model_dump() for s in get_snippets_for_frames(rest)
+                ]
+            else:
+                code_snippets = [s.model_dump() for s in get_snippets_for_frames(frames)]
         except Exception:
             logger.warning("code_snippets 构建失败 (trace_id=%s)", tid)
 
@@ -139,7 +163,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     # git 归因（前 3 帧）
     git_blame: list = []
     recent_diffs: list = []
-    for f in frames[:3]:
+    for f in effective_frames[:3]:
         try:
             blame = get_blame_for_frame(f.get("file", ""), f.get("line", 0))
             if blame:
@@ -174,7 +198,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     related_specs: list = []
     _seen_spec_files: set = set()
     _total = 0
-    for f in frames[:3]:
+    for f in effective_frames[:3]:
         try:
             for s in get_related_specs(f.get("file", "")):
                 if s["file"] in _seen_spec_files:
@@ -205,9 +229,9 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     # 故障定位候选（V1）：仅筛选"最值得优先检查的位置"，不声称绝对根因。
     # 失败降级为 None，不影响 Debug Context 其余部分。
     fault_localization = None
-    if frames:
+    if effective_frames:
         try:
-            fault_localization = to_payload(localize(frames, exc_type, message))
+            fault_localization = to_payload(localize(effective_frames, exc_type, message))
         except Exception:
             logger.warning("fault_localization 构建失败 (trace_id=%s)", tid)
 
@@ -237,6 +261,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "spec_diffs": spec_diffs,
         "runtime": runtime,
         "fault_localization": fault_localization,
+        "resolved_frames": resolved_frames,
     }
     return DebugContext(**result)
 

@@ -65,6 +65,7 @@ class TestToolNamesUnchanged:
         "verify", "verify_ui",
         "auto_test",
         "repair_async", "repair_result",
+        "resolve_stack",
     }
 
     def setup_method(self):
@@ -81,8 +82,8 @@ class TestToolNamesUnchanged:
         extra = registered - self.EXPECTED_NAMES
         assert not extra, f"Unexpected new tools: {extra}"
 
-    def test_tool_count_is_17(self):
-        assert len(_tool_registry) == 17
+    def test_tool_count_is_18(self):
+        assert len(_tool_registry) == 18
 
 
 # ── 3. inputSchema 不变 ──
@@ -136,7 +137,7 @@ class TestBackwardCompatibility:
             {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
             for t in tools
         ]
-        assert len(old_client_view) == 17
+        assert len(old_client_view) == 18
         # 每个条目都是有效的旧格式
         for entry in old_client_view:
             assert set(entry.keys()) == {"name", "description", "inputSchema"}
@@ -168,6 +169,7 @@ class TestCategoryMapping:
         "auto_test": "agent",
         "repair_async": "agent",
         "repair_result": "agent",
+        "resolve_stack": "agent",
     }
 
     def setup_method(self):
@@ -199,6 +201,7 @@ class TestExperimentalFlag:
         "auto_test": True,
         "repair_async": True,
         "repair_result": True,
+        "resolve_stack": True,
     }
 
     def setup_method(self):

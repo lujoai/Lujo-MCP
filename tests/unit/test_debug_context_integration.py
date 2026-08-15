@@ -52,13 +52,13 @@ class TestMcpGetDebugContextJsonStructure:
         )
         result = get_debug_context(tid)
 
-        # 原始 20 字段
+        # 原始 20 字段 + v0.5.1 resolved_frames
         expected_keys = {
             "request_id", "trace_id", "trace_kind", "flow", "input", "output",
             "errors", "exception", "source", "extra", "code_snippets",
             "static_analysis", "git_blame", "recent_diffs", "related_specs",
             "network_trace", "ui_events", "spec_diffs", "runtime",
-            "fault_localization",
+            "fault_localization", "resolved_frames",
         }
         # metadata 由 attach_metadata 注入
         expected_keys.add("metadata")
@@ -148,6 +148,7 @@ class TestModelDumpEquivalence:
             "errors", "exception", "runtime", "source", "extra", "code_snippets",
             "static_analysis", "git_blame", "recent_diffs", "related_specs",
             "network_trace", "ui_events", "spec_diffs", "fault_localization",
+            "resolved_frames",
         }
         assert set(dumped.keys()) == expected_fields
 
@@ -178,12 +179,21 @@ class TestModelDumpEquivalence:
 class TestAnalyzeWithLlmAdaptation:
     """analyze_with_llm 应正确将 DebugContext 转为 dict 传给 analyze()。"""
 
-    def test_analyze_with_llm_returns_dict(self):
-        """analyze_with_llm 返回 dict（非 DebugContext）。"""
+    def test_analyze_with_llm_returns_dict(self, monkeypatch):
+        """analyze_with_llm 返回 dict（非 DebugContext）。
+
+        隔离 .env 真实 Key：本地 .env 若配置了无效/不可达的 provider，
+        真实调用会因 socket 连接挂起 + 重试阻塞测试（环境依赖非代码回归）。
+        强制无 Key 快速回退，不发任何网络请求。
+        """
         from app.mcp.tools.debug_api import analyze_with_llm
+        from app.llm import analyzer
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "openai_api_key", "")
+        monkeypatch.setattr(analyzer, "_client", None)
 
         tid = trace_repo.save_trace("E", "m", [])
-        # analyze 会因缺少 LLM key 返回 fallback dict，不抛异常
         result = analyze_with_llm(tid)
         assert isinstance(result, dict)
         assert not isinstance(result, DebugContext)

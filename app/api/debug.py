@@ -16,7 +16,10 @@ from app.runtime.collectors.stacktrace import capture_exception
 from app.llm.analyzer import analyze, analyze_stream_async
 from app.llm.analysis_queue import get_analysis_queue, QueueFullError
 from app.agent.repair_queue import get_repair_queue, QueueFullError as RepairQueueFullError
-from app.schemas import DebugRequest, AnalyzeRequest, DebugResponse, VerifyRequest, VerifyUiRequest
+from app.schemas import (
+    DebugRequest, AnalyzeRequest, DebugResponse, VerifyRequest, VerifyUiRequest,
+    SourcemapUploadRequest,
+)
 from app.auth.rbac import require_role
 
 logger = logging.getLogger("ai-debug-mcp.api")
@@ -358,6 +361,34 @@ def debug_verify_ui(req: VerifyUiRequest):
 def debug_health():
     """健康检查接口，供 XHR 测试使用"""
     return {"status": "ok", "timestamp": time.time()}
+
+
+@router.post("/sourcemap", dependencies=[Depends(require_role("admin", "developer"))])
+def debug_upload_sourcemap(req: SourcemapUploadRequest):
+    """上传 Source Map（v0.5.1）：用于把前端 minified 堆栈还原为原始源码。
+
+    请求体：
+      artifact: str   — JS 产物标识（如 "app.9f3b2c.js"，解析时也按帧文件 basename 匹配）
+      map: dict       — 完整 source map JSON 对象（至少含 mappings/sources）
+      release?: str   — 可选发布标识（仅透传回执，便于对账）
+
+    存储为进程内 TTL + LRU 容量限制（单机；不落 PG）。
+    """
+    if not settings.sourcemap_enabled:
+        raise HTTPException(status_code=503, detail="sourcemap resolution disabled (SOURCEMAP_ENABLED=false)")
+
+    from app.runtime.collectors.sourcemap_store import upload_sourcemap
+
+    try:
+        receipt = upload_sourcemap(req.artifact, req.map)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    if req.release:
+        receipt["release"] = req.release
+    return receipt
 
 
 @router.post("/echo", dependencies=[Depends(require_role("admin"))])

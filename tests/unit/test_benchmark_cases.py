@@ -74,21 +74,24 @@ class TestSchemas:
         assert "evaluation_metrics" in d
 
 
-# ── 5 个标准 Case ──
+# ── 6 个标准 Case ──
 
 
 class TestStandardCases:
-    def test_five_cases(self):
-        assert len(BENCHMARK_CASES) == 5
-        assert len(BENCHMARK_INDEX) == 5
+    def test_six_cases(self):
+        assert len(BENCHMARK_CASES) == 6
+        assert len(BENCHMARK_INDEX) == 6
 
     def test_case_ids_unique(self):
         ids = [c.case_id for c in BENCHMARK_CASES]
         assert len(ids) == len(set(ids))
 
-    def test_categories_cover_five_scenarios(self):
+    def test_categories_cover_six_scenarios(self):
         categories = {c.category for c in BENCHMARK_CASES}
-        expected = {"api_error", "frontend_blank", "db_error", "auth_403", "perf_slow"}
+        expected = {
+            "api_error", "frontend_blank", "db_error", "auth_403", "perf_slow",
+            "frontend_sourcemap",  # v0.5.1 Source Map 还原对照
+        }
         assert categories == expected
 
     def test_all_cases_have_required_fields(self):
@@ -175,7 +178,7 @@ class TestRunner:
     def test_list_returns_zero(self, capsys):
         assert runner.cmd_list() == 0
         out = capsys.readouterr().out
-        assert "5 个 BenchmarkCase" in out
+        assert "6 个 BenchmarkCase" in out
         assert "api_500_none_attribute" in out
 
     def test_show_returns_zero(self, capsys):
