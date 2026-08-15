@@ -2573,4 +2573,4 @@ DebugContext.resolved_frames（21 字段）；exception.frames 保留 minified �
 
 - 新增 94 项：`test_sourcemap_resolver.py`（43：VLQ 往返/段边界/sourcesContent/缓存/性能）、`test_sourcemap_store.py`（29：TTL/LRU/自动选路/白名单/端点）、`test_sourcemap_integration.py`（22：工具 handler/builder 降级矩阵/schema 兼容/Quality 联动/A-B 实证）。
 - Benchmark Case 6 `frontend_minified_sourcemap` + `frontend_sourcemap_ab()`：断言还原后 QualityScorer 评分 > 还原前（CODE_SNIPPET 维度从缺失到命中）——v0.4.0「Debug Context 价值可量化」目标的直接证据。
-- 全量回归：1086 passed / 6 skipped / 0 failed；ruff All checks passed。
+- 全量回归：1087 passed / 6 skipped / 0 failed；ruff All checks passed。

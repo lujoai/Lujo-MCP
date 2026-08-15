@@ -46,7 +46,7 @@
 
 ## [Unreleased]
 
-> v0.5.0 已发布（2026-08-13）。v0.5.1 开发中：Source Map 解析（已落地，测试基线 992 → **1086 passed / 6 skipped / 0 failed**）+ Browser SDK 增强（column 保留 + release 透传已落地）。
+> v0.5.0 已发布（2026-08-13）。v0.5.1 开发中：Source Map 解析（已落地，测试基线 992 → **1087 passed / 6 skipped / 0 failed**）+ Browser SDK 增强（column 保留 + release 透传已落地）。
 
 ### 新增
 
@@ -59,10 +59,11 @@
   - **SM4 质量联动**：QualityScorer TRACE 维度还原加成（+0.3 封顶 1.0）+ sourcemap_resolver 证据项；Benchmark 新增 Case 6 `frontend_minified_sourcemap`（还原前/后 A/B 对照，`frontend_sourcemap_ab()`，验证还原后 Quality 评分提升——v0.4.0「Debug Context 价值可量化」目标的直接证据）
   - **Browser SDK 最小增强**（`ai-debug.js`）：`_parseStack` 保留 column（source map 精确定位必需，旧版丢弃了该值）；新增可选 `release` 配置随错误 extra 透传（空 = 不发送，向后兼容）
   - **配置项**（`app/config.py`）：`sourcemap_enabled`（默认 False）/ `sourcemap_path_prefix` / `sourcemap_upload_ttl_seconds`（3600）/ `sourcemap_max_uploads`（100）
-  - **测试**：新增 94 项（`test_sourcemap_resolver.py` 43 + `test_sourcemap_store.py` 29 + `test_sourcemap_integration.py` 22），基线 992 → **1086 passed / 6 skipped / 0 failed**；工具数/字段数/Case 数断言同步更新
+  - **测试**：新增 94 项（`test_sourcemap_resolver.py` 43 + `test_sourcemap_store.py` 29 + `test_sourcemap_integration.py` 22），基线 992 → **1087 passed / 6 skipped / 0 failed**；工具数/字段数/Case 数断言同步更新
 
 #### 修复
 
+- **deepseek provider base_url 缺失**（`app/llm/analyzer.py` + `app/rag/qdrant_vector_store.py`）：`_PROVIDER_BASE_URLS` 缺少 `"deepseek"` 映射，`LLM_PROVIDER=deepseek` 时 `_resolve_base_url()` 返回空 → openai SDK 回落 OpenAI 官方端点 → DeepSeek key 必然 401，LLM 分析链不可用。已补 `https://api.deepseek.com`，并新增 `test_resolve_base_url_deepseek` 用例；实测真实调用返回结构化分析 JSON
 - **`tests/unit/test_debug_context_integration.py`**：`test_analyze_with_llm_returns_dict` 增加环境隔离（monkeypatch 无 Key 快速回退）——本地 .env 若配置了不可达/无效 LLM 端点，真实 socket 连接挂起 + 重试会阻塞测试（环境依赖非代码回归）
 
 #### 环境备注（非代码变更）
