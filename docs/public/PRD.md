@@ -237,7 +237,7 @@
 | 规范驱动采集 | `collectors/spec.py` + `tools/spec_api.py`（扫描/标签匹配/缓存/脱敏） | ✅ |
 | 规范注入上下文 | `build_debug_context` 注入 `related_specs`（前3帧去重限长） | ✅ |
 | 指纹去重聚合 | `core/errors.py` compute_fingerprint + occurrence_count（避免重复刷屏） | ✅ |
-| 双传输工具注册 | HTTP 17 工具 + stdio 17 工具 | ✅ |
+| 双传输工具注册 | HTTP 18 工具 + stdio 18 工具 | ✅ |
 
 > **已补齐**：Playwright 自动遍历（FR14，`ui_runner.py` + `verify_ui`）；浏览器 SDK TS（`browser-sdk/ai-debug.js`）；FR15 verify 自动断言+spec 存储（`assert_engine` + `spec_store` + `verify` 工具）。proj2 的 tenacity 评估为不适用，未迁移。
 
@@ -381,7 +381,7 @@ flowchart TB
         Hook["全局异常钩子 ✅<br/>exception_hook"]
         MW["中间件（安全基线）"]
         Router["路由 /api/debug · /mcp · /health · /metrics"]
-        Tools["MCP 工具<br/>HTTP 17 个 (register_all_tools)<br/>stdio 17 个 (mcp_server.py)"]
+        Tools["MCP 工具<br/>HTTP 18 个 (register_all_tools)<br/>stdio 18 个 (mcp_server.py)"]
     end
 
     subgraph Engine["调试引擎"]
@@ -475,11 +475,11 @@ sequenceDiagram
 | GET | `/ingest/network/{trace_id}` | 网络记录查询 | ✅ | admin / developer / viewer |
 | GET | `/api/dashboard/*`（7 条） | Trace/Spec/Error 只读查询 | ✅ | admin / developer / viewer |
 
-### 10.2 stdio MCP 工具（**17 个**，已注册）✅
+### 10.2 stdio MCP 工具（**18 个**，已注册）✅
 
-HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一注册表，实际各 **17 个工具**，均为短名：
+HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一注册表，实际各 **18 个工具**，均为短名：
 
-`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result`
+`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`
 
 > 说明：此前文档中列出的 `get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` 为**内部 Python 函数名**，非对外 MCP 工具名；`get_runtime_snapshot`、`analyze_with_llm` 未作为独立 MCP 工具注册。新增的 `repair_async` / `repair_result` 由 FR19（v5.4）引入，`agent_enabled=False` 时仍注册但调用返回 501。
 

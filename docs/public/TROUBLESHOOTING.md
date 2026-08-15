@@ -582,8 +582,8 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-已注册的 17 个工具:
-`debug`, `debug_context`, `trace`, `stacktrace`, `network_ingest`, `network_trace`, `git_blame`, `recent_diff`, `silent_failure`, `ingest_error`, `console_log`, `related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`
+已注册的 18 个工具:
+`debug`, `debug_context`, `trace`, `stacktrace`, `network_ingest`, `network_trace`, `git_blame`, `recent_diff`, `silent_failure`, `ingest_error`, `console_log`, `related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
 

@@ -64,7 +64,7 @@ npm install -g @lujoai/lujo-mcp
 }
 ```
 
-接入后即可通过 MCP 工具枚举获得 `get_debug_context` / `get_stacktrace` / `get_runtime_snapshot` 等 17 个工具。详见下方「MCP Client 接入」。
+接入后即可通过 MCP 工具枚举获得 `get_debug_context` / `get_stacktrace` / `get_runtime_snapshot` 等 18 个工具。详见下方「MCP Client 接入」。
 
 ***
 
@@ -106,7 +106,7 @@ npm install -g @lujoai/lujo-mcp
 - **采样 / 节流控制、SDK 自排除、敏感信息脱敏** — 采样率、节流间隔、自排除、password/token/secret/authorization 字段脱敏
 
 **传输与安全**
-- **MCP 双传输** — stdio + Streamable HTTP，17 个工具
+- **MCP 双传输** — stdio + Streamable HTTP，18 个工具
 - **安全中间件** — fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护
 - **Prometheus `/metrics`** — 指标暴露
 
@@ -330,7 +330,7 @@ Lujo-MCP 作为 MCP Server，通过 **stdio**（进程管道）或 **Streamable 
 - 配置位置：MCP 管理面板（模型配置 → MCP Server → 添加）
 - 填入 stdio 或 HTTP 配置
 
-> ⚠️ stdio 模式需在 MCP 客户端环境变量中配置 `LLM_PROVIDER`、`OPENAI_API_KEY` 等（见下方「环境变量配置」）。接入后即可通过工具枚举获得 `get_debug_context` / `get_stacktrace` / `get_runtime_snapshot` / `search_logs` / `list_recent_traces` 等 17 个工具。
+> ⚠️ stdio 模式需在 MCP 客户端环境变量中配置 `LLM_PROVIDER`、`OPENAI_API_KEY` 等（见下方「环境变量配置」）。接入后即可通过工具枚举获得 `get_debug_context` / `get_stacktrace` / `get_runtime_snapshot` / `search_logs` / `list_recent_traces` 等 18 个工具。
 
 ## Demo 演示流程
 
@@ -375,12 +375,12 @@ python -m benchmark.runner quality        # QualityScorer 旁证评估
 
 | 指标      | 状态                                                                                                                                                                                                                                                                                                                             |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| MCP 工具数 | HTTP 17 / stdio 17（新增 `repair_async` / `repair_result`，FR19）                                                                                                                                                                                                                                                                   |
-| 测试基线    | 单元 `927 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 48 项 + P1 Debug Experience RAG 26 项 + CODE\_REVIEW\_FIX\_PROMPT 回归测试 17 项 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项） |
+| MCP 工具数 | HTTP 18 / stdio 18（含 `repair_async` / `repair_result` / `resolve_stack`）                                                                                                                                                                                                                                                                   |
+| 测试基线    | 单元 `1086 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 48 项 + P1 Debug Experience RAG 26 项 + CODE\_REVIEW\_FIX\_PROMPT 回归测试 17 项 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项） |
 | 存储后端    | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境                                                                                                                                                                                                                                                                                    |
 | 稳定性能力   | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证                                                                                                                                                                                                                                                                    |
 | 安全能力    | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护                                                                                                                                                                                                                                               |
-| 当前阶段    | Phase 0-6 全部完成；Phase 7 智能化（指纹知识库 + 向量检索 RAG in-process + Qdrant 语义召回 + AI Debug Agent Phase 1 单 Agent + Phase 2 多 Agent DAG）+ Phase 8 实时观测增强（Dashboard 实时 SSE 推送 `DASH-SSE-001`）均已落地；下一步为 Browser SDK 压缩 e2e 联调、Docker 容器化复现实验                                                                                                 |
+| 当前阶段    | Phase 0-6 全部完成；Phase 7 智能化（指纹知识库 + 向量检索 RAG in-process + Qdrant 语义召回 + AI Debug Agent Phase 1 单 Agent + Phase 2 多 Agent DAG）+ Phase 8 实时观测增强（Dashboard 实时 SSE 推送 `DASH-SSE-001`）均已落地；**v0.5.0 已发布**（2026-08-13：DebugContext 7→20 字段 Schema 对齐、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；下一步为 v0.5.1 收口（**Source Map 解析已落地**：纯 Python VLQ 解码 + 上传/磁盘双通道 + `resolve_stack` 工具 + Quality/Benchmark A/B 实证，默认关闭）与 Browser SDK 压缩 e2e CI 验证                                                                                                 |
 | 权威口径    | 项目功能状态与启用验证以内部文档为准                                                                                                                                                                                                                                                                                                             |
 | 安全审查    | 安全加固代码已落地，实际启用边界与前提条件以运行环境配置为准                                                                                                                                                                                                                                                                                                 |
 
@@ -398,7 +398,7 @@ Lujo-MCP/
 │   ├── agent/                 # AI Debug Agent 模块（Phase 1：BaseAgent ABC + RepairAgent + Coordinator + RepairQueue；Phase 2：GitAgent + TestAgent + SecurityAgent + DAG，共 11 文件）
 │   ├── llm/                   # LLM 分析模块
 │   ├── mcp/                   # MCP 传输层（Phase 0 解耦后仅保留协议/工具/传输）
-│   │   ├── tools/             # MCP 工具（HTTP 17 / stdio 17）
+│   │   ├── tools/             # MCP 工具（HTTP 18 / stdio 18）
 │   │   ├── protocol/          # JSON-RPC 协议实现
 │   │   └── transports/        # 传输层（stdio / Streamable HTTP / SSE）
 │   ├── runtime/               # 运行时核心（Phase 0 解耦，MCP 依赖 runtime）

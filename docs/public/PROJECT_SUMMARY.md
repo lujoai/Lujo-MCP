@@ -73,7 +73,7 @@ Verifier 验证
 | 经验检索器 | [app/rag/retriever.py](../../app/rag/retriever.py) | 三层检索：fingerprint 精确 → message normalize → vector（默认关闭） |
 | 向量检索抽象 | [app/rag/vector_store.py](../../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
 | Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](../../app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
-| 工具注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) | register_all_tools（17 个工具，含 `repair_async`/`repair_result`） |
+| 工具注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) | register_all_tools（18 个工具，含 `repair_async`/`repair_result`/`resolve_stack`） |
 | AI Debug Agent | [app/agent/](../../app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
 | 浏览器 SDK | [browser-sdk/ai-debug.js](../../browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
 | npm 分发 | [npm/packages/lujo-mcp](../../npm/packages/lujo-mcp) + [packaging/lujo-mcp-server.spec](../../packaging/lujo-mcp-server.spec) | PyInstaller 单文件打包 + npm 元包 + 3 平台二进制包（win32-x64/linux-x64/osx-arm64），`npm install -g @lujoai/lujo-mcp` 开箱即用 |
@@ -118,7 +118,7 @@ Verifier 验证
 - ✅ SSE 广播中心与会话化长连接
 - ⚠️ MCP HTTP notifications 已具备基础推送闭环，丰富通知类型仍待补齐
 - ✅ **Dashboard 实时 SSE 推送**（`DASH-SSE-001`，2026-07-30）：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource（去抖 refresh + 10s 轮询兜底 + 断线重连）；`dashboard_sse_enabled=False` 默认关闭
-- ✅ MCP 工具双传输注册（HTTP / stdio 均由统一注册表动态导出，当前各 17 个，含 `repair_async`/`repair_result`）
+- ✅ MCP 工具双传输注册（HTTP / stdio 均由统一注册表动态导出，当前各 18 个，含 `repair_async`/`repair_result`/`resolve_stack`）
 - ✅ **npm 开箱即用分发**（2026-08-09）：PyInstaller 单文件打包（`packaging/lujo-mcp-server.spec`）+ npm 元包 + 3 平台二进制包（win32-x64/linux-x64/osx-arm64），`npm install -g @lujoai/lujo-mcp` 即可使用；GitHub Actions 矩阵构建自动发布（`.github/workflows/release-npm.yml`）
 
 ### 稳定性与观测能力 ✅
@@ -138,7 +138,7 @@ Verifier 验证
 - ✅ 入库前脱敏（复合键名子串匹配 + 白名单）
 - ✅ /metrics 独立鉴权 toggle
 - ✅ CORS 可配置来源
-- ✅ **RBAC 角色分级**（AUDIT-2-13）：admin > developer > viewer 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 **33 条 REST 路由**（debug 14 + ingest 7 + dashboard 7 + spec 5）及 17 个 MCP 工具（`TOOL_ROLE_REQUIREMENTS` 字典门控）；未命中映射默认 viewer（fail-closed）
+- ✅ RBAC 角色分级（AUDIT-2-13）：admin > developer > viewer 三级；`require_role(*roles)` FastAPI 依赖工厂覆盖 **33 条 REST 路由**（debug 14 + ingest 7 + dashboard 7 + spec 5）及 18 个 MCP 工具（`TOOL_ROLE_REQUIREMENTS` 字典门控，v0.5.1 新增 `resolve_stack` 只读三级）；未命中映射默认 viewer（fail-closed）
 - ✅ **API_KEY 多 key 恒定时间比较轮换**（AUDIT-2-14）：`verify_api_key` 遍历所有 key 不短路 + `hmac.compare_digest` 防时序侧信道 + 单 key 向后兼容
 - ✅ **LFI/SSRF 防护**：路径白名单 + SSRF URL 白名单（IP/Localhost/Metadata 端点拒绝）
 
@@ -178,7 +178,7 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **927 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **1086 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项）
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -199,7 +199,7 @@ Verifier 验证
 
 ## 5. 当前开发阶段
 
-**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地，当前进入 v0.4 开发阶段收尾：以稳定性、文档完善、Release 准备为主
+**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地；**v0.5.0 已发布（2026-08-13）**：工程质量加固 + Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；下一版本 v0.5.1 开发中（**Source Map 解析已落地**：纯 Python VLQ 解码 + 上传/磁盘双获取通道 + `resolve_stack` MCP 工具（18/18）+ QualityScorer/Benchmark A/B 实证，`sourcemap_enabled` 默认关闭；Browser SDK column 保留 + release 透传）
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -239,15 +239,16 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **927 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1086 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项）。
 
 **当前优先级**：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
-| **P1** | Browser SDK 压缩 e2e 联调 | 对 V3/V6 演示页与上报链路做手工联调收口（CI 交错任务，代码已完成仅验证） |
-| **P2** | Docker 容器化复现实验 | 完成 `STAB-007`，把 Redis / OTel / PG 容器化验证补齐 |
-| ~~P3~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
+| **P1** | v0.5.1 迭代：Source Map 解析 + Browser SDK 增强 | 下一版本主线（见 CHANGELOG [Unreleased] / DEV_PLAN） |
+| **P2** | Browser SDK 压缩 e2e 联调（`SDK-007`） | CI 交错任务，代码已完成仅验证，不占开发轨 |
+| ~~P3~~ ✅ | ~~Docker 容器化复现实验（`STAB-007`）~~ | ✅ 已完成（postgres/redis/app 三容器健康，/health、/api/debug/run、连接池均已验证） |
+| ~~P4~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
 
 **v0.3.0 收口成果**：
 - 测试基线：340 passed / 6 skipped / 0 failed（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
@@ -366,7 +367,7 @@ python -m app.mcp_server
 
 **已复核为安全**：SQL 全参数化（无注入）、LLM 发送前递归脱敏、assert_engine 纯函数无 `eval`、PG 连接池双检锁正确。**无支付/资金逻辑**；唯一间接财务风险是 LLM 调用无配额（费用失控）。
 
-> **新增安全能力（2026-07-25，AUDIT-2-13/14）**：RBAC 三级角色分级（admin > developer > viewer）覆盖 33 条 REST 路由 + 17 个 MCP 工具；`require_role(*roles)` FastAPI 依赖工厂路由级门控 + `TOOL_ROLE_REQUIREMENTS` MCP 工具级门控；未命中映射默认 viewer（fail-closed）。多 key 恒定时间比较（`verify_api_key` 遍历不短路 + `hmac.compare_digest`）+ 单 key 向后兼容。LFI 路径白名单 + SSRF URL 白名单已上线。
+> **新增安全能力（2026-07-25，AUDIT-2-13/14）**：RBAC 三级角色分级（admin > developer > viewer）覆盖 33 条 REST 路由 + 18 个 MCP 工具；`require_role(*roles)` FastAPI 依赖工厂路由级门控 + `TOOL_ROLE_REQUIREMENTS` MCP 工具级门控；未命中映射默认 viewer（fail-closed）。多 key 恒定时间比较（`verify_api_key` 遍历不短路 + `hmac.compare_digest`）+ 单 key 向后兼容。LFI 路径白名单 + SSRF URL 白名单已上线。
 
 > 整改追踪见内部审计报告。修任一项须回填状态 + `文件:行` 验证。
 

@@ -154,7 +154,7 @@ flowchart TB
 - 注册方式：客户端配置 `{"command":"python","args":["-m","app.mcp_server"],"cwd":"<abs>"}`。
 - stdio 唯一启动命令：`python -m app.mcp_server`。
 
-**MCP 工具总览（HTTP 17 个 / stdio 17 个，业务实现共用）**：
+**MCP 工具总览（HTTP 18 个 / stdio 18 个，业务实现共用）**：
 
 | 工具（短名） | 说明 | 实现 |
 | --- | --- | --- |
@@ -173,10 +173,11 @@ flowchart TB
 | `auto_test` | 页面自动遍历 | `auto_test_api.py` |
 | `repair_async` | AI Debug Agent 修复入队 | `repair_api.py`（FR19） |
 | `repair_result` | AI Debug Agent 修复结果轮询 | `repair_api.py`（FR19） |
+| `resolve_stack` | minified 堆栈帧 Source Map 还原 | `sourcemap_api.py`（v0.5.1） |
 
 #### 3.1.3 双传输一致性
 
-HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **17 个工具**；stdio 传输（`mcp_server.py`）共用同一注册表，**实际各 17 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result`。
+HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **18 个工具**；stdio 传输（`mcp_server.py`）共用同一注册表，**实际各 18 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`。
 
 ### 3.2 中间件层（`app/middleware.py`）✅
 
@@ -449,7 +450,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 完整上下文 | [app/runtime/context/builder.py](../../app/runtime/context/builder.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
 | 规范驱动采集 | `app/runtime/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
 | 指纹去重聚合 | [app/runtime/core/errors.py](../../app/runtime/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
-| 双传输注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) + [app/mcp_server.py](../../app/mcp_server.py) | HTTP / stdio 均为 17 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
+| 双传输注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) + [app/mcp_server.py](../../app/mcp_server.py) | HTTP / stdio 均为 18 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
 | 代码定位 | [app/runtime/collectors/code_locator.py](../../app/runtime/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
 | 静默失败检测 | [app/runtime/verifier/assert_engine.py](../../app/runtime/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
@@ -493,7 +494,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 ### 9.1 RBAC 权限矩阵 ✅
 
-**覆盖范围**：以下矩阵覆盖全部已挂载 `require_role` 的 33 条 REST 路由 + 17 个 MCP 工具。
+**覆盖范围**：以下矩阵覆盖全部已挂载 `require_role` 的 33 条 REST 路由 + 18 个 MCP 工具。
 
 **REST API（`debug.py` 14 条路由，全部挂载 `require_role`）**：
 
@@ -548,7 +549,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `PATCH /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 | `DELETE /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 
-**MCP 工具（17 个，`TOOL_ROLE_REQUIREMENTS` 字典门控）**：
+**MCP 工具（18 个，`TOOL_ROLE_REQUIREMENTS` 字典门控）**：
 
 | 工具 | admin | developer | viewer | required_roles |
 | --- | --- | --- | --- | --- |
@@ -569,6 +570,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `get_recent_diff` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
 | `get_related_specs` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
 | `repair_result` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `resolve_stack` | ✅ | ✅ | ✅ | `("admin","developer","viewer")`（v0.5.1 只读还原） |
 | `analyze_with_llm`（未注册为工具） | — | — | — | 内部函数，通过 `debug` 工具间接调用 |
 
 ---
@@ -805,10 +807,10 @@ sequenceDiagram
 
 ### 13.5 工具注册与执行流程（订正工具清单）
 
-`register_all_tools()`（`tools/__init__.py`）**实际注册 17 个工具**，工具名为短名：
-`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result`。
+`register_all_tools()`（`tools/__init__.py`）**实际注册 18 个工具**，工具名为短名：
+`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`（v0.5.1 新增）。
 
-> 说明：`get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` **不是注册的工具名**——它们是内部处理函数，对外以 `context / trace / stacktrace` 短名暴露；`get_runtime_snapshot`、`analyze_with_llm` 当前**未作为独立 MCP 工具注册**。HTTP 与 stdio 共用同一注册表（`mcp_server.py:45`），因此实际是「HTTP 17 / stdio 17」，不存在数量差异。
+> 说明：`get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` **不是注册的工具名**——它们是内部处理函数，对外以 `context / trace / stacktrace` 短名暴露；`get_runtime_snapshot`、`analyze_with_llm` 当前**未作为独立 MCP 工具注册**。HTTP 与 stdio 共用同一注册表（`mcp_server.py:45`），因此实际是「HTTP 18 / stdio 18」（v0.5.1 新增 `resolve_stack`），不存在数量差异。
 
 ### 13.6 执行流程要点
 
@@ -2515,3 +2517,60 @@ Agent Context Assembler 注入 assemble() 输出 debug_experience（可选，默
 - Feature flag：`debug_experience_enabled=False`（默认关闭）；关闭状态不调用 retriever，零额外耗时。
 - 降级：Retriever 任何异常禁止 raise，返回 `[]` 或已有成功结果，不阻断 Agent assemble 主流程。
 - 禁止：引入 RepairAgent、引入新的 LLM 调用链、实现 Repair Loop 代码。
+
+---
+
+## 21. Source Map 解析（v0.5.1，2026-08-15）
+
+> 前端 minified 堆栈还原为原始源码位置。此前 code_locator（本地 Python 源码 + 白名单）、static_analyzer（Python ast）、fault_localizer（node_modules 降权）对生产环境压缩后的 `.js:1:48213` 帧全部失效——Source Map 解析是补齐 Debug Context 前端盲区的唯一路径。
+
+### 21.1 模块结构与数据流
+
+```
+Browser SDK（ai-debug.js，错误上报含 column + 可选 release）
+    ↓ /ingest/error（frames: file/line/column/function）
+trace_repo.save_trace
+    ↓
+build_debug_context()（app/runtime/context/builder.py）
+    ↓ sourcemap_enabled=True 时
+resolve_frames_auto()（app/runtime/collectors/sourcemap_store.py，自动选路）
+    ├─ 显式 artifact（trace.extra.artifact）> 上传表按帧 basename > 磁盘约定
+    ├─ 上传通道：POST /api/debug/sourcemap（进程内 TTL + LRU，单机）
+    └─ 磁盘通道：<sourcemap_path_prefix>/<basename>.map（白名单防 LFI）
+    ↓
+SourceMapParser（app/runtime/collectors/sourcemap_resolver.py，纯 Python base64-VLQ）
+    ├─ 二分查询 (line, column) → 原始 (source, line, column, name)
+    └─ 源码片段：sourcesContent 优先，code_locator 白名单兑底
+    ↓
+DebugContext.resolved_frames（21 字段）；exception.frames 保留 minified 原帧
+    ├─ code_snippets / fault_localization / git 归因 / related_specs 改用还原帧
+    └─ QualityScorer TRACE 加成 + sourcemap_resolver 证据项
+
+独立工具：resolve_stack（MCP，agent/experimental）——Agent 可直接调用还原堆栈
+```
+
+### 21.2 关键设计决策
+
+- **零新依赖**：base64-VLQ 解码手写（约 60 行），与 `static_analyzer` 用 `ast` 的零依赖哲学一致；mappings 为 delta 编码（gen_col 每行重置，source/line/col/name 全文件级相对值），四/五段式还原。
+- **架构合规**：新模块全部归 `app/runtime/collectors/`，仅依赖标准库 + code_locator（同层），不依赖 rag/agent/llm/mcp（Architecture Frozen 规则 1）。
+- **默认关闭**：`sourcemap_enabled=False`，关闭时 builder 零调用、零耗时；`resolve_stack` 工具在关闭时返回 error 字典不抛异常。
+- **安全边界**：磁盘通道复用 code_locator 白名单校验（realpath + 前缀）；上传通道仅限 admin/developer 角色（RBAC）；`_frame_basename` 拒绝路径穿越；sourcesContent 只进内存不落盘。
+- **单机限制**：上传存储为进程内 dict + TTL（默认 1h）+ 容量（100 份），多 Worker 不共享（与 analysis/repair 队列同源限制，见 §16 当前限制）。
+- **原始证据不丢失**：`resolved_frames` 每帧附 `original`（minified 原位置）与 `resolved` 标记；`exception.frames` 保持原样，便于对账与回退。
+
+### 21.3 降级矩阵
+
+| 失败点 | 行为 |
+| --- | --- |
+| `sourcemap_enabled=False` | 零调用，`resolved_frames=None`，行为与 v0.5.0 一致 |
+| .map 解析失败 / 索引越界 / 非法字符 | 帧原样保留 + warning，绝不 raise |
+| (line, column) 无映射命中 | 帧原样保留（resolved=False） |
+| 上传 map 过期 / 被 LRU 驱逐 | 回退磁盘通道，再失败返回原帧 |
+| 磁盘路径不在白名单 / 不存在 | 拒绝读取 / 跳过，返回原帧 |
+| sourcesContent 缺失 | 走 code_locator（白名单约束），仍失败 found=False |
+
+### 21.4 测试与实证
+
+- 新增 94 项：`test_sourcemap_resolver.py`（43：VLQ 往返/段边界/sourcesContent/缓存/性能）、`test_sourcemap_store.py`（29：TTL/LRU/自动选路/白名单/端点）、`test_sourcemap_integration.py`（22：工具 handler/builder 降级矩阵/schema 兼容/Quality 联动/A-B 实证）。
+- Benchmark Case 6 `frontend_minified_sourcemap` + `frontend_sourcemap_ab()`：断言还原后 QualityScorer 评分 > 还原前（CODE_SNIPPET 维度从缺失到命中）——v0.4.0「Debug Context 价值可量化」目标的直接证据。
+- 全量回归：1086 passed / 6 skipped / 0 failed；ruff All checks passed。

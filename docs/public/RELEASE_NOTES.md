@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.4.0（2026-08-09）**。基于 v0.4.0（Debug Context Quality）主干，完成 P1 Debug Experience RAG（D1-D4）、文档冻结（D5）与 **npm 开箱即用分发**（PyInstaller 打包 + npm 元包 + GitHub Actions 构建发布，`@lujoai/lujo-mcp@0.4.0` 已发布 npm）。
-> 测试基线：单元 927 passed / 6 skipped / 0 failed（含 CODE_REVIEW_FIX_PROMPT 代码审查修复与回归测试 + stacktrace 工具与存储工厂边界测试 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项，不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
+> 最新版本：**v0.5.0（2026-08-13）**。在 v0.4.0 主干之上完成工程质量和 Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固），npm `latest` → `@lujoai/lujo-mcp@0.5.0`。
+> 测试基线：单元 992 passed / 6 skipped / 0 failed（含 v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 新增 45 项；不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
@@ -13,9 +13,47 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.4.0  
-**Release Date / 发布日期**: 2026-08-09  
-**Codename / 代号**: Debug Experience RAG + npm 开箱即用分发 — 让 AI Agent 理解真实 Bug 运行现场，一条命令开箱即用
+**Version / 版本**: v0.5.0  
+**Release Date / 发布日期**: 2026-08-13  
+**Codename / 代号**: 工程质量加固 + Runtime 数据契约对齐 — Engineering Hardening & Runtime Contract Alignment
+
+---
+
+## v0.5.0（2026-08-13）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.5.0 是 Lujo-MCP 的工程质量和 Runtime 数据契约对齐版本：`DebugContext` Pydantic model 从 7 字段扩展至 20 字段并对齐 `build_debug_context()` 实际输出，MCP `tools/list` 新增工具分类元数据，LLM 分析链路引入 Prompt Injection 防护，关键端点完成 Pydantic Schema 验证，MCP 会话表增加安全上限。无 Breaking Change：所有新增字段 Optional + default，外部 JSON 结构不变。测试基线 927 → **992 passed / 6 skipped / 0 failed**。
+
+#### ✨ 新增功能
+
+- **DebugContext Schema Alignment**：`DebugContext` 7→20 字段，对齐实际输出；全部 Optional + default + `extra="allow"` 支持未来扩展
+- **DebugContext Runtime Integration**：`build_debug_context()` 返回类型 `dict | None` → `DebugContext | None`；MCP tools / Dashboard API 通过 `.model_dump()` 适配，外部 JSON 结构不变
+- **MCP Tool Category Metadata**：`tools/list` 为每个工具新增 `category`（agent / sdk）与 `experimental`（bool）；HTTP 与 stdio 均支持，旧客户端可忽略额外字段
+- **Prompt Injection 防护（P2-1）**：LLM analyzer 与 Agent 层 `_INJECTION_GUARD` 安全边界声明 + `_wrap_evidence()` XML 标签隔离，防止 Debug Context 中恶意指令文本诱导 LLM
+- **API Schema Validation（P2-2）**：`/verify` 和 `/verify/ui` 端点改 Pydantic 模型（`VerifyRequest` / `VerifyUiRequest`），`extra="ignore"` 兼容旧客户端
+- **Session 安全加固**：MCP 会话表 `_MAX_SESSIONS` 上限（10,000）+ LRU 驱逐 + `SessionLimitExceeded` 503；`/internal/health` 内网 IP 鉴权
+- **测试**：新增 45 项（`test_debug_context_schema.py` 14 + `test_debug_context_integration.py` 14 + `test_tool_category_metadata.py` 17）
+- **ruff 清理**：26 处存量 lint 清零，`ruff check .` All checks passed
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.5.0 is the engineering hardening and Runtime contract alignment release of Lujo-MCP: the `DebugContext` Pydantic model expands from 7 to 20 fields aligned with actual `build_debug_context()` output, MCP `tools/list` gains tool category metadata, the LLM analysis chain gains prompt-injection guarding, key endpoints get Pydantic schema validation, and the MCP session table gains security limits. No breaking changes: all new fields are Optional with defaults and external JSON structures are unchanged. Test baseline improved to **992 passed / 6 skipped / 0 failed**.
+
+#### ✨ New Features
+
+- **DebugContext Schema Alignment**: 7→20 fields aligned with actual output; all Optional + default + `extra="allow"` for future extension
+- **DebugContext Runtime Integration**: `build_debug_context()` return type `dict | None` → `DebugContext | None`; MCP tools / Dashboard API adapted via `.model_dump()` with unchanged external JSON
+- **MCP Tool Category Metadata**: `tools/list` adds `category` (agent / sdk) and `experimental` (bool) per tool; both HTTP and stdio transports; old clients can ignore extra fields
+- **Prompt Injection Guard (P2-1)**: `_INJECTION_GUARD` security boundary + `_wrap_evidence()` XML-tag isolation in LLM analyzer and Agent layer
+- **API Schema Validation (P2-2)**: `/verify` and `/verify/ui` endpoints switch to Pydantic models (`VerifyRequest` / `VerifyUiRequest`) with `extra="ignore"` backward compatibility
+- **Session Hardening**: MCP session table `_MAX_SESSIONS` cap (10,000) + LRU eviction + `SessionLimitExceeded` 503; `/internal/health` intranet-IP auth
+- **Tests**: 45 new tests (schema 14 + integration 14 + tool category metadata 17)
+- **ruff cleanup**: 26 legacy lint issues resolved, `ruff check .` all checks passed
 
 ---
 

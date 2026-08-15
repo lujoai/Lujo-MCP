@@ -46,11 +46,28 @@
 
 ## [Unreleased]
 
-> v0.5.0 已发布（2026-08-13）。下一版本 v0.5.1 规划中（Source Map 解析 + Browser SDK 增强）。
+> v0.5.0 已发布（2026-08-13）。v0.5.1 开发中：Source Map 解析（已落地，测试基线 992 → **1086 passed / 6 skipped / 0 failed**）+ Browser SDK 增强（column 保留 + release 透传已落地）。
 
 ### 新增
 
 #### 代码
+
+- **Source Map 解析（v0.5.1 主线）**：把前端 minified JS 堆栈帧还原为原始源码位置，补齐 Debug Context 前端盲区（此前 code_locator / static_analyzer / fault_localizer 三条证据链对 minified 帧全部失效）
+  - **SM1 解析核心**（`app/runtime/collectors/sourcemap_resolver.py`）：纯 Python base64-VLQ 解码 mappings（零新依赖）；`SourceMapParser` 按 (line, column) 二分查询最近段；`resolve_frames()` 产出 StackFrame 兼容的还原帧（含 original 原位置与 resolved 标记）+ 源码片段（sourcesContent 优先，code_locator 白名单兑底）；LRU 解析缓存（mtime/token 指纹失效）；任何失败静默降级保留原始帧
+  - **SM2 获取通道**（`sourcemap_store.py`，均默认关闭）：上传通道 `POST /api/debug/sourcemap`（进程内 TTL + LRU 容量驱逐）+ 磁盘约定通道（`SOURCEMAP_PATH_PREFIX`，路径须在白名单内防 LFI）；自动选路：显式 artifact > 上传按帧文件名 > 磁盘
+  - **SM3 集成与工具**：`DebugContext` 新增 `resolved_frames` 字段（21 字段，向后兼容）；`build_debug_context()` 还原命中后 code_snippets / fault_localization / git 归因 / 相关规范均改用还原帧，exception.frames 保留 minified 原帧；新 MCP 工具 `resolve_stack`（category=agent，experimental）—— Agent 可直接调用还原堆栈；MCP 工具数 HTTP 17 / stdio 17 → **18 / 18**
+  - **SM4 质量联动**：QualityScorer TRACE 维度还原加成（+0.3 封顶 1.0）+ sourcemap_resolver 证据项；Benchmark 新增 Case 6 `frontend_minified_sourcemap`（还原前/后 A/B 对照，`frontend_sourcemap_ab()`，验证还原后 Quality 评分提升——v0.4.0「Debug Context 价值可量化」目标的直接证据）
+  - **Browser SDK 最小增强**（`ai-debug.js`）：`_parseStack` 保留 column（source map 精确定位必需，旧版丢弃了该值）；新增可选 `release` 配置随错误 extra 透传（空 = 不发送，向后兼容）
+  - **配置项**（`app/config.py`）：`sourcemap_enabled`（默认 False）/ `sourcemap_path_prefix` / `sourcemap_upload_ttl_seconds`（3600）/ `sourcemap_max_uploads`（100）
+  - **测试**：新增 94 项（`test_sourcemap_resolver.py` 43 + `test_sourcemap_store.py` 29 + `test_sourcemap_integration.py` 22），基线 992 → **1086 passed / 6 skipped / 0 failed**；工具数/字段数/Case 数断言同步更新
+
+#### 修复
+
+- **`tests/unit/test_debug_context_integration.py`**：`test_analyze_with_llm_returns_dict` 增加环境隔离（monkeypatch 无 Key 快速回退）——本地 .env 若配置了不可达/无效 LLM 端点，真实 socket 连接挂起 + 重试会阻塞测试（环境依赖非代码回归）
+
+#### 环境备注（非代码变更）
+
+- 本地 venv 曾缺失 `pytest-asyncio` / `qdrant-client` / `opentelemetry-*` / `pybreaker`（与 requirements-dev.txt 漂移），导致 13+ 项环境性失败；已按 `pip install -r requirements-dev.txt` 补齐，全量回归恢复全绿
 
 - **MCP Debug Context 可观测性**（Phase 3 D5，2026-08-11）：`app/mcp/observability.py` 新增 `DebugContextTrace`（记录 request_id / Runtime Context 可用性与大小 / Debug Experience 开关与命中数 / Context 构建耗时 / Tool 响应耗时）+ `observe_context` / `attach_metadata`；context/debug/stacktrace 工具成功分支注入可选 `metadata` 字段（向后兼容）；stdio+HTTP 传输层记录 tool 响应耗时/大小（仅日志，不打印敏感负载）
 - **Benchmark 框架**（Phase 3 D6，2026-08-11）：`benchmark/` 新增 `schemas.py`（`BenchmarkCase` / `EvaluationMetrics`）+ `cases.py`（5 个手写 fixture：api_500 / frontend_blank / db_error / auth_403 / perf_slow）+ `runner.py`（CLI：list / show / quality 旁证）；验证 MCP Debug Context 是否提升外部 AI Debug 能力（与 QualityScorer 两个体系分离）
