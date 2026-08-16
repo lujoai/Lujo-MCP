@@ -193,3 +193,38 @@ def test_ingest_console_route_via_testclient():
     body = resp.json()
     assert body["saved"] is True
     assert "console-" in body["record_id"]
+
+
+def test_ingest_batch_rejects_over_limit():
+    """P3-6: /ingest/batch events 超过 100 条返回 413"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    events = [{"path": "/ingest/error", "payload": {"message": f"e{i}"}} for i in range(101)]
+    resp = client.post("/ingest/batch", json={"events": events})
+    assert resp.status_code == 413
+    assert resp.json()["detail"] == "Too many events in batch, max 100"
+
+
+def test_ingest_batch_exact_limit_ok():
+    """P3-6: /ingest/batch events 恰好 100 条应正常处理"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    events = [{"path": "/ingest/error", "payload": {"message": f"e{i}"}} for i in range(100)]
+    resp = client.post("/ingest/batch", json={"events": events})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 100
+

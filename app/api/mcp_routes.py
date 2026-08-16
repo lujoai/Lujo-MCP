@@ -66,7 +66,8 @@ async def mcp_post(request: Request):
     # ── 会话建立/校验 ──
     if method == "initialize":
         try:
-            sess = registry.create() if not session_id or not registry.get(session_id) else registry.get(session_id)
+            # P3-8: 总是新建会话，忽略请求头携带的 Mcp-Session-Id（防会话固定/通知流劫持）
+            sess = registry.create()
         except SessionLimitExceeded:
             return JSONResponse(
                 make_error(req_id, INTERNAL_ERROR, "会话数已达上限，请稍后重试"),

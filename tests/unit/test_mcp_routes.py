@@ -115,6 +115,26 @@ async def test_delete_session_closes_sse_subscribers():
     assert hub.subscriber_count(session_id) == 0
 
 
+def test_initialize_with_existing_session_creates_new():
+    """P3-8: initialize 携带已有 session_id 时必须新建会话，而非复用（防会话固定/通知流劫持）。"""
+    client = _client()
+    init_resp = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    first_id = init_resp.headers["Mcp-Session-Id"]
+    assert first_id
+
+    # 携带已有 session_id 再次 initialize → 必须新建不同会话
+    init_resp2 = client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": first_id},
+        json={"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}},
+    )
+    second_id = init_resp2.headers["Mcp-Session-Id"]
+    assert second_id != first_id
+    # 原会话未被复用/删除，仍独立存在
+    assert registry.get(first_id) is not None
+    assert registry.get(second_id) is not None
+
+
 # ---------------------------------------------------------------------------
 # P3-3: 会话驱逐策略（仅驱逐过期会话，全活跃拒绝新建）
 # ---------------------------------------------------------------------------

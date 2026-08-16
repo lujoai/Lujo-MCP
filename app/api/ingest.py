@@ -23,6 +23,8 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 logger = logging.getLogger("lujo-mcp.ingest")
 
 _MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
+# FIX: P3-6 /ingest/batch events 数组单次最多 100 条，防止滥用撑爆内存/CPU
+_MAX_BATCH_EVENTS = 100
 
 
 def _bounded_gzip_decompress(data: bytes, max_size: int = _MAX_DECOMPRESSED_SIZE) -> bytes:
@@ -227,6 +229,10 @@ async def ingest_batch(request: Request):
     events = req.get("events", [])
     if not isinstance(events, list):
         events = [events] if events else []
+
+    # FIX: P3-6 条数上限（含非 list 被包装为单元素后的情况）
+    if len(events) > _MAX_BATCH_EVENTS:
+        raise HTTPException(status_code=413, detail="Too many events in batch, max 100")
 
     results = []
     for event in events:

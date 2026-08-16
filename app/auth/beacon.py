@@ -24,6 +24,10 @@ from app.config import settings
 _mem: dict[str, dict] = {}
 _lock = threading.Lock()
 
+# 内存令牌表容量上限。满时先清理已过期项，仍满则驱逐最接近过期的令牌
+# （优先保留较新令牌），防止 Redis 降级/单机模式下 _mem 无限增长（内存泄漏）。
+_MAX_MEM_TOKENS = 10000
+
 
 def _digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -64,6 +68,15 @@ def issue_beacon_token(role: str, scope: str | None = None) -> str:
             # Redis 异常时降级到内存（与限流失败关闭语义相反，这里降级不影响可用性）
             pass
     with _lock:
+        # P3-5: 达容量上限时先清理所有已过期项；仍满则按 expires_at 升序
+        # 驱逐最接近过期的项，直到留出空位（优先保留较新令牌）。
+        if len(_mem) >= _MAX_MEM_TOKENS:
+            now = time.time()
+            for expired in [k for k, v in _mem.items() if v["expires_at"] <= now]:
+                _mem.pop(expired, None)
+            while len(_mem) >= _MAX_MEM_TOKENS:
+                oldest = min(_mem, key=lambda k: _mem[k]["expires_at"])
+                _mem.pop(oldest, None)
         _mem[key] = payload
     return token
 

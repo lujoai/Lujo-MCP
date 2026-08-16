@@ -3,6 +3,7 @@
 import json
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Dict, List
 
@@ -24,6 +25,8 @@ class SSEHub:
 
     def __init__(self):
         self._queues: Dict[str, List[_Subscription]] = {}
+        # FIX: P3-11 保护 _queues 字典结构跨线程读改写，publish/close_session 可能从任意线程调用
+        self._lock = threading.Lock()
 
     @staticmethod
     def _publish_locked(q: asyncio.Queue, message: dict) -> None:
@@ -49,29 +52,33 @@ class SSEHub:
         loop = asyncio.get_running_loop()
         # FIX: P1-10a 有界队列（maxsize=256），满时由 _publish_locked 丢最旧
         q: asyncio.Queue = asyncio.Queue(maxsize=self._QUEUE_MAXSIZE)
-        self._queues.setdefault(session_id, []).append(_Subscription(queue=q, loop=loop))
+        with self._lock:
+            self._queues.setdefault(session_id, []).append(_Subscription(queue=q, loop=loop))
         return q
 
     def unsubscribe(self, session_id: str, q: asyncio.Queue) -> None:
-        qs = self._queues.get(session_id)
-        if not qs:
-            return
+        with self._lock:
+            qs = self._queues.get(session_id)
+            if not qs:
+                return
 
-        for sub in list(qs):
-            if sub.queue is q:
-                qs.remove(sub)
-                break
-        if not qs:
-            self._queues.pop(session_id, None)
+            for sub in list(qs):
+                if sub.queue is q:
+                    qs.remove(sub)
+                    break
+            if not qs:
+                self._queues.pop(session_id, None)
 
     def publish(self, session_id: str, message: dict) -> bool:
         """从任意线程发布 server→client 消息。"""
-        qs = self._queues.get(session_id)
+        # FIX: P3-11 锁内复制订阅列表，锁外再跨线程投递，避免持锁调用 call_soon_threadsafe
+        with self._lock:
+            qs = list(self._queues.get(session_id, []))
         if not qs:
             return False
 
         delivered = False
-        for sub in list(qs):
+        for sub in qs:
             try:
                 # FIX: P1-10a 满时丢最旧由 _publish_locked 在 loop 线程内原子处理
                 sub.loop.call_soon_threadsafe(
@@ -94,11 +101,13 @@ class SSEHub:
         )
 
     def subscriber_count(self, session_id: str) -> int:
-        return len(self._queues.get(session_id, []))
+        with self._lock:
+            return len(self._queues.get(session_id, []))
 
     def close_session(self, session_id: str) -> int:
-        qs = self._queues.pop(session_id, [])
-        for sub in list(qs):
+        with self._lock:
+            qs = self._queues.pop(session_id, [])
+        for sub in qs:
             try:
                 sub.loop.call_soon_threadsafe(sub.queue.put_nowait, _CLOSE_EVENT)
             except RuntimeError:

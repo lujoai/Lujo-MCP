@@ -7,7 +7,7 @@
 
 ## [Unreleased]
 
-> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1098 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 收口后）。
+> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1105 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 清零 + P3 高价值 4 项收口后）。
 
 ### 修复
 
@@ -27,6 +27,10 @@
 - **stdio 阻塞读退出挂死**（R3-4）：`stdio.py` 用默认线程池 `run_in_executor(None, sys.stdin.readline)`，阻塞读无法被取消，stdin 未关闭时进程退出可能挂死；改为专用 daemon 线程读 stdin + `call_soon_threadsafe` 回投事件循环队列（EOF 哨兵退出），daemon 线程不阻止解释器退出，新增 `test_stdio_transport.py` 3 项测试
 - **errors bucket 无界内存增长**（R3-7）：`errors.py` `_recent` 按用户可控 `session_id` 建 bucket（每个 ≤200 条），bucket 总数无上限，高频伪造 session 可无界撑爆内存；`_recent` 改 `OrderedDict` + `_MAX_BUCKETS=1000` LRU 淘汰最久未写入的 bucket，新增 LRU 上限测试
 - **默认无鉴权暴露无告警**（S3-4）：`api_key=None`（不鉴权）+ 绑定非回环地址（如局域网 IP）时启动无任何提示，默认部署即无鉴权对外暴露而不自知；`validate_startup_configuration` 对"无 key + 非 loopback 绑定"组合打 WARNING（`0.0.0.0` 保持硬拒绝），新增 3 项告警分支测试
+- **beacon 令牌内存无界增长**（P3-5）：`beacon.py` `_mem` 在 Redis 降级/单机模式下仅惰性删除过期项，从不主动清理，可无限堆积；新增 `_MAX_MEM_TOKENS=10000` 容量上限，满时先清理过期项，仍满则驱逐最接近过期的令牌，新增 2 项容量测试
+- **MCP initialize 会话固定**（P3-8）：`mcp_routes.py` initialize 分支携带他人有效 `Mcp-Session-Id` 时直接复用该会话（通知流劫持面），且双重 `registry.get` 存在 TOCTOU；改为无条件 `registry.create()` 新建会话，新增会话隔离测试
+- **SSE Hub 跨线程竞争**（P3-11）：`sse.py` `SSEHub._queues` 跨线程读写无锁，close_session pop 与 subscribe setdefault/append 交错存在丢订阅窗口；加 `threading.Lock` 保护字典结构，锁内复制队列列表后在锁外 `call_soon_threadsafe` 发布，新增 2 项并发竞争测试
+- **/ingest/batch 批量无条数上限**（P3-6）：`ingest.py` batch 端点 events 数组仅受 10MB 解压体限制，可被滥用撑爆内存/CPU；新增 `_MAX_BATCH_EVENTS=100` 上限，超限返回 413，新增 2 项边界测试
 
 ### 变更
 

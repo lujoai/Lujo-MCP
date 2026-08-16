@@ -100,6 +100,45 @@ async def test_subscriber_count_after_close(hub, mock_session):
 
 
 @pytest.mark.asyncio
+async def test_subscribe_after_close_creates_fresh_subscription(hub, mock_session):
+    """P3-11: close_session 后重新 subscribe 应新建订阅，不因残留列表丢订阅"""
+    hub.close_session(mock_session)
+    q = hub.subscribe(mock_session)
+    assert hub.subscriber_count(mock_session) == 1
+    hub.unsubscribe(mock_session, q)
+    assert hub.subscriber_count(mock_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_subscribe_during_close_session_no_lost_sub(hub, mock_session):
+    """P3-11: 事件循环线程 subscribe 与 worker 线程 close_session 并发，订阅不丢失、不崩溃"""
+    stop = False
+    errors = []
+
+    def _closer():
+        try:
+            while not stop:
+                hub.close_session(mock_session)
+        except Exception as e:
+            errors.append(e)
+
+    t = threading.Thread(target=_closer)
+    t.start()
+    try:
+        for _ in range(300):
+            q = hub.subscribe(mock_session)
+            hub.unsubscribe(mock_session, q)
+            await asyncio.sleep(0)
+    finally:
+        stop = True
+        t.join()
+
+    assert len(errors) == 0, f"subscribe+close 并发出错: {errors}"
+    hub.close_session(mock_session)
+    assert hub.subscriber_count(mock_session) == 0
+
+
+@pytest.mark.asyncio
 async def test_is_close_event(hub):
     """is_close_event 正确识别关闭信号"""
     assert hub.is_close_event(_CLOSE_EVENT)

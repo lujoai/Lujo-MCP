@@ -75,6 +75,52 @@ class TestBeaconIssueVerify:
         assert beacon.verify_beacon_token(token, "/ingestfoo") is None
 
 
+class TestBeaconCapacityLimit:
+    """P3-5: 内存令牌容量上限 —— 满时清理过期项 / 驱逐最接近过期的令牌。"""
+
+    def test_expired_tokens_cleaned_when_full(self, monkeypatch):
+        monkeypatch.setattr(settings, "beacon_token_ttl_seconds", 60)
+        # 塞满容量上限
+        for _ in range(beacon._MAX_MEM_TOKENS):
+            beacon.issue_beacon_token(role="viewer")
+        assert len(beacon._mem) == beacon._MAX_MEM_TOKENS
+
+        # 将其中一半标记为过期
+        keys = list(beacon._mem.keys())
+        expired_keys = set(keys[: beacon._MAX_MEM_TOKENS // 2])
+        with beacon._lock:
+            for k in expired_keys:
+                beacon._mem[k]["expires_at"] = time.time() - 1
+
+        # 再签发一个 → 触发清理：过期项被移除，新令牌正常插入
+        new_token = beacon.issue_beacon_token(role="viewer")
+        with beacon._lock:
+            assert not expired_keys & set(beacon._mem.keys())
+            assert len(beacon._mem) <= beacon._MAX_MEM_TOKENS
+        assert beacon.verify_beacon_token(new_token, "/ingest") == "viewer"
+
+    def test_closest_to_expiry_evicted_when_all_active(self, monkeypatch):
+        monkeypatch.setattr(settings, "beacon_token_ttl_seconds", 60)
+        for _ in range(beacon._MAX_MEM_TOKENS):
+            beacon.issue_beacon_token(role="viewer")
+        assert len(beacon._mem) == beacon._MAX_MEM_TOKENS
+
+        # 全部保持活跃，但手动设置递增的过期时间，制造"最接近过期"项
+        keys = list(beacon._mem.keys())
+        with beacon._lock:
+            for i, k in enumerate(keys):
+                beacon._mem[k]["expires_at"] = time.time() + 10 + i
+        oldest_key = keys[0]  # 最小 expires_at
+
+        # 再签发一个 → 满且无过期项时驱逐最接近过期的，新令牌保留
+        new_token = beacon.issue_beacon_token(role="viewer")
+        new_key = "beacon:" + beacon._digest(new_token)
+        with beacon._lock:
+            assert oldest_key not in beacon._mem
+            assert new_key in beacon._mem
+            assert len(beacon._mem) == beacon._MAX_MEM_TOKENS
+
+
 class TestBeaconMiddlewareFlow:
     """中间件：header 换取令牌后，URL 只带 ?token= 即可通过（作用域内）。"""
 
