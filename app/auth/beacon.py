@@ -95,6 +95,8 @@ def verify_beacon_token(token: str, path: str) -> str | None:
     if payload["expires_at"] <= time.time():
         return None
     for scope in _scopes(payload.get("scope")):
-        if path.startswith(scope):
+        # FIX: P3-4 startswith 无边界，/ingest 会误放行 /ingest-malicious / /ingestion / /ingestfoo
+        # 等前缀相似但属于不同端点的路径。要求 path 等于 scope，或以 scope + "/" 开头。
+        if path == scope or path.startswith(scope + "/"):
             return payload.get("role") or "viewer"
     return None

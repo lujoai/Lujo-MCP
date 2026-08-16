@@ -43,7 +43,9 @@ def verify_api_key(candidate: str) -> bool:
         return False
     matched = False
     for key in valid_keys:
-        if hmac.compare_digest(candidate, key):
+        # str 版 compare_digest 仅支持 ASCII；畸形非 ASCII 头会抛 TypeError → 500。
+        # 统一 encode 为 bytes（UTF-8），恒定时间语义不变。
+        if hmac.compare_digest(candidate.encode("utf-8"), key.encode("utf-8")):
             matched = True
     return matched
 

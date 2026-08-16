@@ -7,7 +7,26 @@
 
 ## [Unreleased]
 
-> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。测试基线不变（1087 passed / 6 skipped / 0 failed）。
+> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1098 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 收口后）。
+
+### 修复
+
+#### 代码
+
+- **KB 淘汰索引泄漏**（R3-1）：`knowledge_base.py` LRU 淘汰时 `popitem` 返回的 entry 被丢弃，`_remove_from_index` 永不执行，`_norm_index`/`_type_index` 中陈旧 fingerprint 永久累积（索引无界增长 + 候选集混入已淘汰条目）；改为直接使用 `popitem` 返回值清理索引
+- **非 ASCII API Key 头 500**（S3-1）：`key_rotation.py` `hmac.compare_digest` 对含非 ASCII 的 str 抛 `TypeError`，畸形 `Authorization` 头可稳定打出 500；比较前统一 encode 为 UTF-8 bytes（恒定时间语义不变）
+- **JSON-RPC 非 dict 请求 500**（P3-2）：`mcp_routes.py` 合法 JSON 但非对象（`[1]` / `"abc"` / `123`）时 `parsed.get` 抛 `AttributeError` → 500，违反 JSON-RPC 规范；补 `isinstance(parsed, dict)` 校验返回 -32600 Invalid Request
+- **HTTP 指标 path 失效**（R3-2）：`observability.py` 在 `call_next` 之前读取 `scope["route"]` 恒为 None，所有请求 path 归并为 "404-other"，指标失去区分度；path 计算移到 `call_next` 之后
+- **路径白名单 symlink 绕过**（S3-2）：`code_locator.py` / `git.py` 白名单校验用 `abspath` 不解析符号链接，白名单根内 symlink 指向根外文件可绕过校验；统一改用 `realpath`（与 static_analyzer 一致）
+- **LLM 复合键脱敏缺口**（S3-3）：`analyzer.py` `_redact_value_for_llm` 精确匹配敏感键名，`user_token` / `db_password` / `apikey` / `x-api-key` 等复合键不脱敏即发往外部 LLM；复用 `trace_repo._is_sensitive_key` 子串匹配 + 白名单策略
+- **data_table 断言 NameError**（R3-6）：`ui_runner.py` 表格元素未找到时引用仅 form 分支定义的 `expected_values` → NameError 被外层 except 吞掉，返回误导性 error_type；改用 `expected_rows/expected_columns/expected_headers`
+- **限流误伤结果轮询**（R3-5）：`middleware.py` `/api/debug/analyze`（10 次/分）前缀匹配误伤 `/api/debug/analyze/result/{job_id}` 轮询端点，合法客户端轮询超 10 次/分即 429；为 result 子路径单独设置 60 次/分
+- **beacon scope 前缀无边界**（P3-4）：`beacon.py` `path.startswith(scope)` 会误放行 `/ingest-malicious` / `/ingestion` / `/ingestfoo` 等前缀相似但属于不同端点的路径；改为 `path == scope or path.startswith(scope + "/")`，新增 `test_prefix_boundary_not_bypassed` 覆盖三类边界
+- **会话驱逐 DoS**（P3-3）：`session.py` 会话表达上限时无条件驱逐 `last_active` 最小的会话（可为活跃会话），攻击者高频建会话可把正常用户挤下线，`SessionLimitExceeded` 形同虚设；改为仅驱逐超过 TTL（1800s）的过期会话，全活跃时抛 `SessionLimitExceeded`（HTTP 层返回 503），新增 3 项驱逐策略测试
+- **定时清理任务静默死亡**（R3-3）：`main.py` `periodic_cleanup` 循环体内 `get_state_store()` 在 try 之外，一次异常即导致整个清理任务永久失效（traces/sessions 过期数据不再清理）；`get_state_store()` 补兜底 try/except 跳过当期继续下一周期；停机时 `task.cancel()` 后补 `await task`（抑制 `CancelledError`），确保协程真正退出
+- **stdio 阻塞读退出挂死**（R3-4）：`stdio.py` 用默认线程池 `run_in_executor(None, sys.stdin.readline)`，阻塞读无法被取消，stdin 未关闭时进程退出可能挂死；改为专用 daemon 线程读 stdin + `call_soon_threadsafe` 回投事件循环队列（EOF 哨兵退出），daemon 线程不阻止解释器退出，新增 `test_stdio_transport.py` 3 项测试
+- **errors bucket 无界内存增长**（R3-7）：`errors.py` `_recent` 按用户可控 `session_id` 建 bucket（每个 ≤200 条），bucket 总数无上限，高频伪造 session 可无界撑爆内存；`_recent` 改 `OrderedDict` + `_MAX_BUCKETS=1000` LRU 淘汰最久未写入的 bucket，新增 LRU 上限测试
+- **默认无鉴权暴露无告警**（S3-4）：`api_key=None`（不鉴权）+ 绑定非回环地址（如局域网 IP）时启动无任何提示，默认部署即无鉴权对外暴露而不自知；`validate_startup_configuration` 对"无 key + 非 loopback 绑定"组合打 WARNING（`0.0.0.0` 保持硬拒绝），新增 3 项告警分支测试
 
 ### 变更
 

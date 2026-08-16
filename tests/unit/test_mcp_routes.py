@@ -116,6 +116,61 @@ async def test_delete_session_closes_sse_subscribers():
 
 
 # ---------------------------------------------------------------------------
+# P3-3: 会话驱逐策略（仅驱逐过期会话，全活跃拒绝新建）
+# ---------------------------------------------------------------------------
+
+class TestSessionRegistryEviction:
+    def test_all_active_sessions_rejected_at_limit(self):
+        from app.mcp.transports.session import (
+            SessionRegistry,
+            SessionLimitExceeded,
+        )
+
+        reg = SessionRegistry(max_sessions=2)
+        reg.create()
+        reg.create()
+        with pytest.raises(SessionLimitExceeded):
+            reg.create()
+        # 原有活跃会话不被驱逐（防驱逐 DoS）
+        assert len(reg._sessions) == 2
+
+    def test_expired_sessions_evicted_at_limit(self):
+        from app.mcp.transports.session import (
+            SessionRegistry,
+            _SESSION_TTL_SECONDS,
+        )
+
+        reg = SessionRegistry(max_sessions=2)
+        s1 = reg.create()
+        s2 = reg.create()
+        # 将 s1 置为过期（超过 TTL）
+        reg._sessions[s1.session_id].last_active -= _SESSION_TTL_SECONDS + 10
+
+        s3 = reg.create()
+        assert s1.session_id not in reg._sessions  # 过期者被驱逐
+        assert s2.session_id in reg._sessions      # 活跃者保留
+        assert s3.session_id in reg._sessions
+
+    def test_expired_eviction_frees_multiple_slots(self):
+        from app.mcp.transports.session import (
+            SessionRegistry,
+            _SESSION_TTL_SECONDS,
+        )
+
+        reg = SessionRegistry(max_sessions=2)
+        s1 = reg.create()
+        s2 = reg.create()
+        reg._sessions[s1.session_id].last_active -= _SESSION_TTL_SECONDS + 10
+        reg._sessions[s2.session_id].last_active -= _SESSION_TTL_SECONDS + 10
+
+        s3 = reg.create()  # 两个过期槽位一次性释放
+        s4 = reg.create()  # 释放后有空间，无需再驱逐
+        assert s3.session_id in reg._sessions
+        assert s4.session_id in reg._sessions
+        assert len(reg._sessions) == 2
+
+
+# ---------------------------------------------------------------------------
 # TOOL_ROLE_REQUIREMENTS 覆盖校验
 # ---------------------------------------------------------------------------
 

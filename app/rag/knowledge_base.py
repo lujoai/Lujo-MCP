@@ -190,10 +190,8 @@ class KnowledgeBaseStore:
             self._add_to_index(entry)
 
             if existing is None and len(self._entries) > self.max_entries:
-                evicted_fingerprint, _ = self._entries.popitem(last=False)
-                evicted = self._entries.get(evicted_fingerprint)
-                if evicted is not None:
-                    self._remove_from_index(evicted)
+                evicted_fingerprint, evicted = self._entries.popitem(last=False)
+                self._remove_from_index(evicted)
                 logger.info(
                     "Knowledge base entry evicted",
                     extra={

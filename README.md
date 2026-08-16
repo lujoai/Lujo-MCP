@@ -116,7 +116,7 @@ npm install -g @lujoai/lujo-mcp
 
 默认关闭或需外部依赖，按需启用：
 
-- **LLM 智能分析** — 对接智谱 / OpenAI（AsyncOpenAI 异步调用），默认免费模型 GLM-4.7-Flash；需配置 `OPENAI_API_KEY`
+- **LLM 智能分析** — 对接智谱 / OpenAI / DeepSeek（AsyncOpenAI 异步调用），默认免费模型 GLM-4.7-Flash；需配置 `OPENAI_API_KEY`
 - **异步分析削峰队列** — 有界 `asyncio.Queue` + K 常驻消费协程 + 信号量对齐 LLM RPM/TPM；队列满返回 429；优雅停机 drain
 - **多级缓存** — L1(LRU) + L2(Redis) 多级缓存，减少重复 LLM 调用（需 Redis）
 - **Debug Experience Retrieval（RAG-based）** — Debug Experience 历史检索，`debug_experience_enabled` 默认 False；三层检索（L1 fingerprint recall / L2 message normalization / L3 vector fallback），关闭状态零调用零耗时
@@ -208,7 +208,7 @@ cd Lujo-MCP
 cp .env.example .env
 
 # 编辑 .env，填入你的 API Key
-# 最小配置只需设置 OPENAI_API_KEY 或使用智谱
+# 最小配置只需设置 OPENAI_API_KEY（openai / zhipu / deepseek 任一均可）
 # LLM_PROVIDER=zhipu
 # OPENAI_API_KEY=your-zhipu-api-key
 
@@ -248,9 +248,9 @@ python -m app.main
 开发最小配置：
 
 ```
-LLM_PROVIDER=zhipu                          # openai | zhipu | custom
+LLM_PROVIDER=zhipu                          # openai | zhipu | deepseek | custom
 OPENAI_API_KEY=your-zhipu-or-openai-key
-LLM_MODEL=glm-4.7-flash                     # 智谱免费模型；也可换 gpt-4o 等
+LLM_MODEL=glm-4.7-flash                     # 智谱免费模型；也可换 gpt-4o / deepseek-v4-flash 等
 LLM_FALLBACK_MODEL=glm-4-flash
 ```
 
@@ -259,12 +259,13 @@ LLM_FALLBACK_MODEL=glm-4-flash
 >
 > | 变量               | 说明                               | 示例                                |
 > | ---------------- | -------------------------------- | --------------------------------- |
-> | `LLM_PROVIDER`   | 厂商：`openai` / `zhipu` / `custom` | `zhipu`                           |
+> | `LLM_PROVIDER`   | 厂商：`openai` / `zhipu` / `deepseek` / `custom` | `zhipu`                           |
 > | `OPENAI_API_KEY` | 你的 API Key（变量名沿用 OpenAI SDK 约定）  | `your-key`                        |
 > | `LLM_MODEL`      | 模型名，任意兼容端点支持的模型                  | `glm-4.7-flash`                   |
 > | `LLM_BASE_URL`   | 自定义端点（留空则按 provider 自动选）         | `https://my-proxy.example.com/v1` |
 >
 > - **智谱（免费）**：`LLM_PROVIDER=zhipu` 时 base\_url 自动设为 `https://open.bigmodel.cn/api/paas/v4/`，模型填 `glm-4.7-flash`（免费纯文本）即可，无需付费。
+> - **DeepSeek**：`LLM_PROVIDER=deepseek` 时 base\_url 自动设为 `https://api.deepseek.com`，模型填 `deepseek-v4-flash`（低成本档；要更强可换 `deepseek-v4-pro`），密钥同样填入 `OPENAI_API_KEY`。
 > - **自建 / 第三方兼容端点**：`LLM_PROVIDER=custom` 并填 `LLM_BASE_URL` + `LLM_MODEL`，即可接入任意 OpenAI 兼容服务（如本地 Ollama、vLLM、代理网关）。
 > - **OpenAI**：`LLM_PROVIDER=openai`，模型填 `gpt-4o` 等。
 
@@ -274,7 +275,7 @@ LLM_FALLBACK_MODEL=glm-4-flash
 STORAGE_BACKEND=postgresql   # memory | postgresql
 STATE_BACKEND=redis          # memory | redis（限流计数）
 API_KEY=your-secret          # 开启 fail-closed 鉴权
-LLM_PROVIDER=zhipu           # openai | zhipu | custom（智谱免 VPN）
+LLM_PROVIDER=zhipu           # openai | zhipu | deepseek | custom（智谱免 VPN）
 ```
 
 ### 健康检查

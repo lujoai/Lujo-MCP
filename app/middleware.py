@@ -137,6 +137,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     ENDPOINT_LIMITS = {
         "/ingest/": (120, 60),
+        # FIX: R3-5 result 轮询子路径须先于 analyze 匹配（dict 有序，具体前缀在前），
+        # 否则 GET /api/debug/analyze/result/{job_id} 被 analyze 的 10/min 误伤，
+        # 合法客户端轮询超 10 次/分即 429
+        "/api/debug/analyze/result": (60, 60),
         "/api/debug/analyze": (10, 60),
         "/api/debug/verify/ui": (5, 60),
     }

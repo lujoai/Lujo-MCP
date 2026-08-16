@@ -16,11 +16,15 @@ import asyncio
 import hashlib
 import logging
 import threading
-from collections import deque
+from collections import deque, OrderedDict
 
 # 最多保留最近 200 条，超出丢弃最旧的
 _MAX = 200
-_recent: dict[str, deque] = {}
+
+# FIX R3-7: bucket 总数上限。_recent 按用户可控 session_id 建 bucket（每个 ≤200 条），
+# bucket 数无上限时可被高频伪造 session 无界撑爆内存。LRU 淘汰最久未写入的 bucket。
+_MAX_BUCKETS = 1000
+_recent: OrderedDict[str, deque] = OrderedDict()
 _lock = threading.Lock()
 
 logger = logging.getLogger("lujo-mcp.errors")
@@ -116,7 +120,16 @@ def record(exc_data: dict, source: str = "unknown", session_id: str | None = Non
 
     with _lock:
         if key not in _recent:
+            # FIX R3-7: bucket 总数达上限时 LRU 淘汰最久未写入的 bucket
+            if len(_recent) >= _MAX_BUCKETS:
+                oldest_key, oldest_bucket = _recent.popitem(last=False)
+                logger.warning(
+                    "errors bucket 数达上限(%d)，LRU 淘汰最旧 bucket %s（%d 条记录）",
+                    _MAX_BUCKETS, oldest_key, len(oldest_bucket),
+                )
             _recent[key] = deque(maxlen=_MAX)
+        else:
+            _recent.move_to_end(key)  # 维持 LRU 顺序：最近写入的 bucket 在尾
         bucket = _recent[key]
 
         # 从最新向最旧找同指纹记录（仅在当前桶内去重）

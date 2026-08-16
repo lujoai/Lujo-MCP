@@ -51,6 +51,14 @@ async def mcp_post(request: Request):
     except Exception:
         return JSONResponse(make_error(None, PARSE_ERROR, "无效 JSON，详情见服务端日志"), status_code=400)
 
+    # 合法 JSON 但非对象（如 [1] / "abc" / 123）按 JSON-RPC 规范返回 -32600，
+    # 而非在 parsed.get() 处抛 AttributeError → 500
+    if not isinstance(parsed, dict):
+        return JSONResponse(
+            make_error(None, INVALID_REQUEST, "JSON-RPC 请求必须是对象"),
+            status_code=400,
+        )
+
     method = parsed.get("method", "")
     req_id = parsed.get("id")
     session_id = request.headers.get("Mcp-Session-Id")

@@ -47,6 +47,19 @@ def validate_startup_configuration(host: str | None = None, api_key: str | None 
             "Refusing to start: host contains 0.0.0.0 but no API key is configured. "
             "Set API_KEY or API_KEYS before exposing the service."
         )
+    # FIX S3-4: 绑定非回环地址（局域网/公网 IP）且未配置鉴权时打 WARNING，
+    # 避免"默认配置即无鉴权对外暴露"的部署不自知（0.0.0.0 已在上方硬拒绝）。
+    if not auth_on and "0.0.0.0" not in str(bind_host):
+        try:
+            is_loopback = ipaddress.ip_address(str(bind_host)).is_loopback
+        except ValueError:
+            is_loopback = str(bind_host) == "localhost"
+        if not is_loopback:
+            logger.warning(
+                "服务绑定在非回环地址 %s 且未配置 API_KEY/API_KEYS，"
+                "所有能路由到本机的客户端均可未授权访问；生产环境请配置鉴权。",
+                bind_host,
+            )
 
 
 @asynccontextmanager
@@ -109,7 +122,13 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(_CLEANUP_INTERVAL)
 
             # ── 抢占分布式/本地锁 ──
-            store = get_state_store()
+            # FIX R3-3: get_state_store() 在 try 之外，一次异常整个清理任务
+            # 即静默死亡（后续周期全部失效）。此处兜底后 continue 下一周期。
+            try:
+                store = get_state_store()
+            except Exception:
+                logger.exception("获取 state store 失败，跳过本次清理")
+                continue
             use_redis = isinstance(store, RedisStateStore)
             acquired = False
 
@@ -201,7 +220,13 @@ async def lifespan(app: FastAPI):
         logger.warning("知识库种子加载失败，跳过（不影响启动）", exc_info=True)
 
     yield
+    # FIX R3-3: cancel 后 await 任务结束（抑制 CancelledError），
+    # 确保清理协程真正退出且异常不被静默吞掉。
     task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
     # ── AI Debug Agent 优雅停机：排空修复队列（限时 agent_queue_drain_timeout 秒）──
     if settings.agent_enabled:

@@ -28,10 +28,11 @@ def _is_allowed(file_path: str) -> bool:
     防止通过任意路径探测其他 git 仓库历史（信息泄露）。"""
     prefix = (settings.git_path_whitelist or "").strip()
     if prefix:
-        allowed = [os.path.abspath(p.strip()) for p in prefix.split(",") if p.strip()]
+        allowed = [os.path.realpath(p.strip()) for p in prefix.split(",") if p.strip()]
     else:
-        allowed = [os.path.abspath(os.getcwd())]
-    abs_path = os.path.abspath(file_path)
+        allowed = [os.path.realpath(os.getcwd())]
+    # realpath 解析符号链接，防止白名单根内 symlink 指向根外路径绕过校验
+    abs_path = os.path.realpath(file_path)
     # 用 os.sep 边界比较，避免 /app 命中 /app-secrets
     return any(abs_path == p or abs_path.startswith(p + os.sep) for p in allowed)
 

@@ -58,6 +58,22 @@ class TestBeaconIssueVerify:
         # 自定义 scope 未包含 dashboard → 拒绝
         assert beacon.verify_beacon_token(token, "/api/dashboard/stream") is None
 
+    def test_prefix_boundary_not_bypassed(self, monkeypatch):
+        """scope 前缀匹配须有边界：/ingest 不得放行 /ingest-malicious 等相似端点。
+
+        复现 CODE_REVIEW P3-4：``path.startswith(scope)`` 无边界，
+        ``/ingest-xxx`` / ``/ingestion`` / ``/ingestfoo`` 会被误判为作用域内。
+        """
+        monkeypatch.setattr(settings, "beacon_token_scope", "/ingest")
+        token = beacon.issue_beacon_token(role="viewer")
+        # 真实作用域内：scope 本身 + 子路径
+        assert beacon.verify_beacon_token(token, "/ingest") == "viewer"
+        assert beacon.verify_beacon_token(token, "/ingest/batch") == "viewer"
+        # 前缀相似但属于不同端点 → 必须 fail-closed
+        assert beacon.verify_beacon_token(token, "/ingest-malicious") is None
+        assert beacon.verify_beacon_token(token, "/ingestion") is None
+        assert beacon.verify_beacon_token(token, "/ingestfoo") is None
+
 
 class TestBeaconMiddlewareFlow:
     """中间件：header 换取令牌后，URL 只带 ?token= 即可通过（作用域内）。"""

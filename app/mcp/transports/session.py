@@ -16,9 +16,13 @@ from typing import Optional
 
 logger = logging.getLogger("lujo-mcp.session")
 
-# 会话表容量上限。超过时驱逐最旧会话；全活跃则拒绝新建。
+# 会话表容量上限。超过时驱逐已过期会话；全活跃则拒绝新建。
 # 每个会话对象很小（~200B），10000 条 ≈ 2MB，不会造成内存压力。
 _MAX_SESSIONS = 10_000
+
+# 会话空闲过期阈值（秒），与 cleanup() 默认 TTL 一致。
+# FIX P3-3: 达上限时仅驱逐已过期会话，避免把活跃会话挤下线（驱逐 DoS）。
+_SESSION_TTL_SECONDS = 1800
 
 
 class SessionLimitExceeded(Exception):
@@ -46,14 +50,23 @@ class SessionRegistry:
         s = MCPSession(session_id=sid)
         with self._lock:
             if len(self._sessions) >= self._max_sessions:
-                # 尝试驱逐最旧的会话（last_active 最小）
-                oldest_sid = min(
-                    self._sessions, key=lambda k: self._sessions[k].last_active
-                )
-                del self._sessions[oldest_sid]
+                # FIX P3-3: 仅驱逐已过期会话（与 cleanup 同一 TTL）；
+                # 全活跃时抛 SessionLimitExceeded（调用方返回 503），
+                # 防止攻击者高频建会话把正常活跃会话挤下线。
+                now = time.time()
+                expired = [
+                    k for k, sess in self._sessions.items()
+                    if now - sess.last_active > _SESSION_TTL_SECONDS
+                ]
+                if not expired:
+                    raise SessionLimitExceeded(
+                        f"会话数已达上限({self._max_sessions})且全部活跃，拒绝新建"
+                    )
+                for k in expired:
+                    del self._sessions[k]
                 logger.warning(
-                    "会话数达上限(%d)，已驱逐最旧会话 %s",
-                    self._max_sessions, oldest_sid,
+                    "会话数达上限(%d)，已驱逐 %d 个过期会话",
+                    self._max_sessions, len(expired),
                 )
             self._sessions[sid] = s
         return s

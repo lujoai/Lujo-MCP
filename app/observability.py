@@ -153,13 +153,6 @@ class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start = time.time()
         method = request.method
-        route = request.scope.get("route")
-        if route is not None and getattr(route, "path", None):
-            path = _sanitize_label(route.path)
-        else:
-            # FIX: P1-10b 未命中已注册路由时统一 "404-other"，
-            # 否则完整 URL（含用户可控动态路径）会撑爆指标 key 表
-            path = "404-other"
 
         try:
             response = await call_next(request)
@@ -169,6 +162,17 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             raise
         finally:
             elapsed = time.time() - start
+
+            # FIX: R3-2 route 由下游路由阶段写入 scope；在 call_next 之前读取恒为 None，
+            # 所有请求 path 都会归并为 "404-other"，指标失去区分度。
+            # scope 是原地更新的同一 dict，在 call_next 之后读取才能拿到真实路由模板。
+            route = request.scope.get("route")
+            if route is not None and getattr(route, "path", None):
+                path = _sanitize_label(route.path)
+            else:
+                # FIX: P1-10b 未命中已注册路由时统一 "404-other"，
+                # 否则完整 URL（含用户可控动态路径）会撑爆指标 key 表
+                path = "404-other"
 
             # ── 写入内存存储（向后兼容 /metrics 端点）──
             with _counter_lock:

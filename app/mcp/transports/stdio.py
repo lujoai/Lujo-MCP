@@ -8,6 +8,7 @@ import sys
 import json
 import logging
 import asyncio
+import threading
 
 from app.mcp.tools import register_all_tools
 from app.mcp.protocol.server import dispatch
@@ -22,6 +23,9 @@ from app.mcp.protocol.jsonrpc import (
 )
 
 logger = logging.getLogger("lujo-mcp.mcp.stdio")
+
+# stdin EOF 哨兵（与有效行区分；None/空串均为有效输入边界）
+_EOF = object()
 
 
 def _configure_stdio_logging():
@@ -56,15 +60,35 @@ async def run_stdio():
     atexit.register(cleanup_resources)
 
     loop = asyncio.get_running_loop()
-    try:
+
+    # FIX R3-4: 默认线程池里的阻塞 readline 无法被 cancel，stdin 未关闭时
+    # 进程退出会挂死。改用专用 daemon 线程读 stdin，经 call_soon_threadsafe
+    # 回投事件循环队列；daemon 线程不阻止解释器退出，消除挂死面。
+    lines: asyncio.Queue = asyncio.Queue()
+
+    def _stdin_reader():
         while True:
             try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-            except EOFError:
-                break
+                line = sys.stdin.readline()
+            except Exception:
+                line = ""
+            try:
+                loop.call_soon_threadsafe(lines.put_nowait, line if line else _EOF)
+            except RuntimeError:
+                return  # 事件循环已关闭，无需再投递
             if not line:
+                return  # EOF，读线程退出
+
+    threading.Thread(
+        target=_stdin_reader, daemon=True, name="lujo-stdio-stdin"
+    ).start()
+
+    try:
+        while True:
+            item = await lines.get()
+            if item is _EOF:
                 break
-            line = line.strip()
+            line = item.strip()
             if not line:
                 continue
             try:

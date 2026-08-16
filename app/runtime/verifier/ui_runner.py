@@ -837,7 +837,13 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     "selector": selector,
                     "diff": {
                         "field": f"{action}.data_table",
-                        "expected": expected_values,
+                        # FIX: R3-6 expected_values 仅在 form 分支定义，
+                        # 此处引用会 NameError 被外层 except 吞掉，返回误导性 error_type
+                        "expected": {
+                            "rows": expected_rows,
+                            "columns": expected_columns,
+                            "headers": expected_headers,
+                        },
                         "actual": "Table element not found",
                     },
                     "error_type": "ElementNotFound",

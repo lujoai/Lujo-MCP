@@ -121,3 +121,40 @@ def test_get_latest_filter_by_session():
     latest_all = errors.get_latest()
     assert latest_all is not None
     assert latest_all["type"] == "ErrorB"
+
+
+# 8. R3-7: bucket 总数 LRU 上限（防高频伪造 session 无界撑爆内存）
+def test_bucket_total_lru_cap(monkeypatch):
+    from collections import OrderedDict
+
+    monkeypatch.setattr(errors, "_MAX_BUCKETS", 5)
+    saved_recent = errors._recent
+    errors._recent = OrderedDict()  # 隔离既有桶，保证断言确定性
+    try:
+        for i in range(8):
+            errors.record(
+                {"type": "ValueError", "message": f"m{i}",
+                 "frames": [{"file": f"f{i}.py", "line": 1, "function": "fn"}]},
+                source="t", session_id=f"cap-{i}",
+            )
+        # 总数被限制在上限内，最旧的 bucket 已淘汰
+        assert len(errors._recent) == 5
+        assert "cap-0" not in errors._recent
+        assert "cap-7" in errors._recent
+
+        # LRU 语义：写入已存在 bucket 会刷新其位置，不被下一次淘汰
+        errors.record(
+            {"type": "ValueError", "message": "refresh",
+             "frames": [{"file": "r.py", "line": 1, "function": "fn"}]},
+            source="t", session_id="cap-5",
+        )
+        errors.record(
+            {"type": "ValueError", "message": "new",
+             "frames": [{"file": "n.py", "line": 1, "function": "fn"}]},
+            source="t", session_id="cap-8",
+        )
+        assert len(errors._recent) == 5
+        assert "cap-5" in errors._recent      # 刚刷新，保留
+        assert "cap-3" not in errors._recent  # 队首最旧，被淘汰
+    finally:
+        errors._recent = saved_recent

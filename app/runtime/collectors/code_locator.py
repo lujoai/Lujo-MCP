@@ -36,13 +36,16 @@ def _allowed_roots() -> list[str]:
     （stdio 模式下即被调试项目根），默认拒绝根目录之外的任意路径。"""
     prefix = (settings.whitelist_path_prefix or "").strip()
     if prefix:
-        return [os.path.abspath(p.strip()) for p in prefix.split(",") if p.strip()]
-    return [os.path.abspath(os.getcwd())]
+        return [os.path.realpath(p.strip()) for p in prefix.split(",") if p.strip()]
+    return [os.path.realpath(os.getcwd())]
 
 
 def _is_allowed(path: str) -> bool:
-    """路径白名单校验（SEC-01：默认拒绝允许根之外的任意路径，防任意文件读取 / LFI）。"""
-    abs_path = os.path.abspath(path)
+    """路径白名单校验（SEC-01：默认拒绝允许根之外的任意路径，防任意文件读取 / LFI）。
+
+    realpath 解析符号链接：白名单根内的 symlink 指向根外文件时不得绕过校验
+    （与 static_analyzer 的实现保持一致）。"""
+    abs_path = os.path.realpath(path)
     for root in _allowed_roots():
         # 用 os.sep 边界比较，避免 /app 命中 /app-secrets
         if abs_path == root or abs_path.startswith(root + os.sep):

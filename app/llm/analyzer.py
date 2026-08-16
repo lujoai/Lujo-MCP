@@ -28,6 +28,7 @@ from app.rag.debug_case import (
 )
 from app.rag.vector_store import get_vector_store
 from app.runtime.core.redaction import redact
+from app.runtime.core.trace_repo import _is_sensitive_key
 
 logger = logging.getLogger("lujo-mcp.llm")
 
@@ -98,16 +99,6 @@ _async_client_lock = threading.Lock()
 _redis_cache_client: Optional[object] = None
 _redis_cache_initialized: bool = False
 _redis_cache_lock = threading.Lock()
-SENSITIVE_KEYS = {
-    "api_key",
-    "token",
-    "password",
-    "secret",
-    "authorization",
-    "cookie",
-    "passwd",
-    "pwd",
-}
 
 # ── LLM 分析结果缓存（P1-2）──
 # 按 fingerprint 缓存 LLM 分析结果，避免相同上下文重复调用
@@ -400,11 +391,15 @@ SYSTEM_PROMPT = """你是一位资深的后端排障专家。用户会提供程�
 
 
 def _redact_value_for_llm(value):
-    """递归脱敏发送给外部 LLM 的上下文。"""
+    """递归脱敏发送给外部 LLM 的上下文。
+
+    键名判定复用 trace_repo._is_sensitive_key（子串包含 + 白名单），
+    使 user_token / db_password / apikey / x-api-key 等复合键同样被脱敏，
+    与入库脱敏策略保持一致。"""
     if isinstance(value, dict):
         sanitized = {}
         for key, item in value.items():
-            if str(key).lower() in SENSITIVE_KEYS:
+            if _is_sensitive_key(key):
                 sanitized[key] = "***REDACTED***"
             else:
                 sanitized[key] = _redact_value_for_llm(item)
