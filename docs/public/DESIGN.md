@@ -2,7 +2,7 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.4.0｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.5.2｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
@@ -19,6 +19,8 @@
 > **v0.4.0 M5 全量回归更新（2026-08-04）**：M1-M4 全部落地后完成全量回归——修复合入 main 的两个测试回归（`test_static_analyzer.py` 移除已删除 API 用例、`test_security_agent_severity.py` 修正 `VALID_SEVERITY` 哨兵值断言）；单元 792 passed / 6 skipped / 0 failed（不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed（需启动 uvicorn 服务器）。`test_coordinator.py`、`test_agent_repair_e2e.py` 依赖有效 API Key，无 Key 时 skip，属环境依赖非代码回归。产品版本里程碑 v0.4.0 达成。
 >
 > **CODE_REVIEW_FIX_PROMPT 代码审查修复更新（2026-08-08）**：按 `CODE_REVIEW_FIX_PROMPT.md` 清单完成 P0×5 + P1×20 + P2 全部项——P0：`debug.py` 补 `import time`（session/health 端点 500）、`static_analyzer._resolve_path` LFI 白名单（realpath + 允许前缀，拒绝返回 None）、`ui_runner` SSRF 重定向逐跳守卫（导航前固定 IP）、`dashboard.html` 存储型 XSS（`esc()` 补引号转义 + 事件委托去内联 onclick）+ `main.py` dashboard 响应加 CSP 头、DDL 双源分叉收敛（`app/runtime/core/storage/ddl.py` 共享常量，pg_store / async_pg_store / migrations 三处一致）；P1：SDK 离线重试数据全丢、beacon 分支不压缩、repair/analysis 队列残留与 `_jobs` TTL 清理、`pg_async_enabled` 混合行为 fail-fast、redact 递归脱敏全边界、RBAC 默认角色 fail-closed、analyzer 指纹去 request_id、fault_localizer 帧索引错位、scorer runtime 嵌套键、分区表检测、PG 池 `_get_conn` 无限递归 bug 与超时、errors 同指纹节流、verify_loop 超时/语义、dag_degraded、stdio 畸形输入、params 非 dict、SSE 有界队列、metrics 归一化、state.store 限流键驱逐；P2：spec_store 缓存/LIKE/delete/get 回源、ui_runner `browser.close()` finally、assert_engine 值类型归一、死配置收敛、版本号 `0.4.0-beta`、Dockerfile 非 root + `requirements-locked.txt`。新增 `test_state_store`/`test_ddl_consistency`/`test_debug_endpoints` 回归测试。测试基线：891 passed / 6 skipped / 0 failed
+>
+> **v0.5.0/v0.5.1/v0.5.2 发布更新（2026-08-16）**：v0.5.0 工程质量加固（DebugContext Schema 7→20 字段 + Runtime Integration、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）已发布（2026-08-13）；v0.5.1 Source Map 解析（SM1 纯 Python base64-VLQ 解码 + SM2 上传/磁盘双通道 + SM3 `resolve_stack` 工具 18/18 + SM4 Quality/Benchmark A/B 实证，默认关闭）+ deepseek provider base_url 修复 + LLM e2e/git 编码修复已发布（2026-08-15）；v0.5.2 品牌统一（ai-debug-mcp → lujo-mcp）已发布（2026-08-15）。第 3 轮代码审查 P1/P2/P3 共 17 项修复收口（2026-08-16，测试基线 1087 → 1105 passed / 6 skipped / 0 failed）。
 
 ---
 

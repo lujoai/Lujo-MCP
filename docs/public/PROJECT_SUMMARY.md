@@ -178,7 +178,7 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **1087 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek base_url 1 项）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **1105 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek base_url 1 项 + 第 3 轮代码审查 P1/P2/P3 收口 24 项）
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -199,7 +199,7 @@ Verifier 验证
 
 ## 5. 当前开发阶段
 
-**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地；**v0.5.0 已发布（2026-08-13）**：工程质量加固 + Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；下一版本 v0.5.1 已完成开发待发布（**Source Map 解析已落地**：纯 Python VLQ 解码 + 上传/磁盘双获取通道 + `resolve_stack` MCP 工具（18/18）+ QualityScorer/Benchmark A/B 实证，`sourcemap_enabled` 默认关闭；Browser SDK column 保留 + release 透传）
+**当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地；**v0.5.0 已发布（2026-08-13）**：工程质量加固 + Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；**v0.5.1 已发布（2026-08-15）**：Source Map 解析（纯 Python VLQ 解码 + 上传/磁盘双获取通道 + `resolve_stack` MCP 工具（18/18）+ QualityScorer/Benchmark A/B 实证，`sourcemap_enabled` 默认关闭；Browser SDK column 保留 + release 透传）；**v0.5.2 已发布（2026-08-15）**：品牌统一（ai-debug-mcp → lujo-mcp）。第 3 轮代码审查 P1/P2/P3 共 17 项修复已收口（2026-08-16，基线 1105/6/0）。
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -239,14 +239,14 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1087 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek base_url 1 项）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1105 passed / 6 skipped / 0 failed**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek base_url 1 项 + 第 3 轮代码审查 P1/P2/P3 收口 24 项）。
 
 **当前优先级**：
 
 | 优先级 | 任务 | 目标 |
 |--------|------|------|
 | ~~**P1**~~ ✅ | ~~v0.5.1/v0.5.2 迭代：Source Map 解析 + Browser SDK 增强 + 品牌统一~~ | ✅ 已完成（2026-08-15：Source Map 解析 + resolve_stack 18/18 + deepseek 修复 → npm 0.5.1；品牌统一 ai-debug-mcp → lujo-mcp → npm 0.5.2） |
-| **P1** | 后续版本迭代（Source Map 后续增强 / Browser SDK 压缩 e2e 落地） | 待规划（见 CHANGELOG [Unreleased] / DEV_PLAN） |
+| **P1** | 后续版本迭代（Source Map 后续增强 / Browser SDK 压缩 e2e 落地） | 待规划（详见变更记录） |
 | **P2** | Browser SDK 压缩 e2e 联调（`SDK-007`） | CI 交错任务，代码已完成仅验证，不占开发轨 |
 | ~~P3~~ ✅ | ~~Docker 容器化复现实验（`STAB-007`）~~ | ✅ 已完成（postgres/redis/app 三容器健康，/health、/api/debug/run、连接池均已验证） |
 | ~~P4~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
@@ -294,7 +294,7 @@ Verifier 验证
 | 2 | DESIGN.md | 理解技术设计 |
 | 3 | PRD.md | 理解产品需求 |
 
-> 开发规则、当前状态、开发计划、长期路线图等内部文档不对外公开，AI Agent 可通过本地文件系统访问 `docs/internal/` 目录。
+> 开发规则、当前状态、开发计划、长期路线图等内部文档不对外公开，仅供团队与 AI Agent 在本地文件系统中查阅。
 
 ---
 

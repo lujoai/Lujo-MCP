@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
 > 最新版本：**v0.5.2（2026-08-15）**。品牌统一：全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`（MCP server 名 / logger / OTel service name / 配置示例 / Browser SDK description），LICENSE 版权署名改为 LujoAI；v0.5.1 已发布（Source Map 堆栈还原 + `resolve_stack` 18/18 + deepseek provider base_url 修复）。npm `latest` → `@lujoai/lujo-mcp@0.5.2`。
-> 测试基线：单元 1087 passed / 6 skipped / 0 failed（含 v0.5.1 Source Map 94 项 + deepseek base_url 1 项）+ e2e 10 passed。
+> 测试基线：单元 1105 passed / 6 skipped / 0 failed（2026-08-16 第 3 轮代码审查 P1/P2/P3 收口后，新增 24 项）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >

@@ -5,12 +5,12 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v5.9（CODE_REVIEW_FIX_PROMPT 代码审查修复交付） |
+| 文档版本 | v6.0（第 3 轮代码审查修复 + v0.5.2 发布后同步） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v0.4.0-beta |
+| 当前产品版本 | v0.5.2 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-08-08 |
+| 最后更新 | 2026-08-16 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
@@ -36,6 +36,7 @@
 | v5.8 | 2026-08-04 | 架构委员会 | **M5 全量回归 + 文档同步交付**：(1) 修复合入 main 后两个测试回归——`test_static_analyzer.py` 移除已删除的 `analyze_source_code`/旧版 `analyze_handler(module_path=...)` API（无堆栈入口由 `test_url_resolver.py` 覆盖）、`test_security_agent_severity.py` 修正 `VALID_SEVERITY`（`unknown` 为哨兵值，改为断言无效值映射为 `unknown`）；(2) 全量回归验证——单元 792 passed / 6 skipped / 0 failed（不含依赖真实 LLM 的 `coordinator` 用例）+ e2e 10 passed（需启动 uvicorn 服务器）；LLM 依赖用例（`test_coordinator.py`、`test_agent_repair_e2e.py`）在无有效 API Key 时 skip，属环境依赖非代码回归；(3) CHANGELOG/DESIGN/PRD 版本号与测试基线同步，产品版本 v0.3.0 → v0.4.0。v0.4.0 目标「让 Debug Context 价值可量化、可证明」达成。 |
 | v5.9 | 2026-08-08 | 架构委员会 | **CODE_REVIEW_FIX_PROMPT 代码审查修复交付**：按 `CODE_REVIEW_FIX_PROMPT.md` 清单完成 P0×5 + P1-A×6 + P1-B×2 + P1-9×9 + P1-10×3 + P2 全部项——P0：`debug.py` 补 `import time`（session/health 端点 500）、`static_analyzer` LFI 路径白名单（realpath + 允许前缀）、`ui_runner` SSRF 重定向逐跳守卫、`dashboard.html` 存储型 XSS（esc 补引号转义 + 事件委托去内联 onclick）+ `main.py` dashboard 响应加 CSP 头、DDL 双源分叉收敛（`app/runtime/core/storage/ddl.py` 共享常量，pg_store / async_pg_store / migrations 三处一致）；P1：SDK 离线重试数据全丢、beacon 压缩失败、repair/analysis 队列残留与 `_jobs` TTL 清理、`pg_async_enabled` 混合行为 fail-fast、启动鉴权语义统一、redact 递归脱敏全边界、RBAC 默认角色 fail-closed、analyzer 指纹去 request_id、fault_localizer 帧索引错位、scorer runtime 嵌套键、分区表检测、PG 池 `_get_conn` 无限递归 bug 与超时、errors 同指纹节流、verify_loop 超时/语义、dag_degraded 计入 repair 失败、stdio 畸形输入、params 非 dict、SSE 有界队列、metrics 归一化、state.store 限流键驱逐；P2：spec_store 缓存/LIKE/delete/get 回源、ui_runner `browser.close()` finally、assert_engine 值类型归一、死配置收敛（`cb_*`/`qdrant_connect_timeout` 移除）、版本号 `0.4.0-beta` 对齐、Dockerfile 非 root + `requirements-locked.txt`。另修 2 个审查 bug（P1-7 RBAC 语义回归、`test_mcp_verify_ui` `_FakeBrowser` mock 脱节）。新增 `test_state_store`/`test_ddl_consistency`/`test_debug_endpoints` 回归测试。单元测试 891 passed / 6 skipped / 0 failed。产品版本 v0.4.0 → v0.4.0-beta。 |
 | v5.10 | 2026-08-11 | 架构委员会 | **stacktrace 工具 + 存储工厂测试补齐与文档同步交付**：新增 `tests/unit/test_stacktrace_api.py`（9 用例——`stacktrace` MCP 工具 `handler()` 各分支：无异常无 request_id / request_id 无错误 / request_id 有错误 / 当前异常 / 缺参不抛 KeyError / `invoke` 包装 + `get_stacktrace()`：无记录无异常 / 按 error_id 取 / 取最新 fallback）+ `tests/unit/test_factory.py`（8 用例——存储工厂后端校验 fail-fast（非法拼写 raise）、memory 后端分发、error/spec no-op、async 混合 fail-fast、PG 初始化失败 fallback→no-op 与 fail-fast 双路径）。测试基线 891 → 908 passed / 6 skipped / 0 failed。同步更新 RESUME / INTERVIEW / handoff / README / PROJECT_SUMMARY / CHANGELOG / RELEASE_NOTES 测试基线。 |
+| v6.0 | 2026-08-16 | 架构委员会 | **v0.5.0/v0.5.1/v0.5.2 发布 + 第 3 轮代码审查修复交付**：(1) v0.5.0 工程质量加固（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 加固）已发布；v0.5.1 Source Map 解析（`resolve_stack` 工具 18/18）+ deepseek/LLM e2e/git 编码修复已发布；v0.5.2 品牌统一（ai-debug-mcp → lujo-mcp）已发布；(2) 第 3 轮代码审查 P1/P2/P3 共 17 项修复收口（KB 索引泄漏、非 ASCII 鉴权头 500、JSON-RPC 非 dict 500、指标 path 失效、symlink 白名单绕过、LLM 复合键脱敏、data_table NameError、限流误伤轮询、beacon 前缀边界、会话驱逐 DoS、清理任务静默死亡、stdio 挂死、errors bucket 无界、默认暴露告警、beacon 令牌堆积、会话固定、SSE 竞争、batch 上限）。测试基线 1087 → 1105 passed / 6 skipped / 0 failed。产品版本 v0.4.0-beta → v0.5.2。 |
 
 ---
 
