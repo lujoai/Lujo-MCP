@@ -22,14 +22,23 @@ class TestHealthEndpoint:
         assert set(data.keys()) == {"status"}
         assert data["status"] in ("ok", "degraded", "unhealthy")
 
-    def test_internal_health_exposes_service(self, client):
+    def test_internal_health_exposes_service(self, client, monkeypatch):
         # /internal/health 返回详细配置，供集群内访问
+        # TestClient 的 client.host 为非 IP 字符串 "testclient"，_is_internal_ip 恒 False，
+        # 这里 monkeypatch 模拟内网来源（该端点的 IP 门禁逻辑由 test_internal_health_forbidden 覆盖）
+        monkeypatch.setattr("app.main._is_internal_ip", lambda request: True)
         resp = client.get("/internal/health")
         assert resp.status_code == 200
         data = resp.json()
         assert data["service"] == "lujo-mcp"
         assert "version" in data
         assert data["status"] in ("ok", "degraded", "unhealthy")
+
+    def test_internal_health_forbidden_external(self, client, monkeypatch):
+        # 非内网来源（且未启用鉴权）应 fail-closed 返回 403
+        monkeypatch.setattr("app.main._is_internal_ip", lambda request: False)
+        resp = client.get("/internal/health")
+        assert resp.status_code == 403
 
 
 class TestDebugEndpoint:
