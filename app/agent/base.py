@@ -157,23 +157,31 @@ class BaseAgent(ABC):
                 "%s 主模型 %s 不可用，切换 fallback: %s",
                 self.name, model, fallback_model,
             )
-            response = await client.chat.completions.create(
-                model=fallback_model,
-                messages=messages,
-                temperature=temperature,
-                response_format={"type": "json_object"},
-            )
-            choice = response.choices[0]
-            content = choice.message.content or "{}"
-            analysis = validate_fn(content)
-            usage = {}
-            if response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                }
-            return {"analysis": analysis, "usage": usage}
+            try:
+                response = await client.chat.completions.create(
+                    model=fallback_model,
+                    messages=messages,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                )
+                choice = response.choices[0]
+                content = choice.message.content or "{}"
+                analysis = validate_fn(content)
+                usage = {}
+                if response.usage:
+                    usage = {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens,
+                    }
+                return {"analysis": analysis, "usage": usage}
+            except Exception as e:
+                # fallback 也失败：并入 last_error，与主模型路径一致地聚合后统一抛出
+                last_error = e
+                logger.error(
+                    "%s fallback 模型 %s 调用失败: %s",
+                    self.name, fallback_model, e,
+                )
 
         raise RuntimeError(
             f"{self.name} LLM 调用失败（已重试 {max_retries} 次）: {last_error}"

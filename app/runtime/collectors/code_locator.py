@@ -79,11 +79,13 @@ def get_code_snippet(file_path: str, line_no: int, context_lines: int | None = N
         )
 
     # linecache 对不存在的文件/行会返回空字符串，不会抛异常
-    linecache.checkcache(file_path)
-    first_line = linecache.getline(file_path, 1)
+    # 注意：必须用 abs_path（已按 SOURCE_PATH_MAP 映射 + abspath 后的本地路径）读取，
+    # 否则白名单校验通过但 linecache 仍按原始远程路径读取 → 永远读不到本地文件。
+    linecache.checkcache(abs_path)
+    first_line = linecache.getline(abs_path, 1)
     if not first_line and line_no > 0:
         # 尝试确认文件是否真的读取不到（比如属于第三方库的 .pyc 或路径已变化）
-        probe = linecache.getline(file_path, line_no)
+        probe = linecache.getline(abs_path, line_no)
         if not probe:
             return CodeSnippet(
                 file=file_path,
@@ -97,7 +99,7 @@ def get_code_snippet(file_path: str, line_no: int, context_lines: int | None = N
     end = line_no + context_lines
     lines = []
     for i in range(start, end + 1):
-        text = linecache.getline(file_path, i)
+        text = linecache.getline(abs_path, i)
         if not text:
             continue
         marker = ">>> " if i == line_no else "    "

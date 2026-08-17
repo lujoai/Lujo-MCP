@@ -170,7 +170,12 @@ async def lifespan(app: FastAPI):
                     settings.session_ttl_seconds,
                 )
                 from app.mcp.transports.session import registry as mcp_registry
-                mcp_registry.cleanup(ttl_seconds=1800)
+                from app.mcp.transports.sse import hub
+                # FIX P3-14: cleanup 返回被清理的 sid 列表，逐个通知 SSE hub 关闭，
+                # 避免过期会话的 SSE 流悬挂至客户端断开。
+                expired_sids = mcp_registry.cleanup(ttl_seconds=1800)
+                for sid in expired_sids:
+                    hub.close_session(sid)
             except Exception:
                 logger.exception("定时清理失败")
             finally:
@@ -352,7 +357,12 @@ def internal_health(request: Request):
     from app.auth.key_rotation import auth_enabled, verify_api_key
 
     is_internal = _is_internal_ip(request)
-    if not is_internal:
+    # FIX P3-13: 反代部署下 client.host 是反代的内网 IP（is_private=True），
+    # 不能作为内网放行依据 —— 公网用户经反代也可到达，导致完整配置泄露。
+    # 请求携带转发头（X-Forwarded-For / X-Real-IP）即说明经过代理，
+    # 此时不信任私网 IP 判定，一律走 API Key 校验分支（fail-closed：无 key 403）。
+    forwarded = request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")
+    if not is_internal or forwarded:
         if not auth_enabled():
             return JSONResponse(
                 status_code=403,

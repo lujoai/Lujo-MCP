@@ -402,14 +402,23 @@ def query_pg_errors(
         from app.config import settings
         if settings.storage_backend != "postgresql":
             return []
-        from app.runtime.core.storage.pg_store import _get_pool, _ensure_init, _parse_data
+        # FIX P3-10: pg_async_enabled=True 时本函数走 asyncpg 异步存储路径，
+        # 不再惰性创建 psycopg2 同步池，避免双池并存。
+        if settings.pg_async_enabled:
+            logger.debug("query_pg_errors: pg_async_enabled=True，走 async 路径，跳过同步 psycopg2 池")
+            return []
+        from app.runtime.core.storage.pg_store import _get_pool, _ensure_init, _get_conn, _parse_data
     except Exception:
         return []
 
     try:
         _ensure_init()
         pool = _get_pool()
-        conn = pool.getconn()
+        # FIX P3-10: pool.getconn() 裸获取无超时，池耗尽时永久阻塞。
+        # 改用 pg_store 的 _get_conn(timeout=5.0)（有界等待，超时抛 PoolError，
+        # 由下方 except Exception 兜底 return []）。psycopg2 2.9 的 getconn()
+        # 本身不支持 timeout 参数，故复用既有 helper。
+        conn = _get_conn(timeout=5.0)
         try:
             cur = conn.cursor()
             sql = (

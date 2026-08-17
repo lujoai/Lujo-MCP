@@ -189,6 +189,30 @@ class TestSessionRegistryEviction:
         assert s4.session_id in reg._sessions
         assert len(reg._sessions) == 2
 
+    def test_cleanup_returns_cleaned_sid_list(self):
+        """FIX P3-14: cleanup 返回被清理的 sid 列表（而非 int 数量），供 SSE hub 关闭"""
+        from app.mcp.transports.session import (
+            SessionRegistry,
+            _SESSION_TTL_SECONDS,
+        )
+
+        reg = SessionRegistry()
+        s1 = reg.create()
+        s2 = reg.create()
+        reg._sessions[s1.session_id].last_active -= _SESSION_TTL_SECONDS + 10
+
+        cleaned = reg.cleanup(ttl_seconds=_SESSION_TTL_SECONDS)
+        assert cleaned == [s1.session_id]
+        assert s1.session_id not in reg._sessions
+        assert s2.session_id in reg._sessions
+
+    def test_cleanup_returns_empty_list_when_none_expired(self):
+        from app.mcp.transports.session import SessionRegistry
+
+        reg = SessionRegistry()
+        reg.create()
+        assert reg.cleanup(ttl_seconds=1800) == []
+
 
 # ---------------------------------------------------------------------------
 # TOOL_ROLE_REQUIREMENTS 覆盖校验

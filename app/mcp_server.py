@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -46,6 +47,14 @@ logger = logging.getLogger("lujo-mcp")
 
 register_all_tools()
 server = Server("lujo-mcp", version=__version__)
+
+# FIX P3-12: 同步工具 handler 专用有界线程池。
+# asyncio.to_thread 用默认线程池，工具超时后 handler 线程仍在池内继续跑，
+# 反复超时会占满默认池 worker 并拖累其它 to_thread 任务。改用本专用池：
+# - 超时后线程仍运行，但不占用默认池；
+# - 池有界（8）不会因反复超时无限增长。
+# ThreadPoolExecutor 线程懒创建（首次 submit 才起线程），import 时创建无副作用。
+_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 # ── stdio 生命周期资源回收 ──
 # 由 finally / atexit / signal handler 触发，幂等。
@@ -128,7 +137,13 @@ async def _run_registered_tool(handler: Callable, arguments: dict):
     timeout = settings.tool_timeout_seconds
     if asyncio.iscoroutinefunction(handler):
         return await asyncio.wait_for(handler(arguments), timeout=timeout)
-    return await asyncio.wait_for(asyncio.to_thread(handler, arguments), timeout=timeout)
+    # FIX P3-12: 同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
+    # 超时只取消 await，线程继续运行但池有界不增长。
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(_TOOL_EXECUTOR, handler, arguments),
+        timeout=timeout,
+    )
 
 
 @server.list_tools()

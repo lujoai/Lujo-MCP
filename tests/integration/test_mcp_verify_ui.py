@@ -158,28 +158,28 @@ class TestVerifyUiHandlerNature:
         assert tool["inputSchema"], "inputSchema 不应为空"
 
     def test_run_registered_tool_wraps_sync_handler_via_to_thread(self):
-        """app.mcp_server._run_registered_tool 对同步 handler 走 asyncio.to_thread。"""
+        """app.mcp_server._run_registered_tool 对同步 handler 走专用线程池 run_in_executor。"""
         import inspect
         from app.mcp_server import _run_registered_tool
 
         # _run_registered_tool 应为协程函数
         assert asyncio.iscoroutinefunction(_run_registered_tool)
 
-        # 源码里应包含 asyncio.to_thread 调用（验证 H4 修复确实落地）
+        # 源码里应包含 run_in_executor 调用（验证 P3-12 修复确实落地：专用有界线程池）
         source = inspect.getsource(_run_registered_tool)
-        assert "asyncio.to_thread" in source, (
-            "_run_registered_tool 源码未包含 asyncio.to_thread —— H4 修复可能未落地"
+        assert "run_in_executor" in source, (
+            "_run_registered_tool 源码未包含 run_in_executor —— P3-12 修复可能未落地"
         )
 
     def test_handle_tools_call_wraps_sync_handler_via_to_thread(self):
-        """app.mcp.protocol.server._handle_tools_call 对同步 handler 走 asyncio.to_thread。"""
+        """app.mcp.protocol.server._handle_tools_call 对同步 handler 走专用线程池 run_in_executor。"""
         import inspect
         from app.mcp.protocol.server import _handle_tools_call
 
         assert asyncio.iscoroutinefunction(_handle_tools_call)
         source = inspect.getsource(_handle_tools_call)
-        assert "asyncio.to_thread" in source, (
-            "_handle_tools_call 源码未包含 asyncio.to_thread —— H4 修复可能未落地"
+        assert "run_in_executor" in source, (
+            "_handle_tools_call 源码未包含 run_in_executor —— P3-12 修复可能未落地"
         )
 
 

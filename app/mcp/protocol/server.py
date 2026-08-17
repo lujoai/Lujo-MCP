@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from app import __version__
 from app.config import settings
@@ -41,6 +42,10 @@ SERVER_INFO = {
 
 # 工具注册表
 _tool_registry: dict[str, dict] = {}
+
+# FIX P3-12: 同步工具 handler 专用有界线程池（与 app/mcp_server.py 同方案）。
+# 避免超时 handler 占用 asyncio 默认线程池并拖累其它 to_thread 任务；池有界不无限增长。
+_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 
 def register_tool(
@@ -133,7 +138,13 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         if asyncio.iscoroutinefunction(handler):
             result = await asyncio.wait_for(handler(arguments), timeout=timeout)
         else:
-            result = await asyncio.wait_for(asyncio.to_thread(handler, arguments), timeout=timeout)
+            # FIX P3-12: 同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
+            # 超时只取消 await，线程继续运行但池有界不增长。
+            loop = asyncio.get_running_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(_TOOL_EXECUTOR, handler, arguments),
+                timeout=timeout,
+            )
         _elapsed = time.monotonic() - _tool_start
         try:
             _size = len(json.dumps(result, ensure_ascii=False, default=str))

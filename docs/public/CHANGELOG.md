@@ -7,7 +7,7 @@
 
 ## [Unreleased]
 
-> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1105 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 清零 + P3 高价值 4 项收口后）。
+> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1115 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 清零 + P3 高价值 4 项 + P3 专项 7 项收口后）。
 
 ### 修复
 
@@ -31,6 +31,13 @@
 - **MCP initialize 会话固定**（P3-8）：`mcp_routes.py` initialize 分支携带他人有效 `Mcp-Session-Id` 时直接复用该会话（通知流劫持面），且双重 `registry.get` 存在 TOCTOU；改为无条件 `registry.create()` 新建会话，新增会话隔离测试
 - **SSE Hub 跨线程竞争**（P3-11）：`sse.py` `SSEHub._queues` 跨线程读写无锁，close_session pop 与 subscribe setdefault/append 交错存在丢订阅窗口；加 `threading.Lock` 保护字典结构，锁内复制队列列表后在锁外 `call_soon_threadsafe` 发布，新增 2 项并发竞争测试
 - **/ingest/batch 批量无条数上限**（P3-6）：`ingest.py` batch 端点 events 数组仅受 10MB 解压体限制，可被滥用撑爆内存/CPU；新增 `_MAX_BATCH_EVENTS=100` 上限，超限返回 413，新增 2 项边界测试
+- **SOURCE_PATH_MAP 形同虚设**（P3-2）：`code_locator.py` `get_code_snippet` 白名单校验用映射后路径 `abs_path`，但 linecache 仍读原始 `file_path`，配置 `source_path_map` 后永远读不到本地文件；统一改为 linecache 读 `abs_path`，新增 `test_code_locator.py` 2 项（映射命中 + 映射后白名单外拒绝）
+- **truncate_context 精简未写回**（P3-1）：`analyzer.py` `truncate_context` 构建精简版 `runtime` 后未写回 `context["runtime"]`，精简逻辑完全无效，上下文仍过大；补 `context["runtime"] = runtime`，新增精简写回测试
+- **Agent fallback 调用未保护**（P3-3）：`agent/base.py` fallback 模型调用未包 try/无重试，失败抛原始 APIError 而非统一 RuntimeError；包 try/except 聚合 last_error 后统一抛出，新增 2 项 fallback 测试
+- **query_pg_errors 双池并存 + 无超时**（P3-10）：`errors.py` `pg_async_enabled=True` 时仍惰性创建 psycopg2 同步池（双池并存）；裸 `pool.getconn()` 池耗尽时永久阻塞；`pg_async_enabled` 时提前返回空，改用 `_get_conn(timeout=5.0)` 有界等待（psycopg2 2.9 `getconn` 不支持 timeout），新增/更新 3 项测试
+- **同步工具超时后线程继续跑**（P3-12）：`mcp_server.py` / `protocol/server.py` 同步 handler 用 `asyncio.to_thread` 占用默认线程池，`wait_for` 超时只取消 await、线程池 worker 被长任务占用；改用专用有界 `ThreadPoolExecutor(max_workers=8)` + `run_in_executor`，与默认池隔离，更新 verify_ui 源码断言
+- **过期 MCP 会话 SSE 悬挂**（P3-14）：`session.py` `cleanup()` 返回 int 导致调用方无法定位被清理会话；改为返回 sid 列表，`main.py` periodic_cleanup 逐个 `hub.close_session(sid)` 关闭悬挂 SSE 流，新增 2 项测试
+- **/internal/health 反代泄露**（P3-13）：`main.py` `_is_internal_ip` 信任直连 `client.host`，局域网反代部署时 `is_private=True` 被当内网放行，公网用户可读取完整配置；`internal_health` 检测到 `X-Forwarded-For`/`X-Real-IP` 转发头即不再按内网放行，改走 API Key 校验（fail-closed），新增 2 项测试
 
 ### 变更
 

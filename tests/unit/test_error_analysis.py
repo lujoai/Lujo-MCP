@@ -136,10 +136,19 @@ class TestQueryPgErrors:
             result = errors.query_pg_errors()
             assert result == []
 
+    def test_returns_empty_when_pg_async_enabled(self):
+        """P3-10: pg_async_enabled=True 时走 async 路径返回空列表，不创建同步 psycopg2 池"""
+        with patch("app.config.settings") as mock_settings:
+            mock_settings.storage_backend = "postgresql"
+            mock_settings.pg_async_enabled = True
+            result = errors.query_pg_errors()
+            assert result == []
+
     def test_returns_empty_on_pg_error(self):
         """PG 连接失败时返回空列表"""
         with patch("app.config.settings") as mock_settings:
             mock_settings.storage_backend = "postgresql"
+            mock_settings.pg_async_enabled = False
             with patch("app.runtime.core.storage.pg_store._get_pool") as mock_pool:
                 mock_pool.side_effect = RuntimeError("connection failed")
                 result = errors.query_pg_errors()
@@ -153,6 +162,7 @@ class TestQueryPgErrors:
         )
         with patch("app.config.settings") as mock_settings:
             mock_settings.storage_backend = "postgresql"
+            mock_settings.pg_async_enabled = False
             with patch("app.runtime.core.storage.pg_store._get_pool") as mock_pool:
                 mock_conn = MagicMock()
                 mock_cur = MagicMock()

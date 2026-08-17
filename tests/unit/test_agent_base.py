@@ -162,3 +162,88 @@ class TestBaseAgent:
         assert trace.status == AgentStatus.SUCCESS
         assert trace.duration_s == 2.5
         assert trace.usage == {"total_tokens": 50}
+
+
+class TestCallLlmFallback:
+    """_call_llm fallback 分支：成功返回结构不变，失败抛统一 RuntimeError（P3-3）。"""
+
+    @staticmethod
+    def _make_agent():
+        class FakeAgent(BaseAgent):
+            name = "fake"
+
+            async def run(self, ctx: AgentContext) -> AgentResult:
+                return AgentResult(
+                    agent_name=self.name,
+                    status=AgentStatus.SUCCESS,
+                    output={},
+                )
+
+        return FakeAgent()
+
+    @staticmethod
+    def _chat_response(content: str):
+        from unittest.mock import MagicMock
+
+        response = MagicMock()
+        choice = MagicMock()
+        choice.message.content = content
+        response.choices = [choice]
+        response.usage = None
+        return response
+
+    @pytest.mark.asyncio
+    async def test_fallback_success_keeps_return_shape(self):
+        """主模型失败后 fallback 成功 → 返回结构不变（{"analysis": ..., "usage": ...}）。"""
+        from unittest.mock import AsyncMock, MagicMock
+        from openai import APIError
+
+        agent = self._make_agent()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[
+                APIError("primary down", None, body=None),
+                self._chat_response('{"root_cause": "x", "impact": "", "fix": ""}'),
+            ]
+        )
+
+        result = await agent._call_llm(
+            client=client,
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.3,
+            max_retries=0,
+            validate_fn=lambda content: {"root_cause": "x", "impact": "", "fix": ""},
+            fallback_model="fallback",
+        )
+
+        assert result["analysis"]["root_cause"] == "x"
+        assert result["usage"] == {}
+        assert client.chat.completions.create.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_failure_raises_unified_runtime_error(self):
+        """主模型与 fallback 均失败 → 抛统一 RuntimeError（聚合 last_error）。"""
+        from unittest.mock import AsyncMock, MagicMock
+        from openai import APIError
+
+        agent = self._make_agent()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=APIError("fallback also down", None, body=None)
+        )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await agent._call_llm(
+                client=client,
+                model="primary",
+                messages=[{"role": "user", "content": "hi"}],
+                temperature=0.3,
+                max_retries=0,
+                validate_fn=lambda content: {"root_cause": "x"},
+                fallback_model="fallback",
+            )
+
+        assert "fake LLM 调用失败" in str(excinfo.value)
+        assert "fallback also down" in str(excinfo.value)
+        assert client.chat.completions.create.call_count == 2

@@ -468,6 +468,8 @@ def truncate_context(context: dict, max_tokens: Optional[int] = None) -> dict:
                 "num_threads": runtime.get("process", {}).get("num_threads"),
             },
         }
+        # 精简结果必须写回，否则后续序列化/最终截断仍基于未精简的完整 runtime
+        context["runtime"] = runtime
 
     # 截断异常帧
     exc = context.get("exception")

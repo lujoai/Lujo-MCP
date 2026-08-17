@@ -89,13 +89,18 @@ class SessionRegistry:
         with self._lock:
             self._sessions.pop(sid, None)
 
-    def cleanup(self, ttl_seconds: int = 1800) -> int:
+    def cleanup(self, ttl_seconds: int = 1800) -> list[str]:
+        """删除过期会话，返回被清理的 session_id 列表。
+
+        FIX P3-14: 此前返回 int 数量，调用方无法据此通知 SSE hub 关闭悬挂流。
+        改为返回被清理的 sid 列表，供 periodic_cleanup 逐个 hub.close_session()。
+        """
         now = time.time()
         with self._lock:
             stale = [sid for sid, s in self._sessions.items() if now - s.last_active > ttl_seconds]
             for sid in stale:
                 del self._sessions[sid]
-        return len(stale)
+        return stale
 
 
 # 全局单例

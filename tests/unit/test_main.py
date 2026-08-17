@@ -47,3 +47,43 @@ def test_validate_no_warn_on_non_loopback_bind_with_api_key(caplog):
     with caplog.at_level(logging.WARNING):
         validate_startup_configuration(host="192.168.1.10", api_key="secret")
     assert "非回环" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# P3-13: /internal/health 反代部署下不得信任 client.host 私网判定
+# ---------------------------------------------------------------------------
+
+def test_internal_health_with_forwarded_header_requires_key(monkeypatch):
+    """反代场景：client.host 为私网 IP（旧逻辑放行）但携带转发头 → fail-closed 403。"""
+    from types import SimpleNamespace
+
+    from app.auth import key_rotation
+    from app.main import internal_health
+
+    # 无鉴权配置（隔离 .env 的 API_KEY 污染）
+    monkeypatch.setattr(key_rotation, "get_valid_keys", lambda: [])
+
+    class _FakeRequest:
+        client = SimpleNamespace(host="192.168.1.10")
+        headers = {"X-Forwarded-For": "203.0.113.5"}
+
+    resp = internal_health(_FakeRequest)
+    assert resp.status_code == 403
+
+
+def test_internal_health_forwarded_with_valid_key_allowed(monkeypatch):
+    """反代场景 + 有效 API Key → 放行（不再信任私网判定但 key 校验通过）。"""
+    from types import SimpleNamespace
+
+    from app.auth import key_rotation
+    from app.main import internal_health
+
+    monkeypatch.setattr(key_rotation, "get_valid_keys", lambda: ["secret-key"])
+
+    class _FakeRequest:
+        client = SimpleNamespace(host="192.168.1.10")
+        headers = {"X-Real-IP": "203.0.113.5", "X-API-Key": "secret-key"}
+
+    resp = internal_health(_FakeRequest)
+    assert isinstance(resp, dict)
+    assert resp["status"] in ("ok", "degraded", "unhealthy")

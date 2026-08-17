@@ -28,6 +28,46 @@ class TestAnalyzer:
         result = truncate_context(ctx, max_tokens=10000)
         assert result.get("_truncated") is not True
 
+    def test_truncate_context_rewrites_trimmed_runtime(self):
+        """P3-1: 精简版 runtime 必须写回 context["runtime"]，后续序列化才基于精简结果。"""
+        from app.llm.analyzer import truncate_context
+
+        ctx = {
+            "request_id": "rt-001",
+            "runtime": {
+                "python": {"version": "3.12.1"},
+                "system": {
+                    "cpu_percent": 10.0,
+                    "memory_percent": 20.0,
+                    "load_avg": [1.0, 2.0, 3.0],  # 非关键字段，应被精简掉
+                    "hostname": "drop-me",
+                },
+                "process": {
+                    "pid": 1234,
+                    "cpu_percent": 5.0,
+                    "memory_rss_mb": 100,
+                    "num_threads": 8,
+                    "cmdline": ["python", "-m", "app"],  # 非关键字段，应被精简掉
+                },
+                "top_level_extra": {"drop": True},  # 非关键字段，应被精简掉
+            },
+        }
+        result = truncate_context(ctx, max_tokens=100000)
+
+        assert result["runtime"] == {
+            "python": {"version": "3.12.1"},
+            "system": {"cpu_percent": 10.0, "memory_percent": 20.0},
+            "process": {
+                "pid": 1234,
+                "cpu_percent": 5.0,
+                "memory_rss_mb": 100,
+                "num_threads": 8,
+            },
+        }
+        assert "load_avg" not in result["runtime"]["system"]
+        assert "cmdline" not in result["runtime"]["process"]
+        assert "top_level_extra" not in result["runtime"]
+
     def test_build_analysis_prompt(self):
         from app.llm.analyzer import build_analysis_prompt
 
