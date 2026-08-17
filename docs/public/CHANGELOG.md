@@ -40,6 +40,7 @@
 - **/internal/health 反代泄露**（P3-13）：`main.py` `_is_internal_ip` 信任直连 `client.host`，局域网反代部署时 `is_private=True` 被当内网放行，公网用户可读取完整配置；`internal_health` 检测到 `X-Forwarded-For`/`X-Real-IP` 转发头即不再按内网放行，改走 API Key 校验（fail-closed），新增 2 项测试
 - **SSE 订阅无并发上限**（P3-7）：`SSEHub`（每 session）与 `DashboardEventBus`（全局）订阅无上限，持有效 key 可开无限长连接耗尽连接池；SSEHub 每 session 上限 5、DashboardEventBus 全局上限 100，超限返回 429，新增上限测试
 - **jsonrpc 死代码 + 冗余 import**（P3-15）：`jsonrpc.py` `JSONRPCResponse` 无任何使用（死代码）已删除；`server.py` `__import__("asyncio")` 改为顶层 `asyncio.iscoroutine`
+- **SDK e2e 测试接口过时**：`test_sdk_v5_enhancements.py` / `test_sdk_full_chain.py` 引用闭包式 SDK 不再暴露的 `AiDebug._cfg.*` 与 `AiDebug._uiMutationObserver`；SDK 新增 `_setConfig(key, value)` 测试辅助方法 + `_inited` 只读 getter，e2e 测试改用 `_getPublicConfig()` / `_setConfig` / `_getUIMutationObserver()`；`network_capture_demo.html`（app/web + examples）同步改用 `_setConfig`
 
 ### 变更
 

@@ -77,12 +77,12 @@ def test_sdk_v3_network_error_auto_report(page: Page):
     sdk_loaded = page.evaluate("typeof AiDebug !== 'undefined'")
     assert sdk_loaded, "SDK 未加载"
 
-    # 检查 SDK 内部状态
+    # 检查 SDK 内部状态（SDK 闭包式配置，_inited 经只读 getter 暴露）
     sdk_inited = page.evaluate("AiDebug._inited")
     print(f"SDK initialized: {sdk_inited}")
-    
-    # 检查 UI hook 是否安装
-    ui_hook_installed = page.evaluate("!!AiDebug._uiMutationObserver")
+
+    # 检查 UI hook 是否安装（_getUIMutationObserver 测试辅助方法）
+    ui_hook_installed = page.evaluate("!!AiDebug._getUIMutationObserver()")
     print(f"UI mutation observer installed: {ui_hook_installed}")
 
     # 检查 trace_id 是否自动生成
@@ -133,12 +133,12 @@ def test_sdk_v6_ui_silent_failure_detection(page: Page):
     sdk_loaded = page.evaluate("typeof AiDebug !== 'undefined'")
     assert sdk_loaded, "SDK 未加载"
 
-    # 检查 SDK 内部状态
+    # 检查 SDK 内部状态（SDK 闭包式配置，_inited 经只读 getter 暴露）
     sdk_inited = page.evaluate("AiDebug._inited")
     print(f"SDK initialized: {sdk_inited}")
-    
-    # 检查 UI hook 是否安装
-    ui_hook_installed = page.evaluate("!!AiDebug._uiMutationObserver")
+
+    # 检查 UI hook 是否安装（_getUIMutationObserver 测试辅助方法）
+    ui_hook_installed = page.evaluate("!!AiDebug._getUIMutationObserver()")
     print(f"UI mutation observer installed: {ui_hook_installed}")
 
     # 检查 trace_id 是否自动生成
@@ -170,8 +170,8 @@ def test_sdk_v6_ui_silent_failure_detection(page: Page):
     if silent_button:
         print("Clicking silentButton...")
         
-        # 检查 SDK 配置
-        sdk_config = page.evaluate("JSON.stringify(AiDebug._cfg || {})")
+        # 检查 SDK 配置（经 _getPublicConfig 只读视图读取）
+        sdk_config = page.evaluate("JSON.stringify(AiDebug._getPublicConfig())")
         print(f"SDK config: {sdk_config}")
         
         # 点击前检查内部状态

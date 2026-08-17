@@ -56,11 +56,11 @@ def test_gzip_compression_threshold(page: Page):
     sdk_loaded = page.evaluate("typeof AiDebug !== 'undefined'")
     assert sdk_loaded, "SDK 未加载"
 
-    # 检查压缩配置
+    # 检查压缩配置（SDK 闭包式配置，经 _getPublicConfig 只读视图读取）
     compression_config = page.evaluate("""
         JSON.stringify({
-            enableCompression: AiDebug._cfg.enableCompression,
-            compressionThreshold: AiDebug._cfg.compressionThreshold
+            enableCompression: AiDebug._getPublicConfig().enableCompression,
+            compressionThreshold: AiDebug._getPublicConfig().compressionThreshold
         })
     """)
     print(f"Compression config: {compression_config}")
@@ -142,8 +142,8 @@ def test_throttle_control(page: Page):
     # 检查节流配置
     throttle_config = page.evaluate("""
         JSON.stringify({
-            throttleWindowMs: AiDebug._cfg.throttleWindowMs,
-            maxBatchesPerWindow: AiDebug._cfg.maxBatchesPerWindow
+            throttleWindowMs: AiDebug._getPublicConfig().throttleWindowMs,
+            maxBatchesPerWindow: AiDebug._getPublicConfig().maxBatchesPerWindow
         })
     """)
     print(f"Throttle config: {throttle_config}")
@@ -199,9 +199,9 @@ def test_localstorage_fallback(page: Page):
     # 检查 localStorage 降级配置
     fallback_config = page.evaluate("""
         JSON.stringify({
-            enableLocalStorageFallback: AiDebug._cfg.enableLocalStorageFallback,
-            localStorageKey: AiDebug._cfg.localStorageKey,
-            maxPendingBatches: AiDebug._cfg.maxPendingBatches
+            enableLocalStorageFallback: AiDebug._getPublicConfig().enableLocalStorageFallback,
+            localStorageKey: AiDebug._getPublicConfig().localStorageKey,
+            maxPendingBatches: AiDebug._getPublicConfig().maxPendingBatches
         })
     """)
     print(f"Fallback config: {fallback_config}")
@@ -209,9 +209,9 @@ def test_localstorage_fallback(page: Page):
     # 清空 localStorage
     page.evaluate("localStorage.clear()")
 
-    # 模拟服务端不可用：修改 endpoint 为错误地址
+    # 模拟服务端不可用：修改 endpoint 为错误地址（经 _setConfig 绕过 init 守卫）
     page.evaluate("""
-        AiDebug._cfg.endpoint = 'http://localhost:9999';
+        AiDebug._setConfig('endpoint', 'http://localhost:9999');
     """)
 
     # 发送事件触发重试失败
@@ -230,7 +230,7 @@ def test_localstorage_fallback(page: Page):
     
     # 恢复 endpoint
     page.evaluate(f"""
-        AiDebug._cfg.endpoint = '{BASE_URL}';
+        AiDebug._setConfig('endpoint', '{BASE_URL}');
     """)
 
     # 验证 localStorage 中有暂存数据（如果有）

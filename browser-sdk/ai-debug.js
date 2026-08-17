@@ -1422,6 +1422,12 @@
       }
       return copy;
     },
+    // 测试辅助：运行时改单个配置项（绕过 init 的 _inited 守卫，仅供 e2e 测试用）
+    _setConfig: function(key, value) {
+      if (cfg.hasOwnProperty(key)) cfg[key] = value;
+    },
+    // 测试辅助：只读查询初始化状态
+    get _inited() { return _inited; },
     _getPendingUISilentFailure: function() { return _pendingUISilentFailure; },
     _getLastDomMutationAt: function() { return _lastDomMutationAt; },
     _getUIMutationObserver: function() { return _uiMutationObserver; },

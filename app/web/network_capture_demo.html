@@ -236,7 +236,7 @@
 
     function testSampleRateZero() {
       var beforeCount = captureCount;
-      AiDebug._cfg.networkSampleRate = 0;
+      AiDebug._setConfig('networkSampleRate', 0);
       for (var i = 0; i < 5; i++) {
         var xhr = new XMLHttpRequest();
         xhr.open('GET', '/api/debug/health?test=zero-' + i);
@@ -252,13 +252,13 @@
           result.className = 'result error';
           result.textContent = '✗ networkSampleRate=0 验证失败！\n发送了 5 次请求，采集数增加: ' + newCaptures;
         }
-        AiDebug._cfg.networkSampleRate = parseFloat(document.getElementById('sampleRate').value);
+        AiDebug._setConfig('networkSampleRate', parseFloat(document.getElementById('sampleRate').value));
       }, 1000);
     }
 
     function testSampleRateOne() {
       var beforeCount = captureCount;
-      AiDebug._cfg.networkSampleRate = 1;
+      AiDebug._setConfig('networkSampleRate', 1);
       var xhr = new XMLHttpRequest();
       xhr.open('GET', '/api/debug/health?test=one');
       xhr.onload = function() {
@@ -279,7 +279,7 @@
 
     function testThrottle() {
       var beforeCount = captureCount;
-      AiDebug._cfg.networkThrottleMs = 1000;
+      AiDebug._setConfig('networkThrottleMs', 1000);
       document.getElementById('throttleCounter').textContent = '0';
       var count = 0;
       var interval = setInterval(function() {
@@ -300,7 +300,7 @@
               result.className = 'result error';
               result.textContent = '✗ networkThrottleMs=1000ms 验证失败！\n发送了 10 次请求，实际采集: ' + newCaptures + ' 次（应 <= 3）';
             }
-            AiDebug._cfg.networkThrottleMs = parseInt(document.getElementById('throttleMs').value);
+            AiDebug._setConfig('networkThrottleMs', parseInt(document.getElementById('throttleMs').value));
           }, 1500);
         }
       }, 100);
