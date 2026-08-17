@@ -24,7 +24,7 @@
 STORAGE_BACKEND=postgresql
 PG_HOST=localhost
 PG_PORT=5432
-PG_DATABASE=ai_debug_mcp
+PG_DATABASE=lujo_mcp
 PG_USER=postgres
 PG_PASSWORD=你的当前 PostgreSQL 密码
 ```

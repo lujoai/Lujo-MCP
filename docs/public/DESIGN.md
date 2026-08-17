@@ -671,7 +671,7 @@ flowchart TB
         ERRORS["errors 缓冲<br/>errors.py<br/>内存 deque"]
     end
 
-    DB[("PostgreSQL<br/>ai_debug_mcp<br/>traces + sessions")]
+    DB[("PostgreSQL<br/>lujo_mcp<br/>traces + sessions")]
 
     MC --> STDIO
     REST --> HTTP

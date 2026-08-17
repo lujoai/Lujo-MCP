@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ai_debug_mcp
+      POSTGRES_DB: lujo_mcp
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须设置}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_debug_mcp"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lujo_mcp"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -34,7 +34,7 @@ services:
       STATE_BACKEND: redis
       PG_HOST: postgres
       PG_PORT: 5432
-      PG_DATABASE: ai_debug_mcp
+      PG_DATABASE: lujo_mcp
       PG_USER: postgres
       PG_PASSWORD: ${PG_PASSWORD:?必须设置}
       REDIS_URL: redis://redis:6379/0

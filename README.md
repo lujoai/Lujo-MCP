@@ -33,6 +33,7 @@
 - **User action tracking** — 记录点击 / 提交后的 DOM、路由、网络变化（UI 静默失败检测）
 - **AI debugging context** — 把以上信息组装为 AI 可理解的结构化 Debug Context
 - **Debug Experience Retrieval（RAG-based）** — 通过历史 Debug Experience 检索（fingerprint recall / message normalization / vector fallback）增强 AI 分析
+- **Knowledge Base with PostgreSQL persistence** — 调试经验写穿落库（`kb_entries` 表）、跨重启回灌、置信度随验证进化、团队共享同一知识库；详见 [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md)
 
 ## Supported Clients
 
@@ -88,7 +89,9 @@ npm install -g @lujoai/lujo-mcp
 - **调试上下文构建** — 将原始追踪日志转换为 AI 可理解的结构化上下文
 - **异常堆栈捕获** — 捕获异常调用栈、局部变量、源码行号
 - **运行时快照** — 采集系统/进程/解释器状态（CPU、内存、线程等）
-- **指纹知识库** — 基于错误指纹复用历史分析结论，命中时优先返回，并在 LLM 成功后自动沉淀
+- **指纹知识库** — 基于错误指纹复用历史分析结论，命中时优先返回，并在 LLM 成功后自动沉淀；支持 PostgreSQL 持久化（`kb_entries` 表）：经验跨重启保留、`verify_count`/`case_confidence` 置信度进化、连同一库即团队共享（见 [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md)）
+
+  **置信度进化**：每条经验带 `verify_count`（验证次数）与 `case_confidence`（置信度，只升不降）两个统计字段——修复方案每次被验证成功，`verify_count` +1，`confidence` 取历史最大值。例如：新经验 `0.0` → 验证通过一次 `0.7` → 三次后 `0.9`，AI 检索时高置信度方案优先复用，知识库随使用时间越用越准。
 - **向量检索 RAG（in-process）** — 零依赖 Jaccard 相似度召回，精确指纹 miss 后 fallback
 - **规范驱动 + verify 自动断言** — 定义期望规范，系统自动比对实际结果，检测"返回正常但不符合规范"的静默失败
 - **errors 持久化聚合** — 异常自动入库 errors 表，支持指纹去重与聚合统计
@@ -434,6 +437,7 @@ Lujo-MCP/
 | [DEMO.md](./docs/public/DEMO.md)     | 端到端演示场景（React Login Bug 完整流程） |
 | [PRD.md](./docs/public/PRD.md)       | 产品需求                          |
 | [DESIGN.md](./docs/public/DESIGN.md) | 技术架构设计                        |
+| [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md) | 知识库设计：经验积累 + 置信度进化 + 建表 SQL |
 
 ## 测试
 

@@ -57,7 +57,7 @@ docker info
 STORAGE_BACKEND=postgresql
 PG_HOST=localhost
 PG_PORT=5432
-PG_DATABASE=ai_debug_mcp
+PG_DATABASE=lujo_mcp
 PG_USER=postgres
 PG_PASSWORD=your_password
 POSTGRES_PASSWORD=your_password
@@ -72,7 +72,7 @@ python -m pytest tests/integration/test_pg_integration.py -q
 本机最小基线建议：
 
 - 数据库服务：`localhost:5432`
-- 数据库名：`ai_debug_mcp`
+- 数据库名：`lujo_mcp`
 - 用户：`postgres`
 - 密码：以当前本机 PostgreSQL 实际密码为准
 

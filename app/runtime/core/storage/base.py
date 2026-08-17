@@ -116,3 +116,44 @@ class SpecStorage(ABC):
     def delete_spec(self, spec_id: str) -> bool:
         """删除一条 spec，返回是否删除成功。"""
         ...
+
+
+class KnowledgeBaseStorage(ABC):
+    """RAG 知识库持久化存储的抽象接口（v0.5.3 kb_entries 表）。
+
+    KB 主存仍是进程内 KnowledgeBaseStore（OrderedDict + 三级索引），
+    本接口承担写穿（write-through）持久化与启动回灌：
+    - PG 后端实现真实持久化，跨重启保留 learned 知识；
+    - memory 后端 no-op（KB 行为与历史版本完全一致）。
+    """
+
+    @abstractmethod
+    def upsert_kb_entry(self, entry: dict) -> None:
+        """upsert 一条 KB entry（按 fingerprint 去重）。"""
+        ...
+
+    @abstractmethod
+    def update_kb_verification(
+        self,
+        fingerprint: str,
+        verify_count: int,
+        case_confidence: float,
+        updated_at: float,
+    ) -> bool:
+        """回写验证统计（verify_count/case_confidence），返回是否命中。"""
+        ...
+
+    @abstractmethod
+    def delete_kb_entry(self, fingerprint: str) -> bool:
+        """删除一条 KB entry（LRU 驱逐同步删除），返回是否删除成功。"""
+        ...
+
+    @abstractmethod
+    def delete_all_kb_entries(self) -> int:
+        """清空 KB 表（clear 同步），返回删除条数。"""
+        ...
+
+    @abstractmethod
+    def list_recent_kb_entries(self, limit: int = 100) -> list[dict]:
+        """按 updated_at 倒序列出最近 limit 条 entry（启动回灌用）。"""
+        ...

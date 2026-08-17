@@ -13,7 +13,7 @@ if [ -z "$PG_USER" ]; then
     PG_USER="postgres"
 fi
 if [ -z "$PG_DATABASE" ]; then
-    PG_DATABASE="ai_debug_mcp"
+    PG_DATABASE="lujo_mcp"
 fi
 
 # 迁移文件说明（pg_store.py 通过 DDL 常量自动建表，此处 SQL 仅供手动初始化/参考）：

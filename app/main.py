@@ -215,6 +215,16 @@ async def lifespan(app: FastAPI):
         from app.agent.repair_queue import start_repair_queue
         await start_repair_queue()
 
+    # ── v0.5.3：KB 持久化启动回灌（从 kb_entries 表加载 learned 知识，失败降级不阻断）──
+    try:
+        from app.rag.knowledge_base import load_knowledge_base_from_persistent
+
+        persisted_count = load_knowledge_base_from_persistent()
+        if persisted_count > 0:
+            logger.info("知识库持久化回灌完成: %d 条", persisted_count)
+    except Exception:
+        logger.warning("知识库持久化回灌失败，跳过（不影响启动）", exc_info=True)
+
     # ── v0.4.0 M2：加载种子知识到知识库（失败静默降级，不阻断启动）──
     try:
         from app.rag.seed_data import load_seed_data

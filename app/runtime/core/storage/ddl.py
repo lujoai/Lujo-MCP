@@ -70,6 +70,26 @@ CREATE INDEX IF NOT EXISTS idx_specs_kind ON specs(kind);
 CREATE INDEX IF NOT EXISTS idx_specs_target ON specs(target);
 """
 
+# ── kb_entries 知识库表（v0.5.3：RAG 知识库持久化，跨重启保留 learned 知识）──
+# 时间戳语义与 traces/sessions/specs 一致：DOUBLE PRECISION（epoch 秒）。
+DDL_KB_ENTRIES = """
+CREATE TABLE IF NOT EXISTS kb_entries (
+    fingerprint            TEXT PRIMARY KEY,
+    analysis               JSONB,
+    fix_suggestion         TEXT,
+    source                 TEXT,
+    created_at             DOUBLE PRECISION NOT NULL,
+    updated_at             DOUBLE PRECISION NOT NULL,
+    normalized_fingerprint TEXT,
+    type_fingerprint       TEXT,
+    verify_count           INTEGER DEFAULT 0,
+    case_confidence        DOUBLE PRECISION DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_kb_entries_nfp ON kb_entries(normalized_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_kb_entries_tfp ON kb_entries(type_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_kb_entries_updated ON kb_entries(updated_at DESC);
+"""
+
 # ── traces 归档表（Phase 5 P3-2：结构同主表，用于冷数据归档）──
 DDL_TRACES_ARCHIVE = """
 CREATE TABLE IF NOT EXISTS traces_archive (

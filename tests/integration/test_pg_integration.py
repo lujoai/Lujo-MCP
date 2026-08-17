@@ -338,3 +338,81 @@ class TestTraceRepoPersistence:
             assert link_data.get("caller_trace_id") == caller_tid
         finally:
             delete_logs(error_id)
+
+
+@pytest.mark.integration
+@pytest.mark.pg
+class TestKnowledgeBasePersistence:
+    """v0.5.3 kb_entries 表：KB 写穿持久化 + 启动回灌（真实 PG 往返）"""
+
+    def _cleanup(self, fingerprint: str):
+        from app.runtime.core.storage.factory import get_knowledge_store
+
+        get_knowledge_store().delete_kb_entry(fingerprint)
+
+    def test_kb_entry_roundtrip(self):
+        """upsert 写穿 → 清内存 → 回灌：analysis/验证统计跨"重启"保留"""
+        from app.rag.knowledge_base import KnowledgeBaseStore
+        from app.runtime.core.storage.factory import get_knowledge_store
+
+        fp = f"itest-kb-{uuid.uuid4().hex[:12]}"
+        store = KnowledgeBaseStore(max_entries=10)
+        try:
+            entry = store.upsert(
+                fingerprint=fp,
+                analysis={"root_cause": "db timeout", "exception_type": "OperationalError"},
+                fix_suggestion="add retry with backoff",
+                source="itest",
+            )
+            store.record_verification(fp, 0.88)
+
+            # 持久层已有该行（写穿生效）
+            pg = get_knowledge_store()
+            rows = [r for r in pg.list_recent_kb_entries(limit=100) if r["fingerprint"] == fp]
+            assert len(rows) == 1
+            assert rows[0]["analysis"]["root_cause"] == "db timeout"
+            assert rows[0]["verify_count"] == 1
+            assert rows[0]["case_confidence"] == 0.88
+            assert rows[0]["normalized_fingerprint"] == entry["normalized_fingerprint"]
+
+            # 模拟重启：全新内存实例回灌
+            store2 = KnowledgeBaseStore(max_entries=10)
+            loaded = store2.load_from_persistent()
+            assert loaded > 0
+            restored = store2.get(fp)
+            assert restored is not None
+            assert restored["analysis"]["root_cause"] == "db timeout"
+            assert restored["fix_suggestion"] == "add retry with backoff"
+            assert restored["verify_count"] == 1
+            assert restored["case_confidence"] == 0.88
+
+            # 回灌后可继续写穿（update 路径）
+            store2.record_verification(fp, 0.95)
+            rows2 = [r for r in pg.list_recent_kb_entries(limit=100) if r["fingerprint"] == fp]
+            assert rows2[0]["verify_count"] == 2
+        finally:
+            self._cleanup(fp)
+
+    def test_kb_entry_eviction_deletes_row(self):
+        """LRU 驱逐同步删除持久行：内存与 PG 条数一致"""
+        from app.rag.knowledge_base import KnowledgeBaseStore
+        from app.runtime.core.storage.factory import get_knowledge_store
+
+        base = f"itest-kbev-{uuid.uuid4().hex[:8]}"
+        store = KnowledgeBaseStore(max_entries=2)
+        try:
+            store.upsert(fingerprint=f"{base}-1", analysis={"a": 1}, fix_suggestion="", source="itest")
+            store.upsert(fingerprint=f"{base}-2", analysis={"a": 2}, fix_suggestion="", source="itest")
+            store.upsert(fingerprint=f"{base}-3", analysis={"a": 3}, fix_suggestion="", source="itest")
+
+            pg = get_knowledge_store()
+            remaining = [
+                r["fingerprint"]
+                for r in pg.list_recent_kb_entries(limit=100)
+                if r["fingerprint"].startswith(base)
+            ]
+            assert remaining == [f"{base}-2", f"{base}-3"]
+            assert store.size() == 2
+        finally:
+            for i in (1, 2, 3):
+                self._cleanup(f"{base}-{i}")

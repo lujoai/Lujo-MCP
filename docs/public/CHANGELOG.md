@@ -7,7 +7,22 @@
 
 ## [Unreleased]
 
-> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1116 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 清零 + P3 共 14 项收口后）。
+> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1129 passed / 6 skipped / 0 failed**（2026-08-17 KB 持久化落地后；上一基线 1116）。
+
+### 新增
+
+#### 代码
+
+- **RAG 知识库 PostgreSQL 持久化**：KB 主存（进程内 `KnowledgeBaseStore`）新增写穿（write-through）持久化与启动回灌，learned 知识跨重启保留——
+  - 新增 `kb_entries` 表（DDL 单源 `ddl.py`，`migrations/20260817_create_kb_entries_table.sql` 同步）：fingerprint 主键、analysis JSONB、三级指纹索引列、verify_count/case_confidence 验证统计，时间戳为 DOUBLE PRECISION（epoch 秒）
+  - 新增 `KnowledgeBaseStorage` ABC（`base.py`）与 `PGKnowledgeBaseStore` / `NoOpKnowledgeBaseStore` 双实现，经 `factory.get_knowledge_store()` 分发：PG 后端真实持久化，memory 后端 no-op（行为与历史版本一致），PG 初始化失败降级 no-op 不阻断启动
+  - KB `upsert` / `record_verification` / `clear` / LRU 驱逐同步落库（锁外执行，PG 故障 warning 降级不阻断主流程）；驱逐同步删除持久行，内存与 PG 条数保持一致（≤ max_entries）
+  - 新增 `load_from_persistent()` 启动回灌：按 `updated_at` 倒序取最近 `max_entries` 条重建内存条目（含验证统计与三级索引），`main.py` lifespan 在种子加载前调用；PG 为权威来源，同指纹覆盖内存副本
+
+#### 测试
+
+- 新增 `tests/unit/test_kb_persistence.py`（13 项）：写穿、驱逐删除、验证回写、clear 清空、故障降级、回灌字段保留 / max_entries 截断 / LRU 顺序、内存重复覆盖、NoOp 行为
+- 新增 `tests/integration/test_pg_integration.py::TestKnowledgeBasePersistence`（2 项，真实 PG 往返）：upsert→清内存→回灌字段一致；LRU 驱逐后 PG 行同步删除
 
 ### 修复
 

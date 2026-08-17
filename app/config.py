@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # ── PostgreSQL ──
     pg_host: str = "localhost"
     pg_port: int = 5432
-    pg_database: str = "ai_debug_mcp"
+    pg_database: str = "lujo_mcp"
     pg_user: str = "postgres"
     pg_password: str = ""
     pg_min_connections: int = 2

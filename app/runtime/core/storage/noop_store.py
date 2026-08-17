@@ -9,7 +9,7 @@ spec_store.py 内存 + trace_store 双写回退），因此工厂对非 PG 后�
 import logging
 from typing import Optional
 
-from app.runtime.core.storage.base import ErrorStorage, SpecStorage
+from app.runtime.core.storage.base import ErrorStorage, SpecStorage, KnowledgeBaseStorage
 
 logger = logging.getLogger("lujo-mcp.storage.noop")
 
@@ -41,3 +41,33 @@ class NoOpSpecStore(SpecStorage):
 
     def delete_spec(self, spec_id: str) -> bool:
         return False
+
+
+class NoOpKnowledgeBaseStore(KnowledgeBaseStorage):
+    """memory 后端的知识库持久化 no-op 实现（v0.5.3）。
+
+    KB 主存 KnowledgeBaseStore 本身就在进程内，memory 后端下
+    持久化层无事可做：写穿全部 no-op，启动回灌返回空列表，
+    行为与历史版本完全一致。
+    """
+
+    def upsert_kb_entry(self, entry: dict) -> None:
+        return None
+
+    def update_kb_verification(
+        self,
+        fingerprint: str,
+        verify_count: int,
+        case_confidence: float,
+        updated_at: float,
+    ) -> bool:
+        return False
+
+    def delete_kb_entry(self, fingerprint: str) -> bool:
+        return False
+
+    def delete_all_kb_entries(self) -> int:
+        return 0
+
+    def list_recent_kb_entries(self, limit: int = 100) -> list[dict]:
+        return []

@@ -325,10 +325,10 @@ Test-NetConnection -ComputerName <PG_HOST> -Port <PG_PORT>
 
 ```sql
 -- 创建数据库（如尚未创建）
-CREATE DATABASE ai_debug_mcp;
+CREATE DATABASE lujo_mcp;
 
 -- 确认用户权限
-GRANT ALL PRIVILEGES ON DATABASE ai_debug_mcp TO postgres;
+GRANT ALL PRIVILEGES ON DATABASE lujo_mcp TO postgres;
 
 -- 判定标准 / Pass Criteria: 连接成功且用户有读写权限
 ```

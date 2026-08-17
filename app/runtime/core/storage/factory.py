@@ -3,7 +3,7 @@
 import logging
 
 from app.config import settings
-from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage
+from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage, KnowledgeBaseStorage
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ _trace_store: TraceStorage = None   # type: ignore
 _session_store: SessionStorage = None  # type: ignore
 _error_store: ErrorStorage = None  # type: ignore
 _spec_store: SpecStorage = None  # type: ignore
+_knowledge_store: KnowledgeBaseStorage = None  # type: ignore
 
 
 def _validate_backend() -> None:
@@ -171,3 +172,40 @@ def get_spec_store() -> SpecStorage:
             _spec_store = NoOpSpecStore()
             logger.info("spec_store initialized: backend=%s (no-op)", settings.storage_backend)
     return _spec_store
+
+
+def get_knowledge_store() -> KnowledgeBaseStorage:
+    """返回知识库持久化实例（v0.5.3：PG 真实持久化，memory no-op）。
+
+    KB 主存仍是进程内 KnowledgeBaseStore；本实例承担写穿持久化
+    （upsert/record_verification/驱逐/clear 同步落库）与启动回灌
+    （list_recent_kb_entries）。PG 失败时降级 no-op（KB 退回纯内存行为，
+    不阻断启动）。
+    """
+    global _knowledge_store
+    if _knowledge_store is None:
+        _validate_backend()
+        if settings.storage_backend == "postgresql":
+            try:
+                if settings.pg_async_enabled:
+                    _raise_async_mix("knowledge_store")
+                else:
+                    from app.runtime.core.storage.pg_store import PGKnowledgeBaseStore
+                    _knowledge_store = PGKnowledgeBaseStore()
+                    logger.info(
+                        "knowledge_store initialized: backend=%s, async=disabled (psycopg2 sync)",
+                        settings.storage_backend,
+                    )
+            except Exception as e:
+                if settings.storage_fallback_to_memory:
+                    logger.warning("PG knowledge_store 初始化失败，降级到 no-op: %s", e)
+                    from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
+                    _knowledge_store = NoOpKnowledgeBaseStore()
+                    logger.warning("knowledge_store 已降级到 no-op (fallback enabled)")
+                else:
+                    raise
+        else:
+            from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
+            _knowledge_store = NoOpKnowledgeBaseStore()
+            logger.info("knowledge_store initialized: backend=%s (no-op)", settings.storage_backend)
+    return _knowledge_store

@@ -321,7 +321,7 @@ Verifier 验证
 | `STATE_BACKEND` | `memory` | `memory` / `redis` |
 | `PG_HOST` | `localhost` | PostgreSQL 主机 |
 | `PG_PORT` | `5432` | PostgreSQL 端口 |
-| `PG_DATABASE` | `ai_debug_mcp` | 数据库名 |
+| `PG_DATABASE` | `lujo_mcp` | 数据库名 |
 | `PG_USER` | `postgres` | PostgreSQL 用户名 |
 | `PG_PASSWORD` | — | PostgreSQL 权威密码来源 |
 | `LLM_PROVIDER` | `openai` | `openai` / `zhipu` / `custom` |

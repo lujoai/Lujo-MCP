@@ -11,13 +11,14 @@ import psycopg2.pool
 import psycopg2.errors
 
 from app.config import settings
-from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage
+from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage, KnowledgeBaseStorage
 from app.runtime.core.storage._pg_errors import sanitize_pg_error
 from app.runtime.core.storage.ddl import (  # FIX: P0-5 DDL 单源，消除与 async_pg_store/migrations 分叉
     DDL_TRACES,
     DDL_SESSIONS,
     DDL_ERRORS,
     DDL_SPECS,
+    DDL_KB_ENTRIES,
     DDL_TRACES_ARCHIVE,
 )
 
@@ -305,6 +306,7 @@ def _ensure_init():
             cur.execute(DDL_SESSIONS)
             cur.execute(DDL_ERRORS)
             cur.execute(DDL_SPECS)
+            cur.execute(DDL_KB_ENTRIES)
 
             # P3-2：归档表
             if settings.pg_archive_enabled:
@@ -887,6 +889,153 @@ class PGSpecStore(SpecStorage):
                 (spec_id,),
             )
             return rowcount > 0
+        finally:
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
+
+
+# ════════════════════════════════════════════════════
+#  v0.5.3：kb_entries 表 CRUD（RAG 知识库持久化）—— KnowledgeBaseStorage ABC 实现
+#  KB 主存在进程内 KnowledgeBaseStore，本类承担写穿持久化 + 启动回灌
+# ════════════════════════════════════════════════════
+class PGKnowledgeBaseStore(KnowledgeBaseStorage):
+
+    def upsert_kb_entry(self, entry: dict) -> None:
+        """upsert 一条 KB entry 到 kb_entries 表（按 fingerprint 去重）。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = _get_conn()
+        try:
+            analysis = entry.get("analysis") or {}
+            analysis_json = json.dumps(analysis, ensure_ascii=False, default=str)
+            now = entry.get("updated_at") or time.time()
+            conn, _ = _execute_with_retry(
+                conn,
+                """
+                INSERT INTO kb_entries
+                    (fingerprint, analysis, fix_suggestion, source,
+                     created_at, updated_at, normalized_fingerprint,
+                     type_fingerprint, verify_count, case_confidence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (fingerprint) DO UPDATE SET
+                    analysis               = EXCLUDED.analysis,
+                    fix_suggestion         = EXCLUDED.fix_suggestion,
+                    source                 = EXCLUDED.source,
+                    updated_at             = EXCLUDED.updated_at,
+                    normalized_fingerprint = EXCLUDED.normalized_fingerprint,
+                    type_fingerprint       = EXCLUDED.type_fingerprint,
+                    verify_count           = EXCLUDED.verify_count,
+                    case_confidence        = EXCLUDED.case_confidence
+                """,
+                (
+                    entry.get("fingerprint"),
+                    analysis_json,
+                    entry.get("fix_suggestion", ""),
+                    entry.get("source", ""),
+                    entry.get("created_at", now),
+                    now,
+                    entry.get("normalized_fingerprint", ""),
+                    entry.get("type_fingerprint", ""),
+                    entry.get("verify_count", 0),
+                    entry.get("case_confidence", 0.0),
+                ),
+            )
+        finally:
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
+
+    def update_kb_verification(
+        self,
+        fingerprint: str,
+        verify_count: int,
+        case_confidence: float,
+        updated_at: float,
+    ) -> bool:
+        """回写验证统计到 kb_entries 表，返回是否命中。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = _get_conn()
+        try:
+            conn, rowcount = _execute_with_retry(
+                conn,
+                """
+                UPDATE kb_entries
+                SET verify_count = %s,
+                    case_confidence = %s,
+                    updated_at = %s
+                WHERE fingerprint = %s
+                """,
+                (verify_count, case_confidence, updated_at, fingerprint),
+            )
+            return rowcount > 0
+        finally:
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
+
+    def delete_kb_entry(self, fingerprint: str) -> bool:
+        """从 kb_entries 表删除一条 entry（LRU 驱逐同步删除）。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = _get_conn()
+        try:
+            conn, rowcount = _execute_with_retry(
+                conn,
+                "DELETE FROM kb_entries WHERE fingerprint = %s",
+                (fingerprint,),
+            )
+            return rowcount > 0
+        finally:
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
+
+    def delete_all_kb_entries(self) -> int:
+        """清空 kb_entries 表（clear 同步），返回删除条数。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = _get_conn()
+        try:
+            conn, rowcount = _execute_with_retry(
+                conn,
+                "DELETE FROM kb_entries",
+            )
+            return rowcount
+        finally:
+            if conn is not None and not conn.closed:
+                pool.putconn(conn)
+
+    def list_recent_kb_entries(self, limit: int = 100) -> list[dict]:
+        """按 updated_at 倒序列出最近 limit 条 entry（启动回灌用）。"""
+        _ensure_init()
+        pool = _get_pool()
+        conn = _get_conn()
+        try:
+            rows = _query_with_retry(
+                conn,
+                """
+                SELECT fingerprint, analysis, fix_suggestion, source,
+                       created_at, updated_at, normalized_fingerprint,
+                       type_fingerprint, verify_count, case_confidence
+                FROM kb_entries
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return [
+                {
+                    "fingerprint": r[0],
+                    "analysis": _parse_data(r[1]) or {},
+                    "fix_suggestion": r[2] or "",
+                    "source": r[3] or "",
+                    "created_at": r[4],
+                    "updated_at": r[5],
+                    "normalized_fingerprint": r[6] or "",
+                    "type_fingerprint": r[7] or "",
+                    "verify_count": r[8] or 0,
+                    "case_confidence": r[9] or 0.0,
+                }
+                for r in rows
+            ]
         finally:
             if conn is not None and not conn.closed:
                 pool.putconn(conn)

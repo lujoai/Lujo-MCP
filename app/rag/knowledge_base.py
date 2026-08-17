@@ -7,6 +7,12 @@ v0.4.0 M2 增强：在原有精确指纹（L1）基础上，引入三级 fallbac
 
 并新增向量索引双写同步（_sync_entry_to_vector_store / _sync_all_to_vector_store），
 保证 KB 写入后向量检索能覆盖全部条目，避免"写了但向量召不回"。
+
+v0.5.3 新增 PG 持久化（写穿模式）：
+- upsert / record_verification / LRU 驱逐 / clear 同步落库到 kb_entries 表
+  （经 storage factory 分发，memory 后端 no-op，PG 故障 warning 降级不阻断）；
+- load_from_persistent() 启动回灌：按 updated_at 倒序取最近 max_entries 条
+  重建内存条目（含验证统计），跨重启保留 learned 知识。
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from app.rag.debug_case import (
     compute_type_fingerprint,
 )
 from app.rag.vector_store import get_vector_store
+from app.runtime.core.storage.factory import get_knowledge_store
 
 logger = logging.getLogger("lujo-mcp.knowledge-base")
 
@@ -168,6 +175,7 @@ class KnowledgeBaseStore:
         type_fp = compute_type_fingerprint(exc_type)
 
         now = time.time()
+        evicted_fingerprint: str | None = None
         with self._lock:
             existing = self._entries.get(fingerprint)
             if existing is not None:
@@ -207,6 +215,9 @@ class KnowledgeBaseStore:
         if settings.kb_vector_index_autosync:
             self._sync_entry_to_vector_store(result)
 
+        # PG 写穿持久化（锁外；LRU 驱逐同步删除，失败 warning 降级）
+        self._persist_upsert(result, evicted_fingerprint)
+
         return result
 
     def clear(self) -> None:
@@ -214,6 +225,8 @@ class KnowledgeBaseStore:
             self._entries.clear()
             self._norm_index.clear()
             self._type_index.clear()
+        # PG 写穿：同步清空持久层（锁外执行）
+        self._persist_clear()
 
     def record_verification(
         self, fingerprint: str, confidence: float
@@ -236,6 +249,9 @@ class KnowledgeBaseStore:
 
         if settings.kb_vector_index_autosync:
             self._sync_entry_to_vector_store(result)
+
+        # PG 写穿：同步回写验证统计（锁外执行）
+        self._persist_verification(result)
         return result
 
     def size(self) -> int:
@@ -291,6 +307,134 @@ class KnowledgeBaseStore:
             get_vector_store().add(entries)
         except Exception:
             logger.warning("KB→vector full sync failed", exc_info=True)
+
+    # ── PG 写穿持久化（v0.5.3）──
+
+    def _persistent_store(self):
+        """获取持久化存储实例；不可用时返回 None（KB 退回纯内存行为）。"""
+        try:
+            return get_knowledge_store()
+        except Exception:
+            logger.warning("KB persistent store unavailable, falling back to memory-only",
+                           exc_info=True)
+            return None
+
+    def _persist_upsert(
+        self, entry: dict[str, Any], evicted_fingerprint: str | None
+    ) -> None:
+        """upsert 写穿落库 + LRU 驱逐同步删除（失败 warning 降级，不阻断主流程）。"""
+        store = self._persistent_store()
+        if store is None:
+            return
+        try:
+            store.upsert_kb_entry(entry)
+        except Exception:
+            logger.warning(
+                "KB→PG upsert failed (fingerprint=%s)",
+                entry.get("fingerprint"),
+                exc_info=True,
+            )
+        if evicted_fingerprint:
+            try:
+                store.delete_kb_entry(evicted_fingerprint)
+            except Exception:
+                logger.warning(
+                    "KB→PG evict delete failed (fingerprint=%s)",
+                    evicted_fingerprint,
+                    exc_info=True,
+                )
+
+    def _persist_verification(self, entry: dict[str, Any]) -> None:
+        """验证统计写穿回写（失败 warning 降级）。"""
+        store = self._persistent_store()
+        if store is None:
+            return
+        try:
+            hit = store.update_kb_verification(
+                entry.get("fingerprint", ""),
+                entry.get("verify_count", 0),
+                entry.get("case_confidence", 0.0),
+                entry.get("updated_at", time.time()),
+            )
+            if not hit:
+                logger.debug(
+                    "KB→PG verification update miss (fingerprint=%s)",
+                    entry.get("fingerprint"),
+                )
+        except Exception:
+            logger.warning(
+                "KB→PG verification update failed (fingerprint=%s)",
+                entry.get("fingerprint"),
+                exc_info=True,
+            )
+
+    def _persist_clear(self) -> None:
+        """clear 写穿清空持久层（失败 warning 降级）。"""
+        store = self._persistent_store()
+        if store is None:
+            return
+        try:
+            deleted = store.delete_all_kb_entries()
+            logger.info("KB→PG cleared, deleted %d entries", deleted)
+        except Exception:
+            logger.warning("KB→PG clear failed", exc_info=True)
+
+    def load_from_persistent(self) -> int:
+        """启动回灌：从持久层加载最近 max_entries 条重建内存条目。
+
+        - 按 updated_at 倒序取回，再按时间正序插入 OrderedDict（保证 LRU
+          驱逐语义：最久未更新的条目位于队首）；
+        - 保留 created_at/updated_at/verify_count/case_confidence 原值；
+        - memory 后端（NoOp）返回 0，行为与历史版本一致；
+        - 失败 warning 降级并返回 0，不阻断启动。
+        """
+        store = self._persistent_store()
+        if store is None:
+            return 0
+        try:
+            rows = store.list_recent_kb_entries(limit=self.max_entries)
+        except Exception:
+            logger.warning("KB startup load from persistent store failed", exc_info=True)
+            return 0
+        if not rows:
+            return 0
+
+        count = 0
+        # 倒序取回 → 正序插入：updated_at 最旧的先插入（LRU 队首），最新的在队尾
+        for row in reversed(rows):
+            fingerprint = row.get("fingerprint")
+            if not fingerprint:
+                continue
+            created_at = row.get("created_at") or time.time()
+            updated_at = row.get("updated_at") or created_at
+            with self._lock:
+                entry = KnowledgeBaseEntry(
+                    fingerprint=fingerprint,
+                    analysis=copy.deepcopy(row.get("analysis") or {}),
+                    fix_suggestion=row.get("fix_suggestion", "") or "",
+                    source=row.get("source", "") or "",
+                    created_at=created_at,
+                    updated_at=updated_at,
+                    normalized_fingerprint=row.get("normalized_fingerprint", "") or "",
+                    type_fingerprint=row.get("type_fingerprint", "") or "",
+                    verify_count=int(row.get("verify_count") or 0),
+                    case_confidence=float(row.get("case_confidence") or 0.0),
+                )
+                # PG 为权威来源：直接覆盖内存中的同指纹条目（若有）
+                existing = self._entries.get(fingerprint)
+                if existing is not None:
+                    self._remove_from_index(existing)
+                self._entries[fingerprint] = entry
+                self._entries.move_to_end(fingerprint)
+                self._add_to_index(entry)
+                count += 1
+
+        logger.info(
+            "KB startup load from persistent store: %d entries (max=%d)",
+            count,
+            self.max_entries,
+        )
+        return count
 
     # ── 种子 / 批量导入 ──
 
@@ -366,6 +510,11 @@ def get_entries_by_type_fingerprint(
 def load_knowledge_base_seeds(cases: list[dict[str, Any]]) -> int:
     """加载种子知识到知识库。"""
     return _knowledge_base.load_seed_cases(cases)
+
+
+def load_knowledge_base_from_persistent() -> int:
+    """启动回灌：从持久层（kb_entries 表）加载最近条目回内存（v0.5.3）。"""
+    return _knowledge_base.load_from_persistent()
 
 
 def sync_knowledge_base_to_vector_store() -> None:

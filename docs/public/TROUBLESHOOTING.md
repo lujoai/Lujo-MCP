@@ -257,12 +257,12 @@ systemctl status postgresql
 docker compose ps postgres
 
 # 2. 验证连接参数
-psql -h localhost -p 5432 -U postgres -d ai_debug_mcp -c "SELECT 1"
+psql -h localhost -p 5432 -U postgres -d lujo_mcp -c "SELECT 1"
 
 # 3. 检查 .env 配置
 # PG_HOST=localhost
 # PG_PORT=5432
-# PG_DATABASE=ai_debug_mcp
+# PG_DATABASE=lujo_mcp
 # PG_USER=postgres
 # PG_PASSWORD=<correct_password>
 
@@ -303,7 +303,7 @@ psql -c "ALTER USER postgres PASSWORD 'new_password';"
 
 **现象 / Symptom**:
 ```
-psycopg2.OperationalError: FATAL: database "ai_debug_mcp" does not exist
+psycopg2.OperationalError: FATAL: database "lujo_mcp" does not exist
 ```
 
 **原因 / Cause**: 目标数据库尚未创建。
@@ -314,10 +314,10 @@ psycopg2.OperationalError: FATAL: database "ai_debug_mcp" does not exist
 psql -h localhost -U postgres -d postgres
 
 -- 创建目标数据库
-CREATE DATABASE ai_debug_mcp;
+CREATE DATABASE lujo_mcp;
 ```
 
-**验证 / Verify**: `psql -d ai_debug_mcp -c "SELECT 1"` 成功
+**验证 / Verify**: `psql -d lujo_mcp -c "SELECT 1"` 成功
 
 ---
 
