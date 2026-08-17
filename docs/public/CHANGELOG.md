@@ -7,7 +7,7 @@
 
 ## [Unreleased]
 
-> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1115 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 清零 + P3 高价值 4 项 + P3 专项 7 项收口后）。
+> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1116 passed / 6 skipped / 0 failed**（2026-08-16 第 3 轮审查 P2 清零 + P3 共 14 项收口后）。
 
 ### 修复
 
@@ -38,6 +38,8 @@
 - **同步工具超时后线程继续跑**（P3-12）：`mcp_server.py` / `protocol/server.py` 同步 handler 用 `asyncio.to_thread` 占用默认线程池，`wait_for` 超时只取消 await、线程池 worker 被长任务占用；改用专用有界 `ThreadPoolExecutor(max_workers=8)` + `run_in_executor`，与默认池隔离，更新 verify_ui 源码断言
 - **过期 MCP 会话 SSE 悬挂**（P3-14）：`session.py` `cleanup()` 返回 int 导致调用方无法定位被清理会话；改为返回 sid 列表，`main.py` periodic_cleanup 逐个 `hub.close_session(sid)` 关闭悬挂 SSE 流，新增 2 项测试
 - **/internal/health 反代泄露**（P3-13）：`main.py` `_is_internal_ip` 信任直连 `client.host`，局域网反代部署时 `is_private=True` 被当内网放行，公网用户可读取完整配置；`internal_health` 检测到 `X-Forwarded-For`/`X-Real-IP` 转发头即不再按内网放行，改走 API Key 校验（fail-closed），新增 2 项测试
+- **SSE 订阅无并发上限**（P3-7）：`SSEHub`（每 session）与 `DashboardEventBus`（全局）订阅无上限，持有效 key 可开无限长连接耗尽连接池；SSEHub 每 session 上限 5、DashboardEventBus 全局上限 100，超限返回 429，新增上限测试
+- **jsonrpc 死代码 + 冗余 import**（P3-15）：`jsonrpc.py` `JSONRPCResponse` 无任何使用（死代码）已删除；`server.py` `__import__("asyncio")` 改为顶层 `asyncio.iscoroutine`
 
 ### 变更
 

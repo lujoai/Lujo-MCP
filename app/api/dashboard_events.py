@@ -40,12 +40,18 @@ class DashboardEventBus:
     - 订阅者事件循环关闭时自动清理死订阅，避免泄漏。
     """
 
+    # FIX: P3-7 全局订阅数上限，防止无门槛广播流被无限订阅耗尽连接/内存
+    _MAX_SUBSCRIBERS = 100
+
     def __init__(self) -> None:
         self._subs: list[_DashboardSubscription] = []
 
     def subscribe(self) -> asyncio.Queue:
         """订阅事件流，返回专属队列。必须在运行中的事件循环内调用。"""
         loop = asyncio.get_running_loop()
+        # FIX: P3-7 订阅数达上限时拒绝新订阅
+        if len(self._subs) >= self._MAX_SUBSCRIBERS:
+            raise PermissionError("Dashboard SSE 订阅数达上限")
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
         self._subs.append(_DashboardSubscription(queue=q, loop=loop))
         return q

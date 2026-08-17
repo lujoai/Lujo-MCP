@@ -12,13 +12,6 @@ class JSONRPCRequest(BaseModel):
     params: Optional[dict] = None
 
 
-class JSONRPCResponse(BaseModel):
-    jsonrpc: str = "2.0"
-    id: Optional[Union[int, str]] = None
-    result: Optional[Any] = None
-    error: Optional[dict] = None
-
-
 class JSONParseError(ValueError):
     """JSON 语法解析失败 → 对应 -32700"""
 

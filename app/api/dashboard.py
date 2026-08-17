@@ -351,7 +351,11 @@ async def dashboard_stream(request: Request):
     if not settings.dashboard_sse_enabled:
         return JSONResponse({"detail": "Dashboard SSE 未启用"}, status_code=503)
 
-    q = dashboard_hub.subscribe()
+    try:
+        q = dashboard_hub.subscribe()
+    except PermissionError:
+        # FIX: P3-7 订阅数已达上限，拒绝新长连接
+        return JSONResponse({"detail": "Dashboard SSE 订阅数达上限"}, status_code=429)
 
     async def event_stream():
         try:

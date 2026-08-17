@@ -221,7 +221,7 @@ async def dispatch(jsonrpc_request: JSONRPCRequest) -> dict:
 
     try:
         result = handler(jsonrpc_request)
-        if __import__("asyncio").iscoroutine(result):
+        if asyncio.iscoroutine(result):
             result = await result
         return result
     except Exception:

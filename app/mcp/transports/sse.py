@@ -22,6 +22,8 @@ class SSEHub:
 
     # FIX: P1-10a 每订阅队列有界，防止慢消费客户端导致无界内存增长
     _QUEUE_MAXSIZE = 256
+    # FIX: P3-7 每 session 订阅数上限，防止持有效 session_id 打开无限 SSE 长连接
+    _MAX_SUBSCRIBERS_PER_SESSION = 5
 
     def __init__(self):
         self._queues: Dict[str, List[_Subscription]] = {}
@@ -53,6 +55,9 @@ class SSEHub:
         # FIX: P1-10a 有界队列（maxsize=256），满时由 _publish_locked 丢最旧
         q: asyncio.Queue = asyncio.Queue(maxsize=self._QUEUE_MAXSIZE)
         with self._lock:
+            # FIX: P3-7 锁内检查订阅数上限，防止同一有效 session 开无限长连接
+            if len(self._queues.get(session_id, [])) >= self._MAX_SUBSCRIBERS_PER_SESSION:
+                raise PermissionError("SSE 订阅数达上限")
             self._queues.setdefault(session_id, []).append(_Subscription(queue=q, loop=loop))
         return q
 

@@ -22,9 +22,9 @@ def mock_session(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_concurrent_subscribe_unsubscribe(hub, mock_session):
-    """并发 subscribe/unsubscribe 不抛异常"""
+    """并发 subscribe/unsubscribe 不抛异常（订阅数保持在每 session 上限内）"""
     qs = []
-    for _ in range(10):
+    for _ in range(5):  # 每 session 订阅上限 _MAX_SUBSCRIBERS_PER_SESSION=5
         q = hub.subscribe(mock_session)
         qs.append(q)
 
@@ -37,6 +37,15 @@ async def test_concurrent_subscribe_unsubscribe(hub, mock_session):
     thread.join()
 
     assert hub.subscriber_count(mock_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_subscribe_exceeds_per_session_limit(hub, mock_session):
+    """同一 session 订阅数达上限后拒绝（P3-7 防无限长连接）"""
+    for _ in range(5):  # 上限内可订阅
+        hub.subscribe(mock_session)
+    with pytest.raises(PermissionError):  # 第 6 个被拒
+        hub.subscribe(mock_session)
 
 
 @pytest.mark.asyncio

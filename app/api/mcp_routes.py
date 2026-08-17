@@ -175,7 +175,11 @@ async def mcp_get(request: Request):
     if not registry.get(session_id):
         return JSONResponse({"detail": "MCP session not found, please re-initialize"}, status_code=404)
 
-    q = hub.subscribe(session_id)
+    try:
+        q = hub.subscribe(session_id)
+    except PermissionError:
+        # FIX: P3-7 订阅数已达上限，拒绝新长连接
+        return JSONResponse({"detail": "Too many SSE subscribers"}, status_code=429)
 
     async def event_stream():
         try:
