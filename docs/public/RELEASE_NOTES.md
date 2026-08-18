@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.5.2（2026-08-15）**。品牌统一：全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`（MCP server 名 / logger / OTel service name / 配置示例 / Browser SDK description），LICENSE 版权署名改为 LujoAI；v0.5.1 已发布（Source Map 堆栈还原 + `resolve_stack` 18/18 + deepseek provider base_url 修复）。npm `latest` → `@lujoai/lujo-mcp@0.5.2`。
-> 测试基线：单元 1105 passed / 6 skipped / 0 failed（2026-08-16 第 3 轮代码审查 P1/P2/P3 收口后，新增 24 项）+ e2e 10 passed。
+> 最新版本：**v0.5.3（2026-08-18）**。RAG 知识库 PostgreSQL 持久化（learned 经验跨重启保留）+ 数据库改名 `lujo_mcp` + P3-9 pg_store 重连缺陷修复（第 3 轮代码审查 P3 至此全部清零）；v0.5.2 已发布（品牌统一：全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`）。npm `latest` → `@lujoai/lujo-mcp@0.5.3`。
+> 测试基线：单元 **1134 passed / 6 skipped / 0 failed**（2026-08-17 KB 持久化 + P3-9 收口后）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
@@ -13,9 +13,57 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.5.2  
-**Release Date / 发布日期**: 2026-08-15  
-**Codename / 代号**: 品牌统一 — Rebrand to Lujo-MCP
+**Version / 版本**: v0.5.3  
+**Release Date / 发布日期**: 2026-08-18  
+**Codename / 代号**: 知识持久化 — KB Persistence
+
+---
+
+## v0.5.3（2026-08-18）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.5.3 是 Lujo-MCP 的 **RAG 知识库持久化** 版本：将进程内知识库（KB）同步写穿（write-through）到 PostgreSQL 并支持启动回灌，learned 调试经验跨重启保留；数据库从 `ai_debug_mcp` 改名 `lujo_mcp`；同时完成第 3 轮代码审查最后一个 P3 项（pg_store 重连后连接泄漏，P3-9）修复。无 Breaking Change：PG 未配置时自动降级为纯内存模式（行为与历史版本一致），升级无需迁移。测试基线 1105 → **1134 passed / 6 skipped / 0 failed**。
+
+#### ✨ 新增功能
+
+- **RAG 知识库 PostgreSQL 持久化**（`app/rag/knowledge_base.py`）：
+  - 新增 `kb_entries` 表（DDL 单源 `ddl.py` + `migrations/20260817_create_kb_entries_table.sql` 同步）：fingerprint 主键、analysis JSONB、三级指纹索引列、verify_count/case_confidence 验证统计、DOUBLE PRECISION 时间戳
+  - 新增 `KnowledgeBaseStorage` ABC（`base.py`）与 `PGKnowledgeBaseStore` / `NoOpKnowledgeBaseStore` 双实现，经 `factory.get_knowledge_store()` 分发：PG 后端真实持久化，memory 后端 no-op，PG 初始化失败降级 no-op 不阻断启动
+  - KB `upsert` / `record_verification` / `clear` / LRU 驱逐同步落库（锁外执行，PG 故障 warning 降级）；驱逐同步删除持久行，内存与 PG 条数一致（≤ max_entries）
+  - 新增 `load_from_persistent()` 启动回灌：按 `updated_at` 倒序取最近 `max_entries` 条重建内存条目（含验证统计与三级索引），PG 为权威来源，同指纹覆盖内存副本
+
+#### 🐛 Bug 修复
+
+- **pg_store 重连后连接泄漏**（P3-9）：`_query_with_retry` 内部重连换新连接后仅返回查询结果，调用方 `finally` 仍归还旧 conn —— 新连接从池取出永不归还（连接泄漏）、旧连接被重复归还（已 close 连接再 putconn）、重连后继续用旧引用报 `InterfaceError`；改为返回 `(rows, conn)` 与 `_execute_with_retry` 对齐，7 处调用方（traces/sessions/specs/kb_entries 读路径）全部更新为归还最新连接（第 3 轮审查 P3 至此全部清零）
+
+#### 🧪 测试
+
+- 新增 `tests/unit/test_kb_persistence.py`（13 项）+ `tests/unit/test_pg_store_reconnect.py`（5 项）+ 集成 2 项，基线 1105 → **1134 passed / 6 skipped / 0 failed**
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.5.3 is the **Knowledge Base persistence** release of Lujo-MCP: the in-process knowledge base (KB) now write-throughs to PostgreSQL and reloads on startup, so learned debugging experience survives restarts; the database was renamed from `ai_debug_mcp` to `lujo_mcp`; and the last P3 item from the third review round (post-reconnect connection leak in `pg_store`, P3-9) is fixed. No breaking changes: without PG configured it degrades to pure in-memory mode (same behavior as prior versions) and upgrades need no migration. Test baseline improved to **1134 passed / 6 skipped / 0 failed**.
+
+#### ✨ New Features
+
+- **RAG knowledge base PostgreSQL persistence** (`app/rag/knowledge_base.py`):
+  - New `kb_entries` table (single DDL source `ddl.py` + `migrations/20260817_create_kb_entries_table.sql`): fingerprint PK, analysis JSONB, three-level fingerprint index columns, verify_count/case_confidence, DOUBLE PRECISION timestamps
+  - New `KnowledgeBaseStorage` ABC (`base.py`) with `PGKnowledgeBaseStore` / `NoOpKnowledgeBaseStore` implementations via `factory.get_knowledge_store()`: PG backend persists, memory backend no-ops, PG init failure degrades to no-op without blocking startup
+  - KB `upsert` / `record_verification` / `clear` / LRU eviction sync to PG (outside locks; PG failures degrade with a warning); eviction deletes the persistent row so memory and PG counts stay consistent (≤ max_entries)
+  - New `load_from_persistent()` startup reload: rebuilds in-memory entries (verification stats + three-level index) from the most recent `max_entries` by `updated_at`; PG is authoritative and overwrites in-memory copies on fingerprint match
+
+#### 🐛 Bug Fixes
+
+- **Post-reconnect connection leak in `pg_store`** (P3-9): `_query_with_retry` returned only query results after an internal reconnect, so callers' `finally` still returned the stale conn — the new connection was never returned to the pool (leak), the old one was double-returned (putconn after close), and continued use of the stale reference raised `InterfaceError`; now returns `(rows, conn)` aligned with `_execute_with_retry`, and all 7 callers (traces/sessions/specs/kb_entries read paths) return the latest connection (the third review round's P3 items are now all closed)
+
+#### 🧪 Tests
+
+- New `tests/unit/test_kb_persistence.py` (13) + `tests/unit/test_pg_store_reconnect.py` (5) + 2 integration tests; baseline 1105 → **1134 passed / 6 skipped / 0 failed**
 
 ---
 
