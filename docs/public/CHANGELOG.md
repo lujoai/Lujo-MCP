@@ -7,7 +7,7 @@
 
 ## [Unreleased]
 
-> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1129 passed / 6 skipped / 0 failed**（2026-08-17 KB 持久化落地后；上一基线 1116）。
+> v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1134 passed / 6 skipped / 0 failed**（2026-08-17 KB 持久化 + P3-9 收口后；上一基线 1129）。
 
 ### 新增
 
@@ -23,10 +23,13 @@
 
 - 新增 `tests/unit/test_kb_persistence.py`（13 项）：写穿、驱逐删除、验证回写、clear 清空、故障降级、回灌字段保留 / max_entries 截断 / LRU 顺序、内存重复覆盖、NoOp 行为
 - 新增 `tests/integration/test_pg_integration.py::TestKnowledgeBasePersistence`（2 项，真实 PG 往返）：upsert→清内存→回灌字段一致；LRU 驱逐后 PG 行同步删除
+- 新增 `tests/unit/test_pg_store_reconnect.py`（5 项，P3-9）：mock 池模拟断线重连，断言返回最新连接、调用方正确归还、重试耗尽抛错
 
 ### 修复
 
 #### 代码
+
+- **pg_store 重连后连接泄漏**（P3-9）：`_query_with_retry` 内部重连换新连接后仅返回查询结果，调用方 `finally` 仍归还旧 conn —— 新连接从池取出永不归还（连接泄漏）、旧连接被重复归还（已 close 连接再 putconn）、重连后继续用旧引用报 `InterfaceError`；改为返回 `(rows, conn)` 与 `_execute_with_retry` 对齐，7 处调用方（traces/sessions/specs/kb_entries 读路径）全部更新为归还最新连接，新增 5 项重连回归测试（第 3 轮审查 P3 至此全部清零）
 
 - **KB 淘汰索引泄漏**（R3-1）：`knowledge_base.py` LRU 淘汰时 `popitem` 返回的 entry 被丢弃，`_remove_from_index` 永不执行，`_norm_index`/`_type_index` 中陈旧 fingerprint 永久累积（索引无界增长 + 候选集混入已淘汰条目）；改为直接使用 `popitem` 返回值清理索引
 - **非 ASCII API Key 头 500**（S3-1）：`key_rotation.py` `hmac.compare_digest` 对含非 ASCII 的 str 抛 `TypeError`，畸形 `Authorization` 头可稳定打出 500；比较前统一 encode 为 UTF-8 bytes（恒定时间语义不变）

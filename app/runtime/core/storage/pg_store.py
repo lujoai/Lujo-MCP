@@ -401,11 +401,16 @@ def _query_with_retry(
 
     P3-8: 熔断器保护，当 PG 连续失败时触发熔断。
 
-    与 _execute_with_retry 对齐读路径重连重试：OperationalError 时丢弃并
+    P3-9: 与 _execute_with_retry 对齐读路径重连重试：OperationalError 时丢弃并
     获取新连接重试，避免在坏连接上重复查询。坏连接 putconn(close=True) 关闭，
     避免污染连接池。
 
-    返回: fetch_all=True 返回所有行列表，fetch_all=False 返回单行
+    返回 (rows, conn)：
+    - rows: fetch_all=True 返回所有行列表，fetch_all=False 返回单行
+    - conn: 最新的连接对象（可能是重连后的新连接）
+
+    FIX P3-9: 重连后调用方必须拿到最新连接归还连接池，否则新连接泄漏
+    且旧连接被重复归还；旧实现只返回 rows，调用方 finally 仍归还旧 conn。
     """
 
     def _do_query():
@@ -417,8 +422,10 @@ def _query_with_retry(
                 cur = conn.cursor()
                 cur.execute(sql, params)
                 if fetch_all:
-                    return cur.fetchall()
-                return cur.fetchone()
+                    rows = cur.fetchall()
+                else:
+                    rows = cur.fetchone()
+                return rows, conn
             except psycopg2.OperationalError as e:
                 last_error = e
                 if attempt < max_retries:
@@ -525,7 +532,7 @@ class PGTraceStore(TraceStorage):
     def get_entries(self, request_id: str) -> list[dict]:
         conn = self._conn()
         try:
-            rows = _query_with_retry(
+            rows, conn = _query_with_retry(
                 conn,
                 "SELECT timestamp, step, data FROM traces WHERE request_id = %s ORDER BY timestamp",
                 (request_id,),
@@ -582,7 +589,7 @@ class PGTraceStore(TraceStorage):
     def list_request_ids(self, limit: int = 50) -> list[str]:
         conn = self._conn()
         try:
-            rows = _query_with_retry(
+            rows, conn = _query_with_retry(
                 conn,
                 "SELECT request_id FROM ("
                 "  SELECT request_id, MAX(timestamp) as max_ts FROM traces GROUP BY request_id"
@@ -632,7 +639,7 @@ class PGSessionStore(SessionStorage):
     def get(self, session_id: str) -> Optional[dict]:
         conn = self._conn()
         try:
-            row = _query_with_retry(
+            row, conn = _query_with_retry(
                 conn,
                 "SELECT session_id, created_at, last_active, metadata FROM sessions WHERE session_id = %s",
                 (session_id,),
@@ -669,7 +676,7 @@ class PGSessionStore(SessionStorage):
         conn = self._conn()
         try:
             cutoff = time.time() - ttl_seconds
-            rows = _query_with_retry(
+            rows, conn = _query_with_retry(
                 conn,
                 "SELECT session_id, created_at, last_active, metadata FROM sessions WHERE last_active > %s",
                 (cutoff,),
@@ -809,7 +816,7 @@ class PGSpecStore(SpecStorage):
         pool = _get_pool()
         conn = _get_conn()
         try:
-            row = _query_with_retry(
+            row, conn = _query_with_retry(
                 conn,
                 "SELECT id, kind, target, expect, created_at, updated_at "
                 "FROM specs WHERE id = %s",
@@ -861,7 +868,7 @@ class PGSpecStore(SpecStorage):
             if conditions:
                 sql += " WHERE " + " AND ".join(conditions)
             sql += " ORDER BY updated_at DESC"
-            rows = _query_with_retry(conn, sql, tuple(params))
+            rows, conn = _query_with_retry(conn, sql, tuple(params))
             return [
                 {
                     "id": r[0],
@@ -1009,7 +1016,7 @@ class PGKnowledgeBaseStore(KnowledgeBaseStorage):
         pool = _get_pool()
         conn = _get_conn()
         try:
-            rows = _query_with_retry(
+            rows, conn = _query_with_retry(
                 conn,
                 """
                 SELECT fingerprint, analysis, fix_suggestion, source,
