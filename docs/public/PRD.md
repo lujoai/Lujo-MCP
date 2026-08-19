@@ -5,9 +5,9 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v6.1（v0.5.3 KB 持久化 + P3-9 收口后同步） |
+| 文档版本 | v6.2（v0.5.4 工程收口 + 文档补全后同步） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v0.5.3 |
+| 当前产品版本 | v0.5.4 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
 | 最后更新 | 2026-08-18 |
@@ -38,6 +38,7 @@
 | v5.10 | 2026-08-11 | 架构委员会 | **stacktrace 工具 + 存储工厂测试补齐与文档同步交付**：新增 `tests/unit/test_stacktrace_api.py`（9 用例——`stacktrace` MCP 工具 `handler()` 各分支：无异常无 request_id / request_id 无错误 / request_id 有错误 / 当前异常 / 缺参不抛 KeyError / `invoke` 包装 + `get_stacktrace()`：无记录无异常 / 按 error_id 取 / 取最新 fallback）+ `tests/unit/test_factory.py`（8 用例——存储工厂后端校验 fail-fast（非法拼写 raise）、memory 后端分发、error/spec no-op、async 混合 fail-fast、PG 初始化失败 fallback→no-op 与 fail-fast 双路径）。测试基线 891 → 908 passed / 6 skipped / 0 failed。同步更新 RESUME / INTERVIEW / handoff / README / PROJECT_SUMMARY / CHANGELOG / RELEASE_NOTES 测试基线。 |
 | v6.0 | 2026-08-16 | 架构委员会 | **v0.5.0/v0.5.1/v0.5.2 发布 + 第 3 轮代码审查修复交付**：(1) v0.5.0 工程质量加固（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 加固）已发布；v0.5.1 Source Map 解析（`resolve_stack` 工具 18/18）+ deepseek/LLM e2e/git 编码修复已发布；v0.5.2 品牌统一（ai-debug-mcp → lujo-mcp）已发布；(2) 第 3 轮代码审查 P1/P2/P3 共 17 项修复收口（KB 索引泄漏、非 ASCII 鉴权头 500、JSON-RPC 非 dict 500、指标 path 失效、symlink 白名单绕过、LLM 复合键脱敏、data_table NameError、限流误伤轮询、beacon 前缀边界、会话驱逐 DoS、清理任务静默死亡、stdio 挂死、errors bucket 无界、默认暴露告警、beacon 令牌堆积、会话固定、SSE 竞争、batch 上限）。测试基线 1087 → 1105 passed / 6 skipped / 0 failed。产品版本 v0.4.0-beta → v0.5.2。 |
 | v6.1 | 2026-08-18 | 架构委员会 | **v0.5.3 发布 + KB 持久化与 P3-9 收口交付**：(1) RAG 知识库 PostgreSQL 持久化——新增 `kb_entries` 表（fingerprint 主键 + analysis JSONB + 三级指纹索引 + verify_count/case_confidence）、`KnowledgeBaseStorage` ABC 与 `PGKnowledgeBaseStore`/`NoOpKnowledgeBaseStore` 双实现、upsert/record_verification/clear/LRU 驱逐同步写穿落库、启动 `load_from_persistent()` 回灌，learned 知识跨重启保留；(2) 数据库改名 ai_debug_mcp → lujo_mcp；(3) 第 3 轮审查 P3 最后一环 pg_store 重连缺陷（P3-9）修复——`_query_with_retry` 返回 `(rows, conn)`，7 处调用方归还最新连接，消除连接泄漏与重复归还。测试基线 1105 → 1134 passed / 6 skipped / 0 failed。产品版本 v0.5.2 → v0.5.3。 |
+| v6.2 | 2026-08-18 | 架构委员会 | **v0.5.4 发布 + 工程收口与文档补全交付**：(1) TST-3 测试资产收口——`tests/unit/test_distribution_smoke.py`（9 项分发链 smoke：PyInstaller spec / npm 元包与三平台包一致性 / bin 脚本）+ `browser-sdk/test/sdk-core.test.js`（7 项 SDK JS 契约单测）+ CI 新增 `sdk-js-smoke` job（防 SDK 演进失联）；(2) DOC-1/DOC-3 文档补全——新增 `docs/public/API_REFERENCE.md`（REST 5 组端点 + 18 个 MCP 工具 + RBAC + 字段速查）与 `docs/public/SDK_GUIDE.md`（接入 / 26 项配置 / 采集 / 脱敏 / V5 传输），README 文档导航挂入；(3) SEC-1 CSP 头统一移入 `SecurityHeadersMiddleware` 覆盖所有响应；(4) QC-1 修正 SDK 注释过时工具名。无新功能、无 Breaking Change，测试基线保持 1134 passed / 6 skipped / 0 failed。产品版本 v0.5.3 → v0.5.4。 |
 
 ---
 

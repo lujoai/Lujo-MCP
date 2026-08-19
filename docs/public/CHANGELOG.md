@@ -5,6 +5,31 @@
 
 ---
 
+## [0.5.4] - 2026-08-18
+
+> v0.5.3 已发布（2026-08-18）：RAG 知识库 PostgreSQL 持久化 + 数据库改名 lujo_mcp + P3-9 pg_store 重连修复。当前测试基线 **1134 passed / 6 skipped / 0 failed**（v0.5.3 基线）。v0.5.4 为**工程收口 + 文档补全**版本：无新功能、无 Breaking Change。
+
+### 新增
+
+#### 测试
+
+- **分发链 smoke 校验**（TST-3）：新增 `tests/unit/test_distribution_smoke.py`（9 项）——packaging/ 打包资产与 PyInstaller spec 配置（datas/hiddenimports/excludes）、npm 元包结构与 `optionalDependencies` 三平台一致性、三平台包结构、bin 脚本存在性；版本动态读 `app.__version__` 防漂移
+- **SDK JS 契约单测**（TST-3）：新增 `browser-sdk/test/sdk-core.test.js`（7 项）——Node 无浏览器加载 UMD 包，守护公开 API 面、V5 传输配置契约（gzip 4096 / 节流 5000·2 / localStorage 降级）、`_getPublicConfig` 不含 apiKey（安全）、`_setConfig` 行为
+- **CI 新增 `sdk-js-smoke` job**（node 20）：CI 层面守护 SDK 契约，防止 SDK 闭包化配置等演进后 e2e 接口再次失联
+
+#### 文档
+
+- **API 参考手册**（DOC-1）：新增 `docs/public/API_REFERENCE.md` —— REST 5 组端点（/api/debug 15 + /ingest 7 + /api/dashboard 9 + /api/spec 5 + /mcp + /auth）+ 18 个 MCP 工具（分类/角色/入参/返回）+ 鉴权 RBAC + 常用字段速查
+- **浏览器 SDK 使用手册**（DOC-3）：新增 `docs/public/SDK_GUIDE.md` —— 接入方式 / 26 项 init 配置 / 公开 API / 采集行为 / 拦截规则 / 脱敏 / V5 传输优化 / beacon 令牌
+- **README 文档导航表**：新增 API_REFERENCE / SDK_GUIDE 两行，消除孤儿文档
+
+### 修复
+
+- **CSP 头未统一覆盖**（SEC-1）：`Content-Security-Policy` 此前仅在 dashboard/demo 的 HTML 响应上设置，其余响应类型（JSON/JS 等）未覆盖；改为 `SecurityHeadersMiddleware` 统一 `setdefault`，单一来源覆盖所有响应
+- **SDK 注释过时工具名**（QC-1）：`browser-sdk/ai-debug.js` 注释引用旧 MCP 工具名 `get_debug_context`（对外已改名 `context`），已修正
+
+---
+
 ## [0.5.3] - 2026-08-18
 
 > v0.5.2 已发布（2026-08-15）：品牌统一 —— 全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`。当前测试基线 **1134 passed / 6 skipped / 0 failed**（2026-08-17 KB 持久化 + P3-9 收口后；上一基线 1129）。

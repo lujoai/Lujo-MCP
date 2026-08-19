@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.5.3（2026-08-18）**。RAG 知识库 PostgreSQL 持久化（learned 经验跨重启保留）+ 数据库改名 `lujo_mcp` + P3-9 pg_store 重连缺陷修复（第 3 轮代码审查 P3 至此全部清零）；v0.5.2 已发布（品牌统一：全仓 `ai-debug-mcp` 标识改为 `lujo-mcp`）。npm `latest` → `@lujoai/lujo-mcp@0.5.3`。
-> 测试基线：单元 **1134 passed / 6 skipped / 0 failed**（2026-08-17 KB 持久化 + P3-9 收口后）+ e2e 10 passed。
+> 最新版本：**v0.5.4（2026-08-18）**。工程收口 + 文档补全版本：分发链 smoke 校验 + SDK JS 契约单测纳入 CI（防接口失联）、新增 API 参考手册与 SDK 使用手册、CSP 头统一覆盖、注释清理。无新功能、无 Breaking Change；v0.5.3 已发布（RAG 知识库 PostgreSQL 持久化 + 数据库改名 `lujo_mcp` + P3-9 pg_store 重连修复）。npm `latest` → `@lujoai/lujo-mcp@0.5.4`。
+> 测试基线：单元 **1134 passed / 6 skipped / 0 failed**（v0.5.3 基线）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
@@ -13,9 +13,61 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.5.3  
+**Version / 版本**: v0.5.4  
 **Release Date / 发布日期**: 2026-08-18  
-**Codename / 代号**: 知识持久化 — KB Persistence
+**Codename / 代号**: 工程收口 — Engineering Consolidation
+
+---
+
+## v0.5.4（2026-08-18）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.5.4 是 Lujo-MCP 的**工程收口 + 文档补全**版本：把第 2 轮代码审查遗留的测试资产与文档欠账全部清零。无新功能、无 Breaking Change，测试基线不变（1134 passed / 6 skipped / 0 failed）。核心价值：**堵住"SDK 演进后接口失联"的监控盲区**（此前 SDK e2e 不在 CI 监控内、曾长期失联未被发现），并补齐长期缺失的公开 API 参考与 SDK 使用手册。
+
+#### ✨ 新增功能
+
+- **分发链 smoke 校验**（TST-3）：`tests/unit/test_distribution_smoke.py`（9 项）守护 PyInstaller 打包配置、npm 元包结构与三平台包一致性、bin 脚本存在性；版本动态读 `app.__version__` 防漂移
+- **SDK JS 契约单测**（TST-3）：`browser-sdk/test/sdk-core.test.js`（7 项）——Node 无浏览器加载 UMD 包，守护公开 API 面、V5 传输配置契约（gzip 4096 / 节流 5000·2 / localStorage 降级）、`_getPublicConfig` 不含 apiKey（安全关键）
+- **CI `sdk-js-smoke` job**（node 20）：SDK 契约测试纳入 CI，防止闭包化配置等演进再导致 e2e 接口失联
+- **API 参考手册**（DOC-1）：`docs/public/API_REFERENCE.md` —— REST 5 组端点 + 18 个 MCP 工具（分类/角色/入参/返回）+ 鉴权 RBAC + 字段速查
+- **浏览器 SDK 使用手册**（DOC-3）：`docs/public/SDK_GUIDE.md` —— 接入方式 / 26 项 init 配置 / 公开 API / 采集行为 / 拦截规则 / 脱敏 / V5 传输优化 / beacon 令牌
+- **README 文档导航**：新增 API_REFERENCE / SDK_GUIDE 两行，消除孤儿文档
+
+#### 🐛 Bug 修复
+
+- **CSP 头未统一覆盖**（SEC-1）：`Content-Security-Policy` 此前仅在 dashboard/demo 的 HTML 响应设置，其余响应未覆盖；改为 `SecurityHeadersMiddleware` 统一 `setdefault`，单一来源覆盖所有响应
+- **SDK 注释过时工具名**（QC-1）：`browser-sdk/ai-debug.js` 注释引用旧 MCP 工具名 `get_debug_context`（对外已改名 `context`），已修正
+
+#### 🧪 测试
+
+- 新增分发链 smoke 9 项 + SDK JS 契约 7 项（Node）；Python 单元基线不变 1134 / 6 / 0
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.5.4 is the **engineering consolidation** release of Lujo-MCP: it closes out all remaining test-asset and documentation debt from the second code-review round. No new features, no breaking changes; test baseline unchanged (1134 passed / 6 skipped / 0 failed). Core value: it plugs the monitoring blind spot where SDK evolution could silently break e2e tests outside CI, and adds the long-missing public API reference and SDK usage guide.
+
+#### ✨ New Features
+
+- **Distribution-chain smoke checks** (TST-3): `tests/unit/test_distribution_smoke.py` (9) guarding PyInstaller packaging config, npm meta-package structure and 3-platform consistency, bin script existence; version read dynamically from `app.__version__`
+- **SDK JS contract tests** (TST-3): `browser-sdk/test/sdk-core.test.js` (7) — loads the UMD bundle in Node without a browser, guarding the public API surface, V5 transport config contracts (gzip 4096 / throttle 5000·2 / localStorage fallback), and `_getPublicConfig` excluding `apiKey` (security-critical)
+- **CI `sdk-js-smoke` job** (node 20): SDK contract tests now run in CI to prevent silent e2e interface drift
+- **API Reference** (DOC-1): `docs/public/API_REFERENCE.md` — REST endpoint groups + 18 MCP tools (category/role/inputs/outputs) + auth RBAC + field quick reference
+- **Browser SDK Guide** (DOC-3): `docs/public/SDK_GUIDE.md` — setup, 26 init options, public API, capture behavior, interception rules, redaction, V5 transport, beacon tokens
+- **README doc navigation**: added API_REFERENCE / SDK_GUIDE entries
+
+#### 🐛 Bug Fixes
+
+- **CSP not uniformly applied** (SEC-1): `Content-Security-Policy` was only set on dashboard/demo HTML responses; now applied uniformly via `SecurityHeadersMiddleware.setdefault` as a single source
+- **Stale tool-name comment in SDK** (QC-1): `browser-sdk/ai-debug.js` comment referenced the old MCP tool name `get_debug_context` (renamed to `context`)
+
+#### 🧪 Tests
+
+- Added distribution smoke (9) + SDK JS contract (7, Node); Python unit baseline unchanged 1134 / 6 / 0
 
 ---
 
