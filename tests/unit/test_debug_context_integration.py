@@ -187,11 +187,11 @@ class TestAnalyzeWithLlmAdaptation:
         强制无 Key 快速回退，不发任何网络请求。
         """
         from app.mcp.tools.debug_api import analyze_with_llm
-        from app.llm import analyzer
+        from app.llm import clients
         from app.config import settings
 
         monkeypatch.setattr(settings, "openai_api_key", "")
-        monkeypatch.setattr(analyzer, "_client", None)
+        monkeypatch.setattr(clients, "_client", None)
 
         tid = trace_repo.save_trace("E", "m", [])
         result = analyze_with_llm(tid)

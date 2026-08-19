@@ -21,7 +21,7 @@ from typing import Any
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
-from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
+from app.llm.injection_guard import wrap_evidence, INJECTION_GUARD
 
 logger = logging.getLogger("lujo-mcp.agent.test")
 
@@ -35,7 +35,7 @@ SYSTEM_PROMPT = """你是一位资深的测试工程师。基于以下修复方�
   "coverage_note": "覆盖度说明：当前测试是否充分覆盖修复点"
 }
 
-只输出 JSON，不要包含其他文字。""" + _INJECTION_GUARD
+只输出 JSON，不要包含其他文字。""" + INJECTION_GUARD
 
 REQUIRED_FIELDS = (
     "test_files",
@@ -92,7 +92,7 @@ class TestAgent(BaseAgent):
                     started_at, "repair_plan unavailable, skip test plan generation"
                 )
 
-            from app.llm.analyzer import _get_async_client
+            from app.llm.clients import _get_async_client
 
             client = _get_async_client()
             model = ctx.model or settings.agent_model or settings.llm_model
@@ -150,5 +150,5 @@ class TestAgent(BaseAgent):
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _wrap_evidence(user_content)},
+            {"role": "user", "content": wrap_evidence(user_content)},
         ]

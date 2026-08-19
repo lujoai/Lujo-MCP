@@ -14,7 +14,7 @@ import socket
 import pytest
 
 from app.api import dashboard as dashboard_module
-from app.llm import analyzer as analyzer_module
+from app.llm import cache as cache_module
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -48,14 +48,14 @@ def require_redis(redis_url):
 @pytest.fixture(autouse=True)
 def reset_cache_state(monkeypatch, redis_url):
     monkeypatch.setattr("app.config.settings.redis_url", redis_url)
-    analyzer_module._analysis_cache.clear()
-    analyzer_module._redis_cache_client = None
-    analyzer_module._redis_cache_initialized = False
+    cache_module._analysis_cache.clear()
+    cache_module._redis_cache_client = None
+    cache_module._redis_cache_initialized = False
     dashboard_module._cache.clear()
     yield
-    analyzer_module._analysis_cache.clear()
-    analyzer_module._redis_cache_client = None
-    analyzer_module._redis_cache_initialized = False
+    cache_module._analysis_cache.clear()
+    cache_module._redis_cache_client = None
+    cache_module._redis_cache_initialized = False
     dashboard_module._cache.clear()
 
 
@@ -67,17 +67,17 @@ def test_llm_cache_roundtrip_via_redis_l2(require_redis):
         "cached": False,
     }
 
-    analyzer_module._set_cache_result(fingerprint, payload)
+    cache_module._set_cache_result(fingerprint, payload)
 
     raw = require_redis.get(f"ai-debug:llm:cache:{fingerprint}")
     assert raw is not None
 
-    analyzer_module._analysis_cache.clear()
-    restored = analyzer_module._get_cached_result(fingerprint)
+    cache_module._analysis_cache.clear()
+    restored = cache_module._get_cached_result(fingerprint)
 
     assert restored is not None
     assert restored["analysis"]["root_cause"] == "redis-l2"
-    assert fingerprint in analyzer_module._analysis_cache
+    assert fingerprint in cache_module._analysis_cache
 
 
 @pytest.mark.integration

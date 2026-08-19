@@ -407,7 +407,7 @@ Lujo-MCP/
 │   │   └── transports/        # 传输层（stdio / Streamable HTTP / SSE）
 │   ├── runtime/               # 运行时核心（Phase 0 解耦，MCP 依赖 runtime）
 │   │   ├── core/              # 核心引擎（logs / errors / redaction / git / trace_repo）
-│   │   │   └── storage/       # 存储后端（pg_store / async_pg_store / memory / factory / ddl）
+│   │   │   └── storage/       # 存储后端（pg_executor + pg_*_store 各 Store / async_pg_store / memory / factory / ddl）
 │   │   ├── collectors/        # 数据采集器（stacktrace / network / static_analyzer）
 │   │   ├── context/           # 上下文构建（builder / fault_localizer）
 │   │   ├── verifier/          # 断言引擎（assert_engine / spec_store / ui_runner）

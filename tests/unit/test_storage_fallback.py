@@ -29,7 +29,7 @@ class TestTraceStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGTraceStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_trace_store.PGTraceStore.__init__", _boom)
 
         with caplog.at_level(logging.WARNING):
             from app.runtime.core.storage.factory import get_trace_store
@@ -48,7 +48,7 @@ class TestTraceStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGTraceStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_trace_store.PGTraceStore.__init__", _boom)
 
         from app.runtime.core.storage.factory import get_trace_store
         with pytest.raises(RuntimeError, match="模拟 PG 连接失败"):
@@ -77,7 +77,7 @@ class TestSessionStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGSessionStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_session_store.PGSessionStore.__init__", _boom)
 
         with caplog.at_level(logging.WARNING):
             from app.runtime.core.storage.factory import get_session_store
@@ -96,7 +96,7 @@ class TestSessionStoreFallback:
         def _boom(self):
             raise RuntimeError("模拟 PG 连接失败")
 
-        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGSessionStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_session_store.PGSessionStore.__init__", _boom)
 
         from app.runtime.core.storage.factory import get_session_store
         with pytest.raises(RuntimeError, match="模拟 PG 连接失败"):

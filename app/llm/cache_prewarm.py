@@ -26,7 +26,7 @@ import random
 from typing import Optional
 
 from app.config import settings
-from app.llm.analyzer import (
+from app.llm.cache import (
     _MAX_CACHE_SIZE,
     _get_redis_cache,
     _set_l1_only,

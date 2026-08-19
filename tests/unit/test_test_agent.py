@@ -111,7 +111,7 @@ class TestTestAgentLLM:
         mock_client = MagicMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             result = await agent.run(_ctx(repair_plan={"patch": "fix"}))
 
         assert result.status == AgentStatus.SUCCESS
@@ -126,7 +126,7 @@ class TestTestAgentLLM:
             side_effect=RuntimeError("LLM down")
         )
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             result = await agent.run(_ctx(repair_plan={"patch": "fix"}))
 
         assert result.status == AgentStatus.FAILED
@@ -147,7 +147,7 @@ class TestTestAgentRetry:
             side_effect=[RateLimitError(message="limit", response=MagicMock(), body=None), mock_resp]
         )
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client), \
+        with patch("app.llm.clients._get_async_client", return_value=mock_client), \
              patch("app.agent.test_agent.asyncio.sleep", new=AsyncMock()):
             result = await agent.run(_ctx(repair_plan={"patch": "fix"}))
 

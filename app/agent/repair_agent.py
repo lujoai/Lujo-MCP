@@ -13,7 +13,7 @@ from typing import Any
 from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
-from app.llm.analyzer import _wrap_evidence, _INJECTION_GUARD
+from app.llm.injection_guard import wrap_evidence, INJECTION_GUARD
 
 logger = logging.getLogger("lujo-mcp.agent.repair")
 
@@ -30,7 +30,7 @@ SYSTEM_PROMPT = """你是一位资深的代码修复工程师。基于以下调�
   "rationale": "修复思路的推理过程"
 }
 
-只输出 JSON，不要包含其他文字。""" + _INJECTION_GUARD
+只输出 JSON，不要包含其他文字。""" + INJECTION_GUARD
 
 REQUIRED_FIELDS = (
     "patch",
@@ -87,7 +87,7 @@ class RepairAgent(BaseAgent):
         """执行修复方案生成。失败返回 FAILED 状态，由 Coordinator 静默降级。"""
         started_at = self._now()
         try:
-            from app.llm.analyzer import _get_async_client
+            from app.llm.clients import _get_async_client
 
             client = _get_async_client()
             model = ctx.model or settings.agent_model or settings.llm_model
@@ -143,5 +143,5 @@ class RepairAgent(BaseAgent):
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _wrap_evidence(user_content)},
+            {"role": "user", "content": wrap_evidence(user_content)},
         ]

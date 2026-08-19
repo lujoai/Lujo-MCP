@@ -11,6 +11,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+from app.llm.context_prep import build_analysis_prompt
+
 logger = logging.getLogger(__name__)
 
 # 内置默认模板。占位符语法遵循 string.Template：
@@ -51,9 +53,8 @@ def build_debug_prompt(context: dict, template_path: Optional[str] = None) -> st
     使用 safe_substitute，模板中无法识别的 $xxx 原样保留，不抛错。
     template_path 未显式传入时读取 settings.prompt_template_path（为空用内置模板）。
     """
-    # 延迟导入：避免 prompt_builder 顶层依赖 analyzer 的完整 import 链
+    # context_prep 与本模块无循环依赖（拆分后不再依赖 analyzer 完整链路）
     from app.config import settings
-    from app.llm.analyzer import build_analysis_prompt
 
     if template_path is None:
         template_path = settings.prompt_template_path

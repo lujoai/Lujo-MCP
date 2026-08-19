@@ -9,7 +9,7 @@ pytest.importorskip("psycopg2", reason="psycopg2 不可用，跳过 PG 集成测
 from app.config import settings
 from app.runtime.core.logs import add_log, get_logs, list_request_ids, delete_logs
 from app.runtime.core.storage.factory import get_trace_store
-from app.runtime.core.storage.pg_store import _get_pool, _parse_data
+from app.runtime.core.storage.pg_executor import _get_pool, _parse_data
 
 
 @pytest.fixture(autouse=True)

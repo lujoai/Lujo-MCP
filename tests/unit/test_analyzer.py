@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 class TestAnalyzer:
 
     def test_truncate_context_basic(self):
-        from app.llm.analyzer import truncate_context
+        from app.llm.context_prep import truncate_context
 
         ctx = {
             "request_id": "001",
@@ -19,7 +19,7 @@ class TestAnalyzer:
         assert result.get("_truncated") is True
 
     def test_truncate_context_short(self):
-        from app.llm.analyzer import truncate_context
+        from app.llm.context_prep import truncate_context
 
         ctx = {
             "request_id": "002",
@@ -30,7 +30,7 @@ class TestAnalyzer:
 
     def test_truncate_context_rewrites_trimmed_runtime(self):
         """P3-1: 精简版 runtime 必须写回 context["runtime"]，后续序列化才基于精简结果。"""
-        from app.llm.analyzer import truncate_context
+        from app.llm.context_prep import truncate_context
 
         ctx = {
             "request_id": "rt-001",
@@ -69,7 +69,7 @@ class TestAnalyzer:
         assert "top_level_extra" not in result["runtime"]
 
     def test_build_analysis_prompt(self):
-        from app.llm.analyzer import build_analysis_prompt
+        from app.llm.context_prep import build_analysis_prompt
 
         ctx = {
             "request_id": "003",
@@ -173,7 +173,7 @@ class TestLLMProvider:
         try:
             settings.llm_provider = "openai"
             settings.llm_base_url = ""
-            from app.llm.analyzer import _resolve_base_url
+            from app.llm.clients import _resolve_base_url
             assert _resolve_base_url() == ""
         finally:
             settings.llm_provider = saved_provider
@@ -188,7 +188,7 @@ class TestLLMProvider:
         try:
             settings.llm_provider = "zhipu"
             settings.llm_base_url = ""
-            from app.llm.analyzer import _resolve_base_url
+            from app.llm.clients import _resolve_base_url
             assert _resolve_base_url() == "https://open.bigmodel.cn/api/paas/v4/"
         finally:
             settings.llm_provider = saved_provider
@@ -203,7 +203,7 @@ class TestLLMProvider:
         try:
             settings.llm_provider = "deepseek"
             settings.llm_base_url = ""
-            from app.llm.analyzer import _resolve_base_url
+            from app.llm.clients import _resolve_base_url
             assert _resolve_base_url() == "https://api.deepseek.com"
         finally:
             settings.llm_provider = saved_provider
@@ -218,7 +218,7 @@ class TestLLMProvider:
         try:
             settings.llm_provider = "zhipu"
             settings.llm_base_url = "https://my-proxy.example.com/v1"
-            from app.llm.analyzer import _resolve_base_url
+            from app.llm.clients import _resolve_base_url
             assert _resolve_base_url() == "https://my-proxy.example.com/v1"
         finally:
             settings.llm_provider = saved_provider
@@ -233,7 +233,7 @@ class TestLLMProvider:
         try:
             settings.llm_provider = "unknown"
             settings.llm_base_url = ""
-            from app.llm.analyzer import _resolve_base_url
+            from app.llm.clients import _resolve_base_url
             assert _resolve_base_url() == ""
         finally:
             settings.llm_provider = saved_provider
@@ -251,7 +251,7 @@ class TestLLMOutputValidation:
     """N2 — LLM 输出零校验/净化测试"""
 
     def _call_validate(self, raw_output: str) -> dict:
-        from app.llm.analyzer import _validate_and_normalize
+        from app.llm.output_schema import _validate_and_normalize
         return _validate_and_normalize(raw_output)
 
     # --- 合法 JSON ---
@@ -379,7 +379,7 @@ class TestLLMOutputValidation:
 
     def test_extract_json_direct_parse_succeeds(self):
         """直接可解析的 JSON 不需要提取"""
-        from app.llm.analyzer import _extract_json
+        from app.llm.output_schema import _extract_json
         # 直接合法的 JSON，_extract_json 不会调用，但验证它不会破坏
         result = _extract_json('{"key": "value"}')
         # re.search 会匹配到 {"key": "value"}
@@ -387,7 +387,7 @@ class TestLLMOutputValidation:
 
     def test_extract_json_from_markdown(self):
         """从 markdown code block 中提取 JSON"""
-        from app.llm.analyzer import _extract_json
+        from app.llm.output_schema import _extract_json
         content = '```\n{"root_cause": "test"}\n```'
         result = _extract_json(content)
         assert result is not None
@@ -395,7 +395,7 @@ class TestLLMOutputValidation:
 
     def test_extract_json_no_json_found(self):
         """找不到 JSON 返回 None"""
-        from app.llm.analyzer import _extract_json
+        from app.llm.output_schema import _extract_json
         result = _extract_json("纯文本，没有 JSON")
         # re.search 可能匹配到整个字符串作为 {} 包裹的内容
         # 但只要不是合法 JSON 就行
@@ -418,14 +418,14 @@ class TestLLMCache:
 
     def setup_method(self):
         """每个测试前清空缓存，避免互相影响"""
-        from app.llm.analyzer import _analysis_cache
+        from app.llm.cache import _analysis_cache
         from app.rag.knowledge_base import clear_knowledge_base
         _analysis_cache.clear()
         clear_knowledge_base()
 
     def test_cache_hit_on_second_call(self):
         """相同 context 二次调用应命中缓存，不调用 LLM"""
-        from app.llm.analyzer import (
+        from app.llm.cache import (
             _compute_context_fingerprint,
             _set_cache_result,
             _get_cached_result,
@@ -443,7 +443,7 @@ class TestLLMCache:
 
     def test_cache_miss_on_different_context(self):
         """不同 context 不应命中缓存"""
-        from app.llm.analyzer import (
+        from app.llm.cache import (
             _compute_context_fingerprint,
             _set_cache_result,
             _get_cached_result,
@@ -461,7 +461,7 @@ class TestLLMCache:
 
     def test_cache_expires_after_ttl(self):
         """TTL 过期后应返回 None"""
-        from app.llm.analyzer import (
+        from app.llm.cache import (
             _compute_context_fingerprint,
             _set_cache_result,
             _get_cached_result,
@@ -474,14 +474,14 @@ class TestLLMCache:
         _set_cache_result(fp, {"analysis": {"root_cause": "expired"}})
 
         # 模拟过期：手动修改 cached_at 为 2 小时前
-        with __import__("app.llm.analyzer", fromlist=["_cache_lock"])._cache_lock:
+        with __import__("app.llm.cache", fromlist=["_cache_lock"])._cache_lock:
             _analysis_cache[fp]["cached_at"] -= 7200
 
         assert _get_cached_result(fp) is None
 
     def test_cache_evicts_oldest_when_full(self):
         """缓存达到上限时应淘汰最旧的条目"""
-        from app.llm.analyzer import (
+        from app.llm.cache import (
             _set_cache_result,
             _get_cached_result,
             _MAX_CACHE_SIZE,
@@ -651,13 +651,13 @@ class TestLLMCache:
 
 class TestKnowledgeBaseAutoPersist:
     def setup_method(self):
-        from app.llm.analyzer import _analysis_cache
+        from app.llm.cache import _analysis_cache
         from app.rag.knowledge_base import clear_knowledge_base
 
         _analysis_cache.clear()
         clear_knowledge_base()
 
-    @patch("app.llm.analyzer._get_redis_cache", return_value=None)
+    @patch("app.llm.cache._get_redis_cache", return_value=None)
     @patch("app.llm.analyzer._get_client")
     def test_analyze_auto_persists_knowledge_base_entry(self, mock_get_client, _mock_get_redis_cache):
         from app.llm.analyzer import analyze
@@ -696,9 +696,9 @@ class TestKnowledgeBaseAutoPersist:
         assert entry["fix_suggestion"] == "增加连接池重试"
         assert entry["source"] == "llm"
 
-    @patch("app.llm.analyzer._get_redis_cache", return_value=None)
-    @patch("app.llm.analyzer.logger.warning")
-    @patch("app.llm.analyzer.upsert_knowledge_entry", side_effect=RuntimeError("kb write failed"))
+    @patch("app.llm.cache._get_redis_cache", return_value=None)
+    @patch("app.llm.kb_integration.logger.warning")
+    @patch("app.llm.kb_integration.upsert_knowledge_entry", side_effect=RuntimeError("kb write failed"))
     @patch("app.llm.analyzer._get_client")
     def test_analyze_ignores_knowledge_base_write_failure(
         self,
@@ -750,7 +750,7 @@ class TestVectorRagFallback:
     """P7 — 精确指纹 miss 后的向量检索 RAG fallback 行为测试"""
 
     def setup_method(self):
-        from app.llm.analyzer import _analysis_cache
+        from app.llm.cache import _analysis_cache
         from app.rag.knowledge_base import clear_knowledge_base
         from app.rag.vector_store import _reset_vector_store
 
@@ -764,7 +764,7 @@ class TestVectorRagFallback:
         _reset_vector_store()
 
     @patch("app.llm.analyzer._get_client")
-    @patch("app.llm.analyzer.retrieve_similar")
+    @patch("app.llm.kb_integration.retrieve_similar")
     def test_vector_rag_hit_when_fingerprint_misses(
         self, mock_retrieve_similar, mock_get_client
     ):
@@ -799,7 +799,7 @@ class TestVectorRagFallback:
         mock_get_client.assert_not_called()
 
     @patch("app.llm.analyzer._get_client")
-    @patch("app.llm.analyzer.retrieve_similar", return_value=[])
+    @patch("app.llm.kb_integration.retrieve_similar", return_value=[])
     def test_vector_rag_miss_falls_through_to_llm(
         self, mock_retrieve_similar, mock_get_client
     ):
@@ -841,7 +841,7 @@ class TestVectorRagFallback:
         mock_retrieve_similar.assert_called_once()
 
     @patch("app.llm.analyzer._get_client")
-    @patch("app.llm.analyzer.retrieve_similar", return_value=[])
+    @patch("app.llm.kb_integration.retrieve_similar", return_value=[])
     def test_vector_store_disabled_does_not_break_analyze(
         self, mock_retrieve_similar, mock_get_client
     ):
@@ -878,7 +878,7 @@ class TestVectorRagFallback:
         assert result["model"] == "mock-model"
         mock_retrieve_similar.assert_called_once()
 
-    @patch("app.llm.analyzer.retrieve_similar")
+    @patch("app.llm.kb_integration.retrieve_similar")
     @patch("app.llm.analyzer._get_client")
     def test_exact_fingerprint_takes_priority_over_vector_rag(
         self, mock_get_client, mock_retrieve_similar

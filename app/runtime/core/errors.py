@@ -407,7 +407,7 @@ def query_pg_errors(
         if settings.pg_async_enabled:
             logger.debug("query_pg_errors: pg_async_enabled=True，走 async 路径，跳过同步 psycopg2 池")
             return []
-        from app.runtime.core.storage.pg_store import _get_pool, _ensure_init, _get_conn, _parse_data
+        from app.runtime.core.storage.pg_executor import _get_pool, _ensure_init, _get_conn, _parse_data
     except Exception:
         return []
 

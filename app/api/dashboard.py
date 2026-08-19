@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth.rbac import require_role
 from app.runtime.core import errors, logs
-from app.llm.analyzer import _get_redis_cache
+from app.llm.cache import _get_redis_cache
 
 logger = logging.getLogger("lujo-mcp.dashboard")
 

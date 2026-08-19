@@ -9,7 +9,7 @@
 import pytest
 import psycopg2
 
-import app.runtime.core.storage.pg_store as pg_store
+import app.runtime.core.storage.pg_executor as pg_store
 
 
 class FakeCursor:

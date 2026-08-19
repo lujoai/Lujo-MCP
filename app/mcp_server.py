@@ -89,7 +89,7 @@ def cleanup_resources() -> None:
     # 2) 关闭 PG 连接池（仅 postgresql 后端）
     if settings.storage_backend == "postgresql":
         try:
-            from app.runtime.core.storage.pg_store import close_pool
+            from app.runtime.core.storage.pg_executor import close_pool
             close_pool()
         except Exception as e:
             logger.warning(f"stdio 退出关闭 PG 连接池失败: {e}")

@@ -263,7 +263,7 @@ async def lifespan(app: FastAPI):
     # 优雅关闭：关闭 PG 连接池（同步 psycopg2）
     if settings.storage_backend == "postgresql":
         try:
-            from app.runtime.core.storage.pg_store import close_pool
+            from app.runtime.core.storage.pg_executor import close_pool
             close_pool()
         except Exception as e:
             logger.warning(f"关闭 PG 连接池失败: {e}")

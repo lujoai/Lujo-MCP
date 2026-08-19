@@ -5,6 +5,30 @@
 
 ---
 
+## [Unreleased]
+
+> god object 架构重构（还债清单 P1 最后一项）：纯内部结构优化，无功能变更、无 API 变更、无配置变更、无 Breaking Change。测试基线 **1153 passed / 6 skipped / 0 failed**（与 v0.5.5 完全一致，零回归）；真实 PostgreSQL 集成测试 18/18 通过。
+
+### 变更
+
+#### 重构
+
+- **pg_store.py god object 拆分**（1048 行 → 删除，拆 7 个单一职责模块）：
+  - `pg_executor.py` —— 连接池/重连重试/熔断器/DDL 初始化/`_parse_data`，新增 `execute_sql` / `query_sql` 便捷封装（连接生命周期由 executor 托管，消除原先在 5 个 Store 中重复约 10 处的 `try/finally putconn` 样板；底层 `_execute_with_retry` / `_query_with_retry` 签名不变，重连语义 P3-9 保持）
+  - `pg_partitions.py` —— traces 月度 RANGE 分区预创建 + 归档（P3-1/P3-2）
+  - `pg_trace_store.py` / `pg_session_store.py` / `pg_error_store.py` / `pg_spec_store.py` / `pg_kb_store.py` —— 5 个 Store 类各归独立模块（ABC 实现不变，factory 分发路径更新）
+- **analyzer.py god object 拆分**（1175 → 474 行，只保留调用编排）：
+  - `app/llm/clients.py` —— OpenAI 同步/异步客户端工厂 + provider base_url 分派（3 个 agent 改从此处获取客户端）
+  - `app/llm/cache.py` —— L1 LRU + L2 Redis 多级缓存 + error-surface 指纹（P1-8/P3-7）
+  - `app/llm/injection_guard.py` —— Prompt Injection 防护公开化（`wrap_evidence` / `INJECTION_GUARD`，修复原私有符号被 3 个 agent 跨模块引用的边界失效）
+  - `app/llm/context_prep.py` —— 错误信号提取/脱敏/截断/`build_analysis_prompt`（`prompt_builder.py` 改顶层 import，消除原函数内延迟 import 规避循环的 hack）
+  - `app/llm/output_schema.py` —— LLM 输出 JSON 提取 + Schema 校验净化
+  - `app/llm/kb_integration.py` —— KB 三级命中 + 向量 RAG 召回 + 经验回写
+- **sync/async 重试双轨收敛**：`_retry_call` 与 `_retry_call_async` 原先 130 行逐行重复（唯一差异 `time.sleep` vs `asyncio.sleep`）→ 抽出共享内核 `_classify_llm_error`（异常分类/退避/日志语义）/`_format_llm_success`/`_fallback_target`，双函数仅剩 IO 调用差异；编排层共享 `_build_llm_messages` / `_finalize_analysis` / `_call_through_circuit_breaker`
+- **引用方全量迁移**（不留 re-export 门面）：app 内 8 处（factory/errors/main/mcp_server/3 个 agent/dashboard/cache_prewarm/prompt_builder）+ 17 个测试文件 patch 路径锚定到符号定义模块（`pg_executor._get_pool` / `app.llm.cache.*` / `app.llm.kb_integration.*` / `app.llm.clients.*`）
+
+---
+
 ## [0.5.5] - 2026-08-19
 
 > v0.5.4 已发布（2026-08-18）：工程收口 + 文档补全。当前测试基线 **1153 passed / 6 skipped / 0 failed**（v0.5.4 基线 1134 + FR12 新增 10 项 + 3 项因单测存储后端隔离修复转绿）。v0.5.5 为**FR12 调试提示词端点**功能版本：新增 `/api/debug/prompt` + `PROMPT_TEMPLATE_PATH` 配置 + 单测存储后端隔离修复（`tests/unit/conftest.py` 强制 memory 后端，与 CI 一致）。无 Breaking Change。

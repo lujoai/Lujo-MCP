@@ -61,7 +61,7 @@ Verifier 验证
 | MCP stdio | [app/mcp_server.py](../../app/mcp_server.py) | stdio 子进程传输 |
 | 日志核心 | [app/runtime/core/logs.py](../../app/runtime/core/logs.py) | add_log/get_logs/list_request_ids |
 | 存储工厂 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) | memory/pg 一键切换 |
-| PG 存储 | [app/runtime/core/storage/pg_store.py](../../app/runtime/core/storage/pg_store.py) | 连接池+自动建表（修改需审批） |
+| PG 存储 | [app/runtime/core/storage/pg_executor.py](../../app/runtime/core/storage/pg_executor.py) | 连接池+自动建表+重试（修改需审批；v0.5.5 后拆分为 pg_executor/分区/5 个 Store 模块） |
 | 上下文构建 | [app/runtime/context/builder.py](../../app/runtime/context/builder.py) | build_debug_context |
 | 故障定位 | [app/runtime/context/fault_localizer.py](../../app/runtime/context/fault_localizer.py) | 栈帧启发式评分，生成 `likely_cause_candidate`（候选，非根因） |
 | 断言引擎 | [app/runtime/verifier/assert_engine.py](../../app/runtime/verifier/assert_engine.py) | assert_behavior 纯函数 |
@@ -267,7 +267,7 @@ Verifier 验证
 
 | 模块 | 文件 | 原因 |
 |------|------|------|
-| PGStore | [app/runtime/core/storage/pg_store.py](../../app/runtime/core/storage/pg_store.py) | 已验证，如需修改须先输出问题分析+影响范围+测试方案 |
+| PG 存储模块 | [app/runtime/core/storage/pg_executor.py](../../app/runtime/core/storage/pg_executor.py) | 已验证，如需修改须先输出问题分析+影响范围+测试方案（连接池/重试/熔断核心；Store 实现见 pg_*_store.py 各模块） |
 | 存储抽象层 | [app/runtime/core/storage/base.py](../../app/runtime/core/storage/base.py) | 工厂模式基础 |
 | 存储工厂 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) | 一行切换核心 |
 | 安全中间件 | [app/middleware.py](../../app/middleware.py) | fail-closed 安全栈 |

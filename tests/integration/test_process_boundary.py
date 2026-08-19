@@ -344,7 +344,7 @@ class TestPGPoolLifecycleBoundary:
 
         # 前置探测：PG 是否真的可连通
         try:
-            from app.runtime.core.storage.pg_store import _get_pool
+            from app.runtime.core.storage.pg_executor import _get_pool
             pool = _get_pool()
             conn = pool.getconn()
             try:
@@ -480,7 +480,7 @@ class TestCleanupResources:
 
     def test_cleanup_closes_pg_pool_when_postgresql(self, monkeypatch):
         import app.mcp_server as mcp_server
-        from app.runtime.core.storage import pg_store
+        from app.runtime.core.storage import pg_executor
 
         monkeypatch.setattr(mcp_server, "_cleanup_done", False)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
@@ -491,7 +491,7 @@ class TestCleanupResources:
         def _fake_close_pool():
             called["count"] += 1
 
-        monkeypatch.setattr(pg_store, "close_pool", _fake_close_pool)
+        monkeypatch.setattr(pg_executor, "close_pool", _fake_close_pool)
         monkeypatch.setattr(mcp_server, "uninstall_global_hook", lambda: None)
 
         mcp_server.cleanup_resources()
@@ -503,14 +503,14 @@ class TestCleanupResources:
 
     def test_cleanup_skips_pg_pool_when_memory(self, monkeypatch):
         import app.mcp_server as mcp_server
-        from app.runtime.core.storage import pg_store
+        from app.runtime.core.storage import pg_executor
 
         monkeypatch.setattr(mcp_server, "_cleanup_done", False)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
         monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
 
         called = {"count": 0}
-        monkeypatch.setattr(pg_store, "close_pool", lambda: called.__setitem__("count", called["count"] + 1))
+        monkeypatch.setattr(pg_executor, "close_pool", lambda: called.__setitem__("count", called["count"] + 1))
         monkeypatch.setattr(mcp_server, "uninstall_global_hook", lambda: None)
 
         mcp_server.cleanup_resources()

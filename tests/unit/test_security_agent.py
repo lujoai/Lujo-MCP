@@ -130,7 +130,7 @@ class TestSecurityAgentLLM:
         mock_client = MagicMock()
         mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             result = await agent.run(_ctx(repair_plan={"patch": "fix"}))
 
         assert result.status == AgentStatus.SUCCESS
@@ -145,7 +145,7 @@ class TestSecurityAgentLLM:
             side_effect=RuntimeError("LLM down")
         )
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             result = await agent.run(_ctx(repair_plan={"patch": "fix"}))
 
         assert result.status == AgentStatus.FAILED

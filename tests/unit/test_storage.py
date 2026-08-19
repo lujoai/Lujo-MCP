@@ -108,9 +108,9 @@ _pg_skip = not _pg_available()
 class TestPGTraceStore:
 
     def setup_method(self):
-        from app.runtime.core.storage.pg_store import PGTraceStore
+        from app.runtime.core.storage.pg_trace_store import PGTraceStore
         # 临时覆盖连接参数
-        import app.runtime.core.storage.pg_store as mod
+        import app.runtime.core.storage.pg_executor as mod
         self._orig_pool = mod._pool
         self._orig_get_pool = mod._get_pool
 
@@ -128,7 +128,7 @@ class TestPGTraceStore:
         mod._get_pool().putconn(conn)
 
     def teardown_method(self):
-        import app.runtime.core.storage.pg_store as mod
+        import app.runtime.core.storage.pg_executor as mod
         if mod._pool:
             mod._pool.closeall()
             mod._pool = None
@@ -162,8 +162,8 @@ class TestPGTraceStore:
 class TestPGSessionStore:
 
     def setup_method(self):
-        from app.runtime.core.storage.pg_store import PGSessionStore
-        import app.runtime.core.storage.pg_store as mod
+        from app.runtime.core.storage.pg_session_store import PGSessionStore
+        import app.runtime.core.storage.pg_executor as mod
         self._orig_pool = mod._pool
         self._orig_get_pool = mod._get_pool
 
@@ -179,7 +179,7 @@ class TestPGSessionStore:
         mod._get_pool().putconn(conn)
 
     def teardown_method(self):
-        import app.runtime.core.storage.pg_store as mod
+        import app.runtime.core.storage.pg_executor as mod
         if mod._pool:
             mod._pool.closeall()
             mod._pool = None
@@ -202,7 +202,7 @@ class TestPGSessionStore:
         self.store.save("s-pg-active", {"session_id": "s-pg-active", "created_at": now, "metadata": {}})
 
         # 用 save 的 ON CONFLICT 写入过期 session
-        import app.runtime.core.storage.pg_store as mod
+        import app.runtime.core.storage.pg_executor as mod
         conn = mod._get_pool().getconn()
         conn.execute(
             "INSERT INTO sessions (session_id, created_at, last_active, metadata) VALUES (%s, %s, %s, %s) "
@@ -282,10 +282,11 @@ class TestStorageFactory:
                 super().__init__()
 
         # factory 内部用延迟 import，需 patch 模块属性
-        import app.runtime.core.storage.pg_store as pg_mod
+        import app.runtime.core.storage.pg_trace_store as pg_trace_mod
+        import app.runtime.core.storage.pg_session_store as pg_session_mod
         import app.runtime.core.storage.memory_store as mem_mod
-        monkeypatch.setattr(pg_mod, "PGTraceStore", _StubPGTraceStore)
-        monkeypatch.setattr(pg_mod, "PGSessionStore", _StubPGSessionStore)
+        monkeypatch.setattr(pg_trace_mod, "PGTraceStore", _StubPGTraceStore)
+        monkeypatch.setattr(pg_session_mod, "PGSessionStore", _StubPGSessionStore)
         monkeypatch.setattr(mem_mod, "MemoryTraceStore", _SpyMemoryTraceStore)
         monkeypatch.setattr(mem_mod, "MemorySessionStore", _SpyMemorySessionStore)
 
@@ -370,7 +371,8 @@ class TestErrorSpecFactory:
         class _StubPGSpecStore:
             def __init__(self): pass
 
-        import app.runtime.core.storage.pg_store as pg_mod
+        import app.runtime.core.storage.pg_error_store as pg_error_mod
+        import app.runtime.core.storage.pg_spec_store as pg_spec_mod
         import app.runtime.core.storage.noop_store as noop_mod
 
         noop_calls = []
@@ -379,8 +381,8 @@ class TestErrorSpecFactory:
         class _SpyNoOpSpecStore:
             def __init__(self): noop_calls.append("spec")
 
-        monkeypatch.setattr(pg_mod, "PGErrorStore", _StubPGErrorStore)
-        monkeypatch.setattr(pg_mod, "PGSpecStore", _StubPGSpecStore)
+        monkeypatch.setattr(pg_error_mod, "PGErrorStore", _StubPGErrorStore)
+        monkeypatch.setattr(pg_spec_mod, "PGSpecStore", _StubPGSpecStore)
         monkeypatch.setattr(noop_mod, "NoOpErrorStore", _SpyNoOpErrorStore)
         monkeypatch.setattr(noop_mod, "NoOpSpecStore", _SpyNoOpSpecStore)
 
@@ -423,7 +425,8 @@ class TestErrorSpecABCContract:
             assert m in SpecStorage.__abstractmethods__
 
     def test_pg_stores_implement_abc(self):
-        from app.runtime.core.storage.pg_store import PGErrorStore, PGSpecStore
+        from app.runtime.core.storage.pg_error_store import PGErrorStore
+        from app.runtime.core.storage.pg_spec_store import PGSpecStore
         from app.runtime.core.storage.base import ErrorStorage, SpecStorage
         assert isinstance(PGErrorStore(), ErrorStorage)
         spec = PGSpecStore()
@@ -699,21 +702,21 @@ class TestPartitionUtils:
 
     def test_month_partition_name_format(self):
         """分区表名格式：traces_YYYY_MM，月份自动补零。"""
-        from app.runtime.core.storage.pg_store import _month_partition_name
+        from app.runtime.core.storage.pg_partitions import _month_partition_name
         assert _month_partition_name(2024, 1) == "traces_2024_01"
         assert _month_partition_name(2024, 12) == "traces_2024_12"
         assert _month_partition_name(2025, 6) == "traces_2025_06"
 
     def test_month_partition_name_async_same_format(self):
         """async 版本分区命名与同步版本一致。"""
-        from app.runtime.core.storage.pg_store import _month_partition_name as sync_name
+        from app.runtime.core.storage.pg_partitions import _month_partition_name as sync_name
         from app.runtime.core.storage.async_pg_store import _month_partition_name as async_name
         assert sync_name(2024, 3) == async_name(2024, 3)
         assert sync_name(2025, 11) == async_name(2025, 11)
 
     def test_month_range_epoch_january(self):
         """1月分区范围：从 1月1日 00:00 到 2月1日 00:00。"""
-        from app.runtime.core.storage.pg_store import _month_range_epoch
+        from app.runtime.core.storage.pg_partitions import _month_range_epoch
         from datetime import datetime, timezone
 
         start_ts, end_ts = _month_range_epoch(2024, 1)
@@ -727,7 +730,7 @@ class TestPartitionUtils:
 
     def test_month_range_epoch_december(self):
         """12月分区范围：跨年，到次年1月1日。"""
-        from app.runtime.core.storage.pg_store import _month_range_epoch
+        from app.runtime.core.storage.pg_partitions import _month_range_epoch
         from datetime import datetime, timezone
 
         start_ts, end_ts = _month_range_epoch(2024, 12)
@@ -739,7 +742,7 @@ class TestPartitionUtils:
 
     def test_month_range_epoch_async_consistent(self):
         """sync 与 async 版本的月份范围计算结果一致。"""
-        from app.runtime.core.storage.pg_store import _month_range_epoch as sync_range
+        from app.runtime.core.storage.pg_partitions import _month_range_epoch as sync_range
         from app.runtime.core.storage.async_pg_store import _month_range_epoch as async_range
 
         for y, m in [(2024, 1), (2024, 6), (2024, 12), (2025, 3)]:
@@ -749,7 +752,7 @@ class TestPartitionUtils:
 
     def test_month_range_exclusive_upper_bound(self):
         """区间为 [start, end)，即 end 不属于本月。"""
-        from app.runtime.core.storage.pg_store import _month_range_epoch
+        from app.runtime.core.storage.pg_partitions import _month_range_epoch
         start_ts, end_ts = _month_range_epoch(2024, 1)
         # 1月31日 23:59:59 属于本月
         from datetime import datetime, timezone

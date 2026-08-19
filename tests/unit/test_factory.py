@@ -66,7 +66,7 @@ class TestErrorSpecStore:
         def _boom(self):
             raise RuntimeError("pg down")
 
-        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGErrorStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_error_store.PGErrorStore.__init__", _boom)
 
         with caplog.at_level(logging.WARNING):
             store = f.get_error_store()
@@ -82,7 +82,7 @@ class TestErrorSpecStore:
         def _boom(self):
             raise RuntimeError("pg down")
 
-        monkeypatch.setattr("app.runtime.core.storage.pg_store.PGErrorStore.__init__", _boom)
+        monkeypatch.setattr("app.runtime.core.storage.pg_error_store.PGErrorStore.__init__", _boom)
 
         with pytest.raises(RuntimeError, match="pg down"):
             f.get_error_store()

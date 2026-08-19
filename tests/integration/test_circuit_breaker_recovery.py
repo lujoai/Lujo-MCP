@@ -11,9 +11,10 @@ import pytest
 @pytest.fixture(autouse=True)
 def reset_breakers():
     import app.llm.analyzer as analyzer_module
-    import app.runtime.core.storage.pg_store as pg_store_module
+    import app.llm.cache as cache_module
+    import app.runtime.core.storage.pg_executor as pg_store_module
 
-    analyzer_module._analysis_cache.clear()
+    cache_module._analysis_cache.clear()
     if analyzer_module._llm_circuit_breaker:
         analyzer_module._llm_circuit_breaker.close()
     analyzer_module._llm_circuit_breaker = None
@@ -24,7 +25,7 @@ def reset_breakers():
 
     yield
 
-    analyzer_module._analysis_cache.clear()
+    cache_module._analysis_cache.clear()
     if analyzer_module._llm_circuit_breaker:
         analyzer_module._llm_circuit_breaker.close()
     analyzer_module._llm_circuit_breaker = None
@@ -90,7 +91,7 @@ def test_llm_circuit_breaker_recovers_after_reset_timeout(monkeypatch):
 
 @pytest.mark.integration
 def test_pg_circuit_breaker_recovers_after_reset_timeout(monkeypatch):
-    import app.runtime.core.storage.pg_store as pg_store_module
+    import app.runtime.core.storage.pg_executor as pg_store_module
 
     monkeypatch.setattr(pg_store_module, "pybreaker", pybreaker)
     cb = pybreaker.CircuitBreaker(

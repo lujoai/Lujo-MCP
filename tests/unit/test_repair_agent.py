@@ -184,7 +184,7 @@ class TestRepairAgentRun:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(return_value=fake_response)
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             result = await agent.run(_make_ctx())
 
         assert result.status == AgentStatus.SUCCESS
@@ -203,7 +203,7 @@ class TestRepairAgentRun:
             side_effect=RuntimeError("LLM unavailable")
         )
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             result = await agent.run(_make_ctx())
 
         assert result.status == AgentStatus.FAILED
@@ -235,7 +235,7 @@ class TestRepairAgentRun:
             model="custom-model",
         )
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             await agent.run(ctx)
 
         assert captured_model["model"] == "custom-model"
@@ -259,7 +259,7 @@ class TestRepairAgentRun:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = fake_create
 
-        with patch("app.llm.analyzer._get_async_client", return_value=mock_client):
+        with patch("app.llm.clients._get_async_client", return_value=mock_client):
             await agent.run(_make_ctx())
 
         assert captured_model["model"] == "fallback-model"

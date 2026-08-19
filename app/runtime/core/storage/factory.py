@@ -57,7 +57,7 @@ def get_trace_store() -> TraceStorage:
                     # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
                     _raise_async_mix("trace_store")
                 else:
-                    from app.runtime.core.storage.pg_store import PGTraceStore
+                    from app.runtime.core.storage.pg_trace_store import PGTraceStore
                     _trace_store = PGTraceStore()
                     logger.info(
                         "trace_store initialized: backend=%s, async=disabled (psycopg2 sync)",
@@ -89,7 +89,7 @@ def get_session_store() -> SessionStorage:
                     # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
                     _raise_async_mix("session_store")
                 else:
-                    from app.runtime.core.storage.pg_store import PGSessionStore
+                    from app.runtime.core.storage.pg_session_store import PGSessionStore
                     _session_store = PGSessionStore()
                     logger.info(
                         "session_store initialized: backend=%s, async=disabled (psycopg2 sync)",
@@ -121,7 +121,7 @@ def get_error_store() -> ErrorStorage:
                     # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
                     _raise_async_mix("error_store")
                 else:
-                    from app.runtime.core.storage.pg_store import PGErrorStore
+                    from app.runtime.core.storage.pg_error_store import PGErrorStore
                     _error_store = PGErrorStore()
                     logger.info(
                         "error_store initialized: backend=%s, async=disabled (psycopg2 sync)",
@@ -153,7 +153,7 @@ def get_spec_store() -> SpecStorage:
                     # FIX: P1-4 同步 getter 遇到 async 后端 fail-fast（fallback=True 时由 except 分支降级）
                     _raise_async_mix("spec_store")
                 else:
-                    from app.runtime.core.storage.pg_store import PGSpecStore
+                    from app.runtime.core.storage.pg_spec_store import PGSpecStore
                     _spec_store = PGSpecStore()
                     logger.info(
                         "spec_store initialized: backend=%s, async=disabled (psycopg2 sync)",
@@ -190,7 +190,7 @@ def get_knowledge_store() -> KnowledgeBaseStorage:
                 if settings.pg_async_enabled:
                     _raise_async_mix("knowledge_store")
                 else:
-                    from app.runtime.core.storage.pg_store import PGKnowledgeBaseStore
+                    from app.runtime.core.storage.pg_kb_store import PGKnowledgeBaseStore
                     _knowledge_store = PGKnowledgeBaseStore()
                     logger.info(
                         "knowledge_store initialized: backend=%s, async=disabled (psycopg2 sync)",

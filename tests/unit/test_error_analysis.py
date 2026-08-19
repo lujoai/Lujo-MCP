@@ -149,7 +149,7 @@ class TestQueryPgErrors:
         with patch("app.config.settings") as mock_settings:
             mock_settings.storage_backend = "postgresql"
             mock_settings.pg_async_enabled = False
-            with patch("app.runtime.core.storage.pg_store._get_pool") as mock_pool:
+            with patch("app.runtime.core.storage.pg_executor._get_pool") as mock_pool:
                 mock_pool.side_effect = RuntimeError("connection failed")
                 result = errors.query_pg_errors()
                 assert result == []
@@ -163,7 +163,7 @@ class TestQueryPgErrors:
         with patch("app.config.settings") as mock_settings:
             mock_settings.storage_backend = "postgresql"
             mock_settings.pg_async_enabled = False
-            with patch("app.runtime.core.storage.pg_store._get_pool") as mock_pool:
+            with patch("app.runtime.core.storage.pg_executor._get_pool") as mock_pool:
                 mock_conn = MagicMock()
                 mock_cur = MagicMock()
                 mock_pool.return_value.getconn.return_value = mock_conn

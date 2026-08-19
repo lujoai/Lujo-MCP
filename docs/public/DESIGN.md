@@ -283,14 +283,18 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 `collect_runtime_snapshot()`（psutil）→ `RuntimeSnapshot{pid, cpu_percent, memory_mb, thread_count, open_files, python_version, env_hint}`。失败降级（不抛未捕获异常）。
 
-#### 3.4.7 LLM Analyzer（`app/llm/analyzer.py`）✅
+#### 3.4.7 LLM Analyzer（`app/llm/`，god object 重构后 7 模块）✅
 
-- `SYSTEM_PROMPT`：要求模型输出 JSON `{root_cause, impact, fix, confidence}`。
-- `build_analysis_prompt(context)`：把 context 拼为文本（调试/展示用）。
-- `truncate_context(context, max_tokens)`：运行时快照/异常帧/整体按字符数（`max_tokens*3`）截断，超长标记 `_truncated`。
-- `_retry_call(...)`：重试（`llm_max_retries`）+ 指数退避 + 限流/超时处理；耗尽切换到 `llm_fallback_model`（缩短 prompt 重试 1 次）；仍失败抛 `RuntimeError`。
-- `analyze(context)` / `analyze_stream(context)`：非流式/流式；流式用 SSE 逐块 yield。
-- **✅ 新增 AsyncOpenAI**：`analyze_async` / `analyze_stream_async` 全链路 async/await，不再阻塞事件循环。
+> 原 `analyzer.py` 单文件 1175 行已拆分（2026-08-19），`analyzer.py` 保留 474 行纯调用编排，其余职责各归单一模块：
+
+- `app/llm/clients.py`：OpenAI 同步/异步客户端工厂 + provider base_url 分派（3 个 agent 共用）。
+- `app/llm/cache.py`：L1/L2 多级缓存 + error-surface 指纹（P1-8）。
+- `app/llm/injection_guard.py`：`wrap_evidence` / `INJECTION_GUARD`（公开 API）。
+- `app/llm/context_prep.py`：`build_analysis_prompt` / `truncate_context`（运行时快照/异常帧/整体按 `max_tokens*3` 字符截断，超长标记 `_truncated`）/ 递归脱敏 / 错误信号提取。
+- `app/llm/output_schema.py`：LLM 输出 JSON 提取 + Schema 校验净化。
+- `app/llm/kb_integration.py`：KB 三级命中 + 向量 RAG 召回 + 经验回写。
+- `analyzer.py`（编排）：`SYSTEM_PROMPT`（输出 JSON `{root_cause, impact, fix, confidence}`）；`_retry_call(_async)` 重试 + 指数退避 + fallback 模型（sync/async 共享内核 `_classify_llm_error`/`_format_llm_success`，仅 IO 语义不同）；`analyze` / `analyze_async` / `analyze_stream(_async)` 非流式/流式（流式用 SSE 逐块 yield）；熔断器（P3-8）。
+- **✅ AsyncOpenAI**：`analyze_async` / `analyze_stream_async` 全链路 async/await，不再阻塞事件循环。
 - **✅ 多级缓存**：L1（OrderedDict LRU 进程级，100 条）+ L2（Redis 分布式，TTL 1h）+ L3 缓存预热（`app/llm/cache_prewarm.py`，从 L2 扫描热门 fingerprint 回填 L1，只写 L1 不刷新 L2 TTL，2026-07-26 落地），按 `fingerprint` 缓存 LLM 分析结果，同类错误不再重复调用。Dashboard 缓存加 Redis L2 + `invalidate_cache`。
 
 #### 3.4.8 全局异常钩子（`app/runtime/hooks/exception_hook.py`）✅
@@ -317,7 +321,13 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 | `errors` ✅ | 异常持久化聚合 | `app/runtime/core/errors.py`，**独立 errors 表**（fingerprint + occurrence_count 落 PG，重启不丢失） |
 | `MemoryTraceStore` | 内存存储 | **OrderedDict + max_entries 容量上限**（防 OOM） |
 
-#### 3.5.1 PostgreSQL 存储实现（`app/runtime/core/storage/pg_store.py`）✅
+#### 3.5.1 PostgreSQL 存储实现（`app/runtime/core/storage/`，god object 重构后 7 模块）✅
+
+> 原 `pg_store.py` 单文件 1048 行已拆分（2026-08-19），职责各归单一模块：
+
+- `pg_executor.py`：连接池 + DDL 初始化 + 重试/重连/熔断执行基础设施，另提供 `execute_sql` / `query_sql` 便捷封装（连接生命周期由 executor 托管）。
+- `pg_partitions.py`：traces 月度 RANGE 分区预创建 + 归档。
+- `pg_trace_store.py` / `pg_session_store.py` / `pg_error_store.py` / `pg_spec_store.py` / `pg_kb_store.py`：5 个 Store 类（TraceStorage / SessionStorage / ErrorStorage / SpecStorage / KnowledgeBaseStorage 的 PG 实现）。
 
 **连接池**：`psycopg2.pool.ThreadedConnectionPool`（`pg_min_connections=2, pg_max_connections=20`，见 `app/config.py`），线程安全，全局单例。
 
@@ -327,7 +337,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 **数据序列化**：`save_entry` 统一用 `json.dumps(data, ensure_ascii=False, default=str)` 序列化，支持 dict/list/str/int/float/bool/None；`get_entries` 用 `_parse_data` 安全反序列化（JSON 字符串→对象，非 JSON 字符串→原样返回）。
 
-**重试机制**：`_execute_with_retry` 包装 SQL 执行，捕获 `OperationalError` 自动重连重试。
+**重试机制**：`_execute_with_retry` 包装 SQL 执行，捕获 `OperationalError` 自动重连重试（重连后返回最新连接，P3-9 语义保持）。
 
 **查询接口**：`list_request_ids(limit)` 返回最近写入的 request_id 列表（按 timestamp 倒序），供 Dashboard 和 MCP Tools 使用。
 
@@ -672,7 +682,7 @@ flowchart TB
 
     subgraph Storage["存储层"]
         FACTORY["Storage Factory<br/>factory.py"]
-        PG["PGStore<br/>pg_store.py<br/>连接池+自动建表"]
+        PG["PGStore<br/>pg_executor.py + pg_*_store.py<br/>连接池+自动建表+重试"]
         MEM["MemoryStore<br/>memory_store.py"]
         ERRORS["errors 缓冲<br/>errors.py<br/>内存 deque"]
     end
@@ -770,7 +780,7 @@ sequenceDiagram
 | Stacktrace | `app/runtime/collectors/stacktrace.py` |
 | Code Locator | `app/runtime/collectors/code_locator.py` ✅ |
 | Runtime | `app/runtime/collectors/runtime.py` |
-| LLM | `app/llm/analyzer.py` |
+| LLM | `app/llm/analyzer.py`（编排）+ `clients/cache/injection_guard/context_prep/output_schema/kb_integration` |
 | 异常钩子 | `app/runtime/hooks/exception_hook.py` ✅ |
 | 存储 | `app/runtime/core/storage/*` |
 | 会话/SSE | `app/mcp/transports/{session,sse}.py` |
@@ -799,7 +809,7 @@ sequenceDiagram
 | **F1 MCP 工具调用** | `POST /mcp` `mcp_routes.py:37` | 预解析 JSON→会话校验 `:54-77`→`dispatch_raw` `server.py:158`→`_handle_tools_call` `server.py:75`→17 工具 handler | 依工具而定 | JSON / SSE `:94-103` |
 | **F2 错误上报** | `POST /ingest/error` `ingest.py:66` | `tool_ingest_error`→`_parse_frames`（仅 `int(line)`，**不校验 file 路径**）→`save_trace` `trace_repo.py:76`→`redact`+`errors.record`(全局 deque)+`add_log` | `errors._recent`(内存) + `trace_store` | `{error_id}` |
 | **F3 完整上下文构建** | 工具 `context` / `GET /api/dashboard/trace/{id}` `dashboard.py:176` | `build_debug_context` `context.py:44`→`get_trace`→**`code_locator` 读文件** `:110`→`git blame/diff` `:119,125`→network/ui/spec/runtime | 只读 | dict（含 `code_snippets`） |
-| **F4 LLM 分析** | `POST /api/debug/analyze` `debug.py:77` | `get_logs`→`build_context`→`collect_runtime_snapshot`→`analyze` `analyzer.py:342`→`_prepare_context_for_llm`(截断+**递归脱敏** `:107-110`) | 只读 | `{context, analysis}` |
+| **F4 LLM 分析** | `POST /api/debug/analyze` `debug.py:77` | `get_logs`→`build_context`→`collect_runtime_snapshot`→`analyze` `analyzer.py`（编排）→`_prepare_context_for_llm`(截断+**递归脱敏** `context_prep.py`) | 只读 | `{context, analysis}` |
 | **F5 全局异常自动捕获** | `sys.excepthook`/asyncio handler `exception_hook.py:36,45` | `capture_exception` `stacktrace.py:22`→`errors.record`（**message/traceback 未脱敏**，见 SEC-06） | `errors._recent` | 供 `stacktrace`/`trace` 工具检索 |
 
 ### 13.3 存储模型（关键架构事实）
@@ -811,7 +821,7 @@ sequenceDiagram
 
 ### 13.4 数据出口（Egress）
 
-只有三个出口：① 返回调用方（工具结果/REST/SSE）；② **外部 LLM**（仅 `/analyze`、`analyze_with_llm` 触发，发送前经 `_prepare_context_for_llm` 截断+递归脱敏 `analyzer.py:107`）；③ 浏览器 SSE。无遥测、无云存储——「数据本地驻留」成立。
+只有三个出口：① 返回调用方（工具结果/REST/SSE）；② **外部 LLM**（仅 `/analyze`、`analyze_with_llm` 触发，发送前经 `_prepare_context_for_llm` 截断+递归脱敏 `app/llm/context_prep.py`）；③ 浏览器 SSE。无遥测、无云存储——「数据本地驻留」成立。
 
 ### 13.5 工具注册与执行流程（订正工具清单）
 
@@ -849,8 +859,8 @@ sequenceDiagram
 
 **关键异步缺陷：**
 
-1. **🔴 PostgreSQL 操作完全同步**（`pg_store.py:40-60`）：`ThreadedConnectionPool(min=2, max=10)` 是同步连接池。在 FastAPI async handler 中调用同步 PG 操作会阻塞事件循环。`maxconn=10` 硬编码不可配置，超过 10 个并发写入请求排队等待。
-2. **🔴 LLM 调用同步阻塞**（`analyzer.py:276-339`）：`_retry_call` 同步 HTTP 调用 2-10 秒。`/api/debug/analyze` 定义为 `def`（非 `async def`），FastAPI 将其放入线程池执行（默认 40 线程），高并发时线程池耗尽。
+1. **🔴 PostgreSQL 操作完全同步**（`pg_executor.py` 连接池区）：`ThreadedConnectionPool(min=2, max=10)` 是同步连接池。在 FastAPI async handler 中调用同步 PG 操作会阻塞事件循环。`maxconn=10` 硬编码不可配置，超过 10 个并发写入请求排队等待。
+2. **🔴 LLM 调用同步阻塞**（`analyzer.py` `_retry_call`）：`_retry_call` 同步 HTTP 调用 2-10 秒。`/api/debug/analyze` 定义为 `def`（非 `async def`），FastAPI 将其放入线程池执行（默认 40 线程），高并发时线程池耗尽。
 3. **🟡 Redis 操作同步**（`state/store.py:80-114`）：`redis.Redis` 同步客户端，限流中间件每个请求增加 1-2ms 延迟。
 
 **改进方向：**
@@ -890,7 +900,7 @@ sequenceDiagram
 | MCP 方法路由 | `protocol/server.py:132-137` | `_METHOD_MAP` 分发 |
 | 存储后端 | `core/storage/factory.py:31-42` | 环境变量选择 memory/postgresql |
 | 状态后端 | `state/store.py:121-131` | 环境变量选择 memory/redis |
-| LLM Provider | `analyzer.py:31-35` | 选择 openai/zhipu/deepseek/custom |
+| LLM Provider | `app/llm/clients.py` | 选择 openai/zhipu/deepseek/custom |
 | 规范类型 | `verifier/assert_engine.py:29-38` | `spec.kind` 分发 api/ui/rule |
 
 **缺失的分流：**
@@ -911,8 +921,8 @@ sequenceDiagram
 |--------|------|------|
 | 请求体限制 | `middleware.py:56-78` | `max_body_size=1MB` 硬截断 |
 | 速率限制 | `middleware.py:95-108` | 固定窗口 60req/min/IP |
-| PG 连接池 | `pg_store.py:40-60` | `ThreadedConnectionPool(min=2, max=10)` |
-| 连接重试 | `pg_store.py:122-148` | `_execute_with_retry(max_retries=2)` |
+| PG 连接池 | `pg_executor.py` | `ThreadedConnectionPool(min=2, max=10)` |
+| 连接重试 | `pg_executor.py` | `_execute_with_retry(max_retries=2)` |
 | 定时清理 | `main.py:77-86` | 每 300s 清理过期 trace/session |
 | 异常缓冲上限 | `core/errors.py:21` | `deque(maxlen=200)` |
 | 安全启动校验 | `main.py:33-41` | 拒绝 `0.0.0.0` + 空 API_KEY |
@@ -1149,7 +1159,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 ## 15. 数据层长期优化设计（Phase 5，2026-07-24）
 
 > 本章记录 Phase 5 数据层长期优化的设计决策，包括 P3-1 表分区和 P3-2 归档策略。
-> 实现位置：`app/runtime/core/storage/pg_store.py`（同步）、`app/runtime/core/storage/async_pg_store.py`（异步）、`app/config.py`
+> 实现位置：`app/runtime/core/storage/pg_executor.py` + `pg_*_store.py` 各 Store（同步）、`app/runtime/core/storage/async_pg_store.py`（异步）、`app/config.py`
 
 ### 15.1 设计背景与目标
 
@@ -1163,7 +1173,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 - **P3-1 分区**：traces 表按月 RANGE 分区，冷热数据分离，查询仅扫描相关分区
 - **P3-2 归档**：超过 N 天的数据自动归档到 traces_archive 表，主表保持轻量
 - **向后兼容**：所有功能默认关闭，现有用户零感知
-- **双实现一致**：同步（pg_store）和异步（async_pg_store）两套实现行为一致
+- **双实现一致**：同步（pg_executor + pg_*_store）和异步（async_pg_store）两套实现行为一致
 
 ### 15.2 P3-1：表分区设计
 
@@ -1549,7 +1559,7 @@ analyze(context)
 
 > **关键设计判断**：本项目的 RAG 不是传统"文档切片 RAG"，而是**"运行时分析结果 RAG"**。原始数据不是静态文件（Markdown/PDF），而是 LLM 实时分析产生的结构化 JSON。
 
-**唯一写入源头**：`analyzer._persist_analysis_to_knowledge_base()`（[analyzer.py:610-645](../../app/llm/analyzer.py#L610-L645)）
+**唯一写入源头**：`_persist_analysis_to_knowledge_base()`（[kb_integration.py](../../app/llm/kb_integration.py)，原 analyzer.py 区域，god object 重构迁出）
 
 ```
 用户 POST /api/debug/analyze
@@ -1673,7 +1683,7 @@ analyze(context)
 | qdrant-client 未安装 | 静默降级为 no-op，warning 日志 | [qdrant_vector_store.py:70-76](../../app/rag/qdrant_vector_store.py#L70-L76) |
 | Qdrant 连接失败 | `_qdrant_collection_ready=True` 后不再重试 | [qdrant_vector_store.py:126-134](../../app/rag/qdrant_vector_store.py#L126-L134) |
 | Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op | [qdrant_vector_store.py:214-216](../../app/rag/qdrant_vector_store.py#L214-L216) |
-| 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM | [analyzer.py:582-584](../../app/llm/analyzer.py#L582-L584) |
+| 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM | [kb_integration.py](../../app/llm/kb_integration.py) |
 
 ##### Agent 侧 RAG 消费
 

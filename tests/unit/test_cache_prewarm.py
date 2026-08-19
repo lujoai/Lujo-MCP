@@ -18,21 +18,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.llm import analyzer as analyzer_module
+from app.llm import cache as cache_module
 from app.llm import cache_prewarm as prewarm_module
 
-# 注意：prewarm_module 在模块加载时通过 `from app.llm.analyzer import _get_redis_cache`
+# 注意：prewarm_module 在模块加载时通过 `from app.llm.cache import _get_redis_cache`
 # 把 _get_redis_cache 绑定到自己的命名空间。因此 patch 必须落在 prewarm_module 上，
-# 而不是 analyzer_module——否则 prewarm_module 内的引用不会被替换。
+# 而不是 cache_module——否则 prewarm_module 内的引用不会被替换。
 
 
 # ── autouse fixture：每个测试前重置 L1 + L2 状态 ──
 # 对齐 tests/integration/test_redis_cache_integration.py:48-59 的风格
 @pytest.fixture(autouse=True)
 def reset_cache_state():
-    analyzer_module._analysis_cache.clear()
-    analyzer_module._redis_cache_client = None
-    analyzer_module._redis_cache_initialized = False
+    cache_module._analysis_cache.clear()
+    cache_module._redis_cache_client = None
+    cache_module._redis_cache_initialized = False
     # 重置 prewarm 任务单例
     if prewarm_module._prewarm_task is not None:
         prewarm_module._prewarm_task = None
@@ -41,9 +41,9 @@ def reset_cache_state():
     if prewarm_module._prewarm_task is not None:
         prewarm_module._prewarm_task.cancel()
         prewarm_module._prewarm_task = None
-    analyzer_module._analysis_cache.clear()
-    analyzer_module._redis_cache_client = None
-    analyzer_module._redis_cache_initialized = False
+    cache_module._analysis_cache.clear()
+    cache_module._redis_cache_client = None
+    cache_module._redis_cache_initialized = False
 
 
 def _make_mock_redis(scan_keys: list[str], mget_values: list):
@@ -71,10 +71,10 @@ def test_prewarm_from_l2_loads_top_n_into_l1():
     assert stats["prewarmed"] == 5
     assert stats["skipped"] == 0
     # L1 写入 5 条
-    assert len(analyzer_module._analysis_cache) == 5
+    assert len(cache_module._analysis_cache) == 5
     # fingerprint 去前缀后作为 L1 key
     for i in range(5):
-        assert f"fp00{i}" in analyzer_module._analysis_cache
+        assert f"fp00{i}" in cache_module._analysis_cache
 
 
 # ────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ def test_prewarm_skips_when_l2_unavailable():
         stats = prewarm_module.prewarm_cache(top_n=20)
 
     assert stats == {"scanned": 0, "prewarmed": 0, "skipped": 0}
-    assert len(analyzer_module._analysis_cache) == 0
+    assert len(cache_module._analysis_cache) == 0
 
 
 # ────────────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ def test_prewarm_handles_scan_errors():
     # fail-safe：异常被捕获，stats 为 _empty_stats()
     assert stats["scanned"] == 0
     assert stats["prewarmed"] == 0
-    assert len(analyzer_module._analysis_cache) == 0
+    assert len(cache_module._analysis_cache) == 0
 
 
 # ────────────────────────────────────────────────────────────
@@ -129,9 +129,9 @@ def test_prewarm_handles_deserialize_errors():
     assert stats["scanned"] == 3
     assert stats["prewarmed"] == 1
     assert stats["skipped"] == 2
-    assert "good" in analyzer_module._analysis_cache
-    assert "bad" not in analyzer_module._analysis_cache
-    assert "missing" not in analyzer_module._analysis_cache
+    assert "good" in cache_module._analysis_cache
+    assert "bad" not in cache_module._analysis_cache
+    assert "missing" not in cache_module._analysis_cache
 
 
 # ────────────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ def test_prewarm_respects_top_n_limit():
 
     assert stats["scanned"] == 20  # SCAN 在累计到 top_n 时 break
     assert stats["prewarmed"] == 20
-    assert len(analyzer_module._analysis_cache) == 20
+    assert len(cache_module._analysis_cache) == 20
 
 
 # ────────────────────────────────────────────────────────────
@@ -220,9 +220,9 @@ def test_prewarm_strips_key_prefix_correctly():
     with patch.object(prewarm_module, "_get_redis_cache", return_value=mock_redis):
         prewarm_module.prewarm_cache(top_n=20)
 
-    assert "fp001" in analyzer_module._analysis_cache
+    assert "fp001" in cache_module._analysis_cache
     # 完整 key 不应作为 L1 key（避免前缀污染）
-    assert "ai-debug:llm:cache:fp001" not in analyzer_module._analysis_cache
+    assert "ai-debug:llm:cache:fp001" not in cache_module._analysis_cache
 
 
 # ────────────────────────────────────────────────────────────
@@ -261,7 +261,7 @@ def test_prewarm_caps_top_n_to_l1_max_size():
         stats = prewarm_module.prewarm_cache(top_n=200)
 
     # cap 后 top_n=100，SCAN 累计到 100 即 break
-    assert stats["scanned"] <= analyzer_module._MAX_CACHE_SIZE
+    assert stats["scanned"] <= cache_module._MAX_CACHE_SIZE
     assert stats["scanned"] == 100
     assert stats["prewarmed"] == 100
 
