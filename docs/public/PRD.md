@@ -10,7 +10,7 @@
 | 当前产品版本 | v0.5.3 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-08-16 |
+| 最后更新 | 2026-08-18 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
@@ -73,7 +73,7 @@
 
 > 本节直接回答「读 PRD 能否解决痛点」。结论：**已实现约 60%**，其余为真实待开发项。
 
-### 3.1 全部已落地（代码核实 ✅，v0.3.0 + Phase 5）
+### 3.1 全部已落地（代码核实 ✅，v0.3.0 + Phase 5 + v0.5.3 增量）
 
 | 能力 | 代码证据 | 对应痛点 |
 | --- | --- | --- |
@@ -96,6 +96,7 @@
 | **RBAC + API Key 轮换（AUDIT-2-13/14）** | `app/auth/key_rotation.py` + `app/auth/rbac.py` | 鉴权增强 ✅ |
 | **AI Debug Agent（Phase 1）** | `app/agent/`（`BaseAgent` ABC + `RepairAgent` + `Coordinator` + `RepairQueue` + `RepairContextAssembler` + `schemas`）+ 2 REST 端点 + 2 MCP 工具 | 自动修复 ✅ |
 | **Dashboard 实时 SSE 推送** | `app/api/dashboard_events.py`（`DashboardEventBus` 广播总线）+ `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource | 实时运维 ✅ |
+| **RAG 知识库 PostgreSQL 持久化（v0.5.3）** | `knowledge_base.py` 写穿（kb_entries 表 + `load_from_persistent()` 启动回灌）+ `factory.get_knowledge_store()` 分发（PG/NoOp 降级） | 历史结论跨重启复用 ✅ |
 
 > **架构师结论（更新 v5.5）**：P1–P6 全部痛点已可交付解决。产品全面覆盖：
 > - 报错场景：自动捕获 → 源码定位 → IDE 跳转（P1/P2/P3）
@@ -109,8 +110,9 @@
 > - 召回增强场景：向量检索 RAG fallback（Phase 7 增量，v5.2）+ Qdrant 语义召回（v5.3，OpenAI/智谱 Embeddings + uuid5 幂等 upsert + 静默降级）
 > - 鉴权场景：多 API Key 轮换 + RBAC 角色分级（AUDIT-2-13/14，v5.2）
 > - 缓存预热场景：L3 缓存预热（只写 L1 不刷新 L2 TTL，P3-7，v5.3）
-> - 自动修复场景：AI Debug Agent Phase 1 单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留 + `Coordinator` 编排 + `RepairQueue` 削峰（v5.4，Phase 2 多 Agent DAG 为后续待办）
+> - 自动修复场景：AI Debug Agent Phase 1 单 Agent `RepairAgent` + Phase 2 多 Agent DAG（`GitAgent`/`TestAgent`/`SecurityAgent` 并行审查，`AGENT-002`，2026-07-30）+ `BaseAgent` ABC 协同框架 + `Coordinator` 编排 + `RepairQueue` 削峰（v5.4/v5.5）
 > - 实时运维场景：Dashboard SSE 实时推送（`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` + 前端 EventSource 去抖刷新 + 轮询兜底，`DASH-SSE-001`，v5.5）
+> - 持久化场景：RAG 知识库 PostgreSQL 写穿 + 启动回灌（kb_entries 表，learned 经验跨重启保留，v0.5.3）
 
 ---
 
@@ -130,7 +132,7 @@
 
 ### 4.3 价值对比
 
-| 维度 | 传统 | Lujo-MCP（v0.3.0） |
+| 维度 | 传统 | Lujo-MCP（v0.5.3） |
 | --- | --- | --- |
 | 查日志 | 手动翻 | ✅ 自动捕获 |
 | 找代码 | 手动翻 | ✅ 内联源码片段+IDE 可跳转链接 |
@@ -197,7 +199,7 @@
   2. `code_locator.py` 生成 `vscode://file/<abs>:<lineno>` 可点击链接，支持路径映射与白名单防穿越。
   3. `stacktrace` / `context` 工具及 `/api/debug/run` 在异常含帧时自动附加 `code_snippets`。
   4. 新建 `app/runtime/core/errors.py` 近期异常存储；`exception_hook` 真正持久化捕获的异常，供 `get_debug_context`/`list_recent_traces`/`search_logs` 检索。
-  5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，当时的 6 个 stdio 工具全部可用（现已扩至 15 个，见 §10.2）。
+  5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，当时的 6 个 stdio 工具全部可用（现已扩至 18 个，见 §10.2）。
 - **验收**：`get_debug_context` / `stacktrace` 返回每帧源码片段与 IDE 链接；点击可在 IDE 打开到对应行。
 
 #### FR12 调试提示词（规范）自动生成（P0）✅ 设计已解决（宿主 AI 推理模式）
@@ -376,7 +378,7 @@ flowchart TB
 
     subgraph Transport["传输层"]
         HTTP["Streamable HTTP"]
-        STDIO["stdio 子进程 (15 工具)"]
+        STDIO["stdio 子进程 (18 工具)"]
     end
 
     subgraph Core["核心服务 (FastAPI)"]
@@ -406,7 +408,7 @@ flowchart TB
     Transport --> MW --> Router --> Tools
     Tools --> Logs --> Builder
     Tools --> Stack
-    Stack -.需要接线.-> Locator
+    Stack --> Locator
     Builder --> Analyzer
     Analyzer --> LLM["OpenAI API"]
     Assert --> SpecStore
@@ -543,8 +545,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `QDRANT_URL` / `QDRANT_COLLECTION` / `QDRANT_API_KEY` | 空 / `ai-debug-kb` / 空 | ✅ FR17 Qdrant 后端已实现（`qdrant_url` 为空时降级为 in_process；配置后启用语义召回） |
 | | `QDRANT_EMBEDDING_MODEL` | text-embedding-3-small | ✅ FR17（OpenAI 用 `text-embedding-3-small` 1536 维；智谱用 `embedding-3` 1024 维） |
 | | `QDRANT_EMBEDDING_DIM` | 1536 | ✅ FR17（必须与已建 collection 维度一致） |
-| | `QDRANT_CONNECT_TIMEOUT` | 5 | ✅ FR17（参照 Redis 快速失败） |
-| | `QDRANT_REQUEST_TIMEOUT` | 10 | ✅ FR17（upsert/query 单次超时） |
+| | `QDRANT_REQUEST_TIMEOUT` | 10 | ✅ FR17（upsert/query 单次超时；注：`QDRANT_CONNECT_TIMEOUT` 已随 v0.5.0 死配置收敛移除） |
 | API Key 轮换 | `API_KEYS` | 空（沿用 `API_KEY`） | ✅ FR18 |
 | | `API_KEY_ROTATION_ENABLED` | false | ✅ FR18 |
 | RBAC | `RBAC_ENABLED` | false | ✅ FR18（false=全 admin 向后兼容） |
@@ -557,7 +558,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `AGENT_MODEL` | 空 | ✅ FR19（空则继承 `LLM_MODEL`） |
 | | `AGENT_MAX_RETRIES` | 2 | ✅ FR19 |
 | | `AGENT_TIMEOUT` | 90 | ✅ FR19 |
-| | `AGENT_MULTI_AGENT_ENABLED` | false | ✅ FR19（Phase 2 预留，当前不生效） |
+| | `AGENT_MULTI_AGENT_ENABLED` | false | ✅ FR19（Phase 2 多 Agent DAG 已实现（2026-07-30，`AGENT-002`）；false 时走 Phase 1 单 Agent 串行） |
 | L3 缓存预热（P3-7） | `LLM_CACHE_PREWARM_ENABLED` | false | ✅ Phase 7 |
 | | `LLM_CACHE_PREWARM_TOP_N` | 20 | ✅ Phase 7 |
 | | `LLM_CACHE_PREWARM_INTERVAL_SECONDS` | 3600 | ✅ Phase 7 |
@@ -579,7 +580,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | ~~P0~~ ✅ | ~~FR18 RBAC + API Key 轮换（AUDIT-2-13/14）~~ | ~~key_rotation.py + rbac.py + require_role~~ | 鉴权安全 |
 | ~~P1~~ ✅ | ~~FR19 AI Debug Agent Phase 1（自动修复）~~ | ~~app/agent/ 模块（BaseAgent ABC + RepairAgent + Coordinator + RepairQueue）+ 2 端点 + 2 MCP 工具~~ | 自动修复 |
 | P1 | FR12 增强 | `/api/debug/prompt` 文本端点 | P2（非 MCP 场景） |
-| P2 | AI Debug Agent Phase 2（多 Agent DAG） | 在 `BaseAgent` ABC + `Coordinator` 框架上扩展 Git Agent / Test Agent / Security Agent 并行编排 | 自动修复增强 |
+| ~~P2~~ ✅ | ~~AI Debug Agent Phase 2（多 Agent DAG）~~ | ~~GitAgent / TestAgent / SecurityAgent 并行编排（`AGENT-002`，2026-07-30）~~ | 自动修复增强 |
 | P2 | 多 LLM 厂商 / OpenTelemetry / Web 控制台 / 多租户 | 见 v1.0 | — |
 
 ### 12.2 v0.4.0 路线图：让 Debug Context 价值可量化、可证明
@@ -642,7 +643,7 @@ M2 贡献最大（+0.10），因为知识库命中同时提升完整度和可信
 
 | 编号 | 验收项 |
 | --- | --- |
-| AC1 | 17 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
+| AC1 | 18 个 stdio MCP 工具可 `list_tools` 并 `call_tool` |
 | AC2 | `exception_hook` 安装后，未捕获异常自动进入 trace，`list_recent_traces` 可见 |
 | AC3 | LLM 分析返回 `root_cause/impact/fix/confidence` |
 | AC4 | 上下文超长被截断且不报错 |

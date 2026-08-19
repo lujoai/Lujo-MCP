@@ -22,9 +22,9 @@
 在 React 应用里引入 Lujo-MCP 的 Browser SDK（`ai-debug.js`），初始化后自动开始采集：
 
 ```html
-<script src="/vendor/ai-debug.js"></script>
+<script src="/ai-debug.js"></script>
 <script>
-  window.LujoDebug.init({ endpoint: "https://your-lujo-server/api/ingest" });
+  window.AiDebug.init({ endpoint: "https://your-lujo-server" });
 </script>
 ```
 
@@ -72,7 +72,7 @@ Browser SDK 捕获三类现场数据
 
 ### 第 5 步：AI Agent 分析原因
 
-宿主 AI（Claude / Cursor / Trae）调用 MCP 工具 `get_debug_context`，拿到上面的真实运行现场后，直接定位：
+宿主 AI（Claude / Cursor / Trae）调用 MCP 工具 `context`，拿到上面的真实运行现场后，直接定位：
 
 > **根因推断**：`POST /api/auth/login` 网络请求失败（status 0，连接中断），且登录处理函数在访问 `res.token` 时抛 `TypeError`——很可能是后端未返回或前端未处理 `token` 字段，导致点击后静默无响应。
 
@@ -98,6 +98,6 @@ AI 不再需要你手动翻日志、拼提示词，就能给出基于**真实运
 2. 打开网络捕获 Demo：`http://localhost:8000/demo`
 3. 点击页面测试按钮，制造一次网络错误 / 静默失败
 4. 打开 Dashboard：`http://localhost:8000/dashboard` 查看追踪记录与 AI 分析
-5. 在 MCP 客户端（Claude / Cursor / Trae）中调用 `get_debug_context`，体验 AI 拿到真实运行现场
+5. 在 MCP 客户端（Claude / Cursor / Trae）中调用 `context`，体验 AI 拿到真实运行现场
 
 > 详细操作见 [Demo 演示流程](../../README.md) 与 [DEMO_GUIDE.md](./DEMO_GUIDE.md)。

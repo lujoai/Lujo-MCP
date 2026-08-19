@@ -18,7 +18,7 @@
 ┌──────────────────▼──────────────────────────────────────────┐
 │                    MCP Layer  (app/mcp)                      │
 │   protocol/ (JSON-RPC) · transports/ (stdio/SSE/session)     │
-│   tools/ (17 个 tool 定义与注册)                               │
+│   tools/ (18 个 tool 定义与注册)                               │
 │   ⚠ tools 作为编排边界，消费 runtime/llm/agent（见 F1/F2）      │
 └──────────────────┬──────────────────────────────────────────┘
                    │
@@ -158,3 +158,25 @@ rag ──▶ 外部向量库（qdrant）
   - Debug Context 增强：输出新增可选字段 `fault_localization`（失败/无 frames 时 `None`）。
   - Runtime 依赖方向不变，未新增任何跨层依赖。
   - Architecture Frozen 规则继续有效。
+
+### 2026-08-15：Source Map 解析（v0.5.1）
+
+- **新增能力**：`app/runtime/collectors/sourcemap_resolver.py`（纯 Python base64-VLQ 解码）+ `sourcemap_store.py`（上传/磁盘双通道）+ `resolved_frames` 注入 `build_debug_context`；新 MCP 工具 `resolve_stack`（tools 18 个，含 `repair_async`/`repair_result`/`resolve_stack`）。
+- **归属**：`app/runtime/collectors`（前端 minified 堆栈还原，符合 Section 6 规则 2 "Runtime 自包含"）。
+- **依赖**：仅 Python 标准库 + `app.runtime` 既有公开能力（code_locator 白名单兜底）；未引入 `app.mcp` / `app.agent` / `app.llm` / `app.rag`。
+- **影响**：Debug Context 新增可选 `resolved_frames`；QualityScorer TRACE 维度还原加成（+0.3）；工具数 17 → 18。冻结依赖方向不变。
+
+### 2026-08-15：品牌统一（v0.5.2）
+
+- **新增能力**：全仓 `ai-debug-mcp` 标识统一为 `lujo-mcp`（MCP server 名 / logger / OTel service name / 配置示例 / SDK description / LICENSE 署名 LujoAI）。无功能变更、无 Breaking Change。
+- **归属**：跨层标识统一，未引入新依赖。
+
+### 2026-08-18：RAG 知识库 PostgreSQL 持久化 + P3-9 修复（v0.5.3）
+
+- **新增能力**：
+  - `app/rag/knowledge_base.py` 写穿（write-through）持久化：`kb_entries` 表（fingerprint 主键 + analysis JSONB + 三级指纹索引 + verify_count/case_confidence），`upsert`/`record_verification`/`clear`/LRU 驱逐同步落库，启动 `load_from_persistent()` 回灌（learned 经验跨重启保留）。
+  - `app/runtime/core/storage/factory.py` 新增 `get_knowledge_store()` 分发（`PGKnowledgeBaseStore` / `NoOpKnowledgeBaseStore`，PG 失败降级 no-op）。
+  - 数据库改名 `ai_debug_mcp` → `lujo_mcp`。
+  - `app/runtime/core/storage/pg_store.py` P3-9：`_query_with_retry` 返回 `(rows, conn)`，7 处调用方归还最新连接，消除重连后连接泄漏。
+- **归属**：RAG 层 `app/rag`（知识检索/持久化，符合 Section 6 规则 6 "RAG 只检索"）；PG 连接管理归 `app/runtime/core/storage`。
+- **依赖**：RAG → `app.runtime.core.storage.factory` 经公开符号取 KB 存储后端；未引入跨层反向依赖。Architecture Frozen 规则继续有效。

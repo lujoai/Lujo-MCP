@@ -1,7 +1,7 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.3.0  
-**最后更新 / Last Updated**: 2026-07-30
+**适用版本 / Applicable Version**: v0.5.3  
+**最后更新 / Last Updated**: 2026-08-18
 
 ---
 
@@ -58,7 +58,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HOST=127.0.0.1`
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | Lujo-MCP v0.3.0`
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | Lujo-MCP v0.5.3`
 
 ---
 
@@ -471,6 +471,7 @@ WARNING: LLM circuit breaker OPEN after 5 failures in 60s window
 |---|---|---|
 | `openai` | `https://api.openai.com/v1` | gpt-4o |
 | `zhipu` | `https://open.bigmodel.cn/api/paas/v4/` | glm-4-flash |
+| `deepseek` | `https://api.deepseek.com` | deepseek-chat |
 | `custom` | 需手动设置 `LLM_BASE_URL` | 自定义 |
 
 ```bash
@@ -504,7 +505,7 @@ OPENAI_API_KEY=your-key-for-this-endpoint
   "method": "initialize",
   "id": 1,
   "params": {
-    "protocolVersion": "2025-06-18",
+    "protocolVersion": "2024-11-05",
     "capabilities": {},
     "clientInfo": {"name": "your-client", "version": "1.0"}
   }
@@ -583,7 +584,7 @@ curl -X POST http://localhost:8000/mcp \
 ```
 
 已注册的 18 个工具:
-`debug`, `debug_context`, `trace`, `stacktrace`, `network_ingest`, `network_trace`, `git_blame`, `recent_diff`, `silent_failure`, `ingest_error`, `console_log`, `related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
+`debug`, `context`, `trace`, `stacktrace`, `ingest_network`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `ingest_silent_failure`, `ingest_error`, `ingest_console`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
 

@@ -1,7 +1,7 @@
 # 启动前检查清单 / Pre-flight Checklist
 
-**适用版本 / Applicable Version**: v0.3.0  
-**最后更新 / Last Updated**: 2026-07-30
+**适用版本 / Applicable Version**: v0.5.3  
+**最后更新 / Last Updated**: 2026-08-18
 
 ---
 
@@ -263,7 +263,7 @@ cp .env.example .env
 ```bash
 # CORS_ORIGINS=https://your-domain.com,https://app.your-domain.com
 # 判定标准 / Pass Criteria: 生产环境禁止 CORS_ORIGINS=*
-# 当前代码默认 allow_origins=["*"]，必须显式配置域名白名单
+# 当前代码默认 cors_origins=""（不下发 CORS 头，默认收紧）；生产如跨域需显式配置域名白名单
 ```
 
 ### 3.5 日志配置
@@ -284,12 +284,12 @@ cp .env.example .env
 
 | 参数 / Parameter | 说明 / Description | 推荐值 / Recommended |
 |---|---|---|
-| `CB_LLM_MAX_FAILURES` | LLM 滑动窗口最大失败数 | 5 |
+| `CB_LLM_MAX_FAILURES` | LLM 熔断最大失败数 | 5 |
 | `CB_LLM_RESET_TIMEOUT` | LLM 熔断后半开等待(秒) | 30 |
-| `CB_LLM_WINDOW_SIZE` | LLM 滑动窗口大小(秒) | 60 |
-| `CB_PG_MAX_FAILURES` | PG 滑动窗口最大失败数 | 3 |
+| `CB_PG_MAX_FAILURES` | PG 熔断最大失败数 | 3 |
 | `CB_PG_RESET_TIMEOUT` | PG 熔断后半开等待(秒) | 15 |
-| `CB_PG_WINDOW_SIZE` | PG 滑动窗口大小(秒) | 60 |
+
+> 注：`CB_*_WINDOW_SIZE` 已随 v0.5.0 死配置收敛移除（pybreaker 用 fail_max 计数 + reset_timeout 复位，无时间窗参数）。
 
 ---
 
@@ -488,17 +488,18 @@ curl http://localhost:8000/health
 #   - 开发环境: 可设为 true 或添加 localhost 到白名单
 ```
 
-### 6.7 JWT 安全
+### 6.7 鉴权安全（API Key）
 
-- [ ] **[必选]** JWT 配置安全性检查
+- [ ] **[必选]** 鉴权配置安全性检查
 
 ```bash
 # 检查项：
-#   1. JWT_SECRET 已配置（非硬编码降级值）
-#   2. 多 Worker 部署时 JWT_SECRET 一致（否则跨 worker token 验证失败）
-#   3. OAuth id_token 不通过 URL query string 传递
+#   1. API_KEY / API_KEYS 已配置（未配置 = 不鉴权，仅限内网/回环使用）
+#   2. 非回环绑定（如 0.0.0.0）必须配置 API Key，否则启动校验拒绝/告警
+#   3. 鉴权使用 API Key 多 key 恒定时间比较轮换（hmac.compare_digest），无 JWT 依赖
 # 判定标准 / Pass Criteria: 上述三项全部满足
-# 注意：当前版本 JWT 多 Worker 不同步问题已知（BETA-P1-03）
+# 说明：本项目鉴权基于 API Key（fail-closed），不引入 JWT/OAuth；历史 BETA 审查中的
+#       JWT 相关项（BETA-P1-02/03/04 等）已确认为误报（无 JWT 实现）
 ```
 
 ### 6.8 RBAC 工具覆盖
@@ -509,7 +510,7 @@ curl http://localhost:8000/health
 # 验证方式：检查 app/mcp/tools/__init__.py 中 TOOL_ROLE_REQUIREMENTS 的 keys
 # 是否覆盖 register_all_tools() 注册的所有工具
 # 判定标准 / Pass Criteria: 两个集合完全一致
-# 注意：当前无程序化校验（BETA-P2-12），需人工核对
+# 说明：已有 TestToolRoleRequirementsCoverage 测试对覆盖完整性做程序化校验（原 BETA-P2-12 已修复）
 ```
 
 ---
@@ -609,7 +610,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | Lujo-MCP v0.3.0 | ..."
+#   - 日志输出 "服务启动 | Lujo-MCP v0.5.3 | ..."
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -629,7 +630,7 @@ curl http://localhost:8000/health
 #   {
 #     "status": "ok",              ← 或 "degraded"（LLM 未配置时）
 #     "service": "Lujo-MCP",
-#     "version": "0.3.0",
+#     "version": "0.5.3",
 #     "storage": "memory",         ← 或 "postgresql (connected)"
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

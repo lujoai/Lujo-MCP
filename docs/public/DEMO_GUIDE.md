@@ -43,7 +43,7 @@ python -m app.main
 
 ```bash
 curl http://localhost:8000/
-# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.3.0"}
+# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.5.3"}
 ```
 
 ## 二、验证 Browser SDK
@@ -159,7 +159,7 @@ AiDebug.init({
 curl http://localhost:8000/api/dashboard/traces
 
 # 查询单个 trace 的网络记录
-curl http://localhost:8000/api/ingest/network/{trace_id}
+curl http://localhost:8000/ingest/network/{trace_id}
 ```
 
 ## 四、展示 AI Debug 场景
@@ -241,7 +241,7 @@ curl http://localhost:8000/
 检查：
 1. `.env` 中 API Key 是否配置正确
 2. 网络是否能访问 LLM Provider（智谱无需 VPN）
-3. 查看后端日志：`docker logs Lujo-MCP`
+3. 查看后端日志：`docker compose logs app`
 
 ## 六、展示 Checklist
 

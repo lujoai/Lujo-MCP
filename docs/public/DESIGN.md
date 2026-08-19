@@ -21,6 +21,12 @@
 > **CODE_REVIEW_FIX_PROMPT 代码审查修复更新（2026-08-08）**：按 `CODE_REVIEW_FIX_PROMPT.md` 清单完成 P0×5 + P1×20 + P2 全部项——P0：`debug.py` 补 `import time`（session/health 端点 500）、`static_analyzer._resolve_path` LFI 白名单（realpath + 允许前缀，拒绝返回 None）、`ui_runner` SSRF 重定向逐跳守卫（导航前固定 IP）、`dashboard.html` 存储型 XSS（`esc()` 补引号转义 + 事件委托去内联 onclick）+ `main.py` dashboard 响应加 CSP 头、DDL 双源分叉收敛（`app/runtime/core/storage/ddl.py` 共享常量，pg_store / async_pg_store / migrations 三处一致）；P1：SDK 离线重试数据全丢、beacon 分支不压缩、repair/analysis 队列残留与 `_jobs` TTL 清理、`pg_async_enabled` 混合行为 fail-fast、redact 递归脱敏全边界、RBAC 默认角色 fail-closed、analyzer 指纹去 request_id、fault_localizer 帧索引错位、scorer runtime 嵌套键、分区表检测、PG 池 `_get_conn` 无限递归 bug 与超时、errors 同指纹节流、verify_loop 超时/语义、dag_degraded、stdio 畸形输入、params 非 dict、SSE 有界队列、metrics 归一化、state.store 限流键驱逐；P2：spec_store 缓存/LIKE/delete/get 回源、ui_runner `browser.close()` finally、assert_engine 值类型归一、死配置收敛、版本号 `0.4.0-beta`、Dockerfile 非 root + `requirements-locked.txt`。新增 `test_state_store`/`test_ddl_consistency`/`test_debug_endpoints` 回归测试。测试基线：891 passed / 6 skipped / 0 failed
 >
 > **v0.5.0/v0.5.1/v0.5.2 发布更新（2026-08-16）**：v0.5.0 工程质量加固（DebugContext Schema 7→20 字段 + Runtime Integration、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）已发布（2026-08-13）；v0.5.1 Source Map 解析（SM1 纯 Python base64-VLQ 解码 + SM2 上传/磁盘双通道 + SM3 `resolve_stack` 工具 18/18 + SM4 Quality/Benchmark A/B 实证，默认关闭）+ deepseek provider base_url 修复 + LLM e2e/git 编码修复已发布（2026-08-15）；v0.5.2 品牌统一（ai-debug-mcp → lujo-mcp）已发布（2026-08-15）。第 3 轮代码审查 P1/P2/P3 共 17 项修复收口（2026-08-16，测试基线 1087 → 1105 passed / 6 skipped / 0 failed）。
+>
+> **v0.5.3 发布更新（2026-08-18，测试基线 1105 → 1134 passed / 6 skipped / 0 failed）**：
+> - **RAG 知识库 PostgreSQL 持久化**：`app/rag/knowledge_base.py` 新增写穿（write-through）持久化——KB 主存 upsert / record_verification / clear / LRU 驱逐同步落库（锁外执行，PG 故障 warning 降级不阻断）；新增 `kb_entries` 表（DDL 单源 `app/runtime/core/storage/ddl.py` + `migrations/20260817_create_kb_entries_table.sql` 同步：fingerprint 主键 + analysis JSONB + 三级指纹索引列 + verify_count/case_confidence + DOUBLE PRECISION 时间戳）；新增 `KnowledgeBaseStorage` ABC（`app/runtime/core/storage/base.py`）与 `PGKnowledgeBaseStore`/`NoOpKnowledgeBaseStore` 双实现，经 `factory.get_knowledge_store()` 分发（PG 后端真实持久化 / memory 后端 no-op / PG 初始化失败降级 no-op 不阻断启动）；新增 `load_from_persistent()` 启动回灌（按 `updated_at` 倒序取最近 `max_entries` 条重建内存条目含验证统计与三级索引，PG 为权威来源）。learned 调试经验跨重启保留。
+> - **数据库改名**：`ai_debug_mcp` → `lujo_mcp`（config / .env / docker-compose 同步）。
+> - **P3-9 pg_store 重连修复**：`_query_with_retry` 改为返回 `(rows, conn)` 与 `_execute_with_retry` 对齐，7 处调用方（traces/sessions/specs/kb_entries 读路径）归还最新连接，消除重连后新连接泄漏 + 旧连接重复归还；新增 5 项重连回归测试（第 3 轮审查 P3 至此全部清零）。
+> - **测试**：新增 `tests/unit/test_kb_persistence.py`（13 项）+ `tests/unit/test_pg_store_reconnect.py`（5 项）+ 集成 2 项。
 
 ---
 
@@ -313,7 +319,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 #### 3.5.1 PostgreSQL 存储实现（`app/runtime/core/storage/pg_store.py`）✅
 
-**连接池**：`psycopg2.pool.ThreadedConnectionPool`（minconn=2, maxconn=10），线程安全，全局单例。
+**连接池**：`psycopg2.pool.ThreadedConnectionPool`（`pg_min_connections=2, pg_max_connections=20`，见 `app/config.py`），线程安全，全局单例。
 
 **自动建表**：`_ensure_init()` 启动时执行 `CREATE TABLE IF NOT EXISTS`：
 - `traces`（id BIGSERIAL, request_id TEXT, timestamp DOUBLE PRECISION, step TEXT, data JSONB）
@@ -600,7 +606,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
 | AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
-| **合计** | — | **340 passed / 6 skipped / 0 failed** | 起始基线 248/6/1，新增 92 个测试，消除全部失败 |
+| **合计** | — | **1134 passed / 6 skipped / 0 failed** | 当前全量单元基线（v0.5.3，2026-08-18）。本节表格其余数字为 v0.3.1 时期历史快照（340/6/0），仅作演进记录 |
 
 ### 11.2 测试执行
 
