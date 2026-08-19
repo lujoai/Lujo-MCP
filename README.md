@@ -438,6 +438,8 @@ Lujo-MCP/
 | [PRD.md](./docs/public/PRD.md)       | 产品需求                          |
 | [DESIGN.md](./docs/public/DESIGN.md) | 技术架构设计                        |
 | [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md) | 知识库设计：经验积累 + 置信度进化 + 建表 SQL |
+| [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | REST API 与 18 个 MCP 工具参考（参数/返回值/角色） |
+| [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | 浏览器 SDK 使用手册（采集/拦截/脱敏/V5 传输优化） |
 
 ## 测试
 
