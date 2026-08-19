@@ -65,3 +65,20 @@ jobs:
                     "请检查是否缺少依赖/环境导致用例整体被跳过。")
               sys.exit(1)
           EOF
+
+  # SDK JS 核心契约 smoke（TST-3）：Node 无浏览器加载 ai-debug.js，守护
+  # 公开 API 面 / V5 传输配置 / _getPublicConfig 不含 apiKey 等契约。
+  # 防止 SDK 演进（如闭包化配置）后 e2e 接口再次失联（CI 不跑 Playwright e2e）。
+  sdk-js-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run SDK core contract tests
+        run: node --test browser-sdk/test/sdk-core.test.js
+
