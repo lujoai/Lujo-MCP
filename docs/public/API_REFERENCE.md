@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 版本：v0.5.3（2026-08-18）
+> 版本：v0.5.5（2026-08-19）
 > 本文档覆盖 Lujo-MCP 对外暴露的两类接口：**REST API** 与 **MCP 工具**。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -65,6 +65,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | POST | `/api/debug/verify` | developer | 比对实际结果 vs 期望规范，检测静默失败 |
 | POST | `/api/debug/verify/ui` | developer | Playwright 按 UI 规范自动遍历并验证（FR14） |
 | GET | `/api/debug/health` | viewer | 调试健康检查（`{"status":"ok","timestamp":...}`） |
+| GET | `/api/debug/prompt?request_id={id}` | viewer | 生成纯文本调试提示词（FR12，非 MCP 场景一键复制；模板可经 `PROMPT_TEMPLATE_PATH` 自定义） |
 | POST | `/api/debug/sourcemap` | developer | 上传 Source Map（v0.5.1，需 `SOURCEMAP_ENABLED=true`） |
 | POST | `/api/debug/echo` | admin | 回显请求体（需 `DEBUG_ENDPOINTS_ENABLED=true`） |
 | GET | `/api/debug/token` | admin | 探测响应脱敏的测试端点（需 `DEBUG_ENDPOINTS_ENABLED=true`） |
@@ -98,6 +99,18 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 // 响应
 { "matched": false, "diffs": [{ "field": "body.data", "expected": "object", "actual": null }], "silent_failure": true }
 ```
+
+**`GET /api/debug/prompt?request_id=req-xxx` 示例**（FR12，v0.5.5）：
+
+```json
+// 响应：prompt 为可一键复制的纯文本提示词
+{
+  "request_id": "req-xxx",
+  "prompt": "你是一位资深排障专家。以下是程序运行时的调试上下文，请分析并定位问题根因：\n\n== 调试上下文（request_id: req-xxx）==\n\n请求 ID: req-xxx\n执行流程: request_start → processing → error\n异常详情: {\n  \"type\": \"ValueError\",\n  \"message\": \"bad value\",\n  ...\n}\n\n请基于以上上下文给出分析结论，包括：..."
+}
+```
+
+> 说明：`prompt` 字段内容 = 完整调试上下文（异常帧/源码片段/运行时/git 归因等）经脱敏 + 截断后的纯文本渲染；可直接粘贴给任意 AI 助手。默认使用内置模板，可用 `PROMPT_TEMPLATE_PATH` 指定自定义模板文件（占位符 `$context` / `$request_id`）。
 
 ### 2.2 数据接入 `/ingest`
 

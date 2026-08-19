@@ -5,6 +5,27 @@
 
 ---
 
+## [0.5.5] - 2026-08-19
+
+> v0.5.4 已发布（2026-08-18）：工程收口 + 文档补全。当前测试基线 **1153 passed / 6 skipped / 0 failed**（v0.5.4 基线 1134 + FR12 新增 10 项 + 3 项因单测存储后端隔离修复转绿）。v0.5.5 为**FR12 调试提示词端点**功能版本：新增 `/api/debug/prompt` + `PROMPT_TEMPLATE_PATH` 配置 + 单测存储后端隔离修复（`tests/unit/conftest.py` 强制 memory 后端，与 CI 一致）。无 Breaking Change。
+
+### 新增
+
+#### 功能
+
+- **调试提示词生成端点**（FR12）：新增 `GET /api/debug/prompt?request_id={id}`（viewer 可读）——基于已采集的完整调试上下文（异常帧/源码片段/运行时/git 归因等），脱敏 + 截断后套用提示词模板，返回可一键复制的纯文本提示词，便于非 MCP 场景直接粘贴给任意 AI 助手分析
+- **提示词模板可配置**（FR12）：新增 `PROMPT_TEMPLATE_PATH` 配置项——支持自定义模板文件（UTF-8，`string.Template` 语法，占位符 `$context` / `$request_id`）；为空或文件不存在时回退内置默认模板；`safe_substitute` 对模板中非法 `$xxx` 原样保留不抛错
+
+#### 测试
+
+- **FR12 单测**：新增 `tests/unit/test_prompt_builder.py`（10 项）——默认模板含 request_id/异常帧/指令文本、上下文发送前脱敏（敏感字段不出现）、自定义模板文件加载、模板文件缺失回退内置、模板含非法 `$` 不抛错、`load_prompt_template` 空路径/无效路径回退、端点 200 返回纯文本 prompt / 未知 request_id 404 / 缺参 422
+
+### 修复
+
+- **单元测试存储后端隔离**：`tests/unit/conftest.py` 强制 memory 后端（改写 `settings.storage_backend` + 重置 storage factory 缓存），使单测不再受本机 `.env STORAGE_BACKEND=postgresql` 影响——修复 3 项本机预存失败（`test_batch_writes`×2：固定 request_id 在 PG 跨运行累积致 len 断言失真；`test_spec_store`×1：`_add_log` 注入 traces 表 vs PG 后端恢复走专用 specs 表致数据不可见）。单测运行与 CI（memory 后端）一致；需真实 PG 行为的测试（`test_factory` / `test_storage` 等）用 monkeypatch 显式覆盖，不受影响
+
+---
+
 ## [0.5.4] - 2026-08-18
 
 > v0.5.3 已发布（2026-08-18）：RAG 知识库 PostgreSQL 持久化 + 数据库改名 lujo_mcp + P3-9 pg_store 重连修复。当前测试基线 **1134 passed / 6 skipped / 0 failed**（v0.5.3 基线）。v0.5.4 为**工程收口 + 文档补全**版本：无新功能、无 Breaking Change。

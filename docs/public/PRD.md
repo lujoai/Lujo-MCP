@@ -5,12 +5,12 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v6.2（v0.5.4 工程收口 + 文档补全后同步） |
+| 文档版本 | v6.3（v0.5.5 FR12 调试提示词端点发布后同步） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v0.5.4 |
+| 当前产品版本 | v0.5.5 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-08-18 |
+| 最后更新 | 2026-08-19 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
@@ -39,6 +39,7 @@
 | v6.0 | 2026-08-16 | 架构委员会 | **v0.5.0/v0.5.1/v0.5.2 发布 + 第 3 轮代码审查修复交付**：(1) v0.5.0 工程质量加固（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 加固）已发布；v0.5.1 Source Map 解析（`resolve_stack` 工具 18/18）+ deepseek/LLM e2e/git 编码修复已发布；v0.5.2 品牌统一（ai-debug-mcp → lujo-mcp）已发布；(2) 第 3 轮代码审查 P1/P2/P3 共 17 项修复收口（KB 索引泄漏、非 ASCII 鉴权头 500、JSON-RPC 非 dict 500、指标 path 失效、symlink 白名单绕过、LLM 复合键脱敏、data_table NameError、限流误伤轮询、beacon 前缀边界、会话驱逐 DoS、清理任务静默死亡、stdio 挂死、errors bucket 无界、默认暴露告警、beacon 令牌堆积、会话固定、SSE 竞争、batch 上限）。测试基线 1087 → 1105 passed / 6 skipped / 0 failed。产品版本 v0.4.0-beta → v0.5.2。 |
 | v6.1 | 2026-08-18 | 架构委员会 | **v0.5.3 发布 + KB 持久化与 P3-9 收口交付**：(1) RAG 知识库 PostgreSQL 持久化——新增 `kb_entries` 表（fingerprint 主键 + analysis JSONB + 三级指纹索引 + verify_count/case_confidence）、`KnowledgeBaseStorage` ABC 与 `PGKnowledgeBaseStore`/`NoOpKnowledgeBaseStore` 双实现、upsert/record_verification/clear/LRU 驱逐同步写穿落库、启动 `load_from_persistent()` 回灌，learned 知识跨重启保留；(2) 数据库改名 ai_debug_mcp → lujo_mcp；(3) 第 3 轮审查 P3 最后一环 pg_store 重连缺陷（P3-9）修复——`_query_with_retry` 返回 `(rows, conn)`，7 处调用方归还最新连接，消除连接泄漏与重复归还。测试基线 1105 → 1134 passed / 6 skipped / 0 failed。产品版本 v0.5.2 → v0.5.3。 |
 | v6.2 | 2026-08-18 | 架构委员会 | **v0.5.4 发布 + 工程收口与文档补全交付**：(1) TST-3 测试资产收口——`tests/unit/test_distribution_smoke.py`（9 项分发链 smoke：PyInstaller spec / npm 元包与三平台包一致性 / bin 脚本）+ `browser-sdk/test/sdk-core.test.js`（7 项 SDK JS 契约单测）+ CI 新增 `sdk-js-smoke` job（防 SDK 演进失联）；(2) DOC-1/DOC-3 文档补全——新增 `docs/public/API_REFERENCE.md`（REST 5 组端点 + 18 个 MCP 工具 + RBAC + 字段速查）与 `docs/public/SDK_GUIDE.md`（接入 / 26 项配置 / 采集 / 脱敏 / V5 传输），README 文档导航挂入；(3) SEC-1 CSP 头统一移入 `SecurityHeadersMiddleware` 覆盖所有响应；(4) QC-1 修正 SDK 注释过时工具名。无新功能、无 Breaking Change，测试基线保持 1134 passed / 6 skipped / 0 failed。产品版本 v0.5.3 → v0.5.4。 |
+| v6.3 | 2026-08-19 | 架构委员会 | **v0.5.5 发布 + FR12 调试提示词端点交付**：(1) FR12 可选增强落地——新增 `GET /api/debug/prompt?request_id={id}`（viewer 可读）：基于完整调试上下文（异常帧/源码片段/运行时/git 归因/网络链等）脱敏 + 截断后套用提示词模板，返回可一键复制的纯文本提示词，补齐非 MCP 场景使用闭环；新增 `PROMPT_TEMPLATE_PATH` 配置（自定义模板，占位符 `$context` / `$request_id`，缺失回退内置，`safe_substitute` 容错）；(2) 单测存储后端隔离修复——`tests/unit/conftest.py` 强制 memory 后端（改写 `settings.storage_backend` + 重置 storage factory 缓存），修复 3 项本机预存失败（固定 request_id 在 PG 跨运行累积 / `_add_log` 注入 traces 表 vs PG 恢复走 specs 表），单测与 CI 一致；(3) 新增 `tests/unit/test_prompt_builder.py` 10 项。测试基线 1134 → 1153 passed / 6 skipped / 0 failed。产品版本 v0.5.4 → v0.5.5。 |
 
 ---
 
@@ -203,10 +204,10 @@
   5. 修复 `mcp_server.py` 的 `tool_*` 导入 bug，当时的 6 个 stdio 工具全部可用（现已扩至 18 个，见 §10.2）。
 - **验收**：`get_debug_context` / `stacktrace` 返回每帧源码片段与 IDE 链接；点击可在 IDE 打开到对应行。
 
-#### FR12 调试提示词（规范）自动生成（P0）✅ 设计已解决（宿主 AI 推理模式）
+#### FR12 调试提示词（规范）自动生成（P0）✅ 设计已解决（宿主 AI 推理模式）+ 可选增强已实现
 
 - **说明**：本产品**不**生成"给人类复制的提示词文本"，而是把清洗好的结构化上下文直接交给宿主 AI 推理（见 `mcp_server.py` 设计原则与 `analyze_with_llm` 可选工具）。这从架构上消解了 P2「手写规范提示词」——开发者无需整理格式。
-- **可选增强（🔲）**：增加 `GET /api/debug/prompt` 返回纯文本提示词，便于非 MCP 场景一键复制。
+- **可选增强（✅ 已实现，v0.5.5）**：新增 `GET /api/debug/prompt?request_id={id}` 返回纯文本提示词，便于非 MCP 场景一键复制。基于该 request_id 已采集的完整调试上下文（异常帧/源码片段/运行时/git 归因等），脱敏 + 截断后套用提示词模板；模板默认内置，可用 `PROMPT_TEMPLATE_PATH` 自定义（占位符 `$context` / `$request_id`）。实现：`app/llm/prompt_builder.py` + `app/api/debug.py`。验收：给定已运行的 request_id → 返回含完整上下文的纯文本提示词 ✅。
 
 #### FR13 静默失败检测（Silent Failure Detection）（P0）✅ 已实现 —— `app/runtime/verifier/assert_engine.py` + `verify` 工具
 
@@ -473,7 +474,7 @@ sequenceDiagram
 | POST | `/api/debug/verify/ui` | 前端自动化验证 | ✅ | admin / developer |
 | GET | `/api/debug/health` | debug 路由组健康检查 | ✅ | admin / developer / viewer |
 | GET/POST/PATCH/DELETE | `/api/spec` + `/api/spec/{id}` | 规范 CRUD | ✅ | 写：admin/developer；读：admin/developer/viewer |
-| GET/POST | `/api/debug/prompt`（可选增强） | 生成提示词文本 | 🔲 FR12 增强 | — |
+| GET | `/api/debug/prompt?request_id={id}` | 生成纯文本调试提示词（FR12 增强，非 MCP 场景一键复制） | ✅ | admin / developer / viewer |
 | POST | `/api/debug/echo` | 回显请求体（诊断端点，默认关闭） | ⚠️ 诊断 | admin |
 | GET | `/api/debug/token` | 返回含 token 的诊断响应（默认关闭） | ⚠️ 诊断 | admin |
 | POST | `/ingest/*`（6 条写） | 错误/网络/控制台/UI 写入 | ✅ | admin / developer |
@@ -531,7 +532,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `SOURCE_PATH_MAP` | 空 | ✅ 已支持（路径映射） |
 | | `IDE_SCHEME` | vscode | ✅ 已支持（可点击链接） |
 | | `WHITELIST_PATH_PREFIX` | 空（=收敛到 CWD） | ✅ 已修复（SEC-01）；空值时默认收敛到进程 CWD 防目录穿越 |
-| 提示词 | `PROMPT_TEMPLATE_PATH` | 内置 | 🔲 FR12 增强 |
+| 提示词 | `PROMPT_TEMPLATE_PATH` | 内置 | ✅ FR12（自定义模板文件路径，支持 `$context` / `$request_id` 占位符；为空或缺失回退内置） |
 | 规范 | `SPEC_BACKEND` | memory | ✅ FR15 spec_store |
 | 前端验证 | `PLAYWRIGHT_ENABLED` | false | ✅ FR14 ui_runner（可选依赖） |
 | 安全 | `WHITELIST_PATH_PREFIX` | 空 | ✅ FR11 增强 |

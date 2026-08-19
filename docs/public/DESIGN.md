@@ -2,7 +2,7 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.5.4｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.5.5｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
@@ -606,7 +606,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
 | AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
-| **合计** | — | **1134 passed / 6 skipped / 0 failed** | 当前全量单元基线（v0.5.4，2026-08-18）。本节表格其余数字为 v0.3.1 时期历史快照（340/6/0），仅作演进记录 |
+| **合计** | — | **1153 passed / 6 skipped / 0 failed** | 当前全量单元基线（v0.5.5，2026-08-19，含 FR12 提示词端点 10 项；单测强制 memory 后端与 CI 一致）。本节表格其余数字为 v0.3.1 时期历史快照（340/6/0），仅作演进记录 |
 
 ### 11.2 测试执行
 

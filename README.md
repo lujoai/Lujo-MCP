@@ -71,9 +71,9 @@ npm install -g @lujoai/lujo-mcp
 
 ## 当前状态（Current Status）
 
-**Lujo-MCP v0.5.4**（npm `@lujoai/lujo-mcp@0.5.4`，开箱即用）
+**Lujo-MCP v0.5.5**（npm `@lujoai/lujo-mcp@0.5.5`，开箱即用）
 
-> 版本统一：app / npm / README / CHANGELOG / MCP serverInfo / git tag 均为 `0.5.4`。
+> 版本统一：app / npm / README / CHANGELOG / MCP serverInfo / git tag 均为 `0.5.5`。
 > 架构冻结（Architecture Frozen）：允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、RAG → Agent/Runtime/LLM/MCP。
 
 ## 能力分层（Capability Tiers）
@@ -285,7 +285,7 @@ LLM_PROVIDER=zhipu           # openai | zhipu | deepseek | custom（智谱免 VP
 
 ```bash
 curl http://localhost:8000/
-# → {"status":"ok","service":"Lujo-MCP","version":"0.5.4"}
+# → {"status":"ok","service":"Lujo-MCP","version":"0.5.5"}
 ```
 
 ## MCP Client 接入（MCP Client Setup）
@@ -380,11 +380,11 @@ python -m benchmark.runner quality        # QualityScorer 旁证评估
 | 指标      | 状态                                                                                                                                                                                                                                                                                                                             |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | MCP 工具数 | HTTP 18 / stdio 18（含 `repair_async` / `repair_result` / `resolve_stack`）                                                                                                                                                                                                                                                                   |
-| 测试基线    | 单元 `1134 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 48 项 + P1 Debug Experience RAG 26 项 + CODE\_REVIEW\_FIX\_PROMPT 回归测试 17 项 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek provider base_url 1 项 + 第 3 轮代码审查 P1/P2/P3 收口 24 项 + v0.5.3 KB 持久化 15 项 + P3-9 重连回归 5 项） |
+| 测试基线    | 单元 `1153 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 48 项 + P1 Debug Experience RAG 26 项 + CODE\_REVIEW\_FIX\_PROMPT 回归测试 17 项 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek provider base_url 1 项 + 第 3 轮代码审查 P1/P2/P3 收口 24 项 + v0.5.3 KB 持久化 15 项 + P3-9 重连回归 5 项 + v0.5.5 FR12 提示词端点 10 项；单测已强制 memory 后端与 CI 一致） |
 | 存储后端    | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境                                                                                                                                                                                                                                                                                    |
 | 稳定性能力   | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证                                                                                                                                                                                                                                                                    |
 | 安全能力    | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护                                                                                                                                                                                                                                               |
-| 当前阶段    | Phase 0-6 全部完成；Phase 7 智能化（指纹知识库 + 向量检索 RAG in-process + Qdrant 语义召回 + AI Debug Agent Phase 1 单 Agent + Phase 2 多 Agent DAG）+ Phase 8 实时观测增强（Dashboard 实时 SSE 推送 `DASH-SSE-001`）均已落地；**v0.5.0 已发布**（2026-08-13：DebugContext 7→20 字段 Schema 对齐、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；**v0.5.1 已发布**（2026-08-15：Source Map 解析纯 Python VLQ 解码 + 上传/磁盘双通道 + `resolve_stack` 工具 18/18 + Quality/Benchmark A/B 实证，默认关闭；Browser SDK column 保留 + release 透传；deepseek provider base_url 修复）；**v0.5.2 已发布**（2026-08-15：品牌统一 ai-debug-mcp → lujo-mcp，MCP server 名/logger/OTel service name/配置示例/License 署名 LujoAI）；**v0.5.3 已发布**（2026-08-18：RAG 知识库 PostgreSQL 持久化 + kb_entries 表跨重启保留 learned 经验 + 数据库改名 lujo_mcp + P3-9 pg_store 重连缺陷修复）；**v0.5.4 已发布**（2026-08-18：工程收口 + 文档补全 —— 分发链 smoke + SDK JS 契约测试纳入 CI + API 参考/SDK 手册 + CSP 统一） |
+| 当前阶段    | Phase 0-6 全部完成；Phase 7 智能化（指纹知识库 + 向量检索 RAG in-process + Qdrant 语义召回 + AI Debug Agent Phase 1 单 Agent + Phase 2 多 Agent DAG）+ Phase 8 实时观测增强（Dashboard 实时 SSE 推送 `DASH-SSE-001`）均已落地；**v0.5.0 已发布**（2026-08-13：DebugContext 7→20 字段 Schema 对齐、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；**v0.5.1 已发布**（2026-08-15：Source Map 解析纯 Python VLQ 解码 + 上传/磁盘双通道 + `resolve_stack` 工具 18/18 + Quality/Benchmark A/B 实证，默认关闭；Browser SDK column 保留 + release 透传；deepseek provider base_url 修复）；**v0.5.2 已发布**（2026-08-15：品牌统一 ai-debug-mcp → lujo-mcp，MCP server 名/logger/OTel service name/配置示例/License 署名 LujoAI）；**v0.5.3 已发布**（2026-08-18：RAG 知识库 PostgreSQL 持久化 + kb_entries 表跨重启保留 learned 经验 + 数据库改名 lujo_mcp + P3-9 pg_store 重连缺陷修复）；**v0.5.4 已发布**（2026-08-18：工程收口 + 文档补全 —— 分发链 smoke + SDK JS 契约测试纳入 CI + API 参考/SDK 手册 + CSP 统一）；**v0.5.5 已发布**（2026-08-19：FR12 调试提示词端点 —— `GET /api/debug/prompt` 纯文本提示词一键复制 + `PROMPT_TEMPLATE_PATH` 自定义模板 + 单测存储后端隔离修复） |
 | 权威口径    | 项目功能状态与启用验证以内部文档为准                                                                                                                                                                                                                                                                                                             |
 | 安全审查    | 安全加固代码已落地，实际启用边界与前提条件以运行环境配置为准                                                                                                                                                                                                                                                                                                 |
 

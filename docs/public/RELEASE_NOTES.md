@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.5.4（2026-08-18）**。工程收口 + 文档补全版本：分发链 smoke 校验 + SDK JS 契约单测纳入 CI（防接口失联）、新增 API 参考手册与 SDK 使用手册、CSP 头统一覆盖、注释清理。无新功能、无 Breaking Change；v0.5.3 已发布（RAG 知识库 PostgreSQL 持久化 + 数据库改名 `lujo_mcp` + P3-9 pg_store 重连修复）。npm `latest` → `@lujoai/lujo-mcp@0.5.4`。
-> 测试基线：单元 **1134 passed / 6 skipped / 0 failed**（v0.5.3 基线）+ e2e 10 passed。
+> 最新版本：**v0.5.5（2026-08-19）**。FR12 调试提示词端点功能版本：新增 `GET /api/debug/prompt`（纯文本提示词，非 MCP 场景一键复制）+ `PROMPT_TEMPLATE_PATH` 自定义模板 + 单测存储后端隔离修复（单测强制 memory 后端，与 CI 一致）。无 Breaking Change；v0.5.4 已发布（工程收口 + 文档补全）。npm `latest` → `@lujoai/lujo-mcp@0.5.5`。
+> 测试基线：单元 **1153 passed / 6 skipped / 0 failed**（v0.5.4 基线 1134 + FR12 新增 10 项 + 3 项单测隔离修复转绿）+ e2e 10 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 >
@@ -13,9 +13,51 @@
 > - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
 > - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.5.4  
-**Release Date / 发布日期**: 2026-08-18  
-**Codename / 代号**: 工程收口 — Engineering Consolidation
+**Version / 版本**: v0.5.5  
+**Release Date / 发布日期**: 2026-08-19  
+**Codename / 代号**: 调试提示词 — Debug Prompt
+
+---
+
+## v0.5.5（2026-08-19）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.5.5 是 Lujo-MCP 的 **FR12 调试提示词端点**功能版本：把「真实运行现场 → 可直接粘贴给 AI 助手的纯文本提示词」一键生成，补齐非 MCP 场景的使用闭环。同时修复了单元测试的存储后端隔离问题（此前本机 `.env STORAGE_BACKEND=postgresql` 会让 3 项单测受 PG 数据累积/路径错配影响而失败，现已强制 memory 后端，与 CI 一致）。无 Breaking Change，测试基线 1134 → **1153 passed / 6 skipped / 0 failed**。
+
+#### ✨ 新增功能
+
+- **调试提示词生成端点**（FR12）：`GET /api/debug/prompt?request_id={id}`（viewer 可读）——基于已采集的完整调试上下文（异常帧/源码片段/运行时/git 归因/网络链等），脱敏 + 截断后套用提示词模板，返回可一键复制的纯文本提示词，便于非 MCP 场景直接粘贴给任意 AI 助手分析
+- **提示词模板可配置**（FR12）：`PROMPT_TEMPLATE_PATH` 配置项——支持自定义模板文件（UTF-8，`string.Template` 语法，占位符 `$context` / `$request_id`）；为空或文件不存在时回退内置默认模板；`safe_substitute` 对模板中非法 `$xxx` 原样保留不抛错
+
+#### 🐛 Bug 修复
+
+- **单元测试存储后端隔离**：`tests/unit/conftest.py` 强制 memory 后端（改写 `settings.storage_backend` + 重置 storage factory 缓存）——修复 3 项本机预存失败（`test_batch_writes`×2：固定 request_id 在 PG 跨运行累积致 len 断言失真；`test_spec_store`×1：`_add_log` 注入 traces 表 vs PG 后端恢复走专用 specs 表致数据不可见）。需真实 PG 行为的测试（`test_factory` / `test_storage` 等）用 monkeypatch 显式覆盖，不受影响
+
+#### 🧪 测试
+
+- 新增 FR12 单测 10 项（`tests/unit/test_prompt_builder.py`：模板渲染/脱敏/自定义模板/缺失回退/非法 `$`/端点 200·404·422）；Python 单元基线 1134 → **1153 / 6 / 0**
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.5.5 is Lujo-MCP's **FR12 debug prompt endpoint** release: it generates a copy-paste-ready plain-text debugging prompt from a captured runtime context, closing the loop for non-MCP workflows. It also fixes unit-test storage-backend isolation (local `.env STORAGE_BACKEND=postgresql` made 3 unit tests fail due to PG data accumulation / path mismatch; unit tests now force the memory backend, matching CI). No breaking changes; test baseline 1134 → **1153 passed / 6 skipped / 0 failed**.
+
+#### ✨ New Features
+
+- **Debug prompt endpoint** (FR12): `GET /api/debug/prompt?request_id={id}` (viewer) — renders the full captured debug context (exception frames / code snippets / runtime / git blame / network trace, etc.) after redaction + truncation into a copy-paste plain-text prompt via a template
+- **Configurable prompt template** (FR12): `PROMPT_TEMPLATE_PATH` — custom UTF-8 template file with `$context` / `$request_id` placeholders; falls back to the built-in template when empty/missing; stray `$xxx` kept verbatim via `safe_substitute`
+
+#### 🐛 Bug Fixes
+
+- **Unit-test storage-backend isolation**: `tests/unit/conftest.py` forces the memory backend (mutates `settings.storage_backend` + resets the storage factory cache) — fixes 3 local pre-existing failures (`test_batch_writes`×2 from PG accumulation on fixed request IDs; `test_spec_store`×1 from `_add_log` seeding the traces table while the PG backend restores from the dedicated specs table). Tests that genuinely exercise PG (e.g. `test_factory` / `test_storage`) still override via monkeypatch.
+
+#### 🧪 Testing
+
+- 10 new FR12 unit tests (`tests/unit/test_prompt_builder.py`); Python unit baseline 1134 → **1153 / 6 / 0**
 
 ---
 

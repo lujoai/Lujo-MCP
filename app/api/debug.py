@@ -3,17 +3,18 @@
 import logging
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 
 from app.config import settings
 from app.runtime.core.logs import create_request_id, add_log, get_logs
 from app.runtime.core.session import session_manager
-from app.runtime.context.builder import build_context
+from app.runtime.context.builder import build_context, build_debug_context
 from app.runtime.collectors.runtime import collect_runtime_snapshot
 from app.runtime.collectors.stacktrace import capture_exception
 from app.llm.analyzer import analyze, analyze_stream_async
+from app.llm.prompt_builder import build_debug_prompt
 from app.llm.analysis_queue import get_analysis_queue, QueueFullError
 from app.agent.repair_queue import get_repair_queue, QueueFullError as RepairQueueFullError
 from app.schemas import (
@@ -405,3 +406,38 @@ def debug_token():
     if not settings.debug_endpoints_enabled:
         raise HTTPException(status_code=404, detail="Not found")
     return {"token": "abc123", "user_id": 123, "username": "admin"}
+
+
+@router.get("/prompt", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
+def debug_prompt(request_id: str = Query(..., description="目标调试流程的 request_id")):
+    """FR12：生成可一键复制的纯文本调试提示词（非 MCP 场景用）。
+
+    基于该 request_id 已采集的完整调试上下文（异常帧/源码片段/运行时/git 归因等），
+    脱敏 + 截断后套用提示词模板，返回可直接复制给任意 AI 助手分析的纯文本。
+    模板默认内置，可用 ``PROMPT_TEMPLATE_PATH`` 自定义（占位符 ``$context`` / ``$request_id``）。
+    """
+    try:
+        trace = get_logs(request_id)
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    if not trace:
+        raise HTTPException(status_code=404, detail=f"找不到请求 {request_id}")
+
+    try:
+        debug_context = build_debug_context(trace_id=request_id, include_runtime=True)
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    if debug_context is None:
+        raise HTTPException(status_code=404, detail=f"找不到请求 {request_id}")
+
+    try:
+        prompt = build_debug_prompt(debug_context.model_dump())
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return JSONResponse(content={"request_id": request_id, "prompt": prompt})

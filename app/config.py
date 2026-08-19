@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # 局部变量截断：每个 frame 最多展示 N 个变量
     max_locals_per_frame: int = 8
 
+    # ── 调试提示词（FR12）──
+    # GET /api/debug/prompt 的模板文件路径；支持 $context / $request_id 占位符。
+    # 为空或文件不存在时回退到内置默认模板（string.Template 语法）。
+    prompt_template_path: str = ""
+
     # ── 代码定位（FR11）──
     # 报错行上下各读取多少行源码片段
     code_context_lines: int = 5
