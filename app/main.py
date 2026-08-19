@@ -424,16 +424,9 @@ def internal_health(request: Request):
     }
 
 
-# FIX: P0-4 给 HTML/JS 响应加 CSP 头。
-# 页面使用内联 <script>，故 script-src 需放行 'unsafe-inline'；
-# default-src 'self' 仍阻止外域资源/脚本加载（纵深防御，主防线为 esc() 转义）。
-_CSP_HEADER = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
-
-
 def _html_response(content: str, status_code: int = 200) -> HTMLResponse:
-    resp = HTMLResponse(content, status_code=status_code)
-    resp.headers["Content-Security-Policy"] = _CSP_HEADER
-    return resp
+    # CSP 头由 SecurityHeadersMiddleware 统一设置（SEC-1），此处不再重复
+    return HTMLResponse(content, status_code=status_code)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

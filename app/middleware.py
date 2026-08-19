@@ -119,11 +119,19 @@ class MaxBodySizeMiddleware(BaseHTTPMiddleware):
 
 
 # ── 安全响应头中间件 ──
+# FIX: SEC-1 统一所有响应类型（HTML/JSON/JS 等）的 CSP 头 —— 此前仅在
+# dashboard/demo 的 HTML 响应上单独设置，其余响应未覆盖。
+# 页面使用内联 <script>，故 script-src 需放行 'unsafe-inline'；
+# default-src 'self' 仍阻止外域资源/脚本加载（纵深防御，主防线为 esc() 转义）。
+_CSP_HEADER = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """为所有响应补充基础安全头"""
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy", _CSP_HEADER)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")

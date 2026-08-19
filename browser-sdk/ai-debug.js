@@ -1268,7 +1268,7 @@
    *
    * 自动从环形缓冲取出最近 N 条 network/UI 事件（N = cfg.silentFailureContextSize，默认 20）
    * 拼装为 observed_events 数组与 trace_id 一起上报，服务端会按 kind 分类入库，
-   * 保证 AI 调试时通过 get_debug_context 能拿到完整事件链。
+   * 保证 AI 调试时通过 MCP `context` 工具能拿到完整事件链。
    *
    * @param {object} payload
    * @param {string} payload.description - 静默失败描述（必填）
