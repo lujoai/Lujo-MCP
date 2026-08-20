@@ -285,7 +285,7 @@ LLM_PROVIDER=zhipu           # openai | zhipu | deepseek | custom（智谱免 VP
 
 ```bash
 curl http://localhost:8000/
-# → {"status":"ok","service":"Lujo-MCP","version":"0.5.5"}
+# → {"status":"ok","service":"Lujo-MCP","version":"0.6.0"}
 ```
 
 ## MCP Client 接入（MCP Client Setup）

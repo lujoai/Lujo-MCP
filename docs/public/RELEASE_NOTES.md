@@ -1,21 +1,39 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.5.5（2026-08-19）**。FR12 调试提示词端点功能版本：新增 `GET /api/debug/prompt`（纯文本提示词，非 MCP 场景一键复制）+ `PROMPT_TEMPLATE_PATH` 自定义模板 + 单测存储后端隔离修复（单测强制 memory 后端，与 CI 一致）。无 Breaking Change；v0.5.4 已发布（工程收口 + 文档补全）。npm `latest` → `@lujoai/lujo-mcp@0.5.5`。
-> 测试基线：单元 **1153 passed / 6 skipped / 0 failed**（v0.5.4 基线 1134 + FR12 新增 10 项 + 3 项单测隔离修复转绿）+ e2e 10 passed。
+> 最新版本：**v0.6.0（2026-08-21）**。架构重构与生产就绪里程碑版本：完成 `pg_store.py` 与 `analyzer.py` 的 God Object 单一职责拆解，补齐 Prometheus 细粒度业务指标体系与生产部署编排套件。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.0`。
+> 测试基线：单元 **1161 passed / 6 skipped / 0 failed** + e2e 10 passed，文档链接 100% 校验通过。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
->
-> 历史 v0.3.0 之后的主干演进（已并入 v0.4.0）：
-> - Browser SDK 已继续补齐 V3 网络错误自动标记、V6 UI 静默失败自动检测
-> - 调试分析链路已新增指纹知识库基础能力（命中优先 + 自动沉淀）
-> - Dashboard 实时 SSE 推送（DASH-SSE-001，2026-07-30）：`DashboardEventBus` 广播总线 + SSE 端点 + 前端 EventSource
-> - AI Debug Agent Phase 2 多 Agent DAG（AGENT-002，2026-07-30）：`RepairAgent` + `GitAgent`/`TestAgent`/`SecurityAgent` 并行审查
-> - MCP 工具数增至 17（新增 `repair_async` / `repair_result`）
-> - ⚠️ **beta-release 全量审查（2026-07-27）**：发现 P0×6 + P1×9 + P2×12 + 文档×5 = 32 项，阻断上线和开源。健康度 8.5/10 → 6.5/10。详见内部审计报告
 
-**Version / 版本**: v0.5.5  
-**Release Date / 发布日期**: 2026-08-19  
-**Codename / 代号**: 调试提示词 — Debug Prompt
+**Version / 版本**: v0.6.0  
+**Release Date / 发布日期**: 2026-08-21  
+**Codename / 代号**: 架构蜕变与生产就绪 — Architecture Refactor & Production Readiness
+
+---
+
+## v0.6.0（2026-08-21）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.6.0 是 Lujo-MCP 的重大**架构重构与生产就绪里程碑版本**。在本版本中，彻底拆解了历史遗留的两个 God Object（`pg_store.py` 拆解为 `pg_executor` + 5 个分治 Store + 分区管理模块；`analyzer.py` 拆解为客户端工厂、缓存、注入防护、上下文准备等 6 个单一职责子模块），消除了所有隐式跨模块依赖和样板代码。同时补齐了 Prometheus 细粒度可观测性指标大盘，优化了多平台分发链与生产配置套件。无 Breaking Change，测试基线提升至 **1161 passed / 6 skipped / 0 failed**。
+
+#### ✨ 核心重构与优化
+
+- **PostgreSQL 存储分治重构**：
+  - `pg_executor.py`：统一管理连接池生命周期、自动重试与熔断机制，封装 `execute_sql` 与 `query_sql`，彻底消除 5 个 Store 中重复的连接样板。
+  - `pg_partitions.py`：标准化 traces 月度 RANGE 分区预创建与自动归档逻辑。
+  - `pg_trace_store.py` / `pg_session_store.py` / `pg_error_store.py` / `pg_spec_store.py` / `pg_kb_store.py`：5 大 Store 模块独立解耦。
+- **LLM 分析引擎模块化拆分**：
+  - `app/llm/clients.py`：统一提供同步与异步 OpenAI 客户端分发工厂。
+  - `app/llm/cache.py`：独立管理 L1 LRU + L2 Redis 多级缓存与错误特征指纹。
+  - `app/llm/injection_guard.py`：规范化 Prompt Injection 防护（`wrap_evidence` / `INJECTION_GUARD`）。
+  - `app/llm/context_prep.py`：收敛错误提取、脱敏、截断与 Prompt 构建。
+  - `app/llm/output_schema.py` & `app/llm/kb_integration.py`：独立处理 Schema 净化校验与三级知识库/向量 RAG 召回。
+- **可观测性与生产部署加固**：
+  - 细化 Prometheus 监控度量（LLM Token 消耗、KB 缓存命中率、MCP 工具调用耗时、存储池排队时间）。
+  - 完善 Dockerfile 与 Docker Compose 生产部署模板。
 
 ---
 

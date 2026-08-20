@@ -1,6 +1,6 @@
 {
   "name": "@lujoai/lujo-mcp-osx-arm64",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "Lujo-MCP binary for darwin-arm64 (auto-installed via the meta package).",
   "license": "MIT",
   "os": [
