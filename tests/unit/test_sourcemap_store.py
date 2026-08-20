@@ -1,4 +1,4 @@
-"""sourcemap_store 单元测试 —— 上传存储 TTL/LRU、自动选路（上传/磁盘/关闭）、端点行为。"""
+﻿"""sourcemap_store 单元测试 —— 上传存储 TTL/LRU、自动选路（上传/磁盘/关闭）、端点行为。"""
 
 from __future__ import annotations
 
@@ -163,6 +163,7 @@ class TestResolveFramesAuto:
     def test_disk_channel_outside_whitelist_rejected(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "sourcemap_enabled", True)
         monkeypatch.setattr(settings, "sourcemap_path_prefix", str(tmp_path))
+        monkeypatch.setattr(settings, "whitelist_path_prefix", str(tmp_path / "isolated"))
         # 白名单不含 tmp_path（默认收敛到 cwd）
         (tmp_path / "app.9f3b2c.js.map").write_text(json.dumps(_valid_map()), encoding="utf-8")
 

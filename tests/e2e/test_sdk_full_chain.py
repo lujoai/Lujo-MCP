@@ -1,4 +1,4 @@
-"""
+﻿"""
 Browser SDK V3/V6 端到端联调测试
 
 验证：
@@ -21,7 +21,8 @@ import pytest
 from playwright.sync_api import sync_playwright, Page, Browser
 
 BASE_URL = "http://127.0.0.1:8000"
-API_KEY = "test_secret_key_456"
+from app.config import settings
+API_KEY = settings.api_key or "test_secret_key_456"
 
 
 @pytest.fixture(scope="module")

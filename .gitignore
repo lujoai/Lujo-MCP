@@ -68,3 +68,6 @@ auto_test_demo.py
 demo.py
 test_full_flow.py
 test_output.txt
+
+.pytest_tmp/
+.claude/

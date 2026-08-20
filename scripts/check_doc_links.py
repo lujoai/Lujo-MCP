@@ -24,6 +24,9 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
+if sys.stdout.encoding is None or sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 ROOT = Path(__file__).resolve().parent.parent
 
 

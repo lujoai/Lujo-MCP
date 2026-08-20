@@ -142,6 +142,9 @@ def truncate_context(context: dict, max_tokens: "int | None" = None) -> dict:
     # 最终截断：序列化后按字符数裁剪
     serialized = json.dumps(context, ensure_ascii=False, default=str)
     if len(serialized) > max_chars:
+        # 暂存旧值，截断后恢复（新 dict 不含 input/output）
+        old_input = context.get("input")
+        old_output = context.get("output")
         context = {
             "request_id": context.get("request_id"),
             "flow": context.get("flow"),
@@ -150,10 +153,9 @@ def truncate_context(context: dict, max_tokens: "int | None" = None) -> dict:
             "_truncated": True,
             "_note": f"上下文过长已截断（{len(serialized)} → {max_chars} 字符）",
         }
-        # 不保留完整的 input/output/runtime
-        if context.get("input"):
-            context["input"] = str(context["input"])[:500]
-        if context.get("output"):
-            context["output"] = str(context["output"])[:500]
+        if old_input:
+            context["input"] = str(old_input)[:500]
+        if old_output:
+            context["output"] = str(old_output)[:500]
 
     return context

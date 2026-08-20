@@ -1,4 +1,4 @@
-"""PG 存储执行基础设施 —— 连接池、重连重试、熔断器、DDL 初始化、连接便捷封装。
+﻿"""PG 存储执行基础设施 —— 连接池、重连重试、熔断器、DDL 初始化、连接便捷封装。
 
 从 pg_store.py 拆出（god object 重构）：本模块只关心"如何安全地拿到连接并执行 SQL"，
 不包含任何业务表 CRUD。5 个 PG*Store 类与 errors.py 聚合层均基于本模块。
@@ -22,6 +22,7 @@ import psycopg2
 import psycopg2.pool
 
 from app.config import settings
+from app.observability import record_storage_operation, record_pg_retry
 from app.runtime.core.storage._pg_errors import sanitize_pg_error
 from app.runtime.core.storage.ddl import (
     DDL_TRACES,
@@ -263,6 +264,7 @@ def _execute_with_retry(
                     except Exception:
                         pass
                     conn = _get_conn()
+                    record_pg_retry("execute")
                     logger.warning(f"PG 操作重试 ({attempt + 1}/{max_retries}): {e}")
                     time.sleep(0.1)
                 else:
@@ -330,6 +332,7 @@ def _query_with_retry(
                     except Exception:
                         pass
                     conn = _get_conn()
+                    record_pg_retry("query")
                     logger.warning(f"PG 查询重试 ({attempt + 1}/{max_retries}): {e}")
                     time.sleep(0.1)
                 else:

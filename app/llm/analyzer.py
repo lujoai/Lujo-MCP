@@ -1,4 +1,4 @@
-"""LLM 错误分析仪（编排层）—— 重试、fallback、熔断器、流式输出。
+﻿"""LLM 错误分析仪（编排层）—— 重试、fallback、熔断器、流式输出。
 
 god object 重构（v0.5.5+）：原 1175 行拆分为 7 个单一职责模块，本文件
 只保留**调用编排**：
@@ -389,13 +389,9 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
 
     messages, context = _build_llm_messages(context)
 
-    async def _call_llm():
-        return await _retry_call_async(
-            client, model_name, messages,
-            temperature=settings.llm_temperature,
-            max_retries=settings.llm_max_retries,
-        )
-
+    # NOTE: pybreaker.CircuitBreaker.call 不支持协程，熔断器路径通过
+    # asyncio.to_thread 使用同步客户端 + _retry_call，保证熔断器状态机
+    # 正确计数；非熔断器路径使用原生 AsyncOpenAI。
     start = time.time()
     try:
         cb = _get_llm_circuit_breaker()
@@ -410,10 +406,12 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
                 ),
             )
         else:
-            result = await _call_llm()
+            result = await _retry_call_async(
+                client, model_name, messages,
+                temperature=settings.llm_temperature,
+                max_retries=settings.llm_max_retries,
+            )
     except Exception as exc:
-        # pybreaker 未安装时为 None；此时无熔断器异常，须原样抛出，避免
-        # 求值 `pybreaker.CircuitBreakerError` 时因 None 触发 AttributeError 掩盖真实异常。
         if pybreaker and isinstance(exc, pybreaker.CircuitBreakerError):
             logger.warning("LLM 熔断器已触发，返回 fallback 结果")
             return _llm_fallback_result()

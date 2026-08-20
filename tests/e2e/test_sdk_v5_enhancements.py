@@ -1,4 +1,4 @@
-"""
+﻿"""
 Browser SDK V5 增强功能 E2E 测试
 
 验证：
@@ -20,7 +20,8 @@ import pytest
 from playwright.sync_api import sync_playwright, Page, Browser
 
 BASE_URL = "http://127.0.0.1:8000"
-API_KEY = "test_secret_key_456"
+from app.config import settings
+API_KEY = settings.api_key or "test_secret_key_456"
 
 
 @pytest.fixture(scope="module")
@@ -101,20 +102,18 @@ def test_gzip_compression_threshold(page: Page):
     assert len(large_body) > 4096, "Large payload should be > 4KB"
 
     # 通过 API 直接测试压缩传输
-    import requests
-    
     # 测试未压缩请求
-    resp = requests.post(
+    resp = page.request.post(
         f"{BASE_URL}/ingest/batch",
         headers={"X-API-Key": API_KEY, "Content-Type": "application/json"},
         data=small_body
     )
-    assert resp.status_code == 200
+    assert resp.status == 200
     print(f"Uncompressed request: {resp.json()}")
 
     # 测试压缩请求
     compressed_body = gzip.compress(large_body.encode("utf-8"))
-    resp = requests.post(
+    resp = page.request.post(
         f"{BASE_URL}/ingest/batch",
         headers={
             "X-API-Key": API_KEY,
@@ -123,7 +122,7 @@ def test_gzip_compression_threshold(page: Page):
         },
         data=compressed_body
     )
-    assert resp.status_code == 200
+    assert resp.status == 200
     print(f"Compressed request: {resp.json()}")
 
 
