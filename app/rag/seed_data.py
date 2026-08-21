@@ -254,6 +254,138 @@ _CONNECTION_ERROR_CASES = [
     ),
 ]
 
+# ── HTTP & Web / API（5 条）────────────────────────────────────────
+_HTTP_WEB_CASES = [
+    _case(
+        "httpx.HTTPStatusError",
+        "Server error '502 Bad Gateway' for url 'https://api.example.com/v1/data'",
+        "seed:http:502_bad_gateway",
+        "反向代理（Nginx/Gateway）无法连接到后端上游服务，上游服务崩溃或未启动",
+        "检查后端容器/服务运行状态与端口，配置健康检查并引入指数退避重试",
+        ["http", "502", "gateway", "network"],
+    ),
+    _case(
+        "httpx.HTTPStatusError",
+        "Client error '401 Unauthorized' for url 'https://api.example.com/v1/auth'",
+        "seed:http:401_unauthorized",
+        "API 请求认证失败：API Key 缺失、过期、格式错误或鉴权 Header 名称不匹配",
+        "检查 Authorization Bearer Token 或 X-API-Key 配置，确认密钥有效期并自动刷新",
+        ["http", "401", "auth", "security"],
+    ),
+    _case(
+        "httpx.HTTPStatusError",
+        "Client error '429 Too Many Requests' for url 'https://api.example.com/v1/chat'",
+        "seed:http:429_rate_limit",
+        "请求超出下游服务速率配额限制或并发上限",
+        "解析 Retry-After 响应头，增加客户端限流节流与异步队列缓冲",
+        ["http", "429", "rate-limit", "throttle"],
+    ),
+    _case(
+        "ssl.SSLCertVerificationError",
+        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate",
+        "seed:ssl:cert_verify_failed",
+        "客户端缺失根证书信任链或系统证书未正确安装，在企业代理环境下常见",
+        "更新 certifi 证书包，或在受控内网环境中配置自定义 CA 证书路径",
+        ["ssl", "tls", "certificate", "security"],
+    ),
+    _case(
+        "CORSError",
+        "Access to fetch at 'https://api.example.com' from origin 'https://app.example.com' has been blocked by CORS policy",
+        "seed:web:cors_blocked",
+        "浏览器同源策略拦截：服务端未返回 Access-Control-Allow-Origin 响应头或缺少指定方法",
+        "在服务端配置 CORS 中间件（如 CORSMiddleware），允许对应的前端 Origin 及 Header",
+        ["cors", "browser", "security", "frontend"],
+    ),
+]
+
+# ── Database & Async（5 条）────────────────────────────────────────
+_DB_ASYNC_CASES = [
+    _case(
+        "asyncio.TimeoutError",
+        "Task timed out after 30 seconds awaiting coroutine",
+        "seed:asyncio:task_timeout",
+        "异步任务或协程执行超时，可能因数据库死锁、外部 RPC 挂起或慢查询阻塞",
+        "使用 asyncio.wait_for 设置合理超时，并在慢查询/下游调用中设置连接及读写超时",
+        ["asyncio", "timeout", "concurrency"],
+    ),
+    _case(
+        "asyncpg.exceptions.UniqueViolationError",
+        "duplicate key value violates unique constraint 'users_pkey'",
+        "seed:db:unique_violation",
+        "数据库主键或唯一索引冲突，在并发写入或重复重试时产生",
+        "使用 ON CONFLICT DO UPDATE (Upsert) 或在应用层先做幂等存在性判断",
+        ["database", "postgres", "unique-constraint", "idempotency"],
+    ),
+    _case(
+        "asyncpg.exceptions.TooManyConnectionsError",
+        "remaining connection slots are reserved for non-replication superuser connections",
+        "seed:db:too_many_connections",
+        "数据库连接池耗尽，连接泄露（未及时归还连接）或突发高并发超出 max_connections",
+        "使用 async with 保证连接正确释放，合理配置连接池 pool_size 并启用 PgBouncer 连接池代理",
+        ["database", "postgres", "connection-pool", "resource-leak"],
+    ),
+    _case(
+        "redis.exceptions.ConnectionError",
+        "Error 111 connecting to redis:6379. Connection refused.",
+        "seed:redis:conn_refused",
+        "Redis 实例未启动、端口不通、密码错误或容器间网络不互通",
+        "检查 Redis 服务状态、网络组配置，并配置内存/降级缓存机制",
+        ["redis", "cache", "connection", "network"],
+    ),
+    _case(
+        "asyncio.CancelledError",
+        "Task was cancelled",
+        "seed:asyncio:task_cancelled",
+        "协程任务在执行过程中被外部显式取消（task.cancel()）或请求连接被客户端提前断开",
+        "在关键清理逻辑中使用 try...finally 或 asyncio.shield() 保护不可中断的状态提交操作",
+        ["asyncio", "cancelled", "async"],
+    ),
+]
+
+# ── Frontend & Browser（5 条）──────────────────────────────────────
+_FRONTEND_BROWSER_CASES = [
+    _case(
+        "TypeError",
+        "Cannot read properties of undefined (reading 'map')",
+        "seed:frontend:cannot_read_map",
+        "前端渲染列表时，后端接口返回空或尚未完成异步加载，变量为 undefined",
+        "使用可选链 (items ?? []).map(...) 或在渲染组件前添加骨架屏/Loading 状态",
+        ["frontend", "javascript", "null-safety", "react-vue"],
+    ),
+    _case(
+        "TypeError",
+        "Cannot read properties of null (reading 'addEventListener')",
+        "seed:frontend:null_add_event_listener",
+        "DOM 未完成挂载时尝试通过 document.getElementById 获取元素并绑定事件",
+        "在 DOMContentLoaded / Vue onMounted / React useEffect 钩子中执行 DOM 绑定",
+        ["frontend", "dom", "lifecycle", "javascript"],
+    ),
+    _case(
+        "ReferenceError",
+        "process is not defined",
+        "seed:frontend:process_not_defined",
+        "在前端 Vite / Webpack 浏览器打包产物中使用了 Node.js 专属的 process.env",
+        "改用 import.meta.env（Vite）或在构建工具中配置 DefinePlugin 注入环境变量",
+        ["frontend", "bundler", "vite", "node-vs-browser"],
+    ),
+    _case(
+        "DOMException",
+        "Failed to execute 'setItem' on 'Storage': Setting the value exceeded the quota.",
+        "seed:frontend:localstorage_quota",
+        "浏览器 LocalStorage 存储达到 5MB 上限，未能写入新的暂存日志",
+        "实现基于 LRU 的自动淘汰清理机制，或对大体量日志启用 IndexedDB 存储",
+        ["frontend", "localstorage", "quota", "storage"],
+    ),
+    _case(
+        "TypeError",
+        "Failed to fetch",
+        "seed:frontend:failed_to_fetch",
+        "浏览器端 fetch 请求失败，由于断网、DNS 失败、CORS 阻断或 Mixed Content (HTTPS 调 HTTP)",
+        "捕获 fetch 异常，统一在 SDK 增加离线缓存与网络状态监测重试",
+        ["frontend", "fetch", "network-error", "browser"],
+    ),
+]
+
 # ── 其他（5 条）────────────────────────────────────────────────────
 _OTHER_CASES = [
     _case(
@@ -307,6 +439,9 @@ SEED_CASES: list[dict] = [
         + _KEY_ERROR_CASES
         + _ATTRIBUTE_ERROR_CASES
         + _CONNECTION_ERROR_CASES
+        + _HTTP_WEB_CASES
+        + _DB_ASYNC_CASES
+        + _FRONTEND_BROWSER_CASES
         + _OTHER_CASES
     )
 ]
@@ -318,6 +453,9 @@ SEED_COVERAGE: dict[str, int] = {
     "KeyError": len(_KEY_ERROR_CASES),
     "AttributeError": len(_ATTRIBUTE_ERROR_CASES),
     "ConnectionError": len(_CONNECTION_ERROR_CASES),
+    "HTTP & Web": len(_HTTP_WEB_CASES),
+    "Database & Async": len(_DB_ASYNC_CASES),
+    "Frontend & Browser": len(_FRONTEND_BROWSER_CASES),
     "其他": len(_OTHER_CASES),
 }
 

@@ -221,18 +221,26 @@ def test_type_fingerprint_strips_module_prefix():
 
 
 def test_load_seed_cases_populates_knowledge_base(monkeypatch):
-    """种子知识应可批量导入，覆盖 30 条且精确指纹可命中"""
+    """种子知识应可批量导入，覆盖 45 条且各类别精确指纹可命中"""
     from app.rag.knowledge_base import KnowledgeBaseStore
     from app.rag.seed_data import SEED_CASES
 
     store = KnowledgeBaseStore()
     loaded = store.load_seed_cases(SEED_CASES)
-    assert loaded == 30
-    assert store.size() == 30
-    # 精确指纹命中（L1）
+    assert loaded == 45
+    assert store.size() == 45
+    # 精确指纹命中（L1）- 基础类型
     entry = store.get("seed:valueerror:int_literal")
     assert entry is not None
     assert entry["analysis"]["exception_type"] == "ValueError"
+    # 精确指纹命中 - HTTP / Web
+    http_entry = store.get("seed:http:502_bad_gateway")
+    assert http_entry is not None
+    assert http_entry["analysis"]["exception_type"] == "httpx.HTTPStatusError"
+    # 精确指纹命中 - Frontend / Browser
+    fe_entry = store.get("seed:frontend:cannot_read_map")
+    assert fe_entry is not None
+    assert fe_entry["analysis"]["exception_type"] == "TypeError"
 
 
 def test_debug_case_roundtrip():
