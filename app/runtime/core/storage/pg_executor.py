@@ -22,7 +22,7 @@ import psycopg2
 import psycopg2.pool
 
 from app.config import settings
-from app.observability import record_storage_operation, record_pg_retry
+from app.observability import record_pg_retry
 from app.runtime.core.storage._pg_errors import sanitize_pg_error
 from app.runtime.core.storage.ddl import (
     DDL_TRACES,

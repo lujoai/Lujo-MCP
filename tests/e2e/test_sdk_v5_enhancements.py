@@ -19,8 +19,9 @@ import time
 import pytest
 from playwright.sync_api import sync_playwright, Page, Browser
 
-BASE_URL = "http://127.0.0.1:8000"
 from app.config import settings
+
+BASE_URL = "http://127.0.0.1:8000"
 API_KEY = settings.api_key or "test_secret_key_456"
 
 

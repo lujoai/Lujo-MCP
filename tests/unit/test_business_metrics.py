@@ -1,6 +1,5 @@
 ﻿"""单元测试：v0.6.0 LLM 与存储层 Prometheus 业务监控指标"""
 
-import pytest
 from app.observability import (
     record_llm_request,
     record_llm_cache_hit,

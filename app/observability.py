@@ -16,7 +16,7 @@ import time
 import threading
 import logging
 from collections import defaultdict
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse

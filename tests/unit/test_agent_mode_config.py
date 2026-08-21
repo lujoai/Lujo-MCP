@@ -1,6 +1,5 @@
 """AgentMode 配置与调度解析单元测试。"""
 
-import pytest
 
 from app.config import AgentMode, Settings
 

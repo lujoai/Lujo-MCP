@@ -33,8 +33,6 @@ from app.llm.injection_guard import INJECTION_GUARD, wrap_evidence
 from app.llm.context_prep import (
     _prepare_context_for_llm,
     _get_error_fingerprint,
-    build_analysis_prompt,
-    truncate_context,
 )
 from app.llm.output_schema import _validate_and_normalize
 from app.llm.kb_integration import (
