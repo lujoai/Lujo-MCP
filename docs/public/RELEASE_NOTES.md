@@ -1,13 +1,30 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.6.0（2026-08-21）**。架构重构与生产就绪里程碑版本：完成 `pg_store.py` 与 `analyzer.py` 的 God Object 单一职责拆解，补齐 Prometheus 细粒度业务指标体系与生产部署编排套件。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.0`。
+> 最新版本：**v0.6.1（2026-08-21）**。架构重构与生产就绪里程碑版本：完成 `pg_store.py` 与 `analyzer.py` 的 God Object 单一职责拆解，补齐 Prometheus 细粒度业务指标体系与生产部署编排套件。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.1`。
 > 测试基线：单元 **1161 passed / 6 skipped / 0 failed** + e2e 10 passed，文档链接 100% 校验通过。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.6.0  
+**Version / 版本**: v0.6.1  
 **Release Date / 发布日期**: 2026-08-21  
 **Codename / 代号**: 架构蜕变与生产就绪 — Architecture Refactor & Production Readiness
+
+---
+
+## v0.6.1（2026-08-21）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.6.1 是智能排障 RAG 经验库扩充与多 Agent 协同上下文优化版本。在 v0.6.0 架构重构基石之上，进一步扩充了 50% 的真实生产排障案例，打通历史经验与 Multi-Agent 修复提示词，增强了 JSON-RPC 2.0 诊断语义，全仓全绿无回归。
+
+#### ✨ 核心特性
+
+- **RAG 种子排障案例由 30 条扩展至 45 条**：覆盖 HTTP 502/401/429/SSL/CORS、数据库 asyncio 超时/任务取消/PostgreSQL 唯一冲突/连接池打满/Redis 拒绝连接、前端 undefined.map/DOM 存储超限/process 缺失/fetch 异常。
+- **多 Agent 上下文装配与质量评分透传**：ContextAssembler 全面集成历史排障经验检索，RepairAgent 优先吸收验证过的历史修复策略，Coordinator 全流程透传可观测指标。
+- **安全与协议语义升级**：JSON-RPC 2.0 错误码标准化定义与 data 字段诊断支持，未捕获异常全局脱敏与标准错误体。
+- **测试与质量体系完善**：补充 Browser SDK JS 事件上报与脱敏单元测试，全仓 Ruff Lint 历史债务清零。
 
 ---
 

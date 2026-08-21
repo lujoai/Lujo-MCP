@@ -5,6 +5,26 @@
 
 ---
 
+## [0.6.1] - 2026-08-21
+
+> 智能排障 RAG 扩展与多 Agent 协同优化版本（RAG Experience & Multi-Agent Context Assembly Release）。测试基线全面扩充，零回归，无 Breaking Change。
+
+### 新增
+
+- **Debug Experience RAG 经验库扩充**：默认种子案例由 30 条扩展至 **45 条**，全面覆盖三大生产高频领域：
+  - HTTP & Web / 网络类：502 Bad Gateway、401 Unauthorized、429 Rate Limit、SSL 证书校验异常、CORS 跨域拦截
+  - Database & Async / 异步并发类：asyncio.TimeoutError 超时、asyncio.CancelledError 任务取消、PostgreSQL 唯一键冲突、连接池打满、Redis 拒绝连接
+  - Frontend & Browser / 浏览器类：undefined.map、null.addEventListener、localStorage 超限、process 未定义、fetch NetworkError
+- **多 Agent 排障经验召回与透传**：在 `context_assembler.py` 中打通历史排障经验检索，为 RepairAgent 补充高匹配排障经验与上下文质量评分透传，Coordinator 全流程透传可观测指标
+
+### 优化与安全
+
+- **JSON-RPC 错误码语义化与 data 诊断扩展**：在 `app/mcp/protocol/jsonrpc.py` 中标准化错误码常量并支持 `data` 字段，加固全局未捕获异常返回体与 trace_id 脱敏
+- **Browser SDK JS 自动化测试与 CI 集成**：新增 `browser-sdk/test/sdk-events.test.js` 并在 CI 流程中接入 SDK 事件上报、脱敏与批处理回归测试
+- **测试覆盖与代码洁癖治理**：清理全仓 ruff lint 历史欠账，补充 `stacktrace_api.py`、`factory.py` 专属单测
+
+---
+
 ## [0.6.0] - 2026-08-21
 
 > 架构重构与生产就绪里程碑版本（Architecture Refactor & Production Readiness Milestone）。测试基线 **1161 passed / 6 skipped / 0 failed**，文档链接 100% 校验通过，零回归，无 Breaking Change。
