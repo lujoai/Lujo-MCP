@@ -273,3 +273,38 @@ def test_normalization_strips_noise():
     b = normalize_message_for_similarity("invalid literal for int() with base 10: 'xyz'")
     assert a == b
     assert "12345" not in normalize_message_for_similarity("value 12345 is bad")
+
+
+def test_persist_verification_hit_and_miss_fallback():
+    """_persist_verification 在 update hit 时不 fallback，在 miss 时应 fallback 调用 upsert_kb_entry"""
+    from unittest.mock import MagicMock
+    from app.rag.knowledge_base import KnowledgeBaseStore
+
+    kb = KnowledgeBaseStore()
+    mock_store = MagicMock()
+    kb._persistent_store = lambda: mock_store
+
+    entry = {
+        "fingerprint": "fp-test-fallback",
+        "verify_count": 3,
+        "case_confidence": 0.85,
+        "updated_at": 1000.0,
+    }
+
+    # Case 1: Hit (hit=True) -> 不需要 fallback
+    mock_store.update_kb_verification.return_value = True
+    kb._persist_verification(entry)
+    mock_store.update_kb_verification.assert_called_once_with("fp-test-fallback", 3, 0.85, 1000.0)
+    mock_store.upsert_kb_entry.assert_not_called()
+
+    # Case 2: Miss (hit=False) -> 必须 fallback 调用 upsert_kb_entry(entry)
+    mock_store.reset_mock()
+    mock_store.update_kb_verification.return_value = False
+    kb._persist_verification(entry)
+    mock_store.update_kb_verification.assert_called_once_with("fp-test-fallback", 3, 0.85, 1000.0)
+    mock_store.upsert_kb_entry.assert_called_once_with(entry)
+
+    # Case 3: Exception -> 不向外抛出异常，优雅降级
+    mock_store.reset_mock()
+    mock_store.update_kb_verification.side_effect = RuntimeError("db unavailable")
+    kb._persist_verification(entry)  # 不应 raise

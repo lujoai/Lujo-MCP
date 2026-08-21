@@ -357,10 +357,12 @@ class KnowledgeBaseStore:
                 entry.get("updated_at", time.time()),
             )
             if not hit:
-                logger.debug(
-                    "KB→PG verification update miss (fingerprint=%s)",
+                # 记录在持久层缺失（如未持久化或冷启动），回退执行全量 upsert 保证经验不丢失
+                logger.info(
+                    "KB→PG verification update miss; falling back to upsert (fingerprint=%s)",
                     entry.get("fingerprint"),
                 )
+                store.upsert_kb_entry(entry)
         except Exception:
             logger.warning(
                 "KB→PG verification update failed (fingerprint=%s)",
