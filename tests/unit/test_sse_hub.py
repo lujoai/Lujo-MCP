@@ -177,3 +177,33 @@ async def test_publish_drops_oldest_when_queue_full(hub, mock_session):
         tail = q.get_nowait()
     assert tail is not None
     assert tail["seq"] == total - 1
+
+@pytest.mark.asyncio
+async def test_close_session_drops_oldest_when_queue_full(hub, mock_session):
+    """FIX: close_session 队列满时通过 _publish_locked 丢弃最旧消息放入 _CLOSE_EVENT，不抛 QueueFull"""
+    q = hub.subscribe(mock_session)
+
+    # 填满队列至 _QUEUE_MAXSIZE (256)
+    for i in range(SSEHub._QUEUE_MAXSIZE):
+        q.put_nowait({"msg": f"data-{i}"})
+
+    assert q.full()
+    assert q.qsize() == SSEHub._QUEUE_MAXSIZE
+
+    # close_session 应该安全调度 _publish_locked，丢弃最旧数据并将 _CLOSE_EVENT 放入队尾
+    closed_count = hub.close_session(mock_session)
+    assert closed_count == 1
+
+    # 让事件循环执行调度
+    await asyncio.sleep(0)
+
+    # 队列依然满，但队尾为 _CLOSE_EVENT
+    assert q.qsize() == SSEHub._QUEUE_MAXSIZE
+
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+
+    # 第一项已被移出，最后一项必须是 _CLOSE_EVENT
+    assert hub.is_close_event(items[-1])
+    assert items[0]["msg"] == "data-1"

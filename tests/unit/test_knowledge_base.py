@@ -308,3 +308,54 @@ def test_persist_verification_hit_and_miss_fallback():
     mock_store.reset_mock()
     mock_store.update_kb_verification.side_effect = RuntimeError("db unavailable")
     kb._persist_verification(entry)  # 不应 raise
+
+
+def test_load_seed_cases_preserves_case_confidence_and_verify_count():
+    """FIX: 验证从 seed_data 载入种子条目时，顶层与 entry 对象的 case_confidence 保持预设值（0.8）"""
+    kb = KnowledgeBaseStore()
+    from app.rag.seed_data import SEED_CASES
+    loaded = kb.load_seed_cases(SEED_CASES)
+    assert loaded == len(SEED_CASES)
+
+    for case in SEED_CASES:
+        fp = case.get("fingerprint")
+        entry = kb._entries.get(fp)
+        assert entry is not None
+        assert entry.case_confidence == 0.8
+        assert entry.verify_count == 0
+
+        d = kb.get(fp)
+        assert d is not None
+        assert d.get("case_confidence") == 0.8
+        assert d.get("verify_count") == 0
+
+
+def test_upsert_preserves_existing_verification_metrics():
+    """FIX: 验证重新 upsert 已有条目时，若未显式传参则保留原先积累的 verify_count 与 case_confidence"""
+    kb = KnowledgeBaseStore()
+    fp = "test:upsert_metrics:001"
+    kb.upsert(
+        fingerprint=fp,
+        analysis={"exception_type": "KeyError", "message": "missing key"},
+        fix_suggestion="add key",
+        source="test",
+        verify_count=3,
+        case_confidence=0.85,
+    )
+
+    entry1 = kb.get(fp)
+    assert entry1["verify_count"] == 3
+    assert entry1["case_confidence"] == 0.85
+
+    # 重新 upsert 更新 fix_suggestion
+    kb.upsert(
+        fingerprint=fp,
+        analysis={"exception_type": "KeyError", "message": "missing key modified"},
+        fix_suggestion="new suggestion",
+        source="test",
+    )
+
+    entry2 = kb.get(fp)
+    assert entry2["verify_count"] == 3
+    assert entry2["case_confidence"] == 0.85
+    assert entry2["fix_suggestion"] == "new suggestion"

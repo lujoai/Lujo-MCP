@@ -162,6 +162,8 @@ class KnowledgeBaseStore:
         analysis: dict[str, Any],
         fix_suggestion: str,
         source: str,
+        verify_count: int | None = None,
+        case_confidence: float | None = None,
     ) -> dict[str, Any]:
         if not fingerprint:
             raise ValueError("fingerprint is required")
@@ -183,6 +185,22 @@ class KnowledgeBaseStore:
                 self._remove_from_index(existing)
             created_at = existing.created_at if existing else now
 
+            if verify_count is None:
+                if existing is not None:
+                    verify_count = existing.verify_count
+                elif "verify_count" in analysis:
+                    verify_count = int(analysis.get("verify_count", 0))
+                else:
+                    verify_count = 0
+
+            if case_confidence is None:
+                if existing is not None:
+                    case_confidence = existing.case_confidence
+                elif "case_confidence" in analysis:
+                    case_confidence = float(analysis.get("case_confidence", 0.0))
+                else:
+                    case_confidence = 0.0
+
             entry = KnowledgeBaseEntry(
                 fingerprint=fingerprint,
                 analysis=copy.deepcopy(analysis),
@@ -192,6 +210,8 @@ class KnowledgeBaseStore:
                 updated_at=now,
                 normalized_fingerprint=normalized_fp,
                 type_fingerprint=type_fp,
+                verify_count=verify_count,
+                case_confidence=case_confidence,
             )
             self._entries[fingerprint] = entry
             self._entries.move_to_end(fingerprint)
@@ -458,6 +478,8 @@ class KnowledgeBaseStore:
                 analysis=analysis,
                 fix_suggestion=case.get("fix_suggestion", ""),
                 source=case.get("source", "seed"),
+                verify_count=case.get("verify_count"),
+                case_confidence=case.get("case_confidence"),
             )
             count += 1
         if settings.kb_vector_index_autosync:
@@ -482,12 +504,16 @@ def upsert_knowledge_entry(
     analysis: dict[str, Any],
     fix_suggestion: str,
     source: str,
+    verify_count: int | None = None,
+    case_confidence: float | None = None,
 ) -> dict[str, Any]:
     return _knowledge_base.upsert(
         fingerprint=fingerprint,
         analysis=analysis,
         fix_suggestion=fix_suggestion,
         source=source,
+        verify_count=verify_count,
+        case_confidence=case_confidence,
     )
 
 

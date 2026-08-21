@@ -130,6 +130,8 @@ class DebugCase:
             "source": "debug_case",
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "case_confidence": self.case_confidence,
+            "verify_count": self.verify_count,
         }
 
     @classmethod

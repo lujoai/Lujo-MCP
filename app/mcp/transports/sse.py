@@ -114,7 +114,10 @@ class SSEHub:
             qs = self._queues.pop(session_id, [])
         for sub in qs:
             try:
-                sub.loop.call_soon_threadsafe(sub.queue.put_nowait, _CLOSE_EVENT)
+                # FIX: 满队列时通过 _publish_locked 丢最旧一条保底入队，避免触发 QueueFull 导致客户端连接悬挂
+                sub.loop.call_soon_threadsafe(
+                    SSEHub._publish_locked, sub.queue, _CLOSE_EVENT
+                )
             except RuntimeError:
                 logger.warning("SSE 关闭失败：事件循环不可用，session_id=%s", session_id)
         return len(qs)
