@@ -1,20 +1,25 @@
 """单元测试：MCP stacktrace 工具（FR11 源码片段 + 各分支覆盖）"""
 
-import sys
+from unittest.mock import MagicMock
 
 from app.mcp.tools import stacktrace_api
+
+
+class TestToolDefinition:
+    def test_tool_def_schema(self):
+        assert stacktrace_api.TOOL_DEF["name"] == "stacktrace"
+        assert "description" in stacktrace_api.TOOL_DEF
+        assert stacktrace_api.TOOL_DEF["inputSchema"]["type"] == "object"
 
 
 class TestStacktraceHandler:
     """覆盖 handler() 的各分支：无异常无 request_id / request_id 无错误 / request_id 有错误 / 当前异常"""
 
-    def test_no_exception_no_request_id(self, monkeypatch):
-        monkeypatch.setattr(sys, "exc_info", lambda: (None, None, None))
+    def test_no_exception_no_request_id(self):
         result = stacktrace_api.handler({})
         assert result == {"message": "当前上下文中没有异常"}
 
     def test_request_id_no_error(self, monkeypatch):
-        monkeypatch.setattr(sys, "exc_info", lambda: (None, None, None))
         monkeypatch.setattr(
             stacktrace_api,
             "get_logs",
@@ -25,7 +30,6 @@ class TestStacktraceHandler:
         assert result["message"] == "当前请求没有捕获到异常"
 
     def test_request_id_with_error(self, monkeypatch):
-        monkeypatch.setattr(sys, "exc_info", lambda: (None, None, None))
         monkeypatch.setattr(
             stacktrace_api,
             "get_logs",
@@ -40,30 +44,37 @@ class TestStacktraceHandler:
         assert result["code_snippets"] == []
         assert "ai_summary" in result
 
-    def test_request_id_missing_arg(self, monkeypatch):
+    def test_request_id_missing_arg(self):
         """arguments 不含 request_id 时不应抛 KeyError"""
-        monkeypatch.setattr(sys, "exc_info", lambda: (None, None, None))
         result = stacktrace_api.handler({})
         assert "message" in result
 
-    def test_current_exception_captured(self, monkeypatch):
+    def test_current_exception_captured_with_snippets(self, monkeypatch):
+        mock_snippet = MagicMock()
+        mock_snippet.model_dump.return_value = {"file": "app.py", "line": 10, "code": "pass"}
+
         captured = {
             "type": "ValueError",
             "message": "bad",
             "traceback": "tb",
-            "frames": [],
-            "frame_count": 0,
+            "frames": [{"filename": "app.py", "lineno": 10}],
+            "frame_count": 1,
         }
-        monkeypatch.setattr(sys, "exc_info", lambda: (None, ValueError("bad"), None))
         monkeypatch.setattr(stacktrace_api, "capture_exception", lambda exc: captured)
-        monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [])
-        result = stacktrace_api.handler({})
+        monkeypatch.setattr(stacktrace_api, "format_trace_for_ai", lambda exc: "AI summary text")
+        monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [mock_snippet])
+
+        try:
+            raise ValueError("bad")
+        except ValueError:
+            result = stacktrace_api.handler({})
+
         assert result["exception"] is captured
-        assert result["code_snippets"] == []
+        assert len(result["code_snippets"]) == 1
+        assert result["code_snippets"][0]["file"] == "app.py"
+        assert result["ai_summary"] == "AI summary text"
 
     def test_invoke_wrapper(self, monkeypatch):
-        monkeypatch.setattr(sys, "exc_info", lambda: (None, None, None))
-
         class Body:
             request_id = "r1"
 
@@ -73,29 +84,32 @@ class TestStacktraceHandler:
 
 
 class TestGetStacktrace:
-    """覆盖 get_stacktrace()：无记录无异常 / 按 error_id 取 / 取最新"""
+    """覆盖 get_stacktrace()：无记录无异常 / 按 error_id 取 / 取最新 / 当前系统异常降级 / metadata 观测"""
 
     def test_no_trace_no_exception(self, monkeypatch):
         monkeypatch.setattr("app.runtime.core.errors.get_latest", lambda: None)
-        monkeypatch.setattr(sys, "exc_info", lambda: (None, None, None))
         result = stacktrace_api.get_stacktrace()
         assert result == {"message": "当前没有捕获到异常"}
 
-    def test_by_error_id(self, monkeypatch):
+    def test_by_error_id_with_snippets(self, monkeypatch):
+        mock_snippet = MagicMock()
+        mock_snippet.model_dump.return_value = {"file": "server.py", "line": 42}
+
         err = {
             "error_id": "e1",
             "type": "ValueError",
             "message": "m",
             "traceback": "t",
-            "frames": [],
-            "frame_count": 0,
+            "frames": [{"file": "server.py", "line": 42, "function": "main", "code": "raise", "locals": {}}],
+            "frame_count": 1,
         }
         monkeypatch.setattr("app.runtime.core.errors.get_by_id", lambda tid: err)
-        monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [])
+        monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [mock_snippet])
         result = stacktrace_api.get_stacktrace("e1")
         assert result["error_id"] == "e1"
         assert result["exception"]["type"] == "ValueError"
-        assert result["code_snippets"] == []
+        assert len(result["code_snippets"]) == 1
+        assert result["code_snippets"][0]["file"] == "server.py"
 
     def test_fallback_to_latest(self, monkeypatch):
         err = {
@@ -110,3 +124,24 @@ class TestGetStacktrace:
         monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [])
         result = stacktrace_api.get_stacktrace()
         assert result["error_id"] == "e2"
+
+    def test_fallback_to_active_sys_exception(self, monkeypatch):
+        monkeypatch.setattr("app.runtime.core.errors.get_latest", lambda: None)
+        captured = {
+            "error_id": "live-1",
+            "type": "ZeroDivisionError",
+            "message": "division by zero",
+            "traceback": "tb",
+            "frames": [],
+            "frame_count": 0,
+        }
+        monkeypatch.setattr(stacktrace_api, "capture_exception", lambda exc: captured)
+        monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [])
+
+        try:
+            raise ZeroDivisionError("division by zero")
+        except ZeroDivisionError:
+            result = stacktrace_api.get_stacktrace()
+
+        assert result["error_id"] == "live-1"
+        assert result["exception"]["type"] == "ZeroDivisionError"

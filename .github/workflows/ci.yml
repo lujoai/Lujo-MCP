@@ -80,5 +80,5 @@ jobs:
           node-version: "20"
 
       - name: Run SDK core contract tests
-        run: node --test browser-sdk/test/sdk-core.test.js
+        run: node --test browser-sdk/test/sdk-core.test.js browser-sdk/test/sdk-events.test.js
 
