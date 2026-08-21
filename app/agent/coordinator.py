@@ -118,10 +118,13 @@ class Coordinator:
                 ).to_dict()
             )
 
+        repair_ctx = ctx.repair_context or {}
         return {
             "repair_plan": repair_plan,
             "sources": sources,
             "agent_trace": agent_trace,
+            "quality_report": repair_ctx.get("quality_report"),
+            "debug_experience": repair_ctx.get("debug_experience"),
             "multi_agent_mode": False,
         }
 
@@ -213,6 +216,7 @@ class Coordinator:
                 skipped,
             )
 
+        repair_ctx = ctx.repair_context or {}
         return {
             "repair_plan": repair_plan,
             "sources": sources,
@@ -220,6 +224,8 @@ class Coordinator:
             "git_attribution": git_output,
             "test_plan": test_output,
             "security_review": security_output,
+            "quality_report": repair_ctx.get("quality_report"),
+            "debug_experience": repair_ctx.get("debug_experience"),
             "multi_agent_mode": True,
             "dag_degraded": dag_degraded,
         }

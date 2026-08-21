@@ -307,3 +307,19 @@ class TestDebugExperienceRecall:
         assert captured["exc_type"] == "ValueError"
         assert captured["message"] == "bad input"
         assert captured["debug_context"] is not None
+
+    @pytest.mark.asyncio
+    async def test_sources_contains_extended_metrics(self, assembler, monkeypatch):
+        """验证 sources 包含 debug_experience_hit, vector_recall_count, debug_experience_count。"""
+        monkeypatch.setattr("app.config.settings.debug_experience_enabled", True)
+        from app.rag.experience import DebugExperienceRecord
+        fake = DebugExperienceRecord(fingerprint="fp-1", exception_type="ValueError")
+
+        with self._enter_patches(patch(
+            "app.rag.retriever.retrieve_debug_experience", return_value=[fake]
+        )):
+            result = await assembler.assemble(_make_debug_context())
+
+        assert result["sources"]["debug_experience_hit"] is True
+        assert result["sources"]["debug_experience_count"] == 1
+        assert "vector_recall_count" in result["sources"]

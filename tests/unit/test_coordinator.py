@@ -250,3 +250,26 @@ class TestCoordinatorAgentModeDispatch:
         assert mock_p1.called
         assert result["repair_plan"]["patch"] == "single_fix"
 
+
+    @pytest.mark.asyncio
+    async def test_coordinator_output_contains_quality_and_experience(self):
+        coord = Coordinator()
+        assemble_result = _make_assemble_result()
+        assemble_result["quality_report"] = {"overall_score": 0.9}
+        assemble_result["debug_experience"] = [{"fingerprint": "fp1"}]
+
+        fake_agent_result = AgentResult(
+            agent_name="repair",
+            status=AgentStatus.SUCCESS,
+            output={"repair_plan": {"patch": "fix"}},
+        )
+
+        with patch.object(
+            coord._assembler, "assemble", return_value=assemble_result
+        ), patch.object(
+            coord._agents["repair"], "run", return_value=fake_agent_result
+        ):
+            result = await coord.run(_make_debug_context())
+
+        assert result["quality_report"] == {"overall_score": 0.9}
+        assert result["debug_experience"] == [{"fingerprint": "fp1"}]

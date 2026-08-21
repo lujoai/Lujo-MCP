@@ -55,6 +55,9 @@ class RepairContextAssembler:
                 "knowledge_base_hit": bool(
                     analysis and analysis.get("knowledge_base_hit")
                 ),
+                "debug_experience_hit": bool(debug_experience),
+                "vector_recall_count": len(vector_recall) if isinstance(vector_recall, list) else 0,
+                "debug_experience_count": len(debug_experience) if isinstance(debug_experience, list) else 0,
             },
         }
 

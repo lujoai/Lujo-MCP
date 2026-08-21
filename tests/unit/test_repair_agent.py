@@ -279,3 +279,23 @@ class TestRepairAgentBuildMessages:
         assert messages[1]["role"] == "user"
         # user content 应包含 debug_context
         assert "request_id" in messages[1]["content"]
+
+    def test_messages_includes_debug_experience_and_quality_report(self):
+        agent = RepairAgent()
+        ctx = AgentContext(
+            debug_context={"request_id": "req-1"},
+            repair_context={
+                "debug_context": {"request_id": "req-1"},
+                "prior_analysis": None,
+                "vector_recall": [],
+                "debug_experience": [{"fingerprint": "exp-1", "summary": "fix"}],
+                "git_context": [],
+                "quality_report": {"overall_score": 0.95},
+                "repair_plan": None,
+            },
+        )
+        messages = agent._build_messages(ctx)
+        user_content = messages[1]["content"]
+        assert "debug_experience" in user_content
+        assert "quality_report" in user_content
+        assert "exp-1" in user_content

@@ -18,8 +18,8 @@ from app.llm.injection_guard import wrap_evidence, INJECTION_GUARD
 logger = logging.getLogger("lujo-mcp.agent.repair")
 
 
-SYSTEM_PROMPT = """你是一位资深的代码修复工程师。基于以下调试上下文、历史相似修复、git 近期改动，
-生成可执行的修复方案。输出 JSON：
+SYSTEM_PROMPT = """你是一位资深的代码修复工程师。基于以下调试上下文、历史排障经验库（debug_experience）、历史相似修复（vector_recall）、git 近期改动，
+生成可执行的修复方案。若存在高匹配的历史排障经验或知识库命中文档，请优先参考其根因与修复建议。输出 JSON：
 
 {
   "patch": "具体的代码修改方案 —— 包含文件路径、修改位置、修改前/后代码片段、修改动作",
@@ -135,7 +135,9 @@ class RepairAgent(BaseAgent):
             "debug_context": repair_ctx.get("debug_context", {}),
             "prior_analysis": repair_ctx.get("prior_analysis"),
             "vector_recall": repair_ctx.get("vector_recall", []),
+            "debug_experience": repair_ctx.get("debug_experience"),
             "git_context": repair_ctx.get("git_context", []),
+            "quality_report": repair_ctx.get("quality_report"),
             # FIX: P1-9f 上一轮 verify_loop 注入的 repair_plan，供迭代轮复用收敛；
             # 无上一轮（首轮）时为 None，保持与原行为一致
             "prior_repair_plan": repair_ctx.get("repair_plan"),
