@@ -1,4 +1,4 @@
-﻿"""LLM 错误分析仪（编排层）—— 重试、fallback、熔断器、流式输出。
+"""LLM 错误分析仪（编排层）—— 重试、fallback、熔断器、流式输出。
 
 god object 重构（v0.5.5+）：原 1175 行拆分为 7 个单一职责模块，本文件
 只保留**调用编排**：
@@ -21,6 +21,7 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Generator, AsyncGenerator
 
 from openai import OpenAI, AsyncOpenAI, APIError, APITimeoutError, RateLimitError
@@ -46,8 +47,12 @@ logger = logging.getLogger("lujo-mcp.llm")
 # ── 熔断器（P3-8）──
 try:
     import pybreaker
+    _CB_ERROR = pybreaker.CircuitBreakerError
+    _CB_STATE_OPEN = pybreaker.STATE_OPEN
 except ImportError:
     pybreaker = None
+    _CB_ERROR = None
+    _CB_STATE_OPEN = None
     logger.warning("pybreaker 未安装，熔断器功能已禁用")
 
 
@@ -316,6 +321,41 @@ def _call_through_circuit_breaker(sync_call):
         raise
 
 
+async def _call_async_through_breaker(cb, coro_factory):
+    """在原生 asyncio 上下文中驱动 pybreaker 熔断状态机。
+
+    pybreaker 的 ``CircuitBreaker.call`` 与 ``call_async``（tornado 协程）均不支持
+    原生 asyncio；此处复刻其 closed/open/half-open 语义，并复用当前 state 对象的
+    ``_handle_success``/``_handle_error`` 完成失败计数与状态迁移，使熔断开启时
+    也能走 AsyncOpenAI（不再退回 to_thread 同步客户端），判定语义与同步 ``analyze`` 一致。
+    OPEN 且未到重置时间 → 抛 ``pybreaker.CircuitBreakerError``（由调用方转 fallback）。
+    """
+    with cb._lock:
+        state = cb.state
+        if cb.current_state == _CB_STATE_OPEN:
+            opened_at = cb._state_storage.opened_at
+            if opened_at and datetime.now(timezone.utc) < opened_at + timedelta(
+                seconds=cb.reset_timeout
+            ):
+                raise _CB_ERROR(
+                    "Timeout not elapsed yet, circuit breaker still open"
+                )
+            cb.half_open()
+            state = cb.state
+        coro = coro_factory()  # 仅构造协程，不执行
+    try:
+        result = await coro
+    except BaseException as exc:
+        # 按熔断语义重新抛出：未达阈值→原异常；达阈值/半开失败→CircuitBreakerError
+        with cb._lock:
+            state._handle_error(exc)
+        raise
+    else:
+        with cb._lock:
+            state._handle_success()
+        return result
+
+
 def analyze(context: dict, model: Optional[str] = None) -> dict:
     """
     调用 LLM 分析调试上下文（带重试、fallback、缓存和熔断器）
@@ -389,18 +429,17 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
 
     messages, context = _build_llm_messages(context)
 
-    # NOTE: pybreaker.CircuitBreaker.call 不支持协程，熔断器路径通过
-    # asyncio.to_thread 使用同步客户端 + _retry_call，保证熔断器状态机
-    # 正确计数；非熔断器路径使用原生 AsyncOpenAI。
+    # v0.6.1：pybreaker 的 CircuitBreaker.call 与 tornado call_async 均不支持原生
+    # asyncio，改用 _call_async_through_breaker 手动驱动状态机（复用其 _handle_success /
+    # _handle_error 计数），使熔断开启时也走 AsyncOpenAI，不再退回 to_thread 同步客户端。
     start = time.time()
     try:
         cb = _get_llm_circuit_breaker()
         if cb:
-            sync_client = _get_client()
-            result = await asyncio.to_thread(
-                cb.call,
-                lambda: _retry_call(
-                    sync_client, model_name, messages,
+            result = await _call_async_through_breaker(
+                cb,
+                lambda: _retry_call_async(
+                    client, model_name, messages,
                     temperature=settings.llm_temperature,
                     max_retries=settings.llm_max_retries,
                 ),

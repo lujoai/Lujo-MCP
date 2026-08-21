@@ -255,20 +255,119 @@ class TestPGCircuitBreaker:
 class TestCircuitBreakerDisabledWhenPybreakerMissing:
     """测试 pybreaker 未安装时熔断器功能被禁用"""
 
-    @patch.dict("sys.modules", {"pybreaker": None})
     def test_llm_circuit_breaker_none_when_pybreaker_missing(self):
         """pybreaker 未安装时 LLM 熔断器为 None"""
         import importlib
         from app.llm import analyzer
 
+        with patch.dict("sys.modules", {"pybreaker": None}):
+            importlib.reload(analyzer)
+            assert analyzer._llm_circuit_breaker is None
+        # 恢复：以真实 pybreaker 重新加载，避免污染后续用例的模块级 pybreaker=None
         importlib.reload(analyzer)
-        assert analyzer._llm_circuit_breaker is None
 
-    @patch.dict("sys.modules", {"pybreaker": None})
     def test_pg_circuit_breaker_none_when_pybreaker_missing(self):
         """pybreaker 未安装时 PG 熔断器为 None"""
         import importlib
         from app.runtime.core.storage import pg_executor
 
+        with patch.dict("sys.modules", {"pybreaker": None}):
+            importlib.reload(pg_executor)
+            assert pg_executor._pg_circuit_breaker is None
         importlib.reload(pg_executor)
-        assert pg_executor._pg_circuit_breaker is None
+
+
+class TestLLMCircuitBreakerAsync:
+    """测试 analyze_async（原生 asyncio）经 _call_async_through_breaker 的熔断保护。
+
+    v0.6.1：熔断开启时不再退回 to_thread 同步客户端，而是手动驱动 pybreaker 状态机
+    包住 ``_retry_call_async``，语义与同步 ``analyze`` 一致。
+    """
+
+    def setup_method(self):
+        from app.llm.cache import _analysis_cache
+        from app.llm.analyzer import _llm_circuit_breaker
+
+        _analysis_cache.clear()
+        if _llm_circuit_breaker:
+            _llm_circuit_breaker.close()
+
+    def teardown_method(self):
+        import app.llm.analyzer as analyzer_module
+
+        if analyzer_module._llm_circuit_breaker:
+            analyzer_module._llm_circuit_breaker.close()
+        analyzer_module._llm_circuit_breaker = None
+
+    @pytest.mark.asyncio
+    @patch("app.llm.analyzer._get_knowledge_base_result", return_value=None)
+    @patch("app.llm.analyzer._get_cached_result", return_value=None)
+    @patch("app.llm.analyzer._get_async_client")
+    async def test_async_triggers_fallback_after_max_failures(
+        self, mock_get_async_client, mock_cache, mock_kb
+    ):
+        """异步路径连续失败达 fail_max 后触发熔断，且走的是 AsyncOpenAI。"""
+        from unittest.mock import AsyncMock
+
+        import pybreaker
+        from app.llm.analyzer import analyze_async
+        import app.llm.analyzer as analyzer_module
+
+        cb = pybreaker.CircuitBreaker(
+            fail_max=2,
+            reset_timeout=1,
+            exclude=[pybreaker.CircuitBreakerError],
+        )
+        analyzer_module._llm_circuit_breaker = cb
+
+        async_client = MagicMock()
+        async_client.chat.completions.create = AsyncMock(
+            side_effect=RuntimeError("LLM service unavailable")
+        )
+        mock_get_async_client.return_value = async_client
+
+        ctx = {"request_id": "cb-async-001", "errors": ["test error"]}
+
+        # 第一次：未达阈值 → 原异常抛出
+        with pytest.raises(RuntimeError):
+            await analyze_async(ctx)
+
+        # 第二次：达阈值 → 熔断 → fallback
+        result = await analyze_async(ctx)
+        assert result["_circuit_breaker_triggered"] is True
+        assert result["model"] == "__circuit_breaker_fallback__"
+        assert result["analysis"]["confidence"] == "low"
+        # 熔断路径确实用的是异步客户端（两次尝试都 await 到 create）
+        assert async_client.chat.completions.create.await_count == 2
+
+    @pytest.mark.asyncio
+    @patch("app.llm.analyzer._get_knowledge_base_result", return_value=None)
+    @patch("app.llm.analyzer._get_cached_result", return_value=None)
+    @patch("app.llm.analyzer._get_async_client")
+    async def test_async_open_returns_fallback_without_call(
+        self, mock_get_async_client, mock_cache, mock_kb
+    ):
+        """OPEN 且未到重置时间 → 直接 fallback，不调用 AsyncOpenAI。"""
+        from unittest.mock import AsyncMock
+
+        import pybreaker
+        from app.llm.analyzer import analyze_async
+        import app.llm.analyzer as analyzer_module
+
+        cb = pybreaker.CircuitBreaker(
+            fail_max=1,
+            reset_timeout=60,
+            exclude=[pybreaker.CircuitBreakerError],
+        )
+        analyzer_module._llm_circuit_breaker = cb
+
+        async_client = MagicMock()
+        async_client.chat.completions.create = AsyncMock(return_value=MagicMock())
+        mock_get_async_client.return_value = async_client
+
+        cb.open()  # 直接打开熔断
+
+        ctx = {"request_id": "cb-async-002", "errors": ["test error"]}
+        result = await analyze_async(ctx)
+        assert result["_circuit_breaker_triggered"] is True
+        async_client.chat.completions.create.assert_not_awaited()
