@@ -203,3 +203,49 @@ class TestCoordinatorTraceStructure:
             await coord.run(ctx)
 
         assert captured_ctx["trace_id"] == "trace-abc-123"
+
+
+class TestCoordinatorAgentModeDispatch:
+    """基于 AgentMode 枚举的调度分发验证。"""
+
+    @pytest.mark.asyncio
+    async def test_agent_mode_dag_dispatches_to_dag(self, monkeypatch):
+        coord = Coordinator()
+        monkeypatch.setattr(settings, "agent_mode", "dag")
+
+        fake_dag_output = {
+            "repair_plan": {"patch": "dag_fix"},
+            "multi_agent_mode": True,
+            "agent_trace": [],
+        }
+
+        with patch.object(
+            coord._assembler, "assemble", return_value=_make_assemble_result()
+        ), patch.object(coord, "_run_dag", return_value=fake_dag_output) as mock_dag:
+            result = await coord.run(_make_debug_context())
+
+        assert mock_dag.called
+        assert result["repair_plan"]["patch"] == "dag_fix"
+        assert result["multi_agent_mode"] is True
+
+    @pytest.mark.asyncio
+    async def test_agent_mode_single_dispatches_to_phase1(self, monkeypatch):
+        coord = Coordinator()
+        monkeypatch.setattr(settings, "agent_mode", "single")
+
+        fake_p1_output = {
+            "repair_plan": {"patch": "single_fix"},
+            "multi_agent_mode": False,
+            "agent_trace": [],
+        }
+
+        with patch.object(
+            coord._assembler, "assemble", return_value=_make_assemble_result()
+        ), patch.object(
+            coord, "_run_phase1", return_value=fake_p1_output
+        ) as mock_p1:
+            result = await coord.run(_make_debug_context())
+
+        assert mock_p1.called
+        assert result["repair_plan"]["patch"] == "single_fix"
+

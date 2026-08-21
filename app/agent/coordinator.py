@@ -31,7 +31,7 @@ from app.agent.dag import (
     build_phase2_agents,
 )
 from app.agent.repair_agent import RepairAgent
-from app.config import settings
+from app.config import AgentMode, settings
 
 logger = logging.getLogger("lujo-mcp.agent.coordinator")
 
@@ -81,16 +81,16 @@ class Coordinator:
             trace_id=trace_id,
         )
 
-        # Step 3: 调度 Agent DAG
-        if settings.agent_multi_agent_enabled:
-            # 三层开关：agent → multi_agent → verify_loop
-            if settings.agent_verify_loop_enabled:
-                from app.agent.verify_loop import run_verify_loop
+        # Step 3: 根据 AgentMode 调度 Agent DAG 或串行执行
+        mode = settings.get_agent_mode()
+        if mode == AgentMode.VERIFY_LOOP:
+            from app.agent.verify_loop import run_verify_loop
 
-                return await run_verify_loop(self._run_dag, ctx, sources)
+            return await run_verify_loop(self._run_dag, ctx, sources)
+        if mode == AgentMode.DAG:
             return await self._run_dag(ctx, sources)
 
-        # Phase 1 兼容路径：单 Agent 串行
+        # 默认回退 / SINGLE / OFF 模式：单 Agent 串行（保持向后兼容）
         return await self._run_phase1(ctx, sources)
 
     async def _run_phase1(

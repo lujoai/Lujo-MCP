@@ -367,7 +367,8 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **1
 
 ### 3.7 配置（`app/config.py`，pydantic-settings）✅
 
-单例 `settings`，读项目根 `.env`（基于 `__file__` 锚定绝对路径，任意 CWD 启动行为一致；修复 ENV-001）。`code_context_lines` 等 FR11 配置键已补全。
+- 单例 `settings`，读项目根 `.env`（基于 `__file__` 锚定绝对路径，任意 CWD 启动行为一致；修复 ENV-001）。`code_context_lines` 等 FR11 配置键已补全。
+- **Agent 运行模式枚举 (`AgentMode`)**：收敛原分散的布尔开关（`agent_enabled` / `agent_multi_agent_enabled` / `agent_verify_loop_enabled`），提供统一的 `agent_mode` 配置（`off` / `single` / `dag` / `verify_loop`），具备完整的向后兼容解析与优雅降级。
 
 ---
 

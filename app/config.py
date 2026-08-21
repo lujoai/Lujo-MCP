@@ -1,6 +1,7 @@
 """统一配置管理 —— 全局单例，替代散落的 os.getenv()"""
 
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +11,20 @@ from pydantic_settings import BaseSettings
 # 项目根目录（app/ 的上一级）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 logger = logging.getLogger(__name__)
+
+
+class AgentMode(str, Enum):
+    """AI Debug Agent 运行模式枚举。
+    
+    OFF: 完全关闭 Agent 调度
+    SINGLE: Phase 1 单 RepairAgent 串行（仅生成修复方案）
+    DAG: Phase 2 多 Agent DAG（RepairAgent 先行 + Git/Test/Security 并行审查）
+    VERIFY_LOOP: Phase 3 迭代验证环（DAG 调度 + 多轮自动验证与重试）
+    """
+    OFF = "off"
+    SINGLE = "single"
+    DAG = "dag"
+    VERIFY_LOOP = "verify_loop"
 
 
 class Settings(BaseSettings):
@@ -275,6 +290,10 @@ class Settings(BaseSettings):
     beacon_token_scope: str = "/ingest,/api/dashboard/stream"
 
     # ── AI Debug Agent（Phase 1：自动修复 + 多 Agent 协同）──
+    # Agent 运行模式：off | single | dag | verify_loop
+    # 若显式设置（如 AGENT_MODE=dag），优先以该值为准；
+    # 若留空或为默认值，自动根据历史布尔开关（agent_enabled, agent_multi_agent_enabled, agent_verify_loop_enabled）向后兼容派生。
+    agent_mode: str = "off"
     # 全局开关：开启后 POST /api/debug/repair/async 走有界队列 + K 常驻消费协程
     # 静默降级：Agent 失败不影响主链路（与 Qdrant 适配器一致）
     agent_enabled: bool = False
@@ -367,6 +386,38 @@ class Settings(BaseSettings):
         if self.api_key is not None and not self.api_key.strip():
             logger.warning("API_KEY 为空，已视为未配置，鉴权关闭")
             self.api_key = None
+
+    def get_agent_mode(self) -> AgentMode:
+        """获取当前有效的 Agent 运行模式。
+        
+        具备多重兼容解析能力：
+        1. 显式配置了 agent_mode 且在有效枚举内，优先使用；
+        2. 若 agent_mode 为默认 "off"（或空），则根据历史布尔开关派生：
+           - verify_loop 开启 → AgentMode.VERIFY_LOOP
+           - multi_agent 开启 → AgentMode.DAG
+           - agent_enabled 开启 → AgentMode.SINGLE
+           - 否则 → AgentMode.OFF
+        """
+        raw_mode = (self.agent_mode or "").strip().lower()
+        if raw_mode in {m.value for m in AgentMode}:
+            mode = AgentMode(raw_mode)
+            # 如果显式指定非 off，直接返回
+            if mode != AgentMode.OFF:
+                return mode
+
+        # 向后兼容：通过布尔开关推导
+        if self.agent_verify_loop_enabled or self.agent_iterative_repair_enabled:
+            return AgentMode.VERIFY_LOOP
+        if self.agent_multi_agent_enabled:
+            return AgentMode.DAG
+        if self.agent_enabled:
+            return AgentMode.SINGLE
+        return AgentMode.OFF
+
+    @property
+    def is_agent_active(self) -> bool:
+        """Agent 是否处于激活状态（非 OFF 模式）。"""
+        return self.get_agent_mode() != AgentMode.OFF
 
 
 # 全局单例
