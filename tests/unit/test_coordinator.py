@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from app.agent.base import AgentResult, AgentStatus, AgentContext
 from app.agent.coordinator import Coordinator
+from app.config import settings
 
 
 @pytest.fixture(autouse=True)
