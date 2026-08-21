@@ -622,7 +622,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
 | AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
-| **合计** | — | **1153 passed / 6 skipped / 0 failed** | 当前全量单元基线（v0.5.5，2026-08-19，含 FR12 提示词端点 10 项；单测强制 memory 后端与 CI 一致）。本节表格其余数字为 v0.3.1 时期历史快照（340/6/0），仅作演进记录 |
+| **合计** | — | **1161 passed / 6 skipped / 0 failed** | 当前全量单元基线（v0.6.0，2026-08-21，含 God Object 拆分后重构测试；单测强制 memory 后端与 CI 一致）。本节表格其余数字为 v0.3.1 时期历史快照（340/6/0），仅作演进记录 |
 
 ### 11.2 测试执行
 
