@@ -26,7 +26,7 @@ npm/
 npm install -g @lujoai/lujo-mcp
 ```
 
-MCP 客户端配置（Claude Desktop / Cursor / Trae）：
+MCP 客户端配置（MCP Desktop 客户端 / Cursor / Trae）：
 
 ```json
 {

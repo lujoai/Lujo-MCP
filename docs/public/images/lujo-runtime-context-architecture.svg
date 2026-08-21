@@ -6,7 +6,7 @@
   <!-- AI Coding Agent -->
   <rect x="210" y="20" width="300" height="70" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
   <text x="360" y="50" text-anchor="middle" font-size="16" font-weight="bold" fill="#174ea6">AI Coding Agent</text>
-  <text x="360" y="72" text-anchor="middle" font-size="13" fill="#4285f4">Claude / Cursor / Trae</text>
+  <text x="360" y="72" text-anchor="middle" font-size="13" fill="#4285f4">Cursor / Trae</text>
 
   <!-- MCP label -->
   <text x="360" y="122" text-anchor="middle" font-size="14" font-weight="bold" fill="#5f6368">MCP (stdio / HTTP)</text>

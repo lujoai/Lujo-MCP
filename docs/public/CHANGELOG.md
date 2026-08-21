@@ -138,7 +138,7 @@
 
 #### 代码
 
-- **品牌统一（v0.5.2）**：MCP server 名 `ai-debug-mcp` → `lujo-mcp`（`app/mcp_server.py`）；全部 `logging.getLogger("ai-debug-mcp.*")` → `lujo-mcp.*`；`config.py` `otel_service_name` / `service_name` → `lujo-mcp`；`browser-sdk/`（package.json + ai-debug.js）、`mcp_config_example.json` 示例路径同步；对应测试断言更新（`test_api.py` / `test_otel.py` / `test_jsonrpc.py`）；删除本地 `.claude` 配置
+- **品牌统一（v0.5.2）**：MCP server 名 `ai-debug-mcp` → `lujo-mcp`（`app/mcp_server.py`）；全部 `logging.getLogger("ai-debug-mcp.*")` → `lujo-mcp.*`；`config.py` `otel_service_name` / `service_name` → `lujo-mcp`；`browser-sdk/`（package.json + ai-debug.js）、`mcp_config_example.json` 示例路径同步；对应测试断言更新（`test_api.py` / `test_otel.py` / `test_jsonrpc.py`）；清理本地 IDE 配置文件
 - **LICENSE**：版权署名 `ai-debug-mcp` → **LujoAI**
 
 ---

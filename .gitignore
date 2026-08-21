@@ -28,6 +28,9 @@ htmlcov/
 *.log
 test_result.txt
 test_api_result.txt
+
+# Codex 本地计划目录（不入库）
+.zcode/
 t.txt
 
 # IDE 内部数据（非项目源码）

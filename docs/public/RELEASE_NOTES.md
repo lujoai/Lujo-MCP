@@ -194,7 +194,7 @@ v0.5.2 是 Lujo-MCP 的 **品牌统一** 版本：将全仓 `ai-debug-mcp` 标�
 - **OTel**：`otel_service_name` / `service_name` → `lujo-mcp`
 - **配置示例 / SDK**：`mcp_config_example.json`、`browser-sdk/`（package.json + ai-debug.js）同步
 - **LICENSE**：`Copyright (c) 2026 LujoAI`
-- 测试断言同步更新（`test_api.py` / `test_otel.py` / `test_jsonrpc.py`）；删除本地 `.claude` 配置
+- 测试断言同步更新（`test_api.py` / `test_otel.py` / `test_jsonrpc.py`）；清理本地 IDE 配置文件
 
 ### English Version
 
