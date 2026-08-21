@@ -152,3 +152,28 @@ def test_invalid_input_degrades():
     assert retrieve_debug_experience() == []
     assert retrieve_debug_experience(exc_type=None, message=None) == []
     assert retrieve_debug_experience(exc_type="E", message=None) == []
+
+
+# ── 9. vector_store_min_score 解耦测试 ──
+
+
+def test_vector_store_min_score_decoupled_from_jaccard(monkeypatch):
+    """验证向量召回使用专属 vector_store_min_score 阈值，与 debug_experience_min_score 解耦。"""
+    monkeypatch.setattr(settings, "vector_store_enabled", True)
+    monkeypatch.setattr(settings, "debug_experience_min_score", 0.8)
+    monkeypatch.setattr(settings, "vector_store_min_score", 0.3)
+
+    class FakeVectorStore:
+        def search(self, text, top_k=3):
+            return [
+                ({"fingerprint": "vec-1", "analysis": {"exception_type": "ValueError", "message": "vec error"}, "fix_suggestion": "fix vec"}, 0.5),
+                ({"fingerprint": "vec-2", "analysis": {"exception_type": "ValueError", "message": "low score error"}, "fix_suggestion": "fix low"}, 0.2),
+            ]
+
+    monkeypatch.setattr("app.rag.retriever.get_vector_store", lambda: FakeVectorStore())
+
+    recs = retrieve_debug_experience(exc_type="ValueError", message="unrelated query", fingerprint="no-match")
+    # vec-1 score (0.5) > vector_store_min_score (0.3) -> 命中
+    # vec-2 score (0.2) <= vector_store_min_score (0.3) -> 过滤
+    assert any(r.fingerprint == "vec-1" and r.source == "vector" for r in recs)
+    assert not any(r.fingerprint == "vec-2" for r in recs)

@@ -169,8 +169,8 @@ def _vector_hits(
         return
     pairs = get_vector_store().search(query, top_k)
     for doc, score in pairs:
-        # FIX: P2 debug_experience_min_score 接入 —— 低于阈值的向量召回不返回
-        if score <= settings.debug_experience_min_score:
+        # 向量召回使用专属 vector_store_min_score（与 Jaccard 相似度阈值解耦）
+        if score <= settings.vector_store_min_score:
             continue
         rec = DebugExperienceRecord.from_kb_entry(doc)
         rec.source = "vector"

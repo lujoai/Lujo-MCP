@@ -111,3 +111,37 @@ class TestSessionStoreFallback:
         store = get_session_store()
 
         assert isinstance(store, MemorySessionStore)
+
+
+@pytest.mark.asyncio
+async def test_async_pg_session_store_does_not_mutate_caller_dict(monkeypatch):
+    """验证 AsyncPGSessionStore.save() 拷贝 dict，不原地改写调用方传入的字典对象。"""
+    from app.runtime.core.storage.async_pg_store import AsyncPGSessionStore
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setattr("app.config.settings.pg_async_enabled", True)
+    monkeypatch.setattr("app.runtime.core.storage.async_pg_store._ensure_init", AsyncMock())
+
+    mock_conn = AsyncMock()
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    mock_pool.acquire.return_value.__aexit__.return_value = None
+
+    monkeypatch.setattr("app.runtime.core.storage.async_pg_store._get_pool", AsyncMock(return_value=mock_pool))
+
+    store = AsyncPGSessionStore()
+    orig_data = {"user": "alice", "created_at": 1000.0}
+    data_copy = dict(orig_data)
+
+    await store.save("sess-1", orig_data)
+
+    assert "last_active" not in orig_data, "save() 不应原地改写调用方的传入字典"
+    assert orig_data == data_copy
+
+
+def test_async_pg_trace_store_write_counter_initialized():
+    """验证 AsyncPGTraceStore._write_counter 在 __init__ 中显式初始化，无 hasattr 竞态。"""
+    from app.runtime.core.storage.async_pg_store import AsyncPGTraceStore
+    store = AsyncPGTraceStore()
+    assert hasattr(store, "_write_counter")
+    assert store._write_counter == 0

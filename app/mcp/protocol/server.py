@@ -133,18 +133,16 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
 
     timeout = settings.tool_timeout_seconds
     _tool_start = time.monotonic()
+    sync_future: asyncio.Future | None = None
     try:
         handler = tool["handler"]
         if asyncio.iscoroutinefunction(handler):
             result = await asyncio.wait_for(handler(arguments), timeout=timeout)
         else:
             # FIX P3-12: 同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
-            # 超时只取消 await，线程继续运行但池有界不增长。
             loop = asyncio.get_running_loop()
-            result = await asyncio.wait_for(
-                loop.run_in_executor(_TOOL_EXECUTOR, handler, arguments),
-                timeout=timeout,
-            )
+            sync_future = loop.run_in_executor(_TOOL_EXECUTOR, handler, arguments)
+            result = await asyncio.wait_for(sync_future, timeout=timeout)
         _elapsed = time.monotonic() - _tool_start
         try:
             _size = len(json.dumps(result, ensure_ascii=False, default=str))
@@ -162,6 +160,11 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
             "isError": False,
         })
     except asyncio.TimeoutError:
+        if sync_future is not None:
+            # 仅在线程尚未启动排队中时 cancel() 有效；
+            # 线程一旦已启动，Python threading 模型下 cancel() 无法中断正在执行的线程，
+            # 线程仍会跑完，这是有界线程池设计下的已知限制。
+            sync_future.cancel()
         logger.warning("工具 %s 执行超时（>%ss），已中止", tool_name, timeout)
         return make_response(req.id, {
             "content": [

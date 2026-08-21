@@ -331,7 +331,7 @@ class AsyncPGTraceStore(TraceStorage):
 
     def __init__(self):
         # DDL 初始化延迟到首次方法调用（async，无法在同步 __init__ 中执行）
-        pass
+        self._write_counter: int = 0
 
     async def save_entry(self, request_id: str, entry: dict) -> None:
         _check_async_context()
@@ -363,9 +363,7 @@ class AsyncPGTraceStore(TraceStorage):
                     logger.warning("分区预创建失败（不影响写入）: %s", e)
 
     def _should_check_partitions(self) -> bool:
-        """惰性分区检查：每 1000 次写入检查一次。"""
-        if not hasattr(self, "_write_counter"):
-            self._write_counter = 0
+        """惰性分区检查：约每 1000 次写入检查一次。"""
         self._write_counter += 1
         if self._write_counter >= 1000:
             self._write_counter = 0
@@ -457,9 +455,11 @@ class AsyncPGSessionStore(SessionStorage):
     async def save(self, session_id: str, data: dict) -> None:
         _check_async_context()
         await _ensure_init()
+        payload = dict(data)
+        now = time.time()
+        payload["last_active"] = now
         pool = await _get_pool()
         async with pool.acquire() as conn:
-            data["last_active"] = time.time()
             await conn.execute(
                 "INSERT INTO sessions (session_id, created_at, last_active, metadata) "
                 "VALUES ($1, $2, $3, $4::jsonb) "
@@ -467,9 +467,9 @@ class AsyncPGSessionStore(SessionStorage):
                 "  last_active = EXCLUDED.last_active,"
                 "  metadata    = EXCLUDED.metadata",
                 session_id,
-                data.get("created_at", time.time()),
-                data["last_active"],
-                json.dumps(data.get("metadata", {}), ensure_ascii=False, default=str),
+                payload.get("created_at", now),
+                payload["last_active"],
+                json.dumps(payload.get("metadata", {}), ensure_ascii=False, default=str),
             )
 
     async def get(self, session_id: str) -> Optional[dict]:

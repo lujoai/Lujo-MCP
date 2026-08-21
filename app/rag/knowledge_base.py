@@ -265,6 +265,7 @@ class KnowledgeBaseStore:
             entry.verify_count += 1
             entry.case_confidence = max(entry.case_confidence, float(confidence))
             entry.updated_at = time.time()
+            self._entries.move_to_end(fingerprint)
             result = entry.to_dict()
 
         if settings.kb_vector_index_autosync:

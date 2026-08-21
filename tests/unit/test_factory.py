@@ -160,3 +160,30 @@ class TestErrorSpecKnowledgeStore:
         monkeypatch.setattr("app.runtime.core.storage.pg_kb_store.PGKnowledgeBaseStore.__init__", _boom)
         with pytest.raises(RuntimeError, match="pg down"):
             f.get_knowledge_store()
+
+
+class TestConcurrentInitialization:
+    def test_concurrent_get_stores_is_thread_safe(self, monkeypatch):
+        """多线程高并发请求各个 store 时，double-checked locking 保证全局唯一单例且无竞态报错。"""
+        from concurrent.futures import ThreadPoolExecutor
+        monkeypatch.setattr("app.config.settings.storage_backend", "memory")
+
+        def _fetch_all(i):
+            return (
+                f.get_trace_store(),
+                f.get_session_store(),
+                f.get_error_store(),
+                f.get_spec_store(),
+                f.get_knowledge_store(),
+            )
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            results = list(pool.map(_fetch_all, range(32)))
+
+        first = results[0]
+        for item in results[1:]:
+            assert item[0] is first[0]
+            assert item[1] is first[1]
+            assert item[2] is first[2]
+            assert item[3] is first[3]
+            assert item[4] is first[4]

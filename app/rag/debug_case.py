@@ -88,7 +88,7 @@ def compute_normalized_fingerprint(
     norm = normalize_message_for_similarity(message)
     if not t and not norm:
         return ""
-    return f"{t}:{norm}".strip(":")
+    return ":".join(p for p in (t, norm) if p)
 
 
 @dataclass(slots=True)

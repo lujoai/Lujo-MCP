@@ -359,3 +359,46 @@ def test_upsert_preserves_existing_verification_metrics():
     assert entry2["verify_count"] == 3
     assert entry2["case_confidence"] == 0.85
     assert entry2["fix_suggestion"] == "new suggestion"
+
+
+def test_record_verification_updates_lru_order():
+    """验证 record_verification 会调用 move_to_end 更新 LRU 顺序。"""
+    kb = KnowledgeBaseStore(max_entries=2)
+    kb.upsert(
+        fingerprint="fp-1",
+        analysis={"exception_type": "ValueError", "message": "msg1"},
+        fix_suggestion="fix1",
+        source="test",
+    )
+    kb.upsert(
+        fingerprint="fp-2",
+        analysis={"exception_type": "ValueError", "message": "msg2"},
+        fix_suggestion="fix2",
+        source="test",
+    )
+
+    # 此时 LRU 顺序：fp-1 (最旧) -> fp-2 (最新)
+    # 验证 fp-1，使其更新为最新使用
+    res = kb.record_verification("fp-1", confidence=0.95)
+    assert res is not None
+
+    # 插入 fp-3，应驱逐最旧的 fp-2，保留 fp-1 和 fp-3
+    kb.upsert(
+        fingerprint="fp-3",
+        analysis={"exception_type": "ValueError", "message": "msg3"},
+        fix_suggestion="fix3",
+        source="test",
+    )
+
+    assert kb.get("fp-1") is not None
+    assert kb.get("fp-3") is not None
+    assert kb.get("fp-2") is None
+
+
+def test_compute_normalized_fingerprint_colon_handling():
+    """验证 compute_normalized_fingerprint 使用 join，当类型为空但消息含冒号时不误剥离首尾冒号。"""
+    from app.rag.debug_case import compute_normalized_fingerprint
+    assert compute_normalized_fingerprint(None, ":some:value:") == ":some:value:"
+    assert compute_normalized_fingerprint("ValueError", "bad input: 123") == "valueerror:bad input:"
+    assert compute_normalized_fingerprint(None, "") == ""
+    assert compute_normalized_fingerprint("", None) == ""
