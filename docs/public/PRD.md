@@ -161,7 +161,7 @@
 | --- | --- |
 | 静默失败（Silent Failure） | 无异常、无 API 报错，但行为不符预期 |
 | 规范驱动开发（SDD） | 以"期望规范"为基准自动校验实现是否偏离 |
-| 宿主 AI 推理模式 | 服务只交付结构化原始数据，由 Trae/Codex/Cursor 等宿主模型自行推理（本产品核心设计） |
+| 宿主 AI 推理模式 | 服务只交付结构化原始数据，由 Claude/Trae/Codex/Cursor 等宿主模型自行推理（本产品核心设计） |
 | 代码定位 / Source Locator | 由堆栈帧解析文件+行号+源码片段（本产品 `code_locator.py`） |
 | 全局异常钩子 | `exception_hook` 自动捕获未处理异常 |
 | Trace / Context / Request ID / Mcp-Session-Id | 见 v1.0 |
@@ -376,7 +376,7 @@
 
 ```mermaid
 flowchart TB
-    Client["宿主 AI 客户端<br/>(Trae/Codex/Cursor) / REST 调用方"]
+    Client["宿主 AI 客户端<br/>(Claude/Trae/Codex/Cursor) / REST 调用方"]
 
     subgraph Transport["传输层"]
         HTTP["Streamable HTTP"]

@@ -10,7 +10,7 @@
 
 **Lujo-MCP：面向 AI Agent 的运行时调试上下文基础设施。**
 
-基于 MCP 协议，为 Cursor / Trae / Qoder 等 AI Agent 提供真实运行时 Bug 现场信息（Runtime Debug Context），解决"无报错但功能不对"的静默失败检测、"多 Agent 协同调试"以及历史结论复用（Debug Experience RAG）三个核心问题。
+基于 MCP 协议，为 Claude / Cursor / Trae / Qoder 等 AI Agent 提供真实运行时 Bug 现场信息（Runtime Debug Context），解决"无报错但功能不对"的静默失败检测、"多 Agent 协同调试"以及历史结论复用（Debug Experience RAG）三个核心问题。
 
 **核心能力链路**：
 
@@ -305,7 +305,7 @@ Verifier 验证
 1. **工厂模式**：存储层（memory/PG）、状态层（memory/Redis）、LLM provider（openai/zhipu/deepseek/custom）都用工厂模式，一行配置切换
 2. **规范驱动**：用期望规范作为 ground truth，`assert_behavior()` 纯函数自动比对，偏离即告警，支持 api/ui/rule 三种 kind
 3. **双传输**：HTTP 与 stdio 均复用 `register_all_tools()` + `_tool_registry`，避免工具面漂移和漏注册
-4. **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Trae/Codex/Cursor
+4. **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Claude/Trae/Codex/Cursor
 5. **安全优先**：fail-closed 鉴权、Content-Length 硬检查、IP 限流、安全响应头、入库前脱敏
 6. **幂等性**：异常钩子 `install_global_hook()` 幂等安装，PG 建表 `CREATE TABLE IF NOT EXISTS`
 7. **降级策略**：各采集器失败降级不阻断整体，中间件异常降级放行

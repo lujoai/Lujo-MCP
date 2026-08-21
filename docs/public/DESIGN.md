@@ -40,7 +40,7 @@
 | 目标 | 设计落点 |
 | --- | --- |
 | 把运行时数据转为 AI 可消费的结构化上下文 | Trace Log → Context Builder → LLM/宿主 AI |
-| 零手工整理（不手写提示词） | **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Trae/Codex/Cursor |
+| 零手工整理（不手写提示词） | **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Claude/Trae/Codex/Cursor |
 | 不漏掉未处理异常 | `exception_hook` 全局捕获（sync + asyncio） |
 | 安全可部署 | fail-closed 鉴权 + 限流 + 流式请求体限制 + 安全头 |
 | 双形态接入 | Streamable HTTP（远程）+ stdio（本地子进程），共用同一份业务逻辑 |
@@ -55,7 +55,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  客户端层                                                     │
-│  MCP 客户端 (Trae/Codex/Cursor Desktop) │ REST 调用方 │ 浏览器 │
+│  MCP 客户端 (Claude/Trae/Codex/Cursor Desktop) │ REST 调用方 │ 浏览器 │
 └───────────────┬───────────────────────────┬─────────────────┘
                 │ JSON-RPC 2.0               │ HTTP/JSON
         ┌───────▼────────┐          ┌─────────▼──────────┐
@@ -658,7 +658,7 @@ python -m pytest -m "not integration and not pg and not slow" --tb=short -q
 ```mermaid
 flowchart TB
     subgraph Clients["客户端层"]
-        MC["MCP 客户端<br/>Trae/Codex/Cursor Desktop"]
+        MC["MCP 客户端<br/>Claude/Trae/Codex/Cursor Desktop"]
         REST["REST 调用方<br/>curl/Postman"]
         Browser["浏览器<br/>Dashboard"]
     end
