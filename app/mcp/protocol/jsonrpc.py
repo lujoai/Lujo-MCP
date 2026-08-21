@@ -20,12 +20,20 @@ class InvalidRequestError(ValueError):
     """JSON 合法但不是合法 Request 对象 → 对应 -32600"""
 
 
-# 标准 JSON-RPC 错误码
+# 标准 JSON-RPC 2.0 错误码 (-32768 到 -32000 为预留)
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
+
+# 扩展/语义化应用级错误码 (-32000 到 -32099 为 JSON-RPC 预留服务器错误范围)
+SERVER_ERROR_RESERVED_START = -32000
+SERVER_ERROR_RESERVED_END = -32099
+TOOL_EXECUTION_ERROR = -32000
+TOOL_TIMEOUT_ERROR = -32001
+RATE_LIMIT_ERROR = -32002
+AUTH_ERROR = -32003
 
 
 def make_response(id: Optional[Union[int, str]], result: Any) -> dict:
@@ -36,14 +44,23 @@ def make_response(id: Optional[Union[int, str]], result: Any) -> dict:
     }
 
 
-def make_error(id: Optional[Union[int, str]], code: int, message: str) -> dict:
+def make_error(
+    id: Optional[Union[int, str]],
+    code: int,
+    message: str,
+    data: Optional[Any] = None,
+) -> dict:
+    """构建符合 JSON-RPC 2.0 规范的 Error 响应对象，可选携带 data 附加信息"""
+    err = {
+        "code": code,
+        "message": message,
+    }
+    if data is not None:
+        err["data"] = data
     return {
         "jsonrpc": "2.0",
         "id": id,
-        "error": {
-            "code": code,
-            "message": message,
-        },
+        "error": err,
     }
 
 

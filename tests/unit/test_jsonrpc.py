@@ -265,3 +265,50 @@ class TestProtocolVersionNegotiation:
             resp = asyncio.run(dispatch(req))
         assert resp["result"]["protocolVersion"] == PROTOCOL_VERSION
         assert "protocolVersion" in caplog.text
+
+
+class TestJSONRPCErrorDataAndSemanticCodes:
+    def test_make_error_with_data(self):
+        from app.mcp.protocol.jsonrpc import make_error, INVALID_PARAMS
+        err_resp = make_error(
+            id="req-123",
+            code=INVALID_PARAMS,
+            message="Invalid arguments provided",
+            data={"field": "name", "expected": "str"},
+        )
+        assert err_resp["jsonrpc"] == "2.0"
+        assert err_resp["id"] == "req-123"
+        assert err_resp["error"]["code"] == -32602
+        assert err_resp["error"]["message"] == "Invalid arguments provided"
+        assert err_resp["error"]["data"] == {"field": "name", "expected": "str"}
+
+    def test_make_error_without_data_omits_field(self):
+        from app.mcp.protocol.jsonrpc import make_error, INTERNAL_ERROR
+        err_resp = make_error(id=1, code=INTERNAL_ERROR, message="Boom")
+        assert "data" not in err_resp["error"]
+        assert err_resp["error"]["code"] == -32603
+
+    def test_custom_error_codes_defined(self):
+        from app.mcp.protocol.jsonrpc import (
+            PARSE_ERROR,
+            INVALID_REQUEST,
+            METHOD_NOT_FOUND,
+            INVALID_PARAMS,
+            INTERNAL_ERROR,
+            SERVER_ERROR_RESERVED_START,
+            SERVER_ERROR_RESERVED_END,
+            TOOL_EXECUTION_ERROR,
+            TOOL_TIMEOUT_ERROR,
+            RATE_LIMIT_ERROR,
+            AUTH_ERROR,
+        )
+        assert PARSE_ERROR == -32700
+        assert INVALID_REQUEST == -32600
+        assert METHOD_NOT_FOUND == -32601
+        assert INVALID_PARAMS == -32602
+        assert INTERNAL_ERROR == -32603
+        assert TOOL_EXECUTION_ERROR == -32000
+        assert TOOL_TIMEOUT_ERROR == -32001
+        assert RATE_LIMIT_ERROR == -32002
+        assert AUTH_ERROR == -32003
+        assert SERVER_ERROR_RESERVED_END <= TOOL_EXECUTION_ERROR <= SERVER_ERROR_RESERVED_START

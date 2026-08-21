@@ -13,7 +13,7 @@ def setup_error_handlers(app: FastAPI):
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        """兜底所有未预期的异常，返回 500 但不让进程崩溃"""
+        """兜底所有未预期的异常，返回标准化的 500 JSON 响应（含 error_code / detail / trace_id）"""
         logger.exception(
             f"全局异常捕获: {type(exc).__name__}",
             extra={
@@ -25,8 +25,8 @@ def setup_error_handlers(app: FastAPI):
         return JSONResponse(
             status_code=500,
             content={
+                "error_code": "INTERNAL_SERVER_ERROR",
                 "detail": f"服务内部错误: {type(exc).__name__}",
                 "trace_id": getattr(request.state, "trace_id", "unknown"),
             },
         )
-
