@@ -178,10 +178,14 @@ class Settings(BaseSettings):
     # 默认关闭：开启后记录每个进入服务的请求为 network 记录（跳过 /health /metrics）
     network_capture_enabled: bool = False
 
-    # ── MCP 工具调用超时（SEC-05）──
+    # ── MCP 工具调用超时与并发背压（SEC-05）──
     # 单次工具 handler 执行上限（秒），超时返回 isError+_timed_out，防单工具卡死阻塞会话。
     # 注意：Playwright 类工具（auto_test/verify_ui）耗时较长，需要时调大。
     tool_timeout_seconds: int = 60
+    # 同步工具专用执行线程池容量（槽位数），防止无限制打满线程
+    tool_executor_workers: int = 8
+    # 同步工具获取执行槽位的等待超时（秒）；0 表示无可用槽位时立即拒绝（Fast-Fail）
+    tool_busy_queue_timeout: float = 1.5
 
     # ── 前端验证 URL 安全（SEC-02，防 SSRF）──
     # 默认拒绝回环/私网/链路本地(云元数据 169.254.x)/保留地址，仅允许公网 http(s)。

@@ -301,6 +301,7 @@ class TestJSONRPCErrorDataAndSemanticCodes:
             TOOL_TIMEOUT_ERROR,
             RATE_LIMIT_ERROR,
             AUTH_ERROR,
+            TOOL_BUSY_ERROR,
         )
         assert PARSE_ERROR == -32700
         assert INVALID_REQUEST == -32600
@@ -311,4 +312,5 @@ class TestJSONRPCErrorDataAndSemanticCodes:
         assert TOOL_TIMEOUT_ERROR == -32001
         assert RATE_LIMIT_ERROR == -32002
         assert AUTH_ERROR == -32003
+        assert TOOL_BUSY_ERROR == -32004
         assert SERVER_ERROR_RESERVED_END <= TOOL_EXECUTION_ERROR <= SERVER_ERROR_RESERVED_START

@@ -45,7 +45,8 @@ _tool_registry: dict[str, dict] = {}
 
 # FIX P3-12: 同步工具 handler 专用有界线程池（与 app/mcp_server.py 同方案）。
 # 避免超时 handler 占用 asyncio 默认线程池并拖累其它 to_thread 任务；池有界不无限增长。
-_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8)
+_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_executor_workers)
+_tool_slots = asyncio.Semaphore(settings.tool_executor_workers)
 
 
 def register_tool(
@@ -133,62 +134,109 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
 
     timeout = settings.tool_timeout_seconds
     _tool_start = time.monotonic()
-    sync_future: asyncio.Future | None = None
-    try:
-        handler = tool["handler"]
-        if asyncio.iscoroutinefunction(handler):
+    handler = tool["handler"]
+
+    if asyncio.iscoroutinefunction(handler):
+        try:
             result = await asyncio.wait_for(handler(arguments), timeout=timeout)
-        else:
-            # FIX P3-12: 同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
+        except asyncio.TimeoutError:
+            logger.warning("工具 %s 执行超时（>%ss），已中止", tool_name, timeout)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"工具执行超时（>{timeout}s），已中止。",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_TIMEOUT",
+                "_timed_out": True,
+            })
+        except Exception:
+            logger.exception("工具 %s 执行失败", tool_name)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "工具执行失败，详情见服务端日志",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_INTERNAL",
+            })
+    else:
+        # 同步工具：获取并发槽位（带等待超时，防止线程池排队堆积与饿死）
+        busy_timeout = settings.tool_busy_queue_timeout
+        try:
+            await asyncio.wait_for(_tool_slots.acquire(), timeout=busy_timeout)
+        except asyncio.TimeoutError:
+            logger.warning("工具 %s 执行队列已满（等待 >%ss 超时），已拒绝执行", tool_name, busy_timeout)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "工具执行队列已满，请稍后重试。",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_BUSY",
+                "_busy": True,
+            })
+
+        sync_future: asyncio.Future | None = None
+        try:
             loop = asyncio.get_running_loop()
             sync_future = loop.run_in_executor(_TOOL_EXECUTOR, handler, arguments)
             result = await asyncio.wait_for(sync_future, timeout=timeout)
-        _elapsed = time.monotonic() - _tool_start
-        try:
-            _size = len(json.dumps(result, ensure_ascii=False, default=str))
-        except (TypeError, ValueError):
-            _size = 0
-        # Phase 3 D5：记录 Tool 响应耗时/大小（仅日志，不修改协议响应、不打印敏感负载）
-        logger.info("MCP HTTP tool=%s response_ms=%.1f response_size=%d", tool_name, _elapsed * 1000, _size)
-        return make_response(req.id, {
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps(result, ensure_ascii=False, default=str),
-                }
-            ],
-            "isError": False,
-        })
-    except asyncio.TimeoutError:
-        if sync_future is not None:
-            # 仅在线程尚未启动排队中时 cancel() 有效；
-            # 线程一旦已启动，Python threading 模型下 cancel() 无法中断正在执行的线程，
-            # 线程仍会跑完，这是有界线程池设计下的已知限制。
-            sync_future.cancel()
-        logger.warning("工具 %s 执行超时（>%ss），已中止", tool_name, timeout)
-        return make_response(req.id, {
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"工具执行超时（>{timeout}s），已中止。",
-                }
-            ],
-            "isError": True,
-            "error_code": "TOOL_TIMEOUT",
-            "_timed_out": True,
-        })
-    except Exception:
-        logger.exception(f"工具 {tool_name} 执行失败")
-        return make_response(req.id, {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "工具执行失败，详情见服务端日志",
-                }
-            ],
-            "isError": True,
-            "error_code": "TOOL_INTERNAL",
-        })
+        except asyncio.TimeoutError:
+            if sync_future is not None:
+                # 仅在线程尚未启动排队中时 cancel() 有效；
+                # 线程一旦已启动，Python threading 模型下 cancel() 无法中断正在执行的线程，
+                # 线程仍会跑完，这是有界线程池设计下的已知限制。
+                sync_future.cancel()
+            logger.warning("工具 %s 执行超时（>%ss），已中止", tool_name, timeout)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"工具执行超时（>{timeout}s），已中止。",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_TIMEOUT",
+                "_timed_out": True,
+            })
+        except Exception:
+            logger.exception("工具 %s 执行失败", tool_name)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "工具执行失败，详情见服务端日志",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_INTERNAL",
+            })
+        finally:
+            _tool_slots.release()
+
+    _elapsed = time.monotonic() - _tool_start
+    try:
+        _size = len(json.dumps(result, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        _size = 0
+    # Phase 3 D5：记录 Tool 响应耗时/大小（仅日志，不修改协议响应、不打印敏感负载）
+    logger.info("MCP HTTP tool=%s response_ms=%.1f response_size=%d", tool_name, _elapsed * 1000, _size)
+    return make_response(req.id, {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(result, ensure_ascii=False, default=str),
+            }
+        ],
+        "isError": False,
+    })
 
 
 def _handle_ping(req: JSONRPCRequest) -> dict:

@@ -34,6 +34,7 @@ TOOL_EXECUTION_ERROR = -32000
 TOOL_TIMEOUT_ERROR = -32001
 RATE_LIMIT_ERROR = -32002
 AUTH_ERROR = -32003
+TOOL_BUSY_ERROR = -32004
 
 
 def make_response(id: Optional[Union[int, str]], result: Any) -> dict:
