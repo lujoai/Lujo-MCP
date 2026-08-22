@@ -395,21 +395,19 @@ class Settings(BaseSettings):
         """获取当前有效的 Agent 运行模式。
         
         具备多重兼容解析能力：
-        1. 显式配置了 agent_mode 且在有效枚举内，优先使用；
-        2. 若 agent_mode 为默认 "off"（或空），则根据历史布尔开关派生：
+        1. 显式配置了 agent_mode（含显式 "off"）且在有效枚举内，以它为准，不再做布尔派生；
+        2. 若 agent_mode 未被显式提供（model_fields_set 中无该字段，吃默认 "off"），
+           则根据历史布尔开关向后兼容派生：
            - verify_loop 开启 → AgentMode.VERIFY_LOOP
            - multi_agent 开启 → AgentMode.DAG
            - agent_enabled 开启 → AgentMode.SINGLE
            - 否则 → AgentMode.OFF
         """
         raw_mode = (self.agent_mode or "").strip().lower()
-        if raw_mode in {m.value for m in AgentMode}:
-            mode = AgentMode(raw_mode)
-            # 如果显式指定非 off，直接返回
-            if mode != AgentMode.OFF:
-                return mode
-
-        # 向后兼容：通过布尔开关推导
+        # 显式提供了 agent_mode（含显式 "off"）→ 以它为准，不再做布尔派生
+        if "agent_mode" in self.model_fields_set and raw_mode in {m.value for m in AgentMode}:
+            return AgentMode(raw_mode)
+        # 未显式提供 agent_mode（吃默认 "off"）→ 向后兼容：按历史布尔开关派生
         if self.agent_verify_loop_enabled or self.agent_iterative_repair_enabled:
             return AgentMode.VERIFY_LOOP
         if self.agent_multi_agent_enabled:

@@ -37,15 +37,16 @@ def test_agent_mode_case_and_whitespace_insensitivity():
 
 
 def test_agent_mode_backward_compatibility_fallback():
-    # _env_file=None 隔离 .env 泄漏，保证派生的唯一来源是显式传入的布尔开关。
+    # 布尔开关派生仅在 agent_mode 未被显式提供时才生效：
+    # 这里不传 agent_mode（吃默认 "off"），_env_file=None 隔离本机 .env 泄漏，
+    # 保证派生的唯一来源是显式传入的布尔开关。
     # 1. 只有 agent_enabled
-    s1 = Settings(_env_file=None, agent_mode="off", agent_enabled=True)
+    s1 = Settings(_env_file=None, agent_enabled=True)
     assert s1.get_agent_mode() == AgentMode.SINGLE
 
     # 2. agent_multi_agent_enabled
     s2 = Settings(
         _env_file=None,
-        agent_mode="off",
         agent_enabled=True,
         agent_multi_agent_enabled=True,
     )
@@ -54,12 +55,23 @@ def test_agent_mode_backward_compatibility_fallback():
     # 3. agent_verify_loop_enabled
     s3 = Settings(
         _env_file=None,
-        agent_mode="off",
         agent_enabled=True,
         agent_multi_agent_enabled=True,
         agent_verify_loop_enabled=True,
     )
     assert s3.get_agent_mode() == AgentMode.VERIFY_LOOP
+
+
+def test_explicit_off_short_circuits_boolean_flags():
+    # 显式 agent_mode="off" 必须短路布尔开关：即使 verify_loop / agent 开启也不顶成激活态
+    s = Settings(
+        _env_file=None,
+        agent_mode="off",
+        agent_enabled=True,
+        agent_verify_loop_enabled=True,
+    )
+    assert s.get_agent_mode() == AgentMode.OFF
+    assert s.is_agent_active is False
 
 
 def test_explicit_agent_mode_overrides_boolean_flags():

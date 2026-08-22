@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from app.agent.base import AgentResult, AgentStatus, AgentContext
 from app.agent.coordinator import Coordinator
-from app.config import settings
+from app.config import AgentMode, Settings
 
 
 @pytest.fixture(autouse=True)
@@ -212,7 +212,8 @@ class TestCoordinatorAgentModeDispatch:
     @pytest.mark.asyncio
     async def test_agent_mode_dag_dispatches_to_dag(self, monkeypatch):
         coord = Coordinator()
-        monkeypatch.setattr(settings, "agent_mode", "dag")
+        # 显式固定 AgentMode.DAG，避免 .env 布尔开关污染全局单例 get_agent_mode() 派生结果
+        monkeypatch.setattr(Settings, "get_agent_mode", lambda self: AgentMode.DAG)
 
         fake_dag_output = {
             "repair_plan": {"patch": "dag_fix"},
@@ -232,7 +233,8 @@ class TestCoordinatorAgentModeDispatch:
     @pytest.mark.asyncio
     async def test_agent_mode_single_dispatches_to_phase1(self, monkeypatch):
         coord = Coordinator()
-        monkeypatch.setattr(settings, "agent_mode", "single")
+        # 显式固定 AgentMode.SINGLE，避免 .env 布尔开关污染全局单例 get_agent_mode() 派生结果
+        monkeypatch.setattr(Settings, "get_agent_mode", lambda self: AgentMode.SINGLE)
 
         fake_p1_output = {
             "repair_plan": {"patch": "single_fix"},

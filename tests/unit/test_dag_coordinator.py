@@ -24,6 +24,7 @@ from app.agent.dag import (
     build_phase2_agents,
     get_phase2_agent_names,
 )
+from app.config import AgentMode, Settings
 
 
 class TestDagTopology:
@@ -56,14 +57,10 @@ class TestCoordinatorPhase1Compat:
 
     @pytest.mark.asyncio
     async def test_phase1_returns_multi_agent_mode_false(self, monkeypatch):
-        # 隔离本机 .env 泄露到全局单例 settings 的 AGENT_* 布尔开关：
-        # 仅覆盖 agent_multi_agent_enabled 不够——.env 里 AGENT_VERIFY_LOOP_ENABLED=true
-        # 会让 get_agent_mode() 派生出 VERIFY_LOOP，从而误走 DAG/verify_loop 分支。
-        monkeypatch.setattr("app.config.settings.agent_mode", "off")
-        monkeypatch.setattr("app.config.settings.agent_enabled", False)
-        monkeypatch.setattr("app.config.settings.agent_multi_agent_enabled", False)
-        monkeypatch.setattr("app.config.settings.agent_verify_loop_enabled", False)
-        monkeypatch.setattr("app.config.settings.agent_iterative_repair_enabled", False)
+        # 显式固定非 DAG 模式（AgentMode.SINGLE），避免 .env 布尔开关污染全局单例
+        # get_agent_mode() 派生结果——本机 .env 的 AGENT_VERIFY_LOOP_ENABLED=true
+        # 会让派生误选出 VERIFY_LOOP，从而误走 DAG/verify_loop 分支。
+        monkeypatch.setattr(Settings, "get_agent_mode", lambda self: AgentMode.SINGLE)
 
         coord = Coordinator()
         # mock assembler + repair agent
@@ -93,7 +90,8 @@ class TestCoordinatorPhase2Dag:
 
     @pytest.mark.asyncio
     async def test_phase2_full_success(self, monkeypatch):
-        monkeypatch.setattr("app.config.settings.agent_multi_agent_enabled", True)
+        # 显式固定 AgentMode.DAG，避免 .env 布尔开关污染全局单例 get_agent_mode() 派生结果
+        monkeypatch.setattr(Settings, "get_agent_mode", lambda self: AgentMode.DAG)
 
         coord = Coordinator()
         with patch.object(
@@ -147,7 +145,8 @@ class TestCoordinatorPhase2Dag:
     @pytest.mark.asyncio
     async def test_phase2_repair_failed_skips_dependents(self, monkeypatch):
         """RepairAgent 失败 → 下游 Test/Security SKIPPED；Git 仍执行（不依赖 repair_plan）。"""
-        monkeypatch.setattr("app.config.settings.agent_multi_agent_enabled", True)
+        # 显式固定 AgentMode.DAG，避免 .env 布尔开关污染全局单例 get_agent_mode() 派生结果
+        monkeypatch.setattr(Settings, "get_agent_mode", lambda self: AgentMode.DAG)
 
         coord = Coordinator()
         with patch.object(
@@ -199,7 +198,8 @@ class TestCoordinatorPhase2Dag:
     @pytest.mark.asyncio
     async def test_phase2_parallel_failure_triggers_dag_degraded(self, monkeypatch):
         """并行节点失败数 >= 阈值（默认 2）时 dag_degraded=True。"""
-        monkeypatch.setattr("app.config.settings.agent_multi_agent_enabled", True)
+        # 显式固定 AgentMode.DAG，避免 .env 布尔开关污染全局单例 get_agent_mode() 派生结果
+        monkeypatch.setattr(Settings, "get_agent_mode", lambda self: AgentMode.DAG)
         monkeypatch.setattr("app.config.settings.agent_dag_failure_threshold", 2)
 
         coord = Coordinator()
@@ -249,7 +249,8 @@ class TestCoordinatorPhase2Dag:
     @pytest.mark.asyncio
     async def test_phase2_parallel_unexpected_exception_caught(self, monkeypatch):
         """并行 Agent 抛异常时 Coordinator 防御性兜底，转为 FAILED。"""
-        monkeypatch.setattr("app.config.settings.agent_multi_agent_enabled", True)
+        # 显式固定 AgentMode.DAG，避免 .env 布尔开关污染全局单例 get_agent_mode() 派生结果
+        monkeypatch.setattr(Settings, "get_agent_mode", lambda self: AgentMode.DAG)
 
         coord = Coordinator()
         with patch.object(
