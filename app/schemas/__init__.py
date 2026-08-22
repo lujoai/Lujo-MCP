@@ -4,8 +4,8 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
-# ── 追踪 ──
-class TraceEntry(BaseModel):
+# ── 流程追踪步骤 ──
+class TraceStep(BaseModel):
     timestamp: float
     step: str
     data: Optional[Any] = None
@@ -66,7 +66,7 @@ class DebugRequest(BaseModel):
 class DebugResponse(BaseModel):
     request_id: str
     result: Any
-    trace: list[TraceEntry]
+    trace: list[TraceStep]
     context: DebugContext
 
 
@@ -225,3 +225,7 @@ class SourcemapUploadRequest(BaseModel):
     release: str | None = None
 
     model_config = {"extra": "ignore"}
+
+
+# ── 异常追踪（权威定义来自 app.schemas.trace）──
+from app.schemas.trace import StackFrame as StackFrame, TraceEntry as TraceEntry, TraceSummary as TraceSummary  # noqa: E402

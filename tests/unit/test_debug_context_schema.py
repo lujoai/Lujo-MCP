@@ -231,3 +231,34 @@ class TestBuildDebugContextOutputValidates:
         assert ctx.request_id == "trace-002"
         assert ctx.code_snippets is None
         assert ctx.runtime is None
+
+
+
+# ── 7. TraceEntry 与 TraceStep 命名空间与模型解耦测试 ──
+
+class TestTraceSchemaDisambiguation:
+    def test_trace_step_and_trace_entry_coexist(self):
+        from app.schemas import DebugResponse, TraceEntry, TraceStep
+        from app.schemas.trace import TraceEntry as CoreTraceEntry
+
+        # 验证 TraceStep 为流程单步模型
+        step = TraceStep(timestamp=1700000000.0, step="request_start", data={"path": "/api"})
+        assert step.step == "request_start"
+        assert step.timestamp == 1700000000.0
+
+        # 验证 TraceEntry 为异常追踪模型，且两者类型完全不同
+        entry = TraceEntry(trace_id="t-1", timestamp=1700000000.0, exc_type="ValueError", message="err")
+        assert entry.trace_id == "t-1"
+        assert TraceEntry is CoreTraceEntry
+        assert TraceEntry is not TraceStep
+
+        # 验证 DebugResponse 的 JSON 序列化字段与结构保持不变
+        from app.schemas import DebugContext
+        resp = DebugResponse(
+            request_id="req-123",
+            result={"ok": True},
+            trace=[step],
+            context=DebugContext(request_id="req-123"),
+        )
+        dumped = resp.model_dump()
+        assert dumped["trace"] == [{"timestamp": 1700000000.0, "step": "request_start", "data": {"path": "/api"}}]
