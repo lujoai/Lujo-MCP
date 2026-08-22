@@ -5,25 +5,28 @@ from app.config import AgentMode, Settings
 
 
 def test_agent_mode_defaults_to_off():
-    s = Settings()
+    # _env_file=None 隔离本机 .env 中 AGENT_* 泄漏，确保测的是「字段默认值 off」
+    s = Settings(_env_file=None)
     assert s.get_agent_mode() == AgentMode.OFF
     assert s.is_agent_active is False
 
 
 def test_agent_mode_explicit_values():
-    s_single = Settings(agent_mode="single")
+    # _env_file=None 隔离 .env 中 AGENT_ENABLED / AGENT_MULTI_AGENT_ENABLED /
+    # AGENT_VERIFY_LOOP_ENABLED 等开关，避免显式 agent_mode="off" 时被 fallback 派生逻辑改写。
+    s_single = Settings(_env_file=None, agent_mode="single")
     assert s_single.get_agent_mode() == AgentMode.SINGLE
     assert s_single.is_agent_active is True
 
-    s_dag = Settings(agent_mode="dag")
+    s_dag = Settings(_env_file=None, agent_mode="dag")
     assert s_dag.get_agent_mode() == AgentMode.DAG
     assert s_dag.is_agent_active is True
 
-    s_loop = Settings(agent_mode="verify_loop")
+    s_loop = Settings(_env_file=None, agent_mode="verify_loop")
     assert s_loop.get_agent_mode() == AgentMode.VERIFY_LOOP
     assert s_loop.is_agent_active is True
 
-    s_off = Settings(agent_mode="off")
+    s_off = Settings(_env_file=None, agent_mode="off")
     assert s_off.get_agent_mode() == AgentMode.OFF
     assert s_off.is_agent_active is False
 
@@ -34,16 +37,23 @@ def test_agent_mode_case_and_whitespace_insensitivity():
 
 
 def test_agent_mode_backward_compatibility_fallback():
+    # _env_file=None 隔离 .env 泄漏，保证派生的唯一来源是显式传入的布尔开关。
     # 1. 只有 agent_enabled
-    s1 = Settings(agent_mode="off", agent_enabled=True)
+    s1 = Settings(_env_file=None, agent_mode="off", agent_enabled=True)
     assert s1.get_agent_mode() == AgentMode.SINGLE
 
     # 2. agent_multi_agent_enabled
-    s2 = Settings(agent_mode="off", agent_enabled=True, agent_multi_agent_enabled=True)
+    s2 = Settings(
+        _env_file=None,
+        agent_mode="off",
+        agent_enabled=True,
+        agent_multi_agent_enabled=True,
+    )
     assert s2.get_agent_mode() == AgentMode.DAG
 
     # 3. agent_verify_loop_enabled
     s3 = Settings(
+        _env_file=None,
         agent_mode="off",
         agent_enabled=True,
         agent_multi_agent_enabled=True,

@@ -56,7 +56,14 @@ class TestCoordinatorPhase1Compat:
 
     @pytest.mark.asyncio
     async def test_phase1_returns_multi_agent_mode_false(self, monkeypatch):
+        # 隔离本机 .env 泄露到全局单例 settings 的 AGENT_* 布尔开关：
+        # 仅覆盖 agent_multi_agent_enabled 不够——.env 里 AGENT_VERIFY_LOOP_ENABLED=true
+        # 会让 get_agent_mode() 派生出 VERIFY_LOOP，从而误走 DAG/verify_loop 分支。
+        monkeypatch.setattr("app.config.settings.agent_mode", "off")
+        monkeypatch.setattr("app.config.settings.agent_enabled", False)
         monkeypatch.setattr("app.config.settings.agent_multi_agent_enabled", False)
+        monkeypatch.setattr("app.config.settings.agent_verify_loop_enabled", False)
+        monkeypatch.setattr("app.config.settings.agent_iterative_repair_enabled", False)
 
         coord = Coordinator()
         # mock assembler + repair agent
