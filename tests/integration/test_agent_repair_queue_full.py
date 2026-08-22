@@ -56,6 +56,12 @@ class TestRepairQueueFullBackpressure:
         from app.config import settings
         from app.main import app
 
+        # 平台隔离：Windows 上 os.environ["API_KEY"]="" 物理无效（等价 unset），
+        # settings 会回落读取 .env 真实 API_KEY，使 AuthMiddleware 以 401 拒绝本测试的
+        # HTTP 请求。此处 monkeypatch settings 单例为「未配置」，让鉴权实时判定关闭。
+        monkeypatch.setattr(settings, "api_key", None)
+        monkeypatch.setattr(settings, "api_keys", "")
+
         # 强制开启 agent
         monkeypatch.setattr(settings, "agent_enabled", True)
         # 注入一个 maxsize=1 的队列，且不启 worker

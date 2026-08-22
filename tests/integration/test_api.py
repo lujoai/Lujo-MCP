@@ -8,7 +8,15 @@ from app.main import app
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # 平台隔离：Windows 上 os.environ["API_KEY"]="" 等价 unset，settings 回落读取
+    # .env 真实 API_KEY，使 AuthMiddleware 以 401 拒绝本文件的 HTTP 请求。此处把
+    # settings 单例改为「未配置」，让鉴权实时判定关闭（每次请求实时读 settings，
+    # monkeypatch 即时生效，测试后自动恢复；本文件无鉴权前置条件的用例不受影响）。
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "api_key", None)
+    monkeypatch.setattr(settings, "api_keys", "")
     return TestClient(app)
 
 

@@ -17,6 +17,12 @@ from app.main import app
 def disable_agent(monkeypatch):
     """强制关闭 agent_enabled。"""
     monkeypatch.setattr(settings, "agent_enabled", False)
+    # 平台隔离：Windows 上 os.environ["API_KEY"]="" 等价 unset，settings 回落读取
+    # .env 真实 API_KEY，使 AuthMiddleware 401 拒绝本文件的 HTTP 请求。此处把
+    # settings 单例改为「未配置」，让鉴权实时判定关闭（REST 测试即时生效；MCP 工具
+    # 测试不经 HTTP 中间件，不受影响）。
+    monkeypatch.setattr(settings, "api_key", None)
+    monkeypatch.setattr(settings, "api_keys", "")
 
 
 class TestRepairEndpointsDisabled:
