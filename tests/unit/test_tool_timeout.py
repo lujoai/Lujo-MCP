@@ -170,7 +170,7 @@ async def test_async_tool_not_blocked_by_sync_tool_slots(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_busy_queue_timeout_zero_fast_fail(monkeypatch):
+async def test_busy_queue_timeout_zero_fast_fail(monkeypatch, caplog):
     """测试 tool_busy_queue_timeout=0 时，槽位被占满后发起新调用立即可靠返回 TOOL_BUSY，不阻塞。"""
     monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0)
@@ -190,9 +190,10 @@ async def test_busy_queue_timeout_zero_fast_fail(monkeypatch):
 
     # 发起第 2 个请求：由于 busy_timeout=0 且槽位已被占满，应立即 Fast-Fail 返回 TOOL_BUSY
     t0 = time.monotonic()
-    resp = await _handle_tools_call(
-        JSONRPCRequest(id=402, method="tools/call", params={"name": "sync_occupier_zero", "arguments": {}})
-    )
+    with caplog.at_level("WARNING", logger="lujo-mcp.protocol"):
+        resp = await _handle_tools_call(
+            JSONRPCRequest(id=402, method="tools/call", params={"name": "sync_occupier_zero", "arguments": {}})
+        )
     elapsed = time.monotonic() - t0
 
     assert elapsed < 0.2
@@ -200,5 +201,46 @@ async def test_busy_queue_timeout_zero_fast_fail(monkeypatch):
     assert resp["result"]["error_code"] == "TOOL_BUSY"
     assert resp["result"]["_busy"] is True
     assert "工具执行队列已满" in resp["result"]["content"][0]["text"]
+
+    # 日志必须明确「不等待/立即拒绝」，且不得包含旧的「等待 >0s 超时」表达
+    assert any("不等待" in record.message or "立即拒绝" in record.message
+               for record in caplog.records)
+    assert not any("等待 >0s 超时" in record.message for record in caplog.records)
+
+    await sync_task
+
+
+@pytest.mark.asyncio
+async def test_busy_queue_timeout_positive_logs_wait_duration(monkeypatch, caplog):
+    """测试 tool_busy_queue_timeout>0 时，背压拒绝日志必须包含实际等待时长语义，而非「立即拒绝」。"""
+    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
+    monkeypatch.setattr(settings, "tool_timeout_seconds", 10.0)
+
+    def _slow_sync(args):
+        time.sleep(0.5)
+        return {"sync": "done"}
+
+    register_tool("sync_occupier_pos", "Sync occupier for positive timeout", _slow_sync)
+
+    sync_task = asyncio.create_task(_handle_tools_call(
+        JSONRPCRequest(id=501, method="tools/call", params={"name": "sync_occupier_pos", "arguments": {}})
+    ))
+    await asyncio.sleep(0.02)
+
+    with caplog.at_level("WARNING", logger="lujo-mcp.protocol"):
+        resp = await _handle_tools_call(
+            JSONRPCRequest(id=502, method="tools/call", params={"name": "sync_occupier_pos", "arguments": {}})
+        )
+
+    # Fast-Fail 与 TOOL_BUSY 响应结构保持不变
+    assert resp["result"]["isError"] is True
+    assert resp["result"]["error_code"] == "TOOL_BUSY"
+    assert resp["result"]["_busy"] is True
+
+    # 日志必须体现等待时长语义（等待 + 超时），且不得出现「立即拒绝」
+    assert any("等待" in record.message and "超时" in record.message
+               for record in caplog.records)
+    assert not any("立即拒绝" in record.message for record in caplog.records)
 
     await sync_task

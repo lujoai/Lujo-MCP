@@ -170,7 +170,10 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         try:
             await asyncio.wait_for(_tool_slots.acquire(), timeout=busy_timeout)
         except asyncio.TimeoutError:
-            logger.warning("工具 %s 执行队列已满（等待 >%ss 超时），已拒绝执行", tool_name, busy_timeout)
+            if busy_timeout <= 0:
+                logger.warning("工具 %s 执行队列已满（不等待，立即拒绝），已拒绝执行", tool_name)
+            else:
+                logger.warning("工具 %s 执行队列已满（等待 %.3fs 后超时），已拒绝执行", tool_name, busy_timeout)
             return make_response(req.id, {
                 "content": [
                     {
