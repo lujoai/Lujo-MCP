@@ -26,6 +26,26 @@ v0.6.1 是智能排障 RAG 经验库扩充与多 Agent 协同上下文优化版�
 - **安全与协议语义升级**：JSON-RPC 2.0 错误码标准化定义与 data 字段诊断支持，未捕获异常全局脱敏与标准错误体。
 - **测试与质量体系完善**：补充 Browser SDK JS 事件上报与脱敏单元测试，全仓 Ruff Lint 历史债务清零。
 
+#### 🛠️ v0.6.1 稳定性补丁（未打新版本 tag）
+
+v0.6.1 发布后又合入一组稳定性与正确性补丁，全部落在 `origin/main`，均不改变对外契约（无字段变更、无 Breaking Change），版本号仍为 **v0.6.1**。
+
+- **同步工具背压与 TOOL_BUSY 快速拒绝**：同步工具调用在高负载下不再无限排队等待，达到容量上限后快速返回 `TOOL_BUSY`，避免调用长时间占用线程导致超时堆积，日志文案同步修正
+- **TraceEntry/TraceStep schema 去重**：统一入口数据模型定义，消除重复 schema，对外字段与结构零变更
+- **agent_mode 显式优先语义修复**：显式配置的 agent 模式不再被隐式默认值覆盖，避免错误回退默认模式
+- **测试环境与集成测试 API key 隔离加固**：测试执行不受本机/外部凭据干扰，缺失凭据时快速回退而非挂起等待，环境无关性更强
+- **PG 知识库驱逐断言与日志修正**：驱逐路径断言与日志文案与实际行为对齐，便于排查
+
+#### 🛠️ v0.6.1 Stability Patches (no new tag)
+
+Additional stability and correctness patches landed on `origin/main` after the v0.6.1 release. None change the external contract (no field changes, no breaking changes) and the version stays at v0.6.1:
+
+- **Sync-tool backpressure & fast `TOOL_BUSY` refusal**: overloaded sync-tool calls no longer queue indefinitely; once the capacity cap is reached they fail fast with `TOOL_BUSY`, holding worker threads no longer and timeouts no longer pile up; log text aligned as well
+- **TraceEntry/TraceStep schema dedup**: unified internal data-model definitions, zero external field changes
+- **agent_mode explicit-priority fix**: an explicitly configured agent mode is no longer overridden by an implicit default
+- **API-key isolation for test & integration environments**: tests no longer depend on ambient credentials and fall back fast when none are present instead of hanging
+- **PG KB eviction assertion & log fixes**: eviction-path assertions and log messages now match actual behavior for easier diagnosis
+
 ---
 
 ## v0.6.0（2026-08-21）
