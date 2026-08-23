@@ -411,7 +411,12 @@ class TestKnowledgeBasePersistence:
                 for r in pg.list_recent_kb_entries(limit=100)
                 if r["fingerprint"].startswith(base)
             ]
-            assert remaining == [f"{base}-2", f"{base}-3"]
+            # 断言顺序无关但严格：update_at 均为 DOUBLE PRECISION epoch 秒，
+            # 连续写入的两条可能在精度内同值，ORDER BY updated_at DESC 的返回顺序
+            # 不属本用例契约（本用例目标是验证驱逐删除第 1 行、保留第 2/3 行）。
+            # 先验数量再验集合，避免仅 set 比较掩盖重复/额外记录。
+            assert len(remaining) == 2
+            assert set(remaining) == {f"{base}-2", f"{base}-3"}
             assert store.size() == 2
         finally:
             for i in (1, 2, 3):
