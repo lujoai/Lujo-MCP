@@ -1,1 +1,9 @@
+{
+  "name": "ai-debug-sdk",
+  "version": "0.6.5",
+  "description": "Browser SDK for lujo-mcp - network auto-detection, XHR/fetch interception, UI event capture, gzip compression, throttle control, localStorage fallback with TTL and resilient backoff",
+  "main": "ai-debug.js",
+  "scripts": {
+    "test": "node --test test/sdk-core.test.js test/sdk-events.test.js test/sdk-transport.test.js"
+  }
 }
