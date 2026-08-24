@@ -155,7 +155,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         try:
-            client_ip = request.client.host if request.client else "unknown"
+            client_ip = self._get_client_ip(request)
             store = get_state_store()
             path = request.url.path
 
@@ -178,6 +178,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+    @staticmethod
+    def _get_client_ip(request: Request) -> str:
+        """SEC: 取真实客户端 IP，修复反代场景下限流键共享/绕过。
+
+        - 反代场景（nginx/CloudFlare）：``request.client.host`` 是代理 IP，所有真实用户
+          共享同一限流桶（互相误伤）；攻击者也可用代理池变化 IP 绕过。
+        - 优先读 X-Forwarded-For 最左 IP（最原始客户端），再读 X-Real-IP。
+        - 都缺失时回退 ``request.client.host``，兜底 "unknown"。
+
+        X-Forwarded-For 形如 ``client, proxy1, proxy2``，取最左 client。空串跳过。
+        """
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            # 取最左非空 IP（最原始客户端），防代理链注入伪造后续段
+            first = next((ip.strip() for ip in xff.split(",") if ip.strip()), "")
+            if first:
+                return first
+        xri = request.headers.get("x-real-ip", "")
+        if xri:
+            ip = xri.strip()
+            if ip:
+                return ip
+        return request.client.host if request.client else "unknown"
 
     @staticmethod
     def _get_endpoint_limit(path: str) -> tuple[int, int]:

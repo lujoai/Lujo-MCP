@@ -5,6 +5,16 @@
 
 ---
 
+## [0.6.4] - 2026-08-24
+
+> v0.6.x 安全补丁：修复 3 个安全组 Major 缺陷（embedding 未脱敏外发、verify_loop 安全门失效、限流键绕过），覆盖数据外发、验证绕过、DoS 防护失效三类风险。测试基线 **1207 passed / 6 skipped / 0 failed**，零回归，无 Breaking Change。
+
+### 🔒 安全
+
+- **embedding 未脱敏外发修复**：`qdrant_vector_store._embed_texts` 将文档原文直接传给外部 embedding API（OpenAI/智谱），未经脱敏处理，密钥/token/手机号等敏感数据会外发。现外发前对每个 text 调用 `_redact_for_embedding` 脱敏（内联复制 `_DEFAULT_RULES` 正则，遵守架构冻结禁 rag→runtime import 的约束，与 `_PROVIDER_BASE_URLS` 同手法）。
+- **verify_loop 安全门失效修复**：`compute_verify_score` 当 `security_review` 缺失（SecurityAgent 跳过/失败）时按 0 计，但不阻止 verdict 通过——只要 repair_plan(0.4)+test_plan(0.3)+git_attribution(0.1)=0.8 即达 HIGH_CONFIDENCE，完全绕过安全审查。现当 security_review 缺失或含 critical/high 发现时，score 钳制为 PARTIAL 阈值，确保 verdict 不会越级到 PASSED/HIGH_CONFIDENCE，仍允许 PARTIAL 继续迭代补全安全审查。
+- **限流键绕过修复**：`RateLimitMiddleware` 用 `request.client.host` 构造限流 key，反代场景（nginx/CloudFlare）下所有真实用户共享代理 IP 的限流桶（互相误伤），攻击者也可用代理池变化 IP 绕过。现优先读 `X-Forwarded-For` 最左客户端 IP，再读 `X-Real-IP`，缺失时回退 `request.client.host`，正确识别反代后的真实客户端。
+
 ## [0.6.3] - 2026-08-24
 
 > v0.6.x 稳定性维护补丁：全量代码审查后修复 2 个 Critical + 10 个 Major 缺陷，ruff 门禁从 advisory 升级为硬门禁。测试基线 **1207 passed / 6 skipped / 0 failed**，零回归，无 Breaking Change。

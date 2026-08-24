@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import uuid
 from typing import Any, Optional
@@ -33,6 +34,51 @@ _PROVIDER_BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
     "custom": "",
 }
+
+# ── 脱敏正则（与 app/runtime/core/redaction.py 的 _DEFAULT_RULES 保持一致）────
+# 架构冻结禁止 rag → runtime import，故此处内联复制（与 _PROVIDER_BASE_URLS 同样手法）。
+# embedding 把文档原文发往外部 LLM 服务，必须先脱敏，否则密钥/token/手机号会外发。
+_REDACT_RULES: list[tuple[re.Pattern[str], str]] = [
+    # password = "x", pwd: xxx, passwd='y'
+    (re.compile(r"(?i)\b(password|pwd|passwd)\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)"), r'\1="***"'),
+    # api_key / api-key / token / secret / access_token / private_key = ...
+    (
+        re.compile(
+            r"(?i)\b(api[_-]?key|apikey|secret|token|access[_-]?token|auth[_-]?token|private[_-]?key)\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
+        ),
+        r'\1="***"',
+    ),
+    # Authorization: Bearer xxx
+    (re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+))(?:'[^']*'|\"[^\"]*\"|\S+)"), r"\1***"),
+    # JSON 格式: {"password":"xxx"}
+    (re.compile(r"(?i)\"(password|pwd|passwd)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)"), r'"\1":"***"'),
+    # JSON 格式: {"api_key":"xxx"}, {"token":"xxx"}, {"secret":"xxx"}, {"authorization":"xxx"}
+    (
+        re.compile(
+            r"(?i)\"(api[_-]?key|apikey|secret|token|access[_-]?token|auth[_-]?token|private[_-]?key|authorization)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
+        ),
+        r'"\1":"***"',
+    ),
+    # 中国大陆 11 位手机号
+    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "***PHONE***"),
+]
+
+
+def _redact_for_embedding(text: str) -> str:
+    """embedding 外发前的脱敏。
+
+    - settings.redaction_enabled=False：原样返回（与 runtime/core/redaction.py 语义一致，
+      但 embedding 路径默认仍脱敏；仅在用户显式关闭全局脱敏时才不脱敏）。
+    - None / 非字符串 / 空串：原样返回。
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    if not settings.redaction_enabled:
+        logger.warning("redaction disabled — embedding 外发可能包含敏感数据")
+        return text
+    for pattern, repl in _REDACT_RULES:
+        text = pattern.sub(repl, text)
+    return text
 
 # ── 模块级单例（参照 analyzer._get_redis_cache 的双重检查锁模式）────────────
 _qdrant_client: Optional[Any] = None  # QdrantClient | None
@@ -190,6 +236,9 @@ def _embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
     client = _get_embedding_client()
     if client is None:
         return None
+
+    # SEC: 外发前脱敏，防止密钥/token/手机号等敏感数据流向外部 embedding API
+    texts = [_redact_for_embedding(t) for t in texts]
 
     all_vectors: list[list[float]] = []
     expected_dim = settings.qdrant_embedding_dim

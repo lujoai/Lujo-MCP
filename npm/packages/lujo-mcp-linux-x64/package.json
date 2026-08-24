@@ -1,6 +1,6 @@
 {
   "name": "@lujoai/lujo-mcp-linux-x64",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Lujo-MCP binary for linux-x64 (auto-installed via the meta package).",
   "license": "MIT",
   "os": [

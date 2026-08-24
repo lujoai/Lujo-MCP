@@ -64,8 +64,13 @@ def compute_verify_score(result: dict[str, Any]) -> float:
     - git_attribution 存在：+0.1
 
     任一维度缺失按 0 计，最终分值 = 各项得分之和。
+
+    SEC: 安全门——当 security_review 缺失（SecurityAgent 跳过/失败）或含 critical/high
+    发现时，score 上限钳制为 PARTIAL 阈值（含），确保 verdict 不会达到 PASSED/HIGH_CONFIDENCE，
+    防止"安全审查缺失即绕过"。仍允许 PARTIAL 以继续迭代补全安全审查。
     """
     score = 0.0
+    security_pass = False
 
     if result.get("repair_plan"):
         score += 0.4
@@ -83,11 +88,21 @@ def compute_verify_score(result: dict[str, Any]) -> float:
         )
         if not critical:
             score += 0.2
+            security_pass = True
+    # security_review 缺失或含 critical → security_pass 保持 False
 
     if result.get("git_attribution"):
         score += 0.1
 
-    return round(min(score, 1.0), 3)
+    score = round(min(score, 1.0), 3)
+
+    # SEC: 安全门未通过时，钳制分数到 PARTIAL 阈值（含），防止 verdict 越级到 PASSED
+    pass_threshold = settings.agent_verify_loop_pass_threshold
+    if not security_pass and score >= pass_threshold:
+        partial_threshold = settings.agent_verify_loop_partial_threshold
+        score = partial_threshold
+
+    return score
 
 
 async def run_verify_loop(
