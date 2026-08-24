@@ -56,7 +56,7 @@ test("_getPublicConfig 暴露 V5 传输增强配置契约（gzip/节流/localSto
   assert.strictEqual(cfg.enableLocalStorageFallback, true);
   assert.strictEqual(cfg.localStorageKey, "ai-debug-pending-batches");
   assert.strictEqual(cfg.maxPendingBatches, 10);
-  // v0.6.1 弹性退避与存储卫生配置
+  // v0.6.2 弹性退避与存储卫生配置
   assert.strictEqual(cfg.maxRetryDelay, 5000);
   assert.strictEqual(cfg.localStorageTTL, 86400000);
   // v0.5.1 Source Map：release 透传（空 = 不发送）

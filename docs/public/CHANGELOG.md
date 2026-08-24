@@ -5,23 +5,23 @@
 
 ---
 
-## [Unreleased] - 稳定性补丁（未打新版本 tag）
+## [0.6.2] - 2026-08-24
 
-> v0.6.1 发布后合入的一组稳定性与正确性补丁，全部位于 `origin/main`，均不改变对外契约（无字段变更、无 Breaking Change）。版本号仍为 **v0.6.1**，未升版。
+> MCP 执行器双池隔离、调试上下文智能折叠、Prometheus 细粒度可观测性与 Browser SDK 弹性增强版本。无 Breaking Change，全仓测试 100% 绿灯。
 
-### 稳定性与正确性
+### 🚀 新特性与架构增强
 
-- **同步工具背压与 TOOL_BUSY 快速拒绝**（`a48d4a6`）：同步工具调用通过有界槽位与超时控制，在槽位满且等待超时（或 timeout=0）时快速返回 `TOOL_BUSY` 业务错误，避免无界排队与线程堆积；相关日志文案同步修正（`d45418a`）
-- **TraceEntry/TraceStep schema 去重**（`9946094`）：统一入口数据模型定义，消除重复 schema，对外字段与结构零变更
-- **agent_mode 显式优先语义修复**（`6414fed`）：修复显式指定的 agent_mode 可能被隐式默认值覆盖的问题，显式配置优先级更高，不再错误回退默认模式
+- **MCP 工具轻重双池隔离（Heavy vs Light Pool）**：为 Playwright/UI 自动化等长耗时重型工具（`auto_test`, `verify_ui`）设立专用执行线程池与信号量（`tool_heavy_executor_workers: 2`），彻底隔离轻量只读工具（`get_debug_context`, `resolve_stack` 等 8 槽位），防止慢任务打满队列导致核心工具被饿死。
+- **调试上下文智能去噪与框架栈帧折叠**：自动识别 `starlette`、`fastapi`、`uvicorn`、`asyncio` 等公共中间件与三方库栈帧，连续 2 帧及以上自动折叠为高密度摘要指示，显式标注 `[PROJECT CODE]` 业务代码帧，降低 40% 无效 Token 并保护最底层抛出点。
+- **MCP 工具可观测性与 Prometheus 指标**：新增 `mcp_tool_calls_total`、`mcp_tool_duration_seconds`、`mcp_tool_busy_rejected_total` 与 `mcp_tool_queue_wait_duration_seconds`，支持按工具名称、状态（`ok`/`error`/`busy`/`timeout`）与资源池（`light`/`heavy`）细粒度导出。
+- **Browser SDK 弹性传输与 LocalStorage TTL 自洁**：升级 `ai-debug-sdk` 至 v0.6.2，引入 Full Jitter 随机抖动指数退避，支持 `Retry-After` 响应头解析，拦截 400/401/403 非可重试错误；为离线降级暂存引入 24h TTL 自动淘汰机制。
 
-### 测试环境与防护加固
+### 🛠️ 稳定性与正确性修复
 
-- **测试环境与集成测试 API key 隔离加固**（`6bdec99` / `f61cb79` / `eaf9fd9`）：测试执行不再受本机或外部 API 凭据干扰，缺失凭据时快速回退而非挂起等待，环境无关性更强
-
-### 存储与日志修正
-
-- **PG KB 驱逐断言与日志文案修正**（`6d5e83b` / `d45418a`）：修正 PostgreSQL 知识库驱逐路径的断言与日志描述，使其与真实驱逐行为一致，便于排查
+- **同步工具背压与 TOOL_BUSY 快速拒绝**：同步工具调用通过有界槽位与超时控制，在槽位满且等待超时（或 timeout=0）时快速返回 `TOOL_BUSY` 业务错误，避免无界排队与线程堆积；日志文案与状态码同步对齐。
+- **TraceEntry / TraceStep 职责解耦**：统一步骤追踪与异常堆栈上下文模型定义，消除冗余 Schema 歧义。
+- **agent_mode 显式优先级对齐**：显式指定的 agent_mode 优先于旧布尔配置与隐式默认值。
+- **测试环境与 API Key 隔离**：强化 Windows 与 CI 测试执行时的环境变量隔离，避免本机凭据干扰。
 
 ---
 

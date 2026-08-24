@@ -91,7 +91,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 gh workflow run release-npm.yml -f version=<version>  # 例如 0.6.1
 
 # 方式二：打 tag 自动触发（v 前缀）
-git tag v<version>  # 例如 v0.6.1
+git tag v<version>  # 例如 v0.6.2
 git push origin v<version>
 ```
 

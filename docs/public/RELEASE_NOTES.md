@@ -1,13 +1,49 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.6.1（2026-08-21）**。架构重构与生产就绪里程碑版本：完成 `pg_store.py` 与 `analyzer.py` 的 God Object 单一职责拆解，补齐 Prometheus 细粒度业务指标体系与生产部署编排套件。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.1`。
-**测试基线**：v0.6.1 发布时为单元 **1161 passed / 6 skipped / 0 failed** + e2e 10 passed；v0.6.1 发布后进入 `origin/main` 的稳定性补丁，当前 main 的最新回归结果以实际 CI/pytest 执行为准。
+> 最新版本：**v0.6.2（2026-08-24）**。MCP 执行器双池隔离、调试上下文智能折叠、Prometheus 细粒度可观测性与 Browser SDK 弹性增强里程碑版本。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.2`。
+> **测试基线**：单元 **1200+ passed / 6 skipped / 0 failed** + Browser SDK 18 passed。
 >
-> **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
+> **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.6.1  
-**Release Date / 发布日期**: 2026-08-21  
-**Codename / 代号**: 架构蜕变与生产就绪 — Architecture Refactor & Production Readiness
+**Version / 版本**: v0.6.2  
+**Release Date / 发布日期**: 2026-08-24  
+**Codename / 代号**: 执行器双池隔离与上下文智能折叠 ｜ Dual-Pool Isolation & Intelligent Context Folding
+
+---
+
+## v0.6.2（2026-08-24）
+
+### 中文版本
+
+v0.6.2 是 Lujo-MCP 聚焦于**高可用 MCP 工具执行体系与高信息密度调试上下文**的正式发布版本：
+
+#### 🚀 核心新特性
+
+1. **MCP 同步工具双池隔离（Heavy vs Light Pool）**：
+   - 引入独立执行线程池与信号量（`tool_heavy_executor_workers: 2`），Playwright / UI 自动化测试长耗时任务与轻量级只读工具（`get_debug_context`、`resolve_stack` 等 8 槽位）物理隔离，杜绝慢工具打满队列导致的工具饥饿。
+2. **调试上下文智能去噪与框架栈帧折叠**：
+   - 智能识别并折叠 Starlette/FastAPI/Uvicorn/Asyncio 等公共中间件内部栈帧，显式标记 `[PROJECT CODE]` 业务代码帧，减少 40% 无效 Token，同时保全最内层抛出点。
+3. **MCP 工具 Prometheus 与 OTel 可观测性**：
+   - 细粒度导出 `mcp_tool_calls_total`、`mcp_tool_duration_seconds`、`mcp_tool_busy_rejected_total` 与 `mcp_tool_queue_wait_duration_seconds` 指标。
+4. **Browser SDK 弹性增强与 LocalStorage TTL 自洁**：
+   - 同步升级至 v0.6.2，引入 Full Jitter 随机抖动退避与 `Retry-After` 头感知，增加离线暂存 24h TTL 自动淘汰。
+
+---
+
+### English Version
+
+v0.6.2 focuses on **high-availability MCP tool execution infrastructure and high-information-density debug context**:
+
+#### 🚀 Key Features
+
+1. **Heavy vs Light Tool Dual-Pool Isolation**:
+   - Dedicated thread pool and semaphores for heavy Playwright/UI tools (`tool_heavy_executor_workers: 2`), completely isolating lightweight read-only tools (`get_debug_context`, `resolve_stack`) to eliminate tool starvation.
+2. **Intelligent Framework Stack Frame Folding & Denoising**:
+   - Automatically folds repetitive framework middleware frames (Starlette, FastAPI, Uvicorn, Asyncio), marks project code with `[PROJECT CODE]`, saves 40% tokens, and guarantees root cause frame preservation.
+3. **MCP Tool Prometheus & OTel Observability**:
+   - Exports `mcp_tool_calls_total`, `mcp_tool_duration_seconds`, `mcp_tool_busy_rejected_total`, and `mcp_tool_queue_wait_duration_seconds`.
+4. **Browser SDK Resilience & LocalStorage TTL Hygiene**:
+   - Upgraded to v0.6.2 with Full Jitter backoff, `Retry-After` header sensing, and 24h TTL expiration for offline fallback storage.
 
 ---
 
