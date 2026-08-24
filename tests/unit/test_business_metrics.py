@@ -5,6 +5,9 @@ from app.observability import (
     record_llm_cache_hit,
     record_storage_operation,
     record_pg_retry,
+    record_mcp_tool_call,
+    record_mcp_tool_busy,
+    record_mcp_tool_wait,
     _render_prometheus,
     _trim_metric_tables_if_needed,
     _MAX_METRIC_KEYS,
@@ -80,3 +83,39 @@ class TestBusinessMetrics:
                 _llm_requests_total[(f"prov_{i}", "mod", "ok")] = 1
             _trim_metric_tables_if_needed()
             assert len(_llm_requests_total) == 0
+
+    def test_record_mcp_tool_call_and_render(self):
+        record_mcp_tool_call("resolve_stack", "ok", 0.025)
+        record_mcp_tool_call("auto_test", "timeout", 60.0)
+        record_mcp_tool_call("debug_tool", "error", 0.120)
+
+        rendered = _render_prometheus()
+        assert "mcp_tool_calls_total" in rendered
+        assert 'tool="resolve_stack"' in rendered
+        assert 'status="ok"' in rendered
+        assert 'tool="auto_test"' in rendered
+        assert 'status="timeout"' in rendered
+        assert "mcp_tool_duration_seconds_sum" in rendered
+        assert 'tool="resolve_stack"' in rendered
+
+    def test_record_mcp_tool_busy_and_wait(self):
+        record_mcp_tool_busy("auto_test", "heavy", 1.5)
+        record_mcp_tool_wait("get_debug_context", "light", 0.005)
+
+        rendered = _render_prometheus()
+        assert "mcp_tool_busy_rejected_total" in rendered
+        assert 'tool="auto_test"' in rendered
+        assert 'pool="heavy"' in rendered
+        assert "mcp_tool_queue_wait_duration_seconds_sum" in rendered
+        assert 'tool="get_debug_context"' in rendered
+        assert 'pool="light"' in rendered
+
+    def test_mcp_tool_label_sanitization(self):
+        record_mcp_tool_call("bad\ntool\"", "ok\r", 0.1)
+        record_mcp_tool_busy("bad\nheavy\"", "pool\t", 0.2)
+
+        rendered = _render_prometheus()
+        assert "\ntool" not in rendered
+        assert 'tool="badtool"' in rendered
+        assert 'pool="pool"' in rendered
+

@@ -8,6 +8,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app import __version__
 from app.config import settings
+from app.observability import (
+    record_mcp_tool_call,
+    record_mcp_tool_busy,
+    record_mcp_tool_wait,
+)
 from app.mcp.protocol.jsonrpc import (
     JSONRPCRequest,
     make_response,
@@ -165,14 +170,19 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
 
     if asyncio.iscoroutinefunction(handler):
         try:
-            result = await asyncio.wait_for(handler(arguments), timeout=timeout)
+            result = await asyncio.wait_for(
+                handler(arguments),
+                timeout=timeout,
+            )
+            record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
         except asyncio.TimeoutError:
-            logger.warning("工具 %s 执行超时（>%ss），已中止", tool_name, timeout)
+            record_mcp_tool_call(tool_name, "timeout", timeout)
+            logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
             return make_response(req.id, {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"工具执行超时（>{timeout}s），已中止。",
+                        "text": f"工具执行超时(>{timeout}s)，已中止",
                     }
                 ],
                 "isError": True,
@@ -180,6 +190,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "_timed_out": True,
             })
         except Exception:
+            record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
             logger.exception("工具 %s 执行失败", tool_name)
             return make_response(req.id, {
                 "content": [
@@ -192,12 +203,16 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": "TOOL_INTERNAL",
             })
     else:
-        # 同步工具：获取并发槽位（带等待超时，防止线程池排队堆积与饿死）
+        # 同步工具：获取执行槽位，带等待超时，防止线程池排队堆积与饥饿
         executor, slots, pool_type = _get_tool_executor_and_slots(tool_name)
         busy_timeout = settings.tool_busy_queue_timeout
+        wait_start = time.perf_counter()
         try:
             await asyncio.wait_for(slots.acquire(), timeout=busy_timeout)
         except asyncio.TimeoutError:
+            wait_sec = time.perf_counter() - wait_start
+            record_mcp_tool_busy(tool_name, pool_type, wait_sec)
+            record_mcp_tool_call(tool_name, "busy", wait_sec)
             if busy_timeout <= 0:
                 logger.warning("工具 %s (%s池) 执行队列已满（不等待，立即拒绝），已拒绝执行", tool_name, pool_type)
             else:
@@ -214,23 +229,25 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "_busy": True,
             })
 
+        wait_sec = time.perf_counter() - wait_start
+        record_mcp_tool_wait(tool_name, pool_type, wait_sec)
+
         sync_future: asyncio.Future | None = None
         try:
             loop = asyncio.get_running_loop()
             sync_future = loop.run_in_executor(executor, handler, arguments)
             result = await asyncio.wait_for(sync_future, timeout=timeout)
+            record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
         except asyncio.TimeoutError:
+            record_mcp_tool_call(tool_name, "timeout", timeout)
             if sync_future is not None:
-                # 仅在线程尚未启动排队中时 cancel() 有效；
-                # 线程一旦已启动，Python threading 模型下 cancel() 无法中断正在执行的线程，
-                # 线程仍会跑完，这是有界线程池设计下的已知限制。
                 sync_future.cancel()
-            logger.warning("工具 %s 执行超时（>%ss），已中止", tool_name, timeout)
+            logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
             return make_response(req.id, {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"工具执行超时（>{timeout}s），已中止。",
+                        "text": f"工具执行超时(>{timeout}s)，已中止",
                     }
                 ],
                 "isError": True,
@@ -238,6 +255,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "_timed_out": True,
             })
         except Exception:
+            record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
             logger.exception("工具 %s 执行失败", tool_name)
             return make_response(req.id, {
                 "content": [

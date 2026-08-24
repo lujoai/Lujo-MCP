@@ -48,6 +48,14 @@ _storage_latency_sum: Dict[Tuple[str, str], float] = defaultdict(float)  # (stor
 _storage_latency_count: Dict[Tuple[str, str], int] = defaultdict(int)    # (store, operation) -> count
 _pg_retries_total: Dict[str, int] = defaultdict(int)                     # operation -> count
 
+# v0.6.2: MCP 工具执行与背压指标
+_mcp_tool_calls_total: Dict[Tuple[str, str], int] = defaultdict(int)        # (tool_name, status) -> count
+_mcp_tool_latency_sum: Dict[str, float] = defaultdict(float)                # tool_name -> sum_sec
+_mcp_tool_latency_count: Dict[str, int] = defaultdict(int)                  # tool_name -> count
+_mcp_tool_busy_rejected_total: Dict[Tuple[str, str], int] = defaultdict(int)  # (tool_name, pool_type) -> count
+_mcp_tool_wait_latency_sum: Dict[Tuple[str, str], float] = defaultdict(float)   # (tool_name, pool_type) -> sum_sec
+_mcp_tool_wait_latency_count: Dict[Tuple[str, str], int] = defaultdict(int) # (tool_name, pool_type) -> count
+
 router = APIRouter(tags=["observability"])
 
 # ── OpenTelemetry（P3-4）──
@@ -62,6 +70,10 @@ _otel_llm_cache_counter = None
 _otel_storage_op_counter = None
 _otel_storage_lat_hist = None
 _otel_pg_retry_counter = None
+_otel_mcp_tool_counter = None
+_otel_mcp_tool_lat_hist = None
+_otel_mcp_busy_counter = None
+_otel_mcp_wait_lat_hist = None
 _otel_shutdown = None
 
 try:
@@ -86,6 +98,7 @@ def _init_otel():
     global _otel_meter, _otel_request_counter, _otel_error_counter, _otel_latency_histogram
     global _otel_llm_req_counter, _otel_llm_latency_hist, _otel_llm_token_counter, _otel_llm_cache_counter
     global _otel_storage_op_counter, _otel_storage_lat_hist, _otel_pg_retry_counter, _otel_shutdown
+    global _otel_mcp_tool_counter, _otel_mcp_tool_lat_hist, _otel_mcp_busy_counter, _otel_mcp_wait_lat_hist
 
     if _otel_meter is not None:
         return _otel_meter, _otel_request_counter, _otel_error_counter, _otel_latency_histogram, _otel_shutdown
@@ -159,6 +172,22 @@ def _init_otel():
             "pg_retries_total",
             description="Total PostgreSQL connection retries",
         )
+        _otel_mcp_tool_counter = meter.create_counter(
+            "mcp_tool_calls_total",
+            description="Total MCP tool calls by tool name and status",
+        )
+        _otel_mcp_tool_lat_hist = meter.create_histogram(
+            "mcp_tool_duration_seconds",
+            description="MCP tool execution latency in seconds",
+        )
+        _otel_mcp_busy_counter = meter.create_counter(
+            "mcp_tool_busy_rejected_total",
+            description="Total MCP tool calls rejected due to saturated execution queue",
+        )
+        _otel_mcp_wait_lat_hist = meter.create_histogram(
+            "mcp_tool_queue_wait_duration_seconds",
+            description="MCP tool slot acquisition wait latency in seconds",
+        )
 
         def shutdown():
             provider.shutdown()
@@ -201,6 +230,8 @@ def _trim_metric_tables_if_needed() -> None:
         + len(_latency_sum)
         + len(_llm_requests_total)
         + len(_storage_ops_total)
+        + len(_mcp_tool_calls_total)
+        + len(_mcp_tool_busy_rejected_total)
     )
     if total_keys > _MAX_METRIC_KEYS:
         logger.warning("指标表超上限，清空重置 (total_keys=%d)", total_keys)
@@ -217,6 +248,12 @@ def _trim_metric_tables_if_needed() -> None:
         _storage_latency_sum.clear()
         _storage_latency_count.clear()
         _pg_retries_total.clear()
+        _mcp_tool_calls_total.clear()
+        _mcp_tool_latency_sum.clear()
+        _mcp_tool_latency_count.clear()
+        _mcp_tool_busy_rejected_total.clear()
+        _mcp_tool_wait_latency_sum.clear()
+        _mcp_tool_wait_latency_count.clear()
 
 
 # ── v0.6.0: LLM 记录辅助函数 ──
@@ -307,6 +344,79 @@ def record_pg_retry(operation: str) -> None:
     _init_otel()
     if _otel_pg_retry_counter:
         _otel_pg_retry_counter.add(1, {"operation": op})
+
+
+# ── v0.6.2: MCP 工具记录辅助函数 ──
+
+def record_mcp_tool_call(
+    tool_name: str,
+    status: str,
+    duration_sec: float = 0.0,
+) -> None:
+    """记录 MCP 工具调用次数与执行耗时 (status: ok | error | busy | timeout)"""
+    t = _sanitize_label(tool_name or "unknown")
+    s = _sanitize_label(status or "unknown")
+    dur = max(0.0, float(duration_sec))
+
+    with _counter_lock:
+        _trim_metric_tables_if_needed()
+        _mcp_tool_calls_total[(t, s)] += 1
+        if dur > 0.0 or s == "ok":
+            _mcp_tool_latency_sum[t] += dur
+            _mcp_tool_latency_count[t] += 1
+
+    _init_otel()
+    if _otel_mcp_tool_counter:
+        _otel_mcp_tool_counter.add(1, {"tool": t, "status": s})
+    if _otel_mcp_tool_lat_hist and (dur > 0.0 or s == "ok"):
+        _otel_mcp_tool_lat_hist.record(dur, {"tool": t, "status": s})
+
+
+def record_mcp_tool_busy(
+    tool_name: str,
+    pool_type: str = "light",
+    wait_sec: float = 0.0,
+) -> None:
+    """记录 MCP 工具因槽位已满触发的 TOOL_BUSY 拒绝及等待耗时"""
+    t = _sanitize_label(tool_name or "unknown")
+    pool = _sanitize_label(pool_type or "light")
+    w = max(0.0, float(wait_sec))
+
+    with _counter_lock:
+        _trim_metric_tables_if_needed()
+        _mcp_tool_busy_rejected_total[(t, pool)] += 1
+        if w > 0.0:
+            _mcp_tool_wait_latency_sum[(t, pool)] += w
+            _mcp_tool_wait_latency_count[(t, pool)] += 1
+
+    _init_otel()
+    if _otel_mcp_busy_counter:
+        _otel_mcp_busy_counter.add(1, {"tool": t, "pool": pool})
+    if _otel_mcp_wait_lat_hist and w > 0.0:
+        _otel_mcp_wait_lat_hist.record(w, {"tool": t, "pool": pool})
+
+
+def record_mcp_tool_wait(
+    tool_name: str,
+    pool_type: str = "light",
+    wait_sec: float = 0.0,
+) -> None:
+    """记录 MCP 工具成功获取槽位前的排队等待耗时"""
+    t = _sanitize_label(tool_name or "unknown")
+    pool = _sanitize_label(pool_type or "light")
+    w = max(0.0, float(wait_sec))
+
+    if w <= 0.0:
+        return
+
+    with _counter_lock:
+        _trim_metric_tables_if_needed()
+        _mcp_tool_wait_latency_sum[(t, pool)] += w
+        _mcp_tool_wait_latency_count[(t, pool)] += 1
+
+    _init_otel()
+    if _otel_mcp_wait_lat_hist:
+        _otel_mcp_wait_lat_hist.record(w, {"tool": t, "pool": pool})
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
@@ -454,6 +564,51 @@ def _render_prometheus() -> str:
             for op, count in _pg_retries_total.items():
                 lines.append(
                     f'pg_retries_total{{operation="{op}"}} {count}'
+                )
+
+        # 4. v0.6.2: MCP 工具执行与背压指标
+        if _mcp_tool_calls_total:
+            lines.append("# HELP mcp_tool_calls_total Total MCP tool calls by tool/status")
+            lines.append("# TYPE mcp_tool_calls_total counter")
+            for (tool, status), count in _mcp_tool_calls_total.items():
+                lines.append(
+                    f'mcp_tool_calls_total{{tool="{tool}",status="{status}"}} {count}'
+                )
+
+        if _mcp_tool_latency_sum:
+            lines.append("# HELP mcp_tool_duration_seconds_sum MCP tool execution latency sum (seconds)")
+            lines.append("# TYPE mcp_tool_duration_seconds_sum counter")
+            for tool, total in _mcp_tool_latency_sum.items():
+                lines.append(
+                    f'mcp_tool_duration_seconds_sum{{tool="{tool}"}} {round(total, 4)}'
+                )
+            lines.append("# HELP mcp_tool_duration_seconds_count MCP tool execution count")
+            lines.append("# TYPE mcp_tool_duration_seconds_count counter")
+            for tool, count in _mcp_tool_latency_count.items():
+                lines.append(
+                    f'mcp_tool_duration_seconds_count{{tool="{tool}"}} {count}'
+                )
+
+        if _mcp_tool_busy_rejected_total:
+            lines.append("# HELP mcp_tool_busy_rejected_total Total MCP tool calls rejected due to queue saturation")
+            lines.append("# TYPE mcp_tool_busy_rejected_total counter")
+            for (tool, pool), count in _mcp_tool_busy_rejected_total.items():
+                lines.append(
+                    f'mcp_tool_busy_rejected_total{{tool="{tool}",pool="{pool}"}} {count}'
+                )
+
+        if _mcp_tool_wait_latency_sum:
+            lines.append("# HELP mcp_tool_queue_wait_duration_seconds_sum MCP tool slot wait latency sum (seconds)")
+            lines.append("# TYPE mcp_tool_queue_wait_duration_seconds_sum counter")
+            for (tool, pool), total in _mcp_tool_wait_latency_sum.items():
+                lines.append(
+                    f'mcp_tool_queue_wait_duration_seconds_sum{{tool="{tool}",pool="{pool}"}} {round(total, 4)}'
+                )
+            lines.append("# HELP mcp_tool_queue_wait_duration_seconds_count MCP tool slot wait count")
+            lines.append("# TYPE mcp_tool_queue_wait_duration_seconds_count counter")
+            for (tool, pool), count in _mcp_tool_wait_latency_count.items():
+                lines.append(
+                    f'mcp_tool_queue_wait_duration_seconds_count{{tool="{tool}",pool="{pool}"}} {count}'
                 )
 
     return "\n".join(lines) + "\n"
