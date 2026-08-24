@@ -327,30 +327,49 @@ async def _call_async_through_breaker(cb, coro_factory):
     ``_handle_success``/``_handle_error`` 完成失败计数与状态迁移，使熔断开启时
     也能走 AsyncOpenAI（不再退回 to_thread 同步客户端），判定语义与同步 ``analyze`` 一致。
     OPEN 且未到重置时间 → 抛 ``pybreaker.CircuitBreakerError``（由调用方转 fallback）。
+
+    FIX: v0.6.5 事件循环阻塞 —— pybreaker 内部为 threading.RLock，与同步路径
+    （to_thread 中的 ``analyze``/``cb.call``）争锁时事件循环线程会持锁等待。
+    三段锁临界区（状态检查/失败计数/成功计数）整体移入线程池执行，
+    锁争用不再发生在事件循环线程；状态对象仍在同一临界区内捕获/使用，语义不变。
     """
-    with cb._lock:
-        state = cb.state
-        if cb.current_state == _CB_STATE_OPEN:
-            opened_at = cb._state_storage.opened_at
-            if opened_at and datetime.now(timezone.utc) < opened_at + timedelta(
-                seconds=cb.reset_timeout
-            ):
-                raise _CB_ERROR(
-                    "Timeout not elapsed yet, circuit breaker still open"
-                )
-            cb.half_open()
+
+    def _state_check():
+        with cb._lock:
             state = cb.state
-        coro = coro_factory()  # 仅构造协程，不执行
+            if cb.current_state == _CB_STATE_OPEN:
+                opened_at = cb._state_storage.opened_at
+                if opened_at and datetime.now(timezone.utc) < opened_at + timedelta(
+                    seconds=cb.reset_timeout
+                ):
+                    raise _CB_ERROR(
+                        "Timeout not elapsed yet, circuit breaker still open"
+                    )
+                cb.half_open()
+                state = cb.state
+            return state
+
+    state = await asyncio.to_thread(_state_check)
+    coro = coro_factory()  # 仅构造协程，不执行
     try:
         result = await coro
     except BaseException as exc:
         # 按熔断语义重新抛出：未达阈值→原异常；达阈值/半开失败→CircuitBreakerError
-        with cb._lock:
-            state._handle_error(exc)
+        # （except ... as 变量在块尾会被删除，闭包内引用需先显式绑定）
+        err = exc
+
+        def _record_error():
+            with cb._lock:
+                state._handle_error(err)
+
+        await asyncio.to_thread(_record_error)
         raise
     else:
-        with cb._lock:
-            state._handle_success()
+        def _record_success():
+            with cb._lock:
+                state._handle_success()
+
+        await asyncio.to_thread(_record_success)
         return result
 
 

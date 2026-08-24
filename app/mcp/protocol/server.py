@@ -79,6 +79,43 @@ def _get_tool_executor_and_slots(tool_name: str) -> tuple[ThreadPoolExecutor, as
     return _TOOL_EXECUTOR, _tool_slots, "light"
 
 
+async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: float) -> bool:
+    """竞态安全地获取执行槽位；超时/无槽位 fast-fail 返回 False。
+
+    FIX: v0.6.5 超时背压竞态 —— 原 ``asyncio.wait_for(slots.acquire(), timeout)``
+    在超时与获取完成同拍（典型：busy_timeout=0/极小且并发释放槽位）时，
+    槽位可能已实际转移到本调用方，但调用方只看到 TimeoutError 并按
+    TOOL_BUSY fast-fail 返回且永不 release → 槽位泄漏，重复 N 次后池永久
+    占满、全部工具恒 TOOL_BUSY。此处超时后显式检查 acquire 任务完成态：
+    已成功取得则立即归还槽位（防泄漏），未取得则由 wait_for 的取消语义
+    保证 semaphore 状态机自行清理 waiter（不产生重复释放）。
+
+    实现细节：
+    - 快路径：有空位时 ``acquire`` 内部不挂起（事件循环单线程，locked()
+      检查到获取之间无 await、无竞态），避免 ensure_future 包一层任务后
+      timeout=0 的定时器把"有空位的快路径获取"误杀成 TOOL_BUSY；
+    - ``busy_timeout <= 0``：无可用槽位时立即拒绝（Fast-Fail 文档语义）。
+    """
+    if not slots.locked():
+        # 有空位：acquire 走 Semaphore 快路径（不挂起、不进等待队列）
+        await slots.acquire()
+        return True
+
+    if busy_timeout <= 0:
+        # Fast-Fail：无可用槽位且不等待，立即拒绝
+        return False
+
+    task = asyncio.ensure_future(slots.acquire())
+    try:
+        await asyncio.wait_for(task, timeout=busy_timeout)
+        return True
+    except asyncio.TimeoutError:
+        if task.done() and not task.cancelled() and task.exception() is None:
+            # 完成与超时同拍：槽位已实际取得，归还防泄漏
+            slots.release()
+        return False
+
+
 def register_tool(
     name: str,
     description: str,
@@ -169,47 +206,75 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     handler = tool["handler"]
 
     if asyncio.iscoroutinefunction(handler):
+        # FIX: v0.6.5 async 工具绕过双池 —— 此前 async handler 直接 await 执行，
+        # 完全绕过 light/heavy 双池槽位门控：无并发上限，重型 async 工具
+        # （auto_test 等）可打满事件循环并与同步工具互相影响。现按同一
+        # heavy 判定获取对应池槽位（async 无需线程池，仅信号量门控），
+        # 超时同样走 TOOL_BUSY fast-fail，保持双池隔离语义。
+        _, slots, pool_type = _get_tool_executor_and_slots(tool_name)
+        busy_timeout = settings.tool_busy_queue_timeout
+        wait_start = time.perf_counter()
+        if not await _acquire_slot_or_fastfail(slots, busy_timeout):
+            wait_sec = time.perf_counter() - wait_start
+            record_mcp_tool_busy(tool_name, pool_type, wait_sec)
+            record_mcp_tool_call(tool_name, "busy", wait_sec)
+            if busy_timeout <= 0:
+                logger.warning("工具 %s (%s池) 执行队列已满（不等待，立即拒绝），已拒绝执行", tool_name, pool_type)
+            else:
+                logger.warning("工具 %s (%s池) 执行队列已满（等待 %.3fs 超时），已拒绝执行", tool_name, pool_type, wait_sec)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "工具执行队列已满，请稍后重试。",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_BUSY",
+                "_busy": True,
+            })
         try:
-            result = await asyncio.wait_for(
-                handler(arguments),
-                timeout=timeout,
-            )
-            record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
-        except asyncio.TimeoutError:
-            record_mcp_tool_call(tool_name, "timeout", timeout)
-            logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
-            return make_response(req.id, {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"工具执行超时(>{timeout}s)，已中止",
-                    }
-                ],
-                "isError": True,
-                "error_code": "TOOL_TIMEOUT",
-                "_timed_out": True,
-            })
-        except Exception:
-            record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
-            logger.exception("工具 %s 执行失败", tool_name)
-            return make_response(req.id, {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "工具执行失败，详情见服务端日志",
-                    }
-                ],
-                "isError": True,
-                "error_code": "TOOL_INTERNAL",
-            })
+            try:
+                result = await asyncio.wait_for(
+                    handler(arguments),
+                    timeout=timeout,
+                )
+                record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
+            except asyncio.TimeoutError:
+                record_mcp_tool_call(tool_name, "timeout", timeout)
+                logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
+                return make_response(req.id, {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"工具执行超时(>{timeout}s)，已中止",
+                        }
+                    ],
+                    "isError": True,
+                    "error_code": "TOOL_TIMEOUT",
+                    "_timed_out": True,
+                })
+            except Exception:
+                record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
+                logger.exception("工具 %s 执行失败", tool_name)
+                return make_response(req.id, {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "工具执行失败，详情见服务端日志",
+                        }
+                    ],
+                    "isError": True,
+                    "error_code": "TOOL_INTERNAL",
+                })
+        finally:
+            slots.release()
     else:
         # 同步工具：获取执行槽位，带等待超时，防止线程池排队堆积与饥饿
         executor, slots, pool_type = _get_tool_executor_and_slots(tool_name)
         busy_timeout = settings.tool_busy_queue_timeout
         wait_start = time.perf_counter()
-        try:
-            await asyncio.wait_for(slots.acquire(), timeout=busy_timeout)
-        except asyncio.TimeoutError:
+        if not await _acquire_slot_or_fastfail(slots, busy_timeout):
             wait_sec = time.perf_counter() - wait_start
             record_mcp_tool_busy(tool_name, pool_type, wait_sec)
             record_mcp_tool_call(tool_name, "busy", wait_sec)

@@ -1,6 +1,7 @@
 """MCP 协议核心 —— JSON-RPC 2.0 消息解析与封装"""
 
 import json
+import math
 from typing import Any, Optional, Union
 from pydantic import BaseModel
 
@@ -84,9 +85,26 @@ def parse_request(raw: str | bytes) -> JSONRPCRequest:
     if "method" not in data:
         raise InvalidRequestError("缺少 method 字段")
 
+    # FIX: v0.6.5 错误 method —— 非 str 的 method（list/dict 等）会经
+    # model_construct 原样透传，dispatch 路由时 _METHOD_MAP.get(不可哈希对象)
+    # 抛 TypeError 且该查找位于 dispatch 的 try 之外，错误码退化为 500/-32603。
+    if not isinstance(data["method"], str):
+        raise InvalidRequestError("method 必须为字符串")
+
+    # FIX: v0.6.5 错误 id —— id 必须为 String/Number/NULL；dict/list/bool 会被
+    # model_construct 原样透传并回显到响应，NaN/Infinity 更会产出非法 JSON
+    # （{"id": NaN}）。此处前置校验，坏 id 按 -32600 返回且响应 id 为 null。
+    req_id = data.get("id")
+    if req_id is not None and (
+        isinstance(req_id, bool) or not isinstance(req_id, (str, int, float))
+    ):
+        raise InvalidRequestError("id 必须为字符串、数字或 null")
+    if isinstance(req_id, float) and not math.isfinite(req_id):
+        raise InvalidRequestError("id 不能为 NaN 或 Infinity")
+
     return JSONRPCRequest.model_construct(
         jsonrpc=data.get("jsonrpc", "2.0"),
-        id=data.get("id"),
+        id=req_id,
         method=data["method"],
         params=data.get("params"),
     )

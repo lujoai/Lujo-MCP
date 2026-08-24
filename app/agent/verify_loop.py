@@ -175,7 +175,9 @@ async def run_verify_loop(
         # 通过 → 收敛并写回 KB
         if verdict in (VerifyVerdict.HIGH_CONFIDENCE, VerifyVerdict.PASSED):
             final_verdict = verdict
-            kb_writeback = _writeback_kb(ctx, result, score)
+            # FIX: v0.6.5 事件循环阻塞 —— _writeback_kb 走 record_verification
+            # 同步 IO（KB 存储），直接调用会卡住整个事件循环，移入线程池执行
+            kb_writeback = await asyncio.to_thread(_writeback_kb, ctx, result, score)
             break
 
         # 未通过 → 将本轮 repair_plan 注入 ctx，供下一轮修复复用

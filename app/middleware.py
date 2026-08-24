@@ -1,5 +1,6 @@
 """中间件层 —— 鉴权、CORS、速率限制、请求体限流、安全头、请求追踪"""
 
+import asyncio
 import time
 import logging
 from fastapi import FastAPI, Request, Response
@@ -162,7 +163,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             limit, window = self._get_endpoint_limit(path)
             key = f"ratelimit:{client_ip}:{path}"
 
-            if not store.allow(key, limit, window):
+            # FIX: v0.6.5 事件循环阻塞 —— RedisStateStore.allow 是同步 Redis
+            # 调用（Lua 脚本 + socket_timeout=2s），直接调用在 Redis 慢/不可达
+            # 时会卡住整个事件循环（所有请求随之停顿），移入线程池执行
+            allowed = await asyncio.to_thread(store.allow, key, limit, window)
+            if not allowed:
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Too many requests, please slow down"},

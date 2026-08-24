@@ -63,3 +63,43 @@ async def test_run_stdio_parse_error_returns_response_not_crash(monkeypatch, cap
 
     out = capsys.readouterr().out
     assert "-32700" in out  # PARSE_ERROR 结构化返回，进程不崩溃
+
+
+class _BufferedStdin:
+    """模拟真实进程 stdin：文本流挂在底层 buffer 上（BytesIO）。"""
+
+    def __init__(self, data: bytes):
+        self.buffer = io.BytesIO(data)
+
+
+@pytest.mark.asyncio
+async def test_run_stdio_bad_utf8_frame_does_not_kill_service(monkeypatch, capsys):
+    """FIX: v0.6.5 坏输入杀服务 —— 坏 UTF-8 字节帧不再被当 EOF。
+
+    旧行为：sys.stdin(errors=strict) 的 readline() 遇坏字节抛 UnicodeDecodeError
+    且此后流永久损坏（后续读取恒为空=EOF），reader 把异常一律按 EOF 处理，
+    单条坏帧即让整个服务退出、后续合法请求全部失效。
+    新行为：读底层 buffer 并以 errors="replace" 解码，坏帧回 PARSE_ERROR(-32700)
+    后继续处理同连接的后续合法请求。
+    """
+    _isolate(monkeypatch)
+
+    async def fake_dispatch(req):
+        return {"jsonrpc": "2.0", "id": req.id, "result": {"ok": True}}
+
+    monkeypatch.setattr(stdio, "dispatch", fake_dispatch)
+
+    frames = (
+        b'\xff\xfe{"method":"ping"}\n'                                      # 坏字节帧
+        b'{"jsonrpc": "2.0", "id": 7, "method": "ping", "params": {}}\n'    # 合法帧
+    )
+    monkeypatch.setattr(sys, "stdin", _BufferedStdin(frames))
+
+    await asyncio.wait_for(stdio.run_stdio(), timeout=5)
+
+    out = capsys.readouterr().out
+    # 坏帧 → PARSE_ERROR 结构化返回
+    assert "-32700" in out
+    # 服务未被杀死：后续合法帧正常响应
+    assert '"id": 7' in out
+    assert '"ok": true' in out

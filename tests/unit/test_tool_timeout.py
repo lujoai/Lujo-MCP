@@ -142,10 +142,16 @@ async def test_sync_tool_slots_released_after_completion(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_tool_not_blocked_by_sync_tool_slots(monkeypatch):
-    """测试同步槽位全部被占满时，异步工具仍可并发执行不受影响。"""
+async def test_async_tool_gated_by_light_pool(monkeypatch):
+    """FIX: v0.6.5 async 工具绕过双池 —— async 轻量工具不再绕过 light 池门控。
+
+    旧行为（缺陷）：async handler 直接 await 执行，完全绕过 light/heavy 双池
+    槽位，无并发上限并与同步工具互相影响。
+    新行为：async 轻量工具与同步轻量工具共享 light 池槽位，池满时同样
+    按 TOOL_BUSY fast-fail。
+    """
     monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
-    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
 
     def _slow_sync(args):
         time.sleep(0.3)
@@ -165,9 +171,147 @@ async def test_async_tool_not_blocked_by_sync_tool_slots(monkeypatch):
     resp_async = await _handle_tools_call(
         JSONRPCRequest(id=302, method="tools/call", params={"name": "fast_async_tool", "arguments": {}})
     )
-    assert resp_async["result"]["isError"] is False
+    assert resp_async["result"]["isError"] is True
+    assert resp_async["result"]["error_code"] == "TOOL_BUSY"
+    assert resp_async["result"]["_busy"] is True
 
     await sync_task
+
+
+@pytest.mark.asyncio
+async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
+    """FIX: v0.6.5 async 工具绕过双池 —— 重型 async 工具走 heavy 池。
+
+    light 池被同步工具占满时，heavy 池的 async 工具不受影响（双池隔离）。
+    """
+    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(2))
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
+
+    def _slow_light_sync(args):
+        time.sleep(0.3)
+        return {"light": "slow"}
+
+    async def _fast_heavy_async(args):
+        return {"heavy": "async"}
+
+    register_tool("light_sync_occ", "Light sync occupier", _slow_light_sync, heavy=False)
+    register_tool("heavy_async_tool", "Heavy async tool", _fast_heavy_async, heavy=True)
+
+    occ = asyncio.create_task(_handle_tools_call(
+        JSONRPCRequest(id=310, method="tools/call", params={"name": "light_sync_occ", "arguments": {}})
+    ))
+    await asyncio.sleep(0.02)
+
+    resp = await _handle_tools_call(
+        JSONRPCRequest(id=311, method="tools/call", params={"name": "heavy_async_tool", "arguments": {}})
+    )
+    assert resp["result"]["isError"] is False
+    heavy_content = json.loads(resp["result"]["content"][0]["text"])
+    assert heavy_content["heavy"] == "async"
+
+    await occ
+
+
+@pytest.mark.asyncio
+async def test_async_tool_releases_slot_after_completion(monkeypatch):
+    """FIX: v0.6.5 —— async 工具执行完毕后释放槽位，连续调用不会耗尽池。"""
+    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
+
+    async def _fast_async(args):
+        return {"async": "ok"}
+
+    register_tool("fast_async_seq", "Fast async sequential", _fast_async)
+
+    resp1 = await _handle_tools_call(
+        JSONRPCRequest(id=320, method="tools/call", params={"name": "fast_async_seq", "arguments": {}})
+    )
+    resp2 = await _handle_tools_call(
+        JSONRPCRequest(id=321, method="tools/call", params={"name": "fast_async_seq", "arguments": {}})
+    )
+    assert resp1["result"]["isError"] is False
+    assert resp2["result"]["isError"] is False
+
+
+@pytest.mark.asyncio
+async def test_slot_acquire_timeout_zero_with_free_slot_succeeds():
+    """FIX: v0.6.5 超时背压 —— busy_timeout=0 且有空位时必须成功获取。
+
+    防止 ensure_future 包装后 timeout=0 定时器把"有空位的快路径获取"
+    误杀成 TOOL_BUSY（回归保护：快路径不挂起、不受定时器影响）。
+    """
+    sem = asyncio.Semaphore(1)
+    got = await server_module._acquire_slot_or_fastfail(sem, 0)
+    assert got is True
+    assert sem.locked() is True  # 槽位被本调用方持有
+
+
+@pytest.mark.asyncio
+async def test_slot_acquire_timeout_zero_without_slot_rejects():
+    """busy_timeout=0 且无空位 → 立即拒绝（Fast-Fail 文档语义）。"""
+    sem = asyncio.Semaphore(0)
+    got = await server_module._acquire_slot_or_fastfail(sem, 0)
+    assert got is False
+    assert sem.locked() is True  # 未误 release（泄漏会让 locked 变 False）
+
+
+@pytest.mark.asyncio
+async def test_slot_acquire_wait_timeout_no_leak():
+    """等待超时且未取得槽位 → 不归还（无重复释放），槽位计数不变。"""
+    sem = asyncio.Semaphore(0)
+    got = await server_module._acquire_slot_or_fastfail(sem, 0.02)
+    assert got is False
+    assert sem.locked() is True  # 若误 release，_value 会变 1 → locked() False
+
+
+@pytest.mark.asyncio
+async def test_slot_acquire_same_tick_race_releases_slot(monkeypatch):
+    """FIX: v0.6.5 超时背压竞态 —— 完成与超时同拍时槽位必须归还。
+
+    模拟 CPython wait_for 竞态窗口：acquire 任务已成功取得槽位（返回 True），
+    但 wait_for 仍向调用方抛 TimeoutError。旧实现按 fast-fail 返回且永不
+    release → 槽位泄漏，重复 N 次后池永久占满（全部工具恒 TOOL_BUSY）。
+    """
+    real_wait_for = asyncio.wait_for
+
+    class _RacingSemaphore:
+        """acquire 完成较慢（确保先挂起进入等待路径），随后成功取得槽位。"""
+
+        def __init__(self):
+            self.acquired = False
+            self.release_count = 0
+
+        def locked(self):
+            return not self.acquired
+
+        async def acquire(self):
+            await asyncio.sleep(0.05)
+            self.acquired = True
+            return True
+
+        def release(self):
+            self.release_count += 1
+            self.acquired = False
+
+    async def _racing_wait_for(fut, timeout=None, **kwargs):
+        # 复现竞态：任务实际完成（槽位已取得），调用方却看到 TimeoutError
+        try:
+            await real_wait_for(fut, timeout=10)
+        except asyncio.CancelledError:
+            raise
+        raise asyncio.TimeoutError()
+
+    sem = _RacingSemaphore()
+    monkeypatch.setattr(asyncio, "wait_for", _racing_wait_for)
+    try:
+        got = await server_module._acquire_slot_or_fastfail(sem, 0.01)
+    finally:
+        monkeypatch.undo()
+
+    assert got is False                # 调用方按 fast-fail 处理
+    assert sem.release_count == 1      # 但已取得的槽位被归还（防泄漏）
+    assert sem.acquired is False
 
 
 @pytest.mark.asyncio

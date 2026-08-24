@@ -5,6 +5,32 @@
 
 ---
 
+## [0.6.5] - 2026-08-24
+
+> v0.6.x 可用性补丁：修复 4 个可用性组 Major 缺陷（stdio 坏输入杀服务、超时背压槽位竞态、事件循环三处阻塞、async 工具绕过双池），并加固 JSON-RPC 协议层输入校验。测试基线 **1221 passed / 6 skipped / 0 failed**（新增 14 项测试），零回归，无 Breaking Change。
+
+### 🛠️ 可用性
+
+- **stdio 坏输入杀服务修复**：stdio transport 的 `sys.stdin` 按 strict 模式解码，收到一帧坏 UTF-8 字节即抛 `UnicodeDecodeError`，且此后 TextIOWrapper 永久损坏（后续读取恒为空 = EOF），单条坏消息就让整个 MCP 服务退出。现改读 `sys.stdin.buffer` 并以 `errors="replace"` 解码：坏字节退化为 U+FFFD，主循环按 PARSE_ERROR（-32700）回错并继续服务。测试环境 stdin 为 StringIO（无 buffer）时回退原路径。
+- **超时背压槽位竞态修复**：`asyncio.wait_for(slots.acquire(), timeout)` 在超时与获取完成同拍（典型：`busy_timeout=0`/极小且并发释放槽位）时，槽位可能已实际转移到本调用方，但调用方只看到 TimeoutError 并按 TOOL_BUSY fast-fail 返回且永不 release → 槽位泄漏，重复 N 次后池永久占满、全部工具恒 TOOL_BUSY。现超时后显式检查 acquire 任务完成态：已取得则立即归还（防泄漏）；另加快路径——有空位时直接 acquire（不挂起、不进等待队列），避免 timeout=0 的定时器把"有空位的快路径获取"误杀成 TOOL_BUSY。
+
+### ⚡ 性能（事件循环阻塞）
+
+- **三处同步阻塞移出事件循环**：以下三件事此前直接跑在 asyncio 事件循环线程上，卡住时整个服务停摆：
+  - **Redis 限流查询**：`RateLimitMiddleware` 直接调用同步 `store.allow`（Lua 脚本 + socket_timeout=2s），Redis 慢/不可达时所有请求随之停顿。现移入 `asyncio.to_thread` 执行（Memory/Redis 后端均为 `threading.Lock` 保护，跨线程安全）。
+  - **KB 写回**：verify_loop 验证通过后的 `record_verification` 同步 IO 现移入 `asyncio.to_thread`。
+  - **pybreaker 熔断器锁**：`_call_async_through_breaker` 的三段 RLock 临界区（状态检查/失败计数/成功计数）整体移入线程池执行，锁争用不再发生在事件循环线程，熔断语义不变。
+
+### 🔧 协议加固
+
+- **JSON-RPC method/id 前置校验**：非字符串的 `method`（list/dict 等）会经 `model_construct` 原样透传，dispatch 路由时对不可哈希对象抛 TypeError 且错误码退化为 500/-32603。`id` 为 dict/list/bool 时同样透传回显，`NaN`/`Infinity` 更会产出非法 JSON（`{"id": NaN}`）。现前置校验：method 必须为字符串，id 必须为 String/Number/NULL 且有限，坏值按 -32600 返回且响应 id 为 null。
+
+### 📊 测试与质量
+
+- **测试基线**：1221 passed / 6 skipped / 0 failed / 0 errors（v0.6.4 基线 1207 → 1221，新增 14 项：stdio 坏帧×1、jsonrpc method/id 校验×5、槽位竞态×6、async 双池门控×2）
+- **CI 全门禁绿**：ruff（advisory）+ check_doc_links（164 链接 0 错误）+ pytest 单测 + SDK JS 冒烟（12 pass）
+- **无 Breaking Change**：全部修复向后兼容，默认行为不变
+
 ## [0.6.4] - 2026-08-24
 
 > v0.6.x 安全补丁：修复 3 个安全组 Major 缺陷（embedding 未脱敏外发、verify_loop 安全门失效、限流键绕过），覆盖数据外发、验证绕过、DoS 防护失效三类风险。测试基线 **1207 passed / 6 skipped / 0 failed**，零回归，无 Breaking Change。

@@ -218,6 +218,55 @@ class TestDispatchRawErrorCodes:
             assert resp["error"]["code"] == INVALID_PARAMS, f"params={bad_params!r}"
 
 
+class TestBadMethodAndIdIsolated:
+    """FIX: v0.6.5 stdio 坏输入隔离 —— 错误 method / 错误 id 均按 -32600 结构化返回，
+    单条坏消息不影响后续请求（不逃逸杀进程、不退化为 500/-32603）。"""
+
+    def test_non_string_method_returns_32600(self):
+        """非 str method（list/dict 等）→ -32600。
+
+        此前 model_construct 原样透传，dispatch 路由时 _METHOD_MAP.get(不可哈希对象)
+        抛 TypeError 且该查找位于 dispatch 的 try 之外，错误码退化为 500/-32603。
+        """
+        from app.mcp.protocol.server import dispatch_raw
+
+        for raw in (
+            '{"jsonrpc":"2.0","id":1,"method":["ping"]}',
+            '{"jsonrpc":"2.0","id":1,"method":{"a":1}}',
+            '{"jsonrpc":"2.0","id":1,"method":42}',
+        ):
+            resp = asyncio.run(dispatch_raw(raw))
+            assert resp["error"]["code"] == INVALID_REQUEST, f"raw={raw}"
+            assert resp["id"] is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            '{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}',
+            '{"jsonrpc":"2.0","id":[1],"method":"ping"}',
+            '{"jsonrpc":"2.0","id":true,"method":"ping"}',
+            '{"jsonrpc":"2.0","id":NaN,"method":"ping"}',
+            '{"jsonrpc":"2.0","id":Infinity,"method":"ping"}',
+        ],
+    )
+    def test_invalid_id_returns_32600(self, raw):
+        """非 JSON-RPC 规范 id（dict/list/bool/NaN/Infinity）→ -32600 且响应 id 为 null。
+
+        此前 model_construct 原样透传并回显到响应，NaN/Infinity 更会产出
+        非法 JSON（{"id": NaN}）。
+        """
+        from app.mcp.protocol.server import dispatch_raw
+
+        resp = asyncio.run(dispatch_raw(raw))
+        assert resp["error"]["code"] == INVALID_REQUEST, f"raw={raw}"
+        assert resp["id"] is None
+
+    def test_float_id_still_accepted(self):
+        """JSON-RPC Number 语义：有限浮点 id 仍然合法（回归保护）。"""
+        req = parse_request('{"jsonrpc":"2.0","id":1.5,"method":"ping"}')
+        assert req.id == 1.5
+
+
 class TestProtocolVersionNegotiation:
     """M5 版本协商：initialize 握手协议版本协商逻辑"""
 
