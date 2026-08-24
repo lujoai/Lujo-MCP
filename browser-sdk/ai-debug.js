@@ -77,6 +77,9 @@
     release: "",
     localStorageKey: "ai-debug-pending-batches",  // localStorage 键名
     maxPendingBatches: 10,             // 最多暂存的批次数
+    // V6 Resilient backoff & storage hygiene
+    maxRetryDelay: 5000,               // 重试最大退避上限（ms）
+    localStorageTTL: 86400000,         // localStorage 暂存批次过期时间（24h，ms）
   };
 
   var _inited = false;
@@ -388,6 +391,39 @@
     _sendBatchXhr(url, body, 0);
   }
 
+  // Non-retryable status codes (400/401/403: client / auth errors)
+  function _isNonRetryableStatus(status) {
+    return status === 400 || status === 401 || status === 403;
+  }
+
+  // Parse Retry-After header (seconds)
+  function _parseRetryAfter(xhr) {
+    try {
+      if (xhr && typeof xhr.getResponseHeader === "function") {
+        var header = xhr.getResponseHeader("Retry-After");
+        if (header) {
+          var seconds = parseInt(header, 10);
+          if (!isNaN(seconds) && seconds > 0) {
+            return seconds * 1000;
+          }
+        }
+      }
+    } catch (err) {}
+    return null;
+  }
+
+  // Compute retry delay with Full Jitter exponential backoff
+  function _computeRetryDelay(attempt, retryAfterMs) {
+    var maxDelay = cfg.maxRetryDelay || 5000;
+    if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
+      return Math.min(retryAfterMs, maxDelay);
+    }
+    var baseDelay = 500;
+    var expDelay = Math.min(maxDelay, baseDelay * Math.pow(2, attempt));
+    var jitter = Math.floor(Math.random() * (expDelay - 50 + 1)) + 50;
+    return jitter;
+  }
+
   function _sendBatchXhr(url, body, attempt) {
     try {
       var xhr = new XMLHttpRequest();
@@ -396,22 +432,29 @@
       if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
       xhr.onreadystatechange = function () {
         if (xhr.readyState !== 4) return;
-        if (xhr.status >= 200 && xhr.status < 300) return; // 成功
-        // 失败 → 重试
+        if (xhr.status >= 200 && xhr.status < 300) return; // success
+        
+        // Fast abort on non-retryable client error
+        if (_isNonRetryableStatus(xhr.status)) {
+          return;
+        }
+
+        // Retry with backoff
         if (attempt < cfg.maxRetries) {
-          var delay = 500 * Math.pow(2, attempt); // 500 → 1000 → 2000
+          var retryAfterMs = _parseRetryAfter(xhr);
+          var delay = _computeRetryDelay(attempt, retryAfterMs);
           setTimeout(function () {
             _sendBatchXhr(url, body, attempt + 1);
           }, delay);
         } else if (cfg.enableLocalStorageFallback) {
-          // V5 失败降级：超过重试次数后暂存 localStorage
+          // Retries exhausted -> fallback to localStorage
           _saveToLocalStorage(body);
         }
       };
       xhr.send(body);
-    } catch (e) {
+    } catch (err) {
       if (attempt < cfg.maxRetries) {
-        var delay = 500 * Math.pow(2, attempt);
+        var delay = _computeRetryDelay(attempt, null);
         setTimeout(function () {
           _sendBatchXhr(url, body, attempt + 1);
         }, delay);
@@ -421,7 +464,7 @@
     }
   }
 
-  // V5 压缩版本的 XHR 发送
+  // V5 Compressed XHR send
   function _sendBatchXhrCompressed(url, compressedBody, attempt) {
     try {
       var xhr = new XMLHttpRequest();
@@ -431,24 +474,31 @@
       if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
       xhr.onreadystatechange = function () {
         if (xhr.readyState !== 4) return;
-        if (xhr.status >= 200 && xhr.status < 300) return; // 成功
-        // 失败 → 重试
+        if (xhr.status >= 200 && xhr.status < 300) return; // success
+        
+        // Fast abort on non-retryable client error
+        if (_isNonRetryableStatus(xhr.status)) {
+          return;
+        }
+
+        // Retry with backoff
         if (attempt < cfg.maxRetries) {
-          var delay = 500 * Math.pow(2, attempt);
+          var retryAfterMs = _parseRetryAfter(xhr);
+          var delay = _computeRetryDelay(attempt, retryAfterMs);
           setTimeout(function () {
             _sendBatchXhrCompressed(url, compressedBody, attempt + 1);
           }, delay);
         } else if (cfg.enableLocalStorageFallback) {
-          // 压缩版本失败降级：转为未压缩存储
+          // Compressed fallback: decode to string for localStorage
           var textDecoder = new TextDecoder();
           var text = textDecoder.decode(compressedBody);
           _saveToLocalStorage(text);
         }
       };
       xhr.send(compressedBody);
-    } catch (e) {
+    } catch (err) {
       if (attempt < cfg.maxRetries) {
-        var delay = 500 * Math.pow(2, attempt);
+        var delay = _computeRetryDelay(attempt, null);
         setTimeout(function () {
           _sendBatchXhrCompressed(url, compressedBody, attempt + 1);
         }, delay);
@@ -460,21 +510,21 @@
     }
   }
 
-  // V5 压缩版本的同步 XHR 发送（页面关闭场景）
+  // V5 Compressed sync XHR send (unload / beforeunload)
   function _sendBatchSyncCompressed(url, compressedBody) {
     try {
       var xhr = new XMLHttpRequest();
-      xhr.open("POST", url, false); // 同步
+      xhr.open("POST", url, false); // sync
       xhr.setRequestHeader("Content-Type", "application/json");
       xhr.setRequestHeader("Content-Encoding", "gzip");
       if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
       xhr.send(compressedBody);
-    } catch (e) {
-      // 页面关闭时同步 XHR 失败，无法重试
+    } catch (err) {
+      // Sync XHR failed during page unload
     }
   }
 
-  // V5 失败降级：暂存到 localStorage
+  // V5/V6 Fallback: save to localStorage with TTL and metadata wrapper
   function _saveToLocalStorage(body) {
     try {
       if (typeof localStorage === "undefined") return;
@@ -484,24 +534,38 @@
       if (stored) {
         try {
           pending = JSON.parse(stored);
-        } catch (e) {
+        } catch (err) {
           pending = [];
         }
       }
       
-      // 限制暂存数量
-      if (pending.length >= cfg.maxPendingBatches) {
-        pending.shift(); // 移除最旧的批次
+      var now = Date.now();
+      var ttl = cfg.localStorageTTL || 86400000;
+      
+      // Filter out expired batches
+      pending = pending.filter(function (item) {
+        if (item && typeof item === "object" && item.timestamp) {
+          return (now - item.timestamp) <= ttl;
+        }
+        return true;
+      });
+
+      // Limit pending count
+      while (pending.length >= cfg.maxPendingBatches) {
+        pending.shift();
       }
       
-      pending.push(body);
+      pending.push({
+        timestamp: now,
+        data: body
+      });
       localStorage.setItem(cfg.localStorageKey, JSON.stringify(pending));
-    } catch (e) {
-      // localStorage 不可用或已满，静默失败
+    } catch (err) {
+      // localStorage quota exceeded or disabled
     }
   }
 
-  // V5 启动时恢复暂存的批次
+  // V5/V6 Restore pending batches on startup with TTL checks
   function _restorePendingBatches() {
     try {
       if (typeof localStorage === "undefined") return;
@@ -512,24 +576,34 @@
       var pending = [];
       try {
         pending = JSON.parse(stored);
-      } catch (e) {
-        // FIX: P1-1 坏数据直接清掉，避免每次启动反复解析失败（死循环）
+      } catch (err) {
         localStorage.removeItem(cfg.localStorageKey);
         return;
       }
       
-      // 清空 localStorage
       localStorage.removeItem(cfg.localStorageKey);
       
-      // FIX: P1-1 暂存内容是整包字符串 {"events":[...]}，必须展开为 {path, payload} 队列元素，
-      // 直接 push 整个解析对象会导致 flush 时二次包裹 {"events":[{"events":[...]}]}，
-      // 后端逐条取 event.path 为空 → 数据全丢。
-      pending.forEach(function(body) {
+      var now = Date.now();
+      var ttl = cfg.localStorageTTL || 86400000;
+
+      pending.forEach(function(item) {
+        var body = null;
+        if (item && typeof item === "object" && item.data) {
+          if (item.timestamp && (now - item.timestamp) > ttl) {
+            return; // expired
+          }
+          body = item.data;
+        } else if (typeof item === "string") {
+          body = item;
+        }
+
+        if (!body) return;
+
         var parsed;
         try {
           parsed = JSON.parse(body);
-        } catch (e) {
-          return; // 单条坏数据跳过
+        } catch (err) {
+          return;
         }
         var events = (parsed && Array.isArray(parsed.events)) ? parsed.events : [];
         events.forEach(function(ev) {
@@ -539,14 +613,14 @@
         });
       });
       
-      // 立即 flush
       if (_batchQueue.length > 0) {
         _flushBatch(false);
       }
-    } catch (e) {
-      // 恢复失败，静默处理
+    } catch (err) {
+      // ignore errors during restoration
     }
   }
+
 
   function _sendBatchSync(url, body) {
     try {
@@ -1438,6 +1512,11 @@
       _onSilentFailureReport = callback;
     },
     _captureDomSnapshot: _captureDomSnapshot,
+    _computeRetryDelay: _computeRetryDelay,
+    _isNonRetryableStatus: _isNonRetryableStatus,
+    _parseRetryAfter: _parseRetryAfter,
+    _saveToLocalStorage: _saveToLocalStorage,
+    _restorePendingBatches: _restorePendingBatches,
   };
 
   // 支持 CommonJS / ES module / 全局变量
