@@ -1,5 +1,6 @@
 """工具超时与背压处理测试：验证同步/异步工具超时响应结构、背压并发控制、快速失败及 sync_future.cancel() 取消调度行为"""
 import asyncio
+import json
 import time
 from unittest.mock import MagicMock, patch
 import pytest
@@ -244,3 +245,102 @@ async def test_busy_queue_timeout_positive_logs_wait_duration(monkeypatch, caplo
     assert not any("立即拒绝" in record.message for record in caplog.records)
 
     await sync_task
+
+
+@pytest.mark.asyncio
+async def test_heavy_tool_saturation_does_not_block_light_tools(monkeypatch):
+    """测试重型工具池打满时，轻量级工具依然享有独立槽位并立即执行（不被饿死）。"""
+    monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(5))
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
+    monkeypatch.setattr(settings, "tool_timeout_seconds", 5.0)
+
+    def _slow_heavy(args):
+        time.sleep(0.3)
+        return {"heavy": "done"}
+
+    def _fast_light(args):
+        return {"light": "ok"}
+
+    register_tool("auto_test_mock", "Heavy mock tool", _slow_heavy, heavy=True)
+    register_tool("get_debug_context_mock", "Light mock tool", _fast_light, heavy=False)
+
+    # 1. 启动一个 heavy 任务占满 heavy 槽位 (容量=1)
+    heavy_task1 = asyncio.create_task(_handle_tools_call(
+        JSONRPCRequest(id=701, method="tools/call", params={"name": "auto_test_mock", "arguments": {}})
+    ))
+    await asyncio.sleep(0.02)
+
+    # 2. 第二个 heavy 任务尝试获取槽位，应当因为 heavy 池满而快速返回 TOOL_BUSY
+    resp_heavy2 = await _handle_tools_call(
+        JSONRPCRequest(id=702, method="tools/call", params={"name": "auto_test_mock", "arguments": {}})
+    )
+    assert resp_heavy2["result"]["isError"] is True
+    assert resp_heavy2["result"]["error_code"] == "TOOL_BUSY"
+
+    # 3. 此时轻量级工具调用，应当完全不受 heavy 池拥堵影响，立即成功返回
+    t0 = time.monotonic()
+    resp_light = await _handle_tools_call(
+        JSONRPCRequest(id=703, method="tools/call", params={"name": "get_debug_context_mock", "arguments": {}})
+    )
+    elapsed = time.monotonic() - t0
+
+    assert resp_light["result"]["isError"] is False
+    light_content = json.loads(resp_light["result"]["content"][0]["text"])
+    assert light_content["light"] == "ok"
+    assert elapsed < 0.1, f"Light tool was blocked! elapsed={elapsed}"
+
+    await heavy_task1
+
+
+@pytest.mark.asyncio
+async def test_light_tool_saturation_does_not_block_heavy_tools(monkeypatch):
+    """测试轻量工具池打满时，重型工具池独立运作不受干扰。"""
+    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(2))
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
+    monkeypatch.setattr(settings, "tool_timeout_seconds", 5.0)
+
+    def _slow_light(args):
+        time.sleep(0.3)
+        return {"light": "slow"}
+
+    def _fast_heavy(args):
+        return {"heavy": "fast"}
+
+    register_tool("light_occupier", "Light occupier", _slow_light, heavy=False)
+    register_tool("heavy_independent", "Heavy independent", _fast_heavy, heavy=True)
+
+    # 1. 占满 light 槽位 (容量=1)
+    light_task1 = asyncio.create_task(_handle_tools_call(
+        JSONRPCRequest(id=801, method="tools/call", params={"name": "light_occupier", "arguments": {}})
+    ))
+    await asyncio.sleep(0.02)
+
+    # 2. 第二个 light 任务触发 TOOL_BUSY
+    resp_light2 = await _handle_tools_call(
+        JSONRPCRequest(id=802, method="tools/call", params={"name": "light_occupier", "arguments": {}})
+    )
+    assert resp_light2["result"]["isError"] is True
+    assert resp_light2["result"]["error_code"] == "TOOL_BUSY"
+
+    # 3. Heavy 工具依然可以正常执行
+    resp_heavy = await _handle_tools_call(
+        JSONRPCRequest(id=803, method="tools/call", params={"name": "heavy_independent", "arguments": {}})
+    )
+    assert resp_heavy["result"]["isError"] is False
+    heavy_content = json.loads(resp_heavy["result"]["content"][0]["text"])
+    assert heavy_content["heavy"] == "fast"
+
+    await light_task1
+
+
+def test_heavy_tool_identification():
+    """测试重型工具名称识别（通过配置与显式元数据）。"""
+    from app.mcp.protocol.server import is_heavy_tool
+
+    # 默认配置中 auto_test 和 verify_ui 为 heavy
+    assert is_heavy_tool("auto_test") is True
+    assert is_heavy_tool("verify_ui") is True
+    assert is_heavy_tool("get_debug_context") is False
+    assert is_heavy_tool("resolve_stack") is False

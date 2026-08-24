@@ -45,8 +45,33 @@ _tool_registry: dict[str, dict] = {}
 
 # FIX P3-12: 同步工具 handler 专用有界线程池（与 app/mcp_server.py 同方案）。
 # 避免超时 handler 占用 asyncio 默认线程池并拖累其它 to_thread 任务；池有界不无限增长。
-_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_executor_workers)
-_tool_slots = asyncio.Semaphore(settings.tool_executor_workers)
+# FIX P3-12 / v0.6.2: 轻重型同步工具双池隔离执行架构
+# 1. 通用/轻量同步工具专用池（如 stacktrace / get_debug_context / blame 等）
+_LIGHT_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_executor_workers)
+_light_tool_slots = asyncio.Semaphore(settings.tool_executor_workers)
+
+# 2. 重型长耗时工具专用池（如 auto_test / verify_ui 等 Playwright 自动化，独立隔离防止打满轻量池）
+_HEAVY_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_heavy_executor_workers)
+_heavy_tool_slots = asyncio.Semaphore(settings.tool_heavy_executor_workers)
+
+# 向后兼容旧版直接引用
+_TOOL_EXECUTOR = _LIGHT_TOOL_EXECUTOR
+_tool_slots = _light_tool_slots
+
+
+def is_heavy_tool(tool_name: str) -> bool:
+    """判定工具是否属于重型长耗时工具（占用独立 Heavy 槽位池）。"""
+    tool_meta = _tool_registry.get(tool_name, {})
+    if tool_meta.get("heavy"):
+        return True
+    return tool_name in settings.heavy_tools
+
+
+def _get_tool_executor_and_slots(tool_name: str) -> tuple[ThreadPoolExecutor, asyncio.Semaphore, str]:
+    """根据工具类型选择执行线程池与并发信号量槽位。"""
+    if is_heavy_tool(tool_name):
+        return _HEAVY_TOOL_EXECUTOR, _heavy_tool_slots, "heavy"
+    return _TOOL_EXECUTOR, _tool_slots, "light"
 
 
 def register_tool(
@@ -58,6 +83,7 @@ def register_tool(
     """注册一个 MCP 工具。inputSchema 等额外字段通过 kwargs 透传。
 
     v0.5: 支持 category 和 experimental 元数据（可选，向后兼容）。
+    v0.6.2: 支持 heavy 元数据标记重型工具（默认通过 settings.heavy_tools 判定）。
     """
     _tool_registry[name] = {
         "name": name,
@@ -66,6 +92,7 @@ def register_tool(
         "handler": handler,
         "category": kwargs.get("category"),
         "experimental": kwargs.get("experimental", False),
+        "heavy": kwargs.get("heavy", False),
     }
 
 
@@ -166,14 +193,15 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
             })
     else:
         # 同步工具：获取并发槽位（带等待超时，防止线程池排队堆积与饿死）
+        executor, slots, pool_type = _get_tool_executor_and_slots(tool_name)
         busy_timeout = settings.tool_busy_queue_timeout
         try:
-            await asyncio.wait_for(_tool_slots.acquire(), timeout=busy_timeout)
+            await asyncio.wait_for(slots.acquire(), timeout=busy_timeout)
         except asyncio.TimeoutError:
             if busy_timeout <= 0:
-                logger.warning("工具 %s 执行队列已满（不等待，立即拒绝），已拒绝执行", tool_name)
+                logger.warning("工具 %s (%s池) 执行队列已满（不等待，立即拒绝），已拒绝执行", tool_name, pool_type)
             else:
-                logger.warning("工具 %s 执行队列已满（等待 %.3fs 后超时），已拒绝执行", tool_name, busy_timeout)
+                logger.warning("工具 %s (%s池) 执行队列已满（等待 %.3fs 超时），已拒绝执行", tool_name, pool_type, busy_timeout)
             return make_response(req.id, {
                 "content": [
                     {
@@ -189,7 +217,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         sync_future: asyncio.Future | None = None
         try:
             loop = asyncio.get_running_loop()
-            sync_future = loop.run_in_executor(_TOOL_EXECUTOR, handler, arguments)
+            sync_future = loop.run_in_executor(executor, handler, arguments)
             result = await asyncio.wait_for(sync_future, timeout=timeout)
         except asyncio.TimeoutError:
             if sync_future is not None:
@@ -222,7 +250,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": "TOOL_INTERNAL",
             })
         finally:
-            _tool_slots.release()
+            slots.release()
 
     _elapsed = time.monotonic() - _tool_start
     try:
