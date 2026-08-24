@@ -41,6 +41,19 @@ _lock = threading.Lock()
 _token_seq = itertools.count(1)
 
 
+def _storage_key(artifact: str, release: str | None) -> str:
+    """上传条目的存储键：release 作为 bundle 版本区分维度并入键。
+
+    FIX: v0.6.7 —— 旧实现仅以 artifact 为键，同 artifact 不同 release（版本）的
+    source map 会互相覆盖；用 NUL 分隔符（文件名/URL 不会出现）拼入 release，
+    保证不同版本独立存储与解析。
+    """
+    artifact = (artifact or "").strip()
+    if release:
+        return f"{artifact}\x00{release}"
+    return artifact
+
+
 def _validate_map(map_obj: object) -> dict:
     """结构校验：必须是含 mappings(str) 与 sources(list) 的 JSON 对象。非法抛 ValueError。"""
     if not isinstance(map_obj, dict):
@@ -53,8 +66,8 @@ def _validate_map(map_obj: object) -> dict:
     return map_obj
 
 
-def upload_sourcemap(artifact: str, map_obj: object, ttl_seconds: int | None = None) -> dict:
-    """存储一份上传的 source map（覆盖同名 artifact），返回存储回执。"""
+def upload_sourcemap(artifact: str, map_obj: object, ttl_seconds: int | None = None, release: str | None = None) -> dict:
+    """存储一份上传的 source map（覆盖同 artifact 同 release），返回存储回执。"""
     artifact = (artifact or "").strip()
     if not artifact or len(artifact) > 256:
         raise ValueError("artifact 不能为空且长度需 <= 256")
@@ -64,12 +77,13 @@ def upload_sourcemap(artifact: str, map_obj: object, ttl_seconds: int | None = N
     ttl = max(1, int(ttl))
     max_uploads = max(1, int(settings.sourcemap_max_uploads))
 
+    key = _storage_key(artifact, release)
     with _lock:
-        _uploads.pop(artifact, None)  # 覆盖时先移除，保证 LRU 位置正确
+        _uploads.pop(key, None)  # 覆盖时先移除，保证 LRU 位置正确
         while len(_uploads) >= max_uploads:
             evicted, _ = _uploads.popitem(last=False)
             logger.info("source map 上传容量已满，驱逐最旧 artifact=%s", evicted)
-        _uploads[artifact] = {
+        _uploads[key] = {
             "map": map_obj,
             "expires_at": time.time() + ttl,
             "token": next(_token_seq),
@@ -77,50 +91,53 @@ def upload_sourcemap(artifact: str, map_obj: object, ttl_seconds: int | None = N
         return {
             "artifact": artifact,
             "stored": True,
-            "expires_at": _uploads[artifact]["expires_at"],
+            "expires_at": _uploads[key]["expires_at"],
             "total_uploads": len(_uploads),
         }
 
 
-def get_uploaded_map(artifact: str) -> Optional[dict]:
+def get_uploaded_map(artifact: str, release: str | None = None) -> Optional[dict]:
     """取未过期的上传 map；过期则驱逐并返回 None。"""
     artifact = (artifact or "").strip()
     if not artifact:
         return None
+    key = _storage_key(artifact, release)
     with _lock:
-        entry = _uploads.get(artifact)
+        entry = _uploads.get(key)
         if entry is None:
             return None
         if entry["expires_at"] <= time.time():
-            _uploads.pop(artifact, None)
+            _uploads.pop(key, None)
             return None
-        _uploads.move_to_end(artifact)
+        _uploads.move_to_end(key)
         return entry["map"]
 
 
-def _uploaded_token(artifact: str) -> Optional[int]:
+def _uploaded_token(artifact: str, release: str | None = None) -> Optional[int]:
     """取上传条目的指纹 token（覆盖上传后变化，用于解析缓存失效）。"""
+    key = _storage_key(artifact, release)
     with _lock:
-        entry = _uploads.get((artifact or "").strip())
+        entry = _uploads.get(key)
         if entry is None or entry["expires_at"] <= time.time():
             return None
         return entry["token"]
 
 
-def get_uploaded_parser(artifact: str) -> Optional[SourceMapParser]:
+def get_uploaded_parser(artifact: str, release: str | None = None) -> Optional[SourceMapParser]:
     """构造/复用上传 map 的解析器；无上传或结构非法返回 None（非法条目被驱逐）。"""
-    token = _uploaded_token(artifact)
+    key = _storage_key(artifact, release)
+    token = _uploaded_token(artifact, release)
     if token is None:
         return None
-    map_obj = get_uploaded_map(artifact)
+    map_obj = get_uploaded_map(artifact, release)
     if map_obj is None:
         return None
     try:
-        return load_parser_from_dict(map_obj, token, f"upload:{artifact.strip()}")
+        return load_parser_from_dict(map_obj, token, f"upload:{key}")
     except SourceMapError:
         logger.warning("上传的 source map 解析失败，已驱逐 artifact=%s", artifact)
         with _lock:
-            _uploads.pop((artifact or "").strip(), None)
+            _uploads.pop(key, None)
         return None
 
 
@@ -157,16 +174,16 @@ def _disk_parser(file: str) -> Optional[SourceMapParser]:
         return None
 
 
-def _parser_for_frame(frame: dict, artifact: Optional[str]) -> Optional[SourceMapParser]:
+def _parser_for_frame(frame: dict, artifact: Optional[str], release: str | None = None) -> Optional[SourceMapParser]:
     """单帧选路：显式 artifact > 上传按 basename 匹配 > 磁盘约定。"""
     file = str(frame.get("file") or "")
     if artifact:
-        parser = get_uploaded_parser(artifact)
+        parser = get_uploaded_parser(artifact, release)
         if parser is not None:
             return parser
     name = _frame_basename(file)
     if name:
-        parser = get_uploaded_parser(name)
+        parser = get_uploaded_parser(name, release)
         if parser is not None:
             return parser
     return _disk_parser(file)
@@ -176,6 +193,7 @@ def resolve_frames_auto(
     frames: list[dict],
     artifact: Optional[str] = None,
     context_lines: int | None = None,
+    release: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """自动选路解析帧（受 sourcemap_enabled 总开关控制）。
 
@@ -189,8 +207,9 @@ def resolve_frames_auto(
     resolved_frames: list[dict] = []
     snippets: list[dict] = []
 
-    # 同一 basename 只选路一次（避免每帧重复查上传表/磁盘）
-    parser_by_key: dict[str, Optional[SourceMapParser]] = {}
+    # 同一 (basename/artifact, release) 只选路一次（避免每帧重复查上传表/磁盘；
+    # release 作为 bundle 版本维度并入键，避免同 basename 不同版本命中错误条目）
+    parser_by_key: dict[tuple, Optional[SourceMapParser]] = {}
 
     for frame in frames or []:
         try:
@@ -199,9 +218,9 @@ def resolve_frames_auto(
                 continue
 
             name = _frame_basename(str(frame.get("file") or ""))
-            key = artifact or name or ""
+            key = (artifact or name or "", release)
             if key not in parser_by_key:
-                parser_by_key[key] = _parser_for_frame(frame, artifact)
+                parser_by_key[key] = _parser_for_frame(frame, artifact, release)
             parser = parser_by_key[key]
             if parser is None:
                 resolved_frames.append(dict(frame))

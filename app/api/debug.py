@@ -381,7 +381,7 @@ def debug_upload_sourcemap(req: SourcemapUploadRequest):
     from app.runtime.collectors.sourcemap_store import upload_sourcemap
 
     try:
-        receipt = upload_sourcemap(req.artifact, req.map)
+        receipt = upload_sourcemap(req.artifact, req.map, release=req.release)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

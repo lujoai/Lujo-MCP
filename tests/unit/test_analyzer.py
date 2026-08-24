@@ -459,6 +459,26 @@ class TestLLMCache:
 
         assert _get_cached_result(fp2) is None
 
+    def test_fingerprint_no_delimiter_collision(self):
+        """字段值内含分隔符（|）时不得算出相同指纹。
+
+        旧实现用 "|" 裸拼接 key_parts，exc_type/message 含 "|" 时不同上下文
+        会拼出同一字符串，导致缓存返回错误分析结果。
+        """
+        from app.llm.cache import _compute_context_fingerprint
+
+        ctx1 = {"exception": {"type": "KeyError", "message": "A|B", "fingerprint": "fp"}}
+        ctx2 = {"exception": {"type": "KeyError|A", "message": "B", "fingerprint": "fp"}}
+
+        assert _compute_context_fingerprint(ctx1) != _compute_context_fingerprint(ctx2)
+
+    def test_fingerprint_uses_full_sha256(self):
+        """指纹应使用完整 sha256 摘要（64 字符），不做 16 字符截断。"""
+        from app.llm.cache import _compute_context_fingerprint
+
+        ctx = {"exception": {"type": "ValueError", "message": "x", "fingerprint": "f"}}
+        assert len(_compute_context_fingerprint(ctx)) == 64
+
     def test_cache_expires_after_ttl(self):
         """TTL 过期后应返回 None"""
         from app.llm.cache import (

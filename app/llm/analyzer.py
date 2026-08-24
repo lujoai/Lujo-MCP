@@ -373,6 +373,45 @@ async def _call_async_through_breaker(cb, coro_factory):
         return result
 
 
+def _breaker_is_open(cb) -> bool:
+    """熔断器是否处于 open 且未到重置时间；到点则自动转 half-open。
+
+    与 ``_call_async_through_breaker`` 的 ``_state_check`` 语义一致，供流式路径
+    复用：open 时返回 True（调用方应 fallback），closed/half-open 返回 False。
+    锁临界区保持同步（供同步流式直接调用 / 异步流式经 ``asyncio.to_thread`` 调用）。
+    """
+    with cb._lock:
+        if cb.current_state == _CB_STATE_OPEN:
+            opened_at = cb._state_storage.opened_at
+            if opened_at and datetime.now(timezone.utc) < opened_at + timedelta(
+                seconds=cb.reset_timeout
+            ):
+                return True
+            cb.half_open()
+    return False
+
+
+def _record_breaker_failure(cb, exc: BaseException) -> bool:
+    """流式调用失败时计入熔断状态机。返回 True 表示本次失败触发熔断（open）。
+
+    复用 pybreaker state 的 ``_handle_error``；达阈值时其 ``on_failure`` 会抛
+    ``CircuitBreakerError``。此处用 ``reraise=False`` 抑制原异常重抛，仅捕获
+    熔断信号并转为布尔返回值，由调用方决定是否 fallback。
+    """
+    with cb._lock:
+        try:
+            cb.state._handle_error(exc, reraise=False)
+        except _CB_ERROR:
+            return True
+    return False
+
+
+def _record_breaker_success(cb) -> None:
+    """流式调用成功完成时计入熔断状态机（复用 pybreaker state 的 ``_handle_success``）。"""
+    with cb._lock:
+        cb.state._handle_success()
+
+
 def analyze(context: dict, model: Optional[str] = None) -> dict:
     """
     调用 LLM 分析调试上下文（带重试、fallback、缓存和熔断器）
@@ -482,22 +521,40 @@ async def analyze_async(context: dict, model: Optional[str] = None) -> dict:
 def analyze_stream(context: dict, model: Optional[str] = None) -> Generator[str, None, None]:
     """
     流式 LLM 分析（用于 SSE）
+
+    FIX: v0.6.7 流式绕熔断 —— 与非流式 analyze 共用同一熔断状态机：
+    熔断 OPEN 时同样 fallback（yield 结构化 fallback JSON），不再直打 LLM；
+    流式的成功/失败同样计入熔断计数，语义与同步 analyze 一致。
     """
     client = _get_client()
     model_name = model or settings.llm_model
 
     messages, _ = _build_llm_messages(context)
 
-    stream = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        temperature=settings.llm_temperature,
-        stream=True,
-    )
+    cb = _get_llm_circuit_breaker()
+    if cb and _breaker_is_open(cb):
+        yield json.dumps(_llm_fallback_result(), ensure_ascii=False)
+        return
 
-    for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    try:
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=settings.llm_temperature,
+            stream=True,
+        )
+
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except Exception as exc:
+        if cb and _record_breaker_failure(cb, exc):
+            yield json.dumps(_llm_fallback_result(), ensure_ascii=False)
+            return
+        raise
+    else:
+        if cb:
+            _record_breaker_success(cb)
 
 
 async def analyze_stream_async(context: dict, model: Optional[str] = None) -> AsyncGenerator[str, None]:
@@ -505,19 +562,40 @@ async def analyze_stream_async(context: dict, model: Optional[str] = None) -> As
     异步流式 LLM 分析（用于 SSE）
 
     Phase 3.2：用 AsyncOpenAI 替代同步生成器，原生 async for 迭代。
+
+    FIX: v0.6.7 流式绕熔断 —— 与非流式 analyze_async 共用同一熔断状态机：
+    熔断 OPEN 时同样 fallback，流式成功/失败同样计入熔断计数。
+    锁临界区（状态检查/失败计数/成功计数）经 ``asyncio.to_thread`` 执行，
+    避免事件循环线程持锁等待（对齐 v0.6.6 的阻塞修复）。
     """
     client = _get_async_client()
     model_name = model or settings.llm_model
 
     messages, _ = _build_llm_messages(context)
 
-    stream = await client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        temperature=settings.llm_temperature,
-        stream=True,
-    )
+    cb = _get_llm_circuit_breaker()
+    if cb and await asyncio.to_thread(_breaker_is_open, cb):
+        yield json.dumps(_llm_fallback_result(), ensure_ascii=False)
+        return
 
-    async for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    try:
+        stream = await client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=settings.llm_temperature,
+            stream=True,
+        )
+
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except Exception as exc:
+        if cb:
+            tripped = await asyncio.to_thread(_record_breaker_failure, cb, exc)
+            if tripped:
+                yield json.dumps(_llm_fallback_result(), ensure_ascii=False)
+                return
+        raise
+    else:
+        if cb:
+            await asyncio.to_thread(_record_breaker_success, cb)

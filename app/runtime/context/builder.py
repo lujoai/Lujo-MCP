@@ -117,7 +117,8 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
             from app.runtime.collectors.sourcemap_store import resolve_frames_auto
 
             artifact = (trace.get("extra") or {}).get("artifact")
-            new_frames, sm_snippets = resolve_frames_auto(frames, artifact=artifact)
+            release = (trace.get("extra") or {}).get("release")
+            new_frames, sm_snippets = resolve_frames_auto(frames, artifact=artifact, release=release)
             if any(f.get("resolved") for f in new_frames):
                 resolved_frames = new_frames
                 effective_frames = new_frames

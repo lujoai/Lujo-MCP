@@ -371,3 +371,112 @@ class TestLLMCircuitBreakerAsync:
         result = await analyze_async(ctx)
         assert result["_circuit_breaker_triggered"] is True
         async_client.chat.completions.create.assert_not_awaited()
+
+
+class TestLLMCircuitBreakerStream:
+    """测试流式分析路径纳入同一熔断状态机（v0.6.7 流式绕熔断修复）。
+
+    OPEN 时流式路径应与非流式一样 fallback，不再直打 LLM；
+    流式成功/失败同样计入熔断计数。
+    """
+
+    def setup_method(self):
+        from app.llm.analyzer import _llm_circuit_breaker
+        from app.llm.cache import _analysis_cache
+
+        _analysis_cache.clear()
+        if _llm_circuit_breaker:
+            _llm_circuit_breaker.close()
+
+    def teardown_method(self):
+        import app.llm.analyzer as analyzer_module
+
+        if analyzer_module._llm_circuit_breaker:
+            analyzer_module._llm_circuit_breaker.close()
+        analyzer_module._llm_circuit_breaker = None
+
+    @patch("app.llm.analyzer._get_client")
+    def test_stream_returns_fallback_when_breaker_open(self, mock_get_client):
+        """熔断 OPEN 时同步流式路径 yield fallback，且不调用 LLM。"""
+        import json
+
+        import pybreaker
+
+        import app.llm.analyzer as analyzer_module
+        from app.llm.analyzer import analyze_stream
+
+        cb = pybreaker.CircuitBreaker(
+            fail_max=1, reset_timeout=60, exclude=[pybreaker.CircuitBreakerError]
+        )
+        analyzer_module._llm_circuit_breaker = cb
+        cb.open()
+
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        ctx = {"request_id": "cb-stream-001", "errors": ["test error"]}
+
+        chunks = list(analyze_stream(ctx))
+        assert len(chunks) == 1
+        fallback = json.loads(chunks[0])
+        assert fallback["_circuit_breaker_triggered"] is True
+        assert fallback["model"] == "__circuit_breaker_fallback__"
+        mock_client.chat.completions.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("app.llm.analyzer._get_async_client")
+    async def test_stream_async_returns_fallback_when_breaker_open(self, mock_get_async_client):
+        """熔断 OPEN 时异步流式路径 yield fallback，且不调用 AsyncOpenAI。"""
+        import json
+
+        import pybreaker
+
+        import app.llm.analyzer as analyzer_module
+        from app.llm.analyzer import analyze_stream_async
+
+        cb = pybreaker.CircuitBreaker(
+            fail_max=1, reset_timeout=60, exclude=[pybreaker.CircuitBreakerError]
+        )
+        analyzer_module._llm_circuit_breaker = cb
+        cb.open()
+
+        mock_client = MagicMock()
+        mock_get_async_client.return_value = mock_client
+
+        ctx = {"request_id": "cb-stream-002", "errors": ["test error"]}
+
+        chunks = []
+        async for chunk in analyze_stream_async(ctx):
+            chunks.append(chunk)
+        assert len(chunks) == 1
+        fallback = json.loads(chunks[0])
+        assert fallback["_circuit_breaker_triggered"] is True
+        mock_client.chat.completions.create.assert_not_called()
+
+    @patch("app.llm.analyzer._get_client")
+    def test_stream_failure_trips_breaker(self, mock_get_client):
+        """流式调用失败应计入熔断计数：达阈值后转为 open 并 yield fallback。"""
+        import json
+
+        import pybreaker
+
+        import app.llm.analyzer as analyzer_module
+        from app.llm.analyzer import analyze_stream
+
+        cb = pybreaker.CircuitBreaker(
+            fail_max=1, reset_timeout=60, exclude=[pybreaker.CircuitBreakerError]
+        )
+        analyzer_module._llm_circuit_breaker = cb
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("LLM down")
+        mock_get_client.return_value = mock_client
+
+        ctx = {"request_id": "cb-stream-003", "errors": ["test error"]}
+
+        chunks = list(analyze_stream(ctx))
+        assert len(chunks) == 1
+        fallback = json.loads(chunks[0])
+        assert fallback["_circuit_breaker_triggered"] is True
+        assert cb.current_state == pybreaker.STATE_OPEN
+

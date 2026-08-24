@@ -43,10 +43,15 @@ def _compute_context_fingerprint(context: dict) -> str:
     FIX: P1-8 以 error-surface 为主键（异常 fingerprint/type/message + key frames
     file:line:function），不再包含 request_id —— 否则每次请求唯一、
     缓存命中率趋近 0。缓存淘汰与 TTL 语义不变（L1 LRU + TTL，L2 Redis）。
+
+    FIX: v0.6.7 指纹碰撞 —— 旧实现用 ``"|"``/``":"`` 裸拼接字段，字段值内含
+    分隔符时不同上下文会拼出同一字符串（如 exc_type="A|B" 与 message="B|C"），
+    且字段缺失统一回退空串、``[:16]`` 截断进一步放大碰撞面。改为结构化
+    JSON 序列化（转义 + 字段边界明确）+ 完整 sha256 摘要，杜绝拼接歧义。
     """
     exc_type, message, fingerprint = _get_error_signal(context)
 
-    # key frames：取异常的前几帧（file:line:function），忽略请求维度噪声
+    # key frames：取异常的前几帧（file/line/function），忽略请求维度噪声
     frames: list = []
     exception = context.get("exception")
     if isinstance(exception, dict):
@@ -56,36 +61,39 @@ def _compute_context_fingerprint(context: dict) -> str:
             if isinstance(error, dict) and error.get("frames"):
                 frames = error["frames"]
                 break
-    key_frames: list[str] = []
+    key_frames: list = []
     for f in (frames or [])[:3]:
         if isinstance(f, dict):
             key_frames.append(
-                f"{f.get('file', '')}:{f.get('line', '')}:{f.get('function', '')}"
+                [f.get("file", ""), f.get("line", ""), f.get("function", "")]
             )
         else:
             key_frames.append(str(f))
 
     # error-surface：无 exception 字段时，把 errors 条目的 type/message/fingerprint
     # 纳入指纹（结构化而非整串序列化），保持"不同错误不同指纹"的同时去除 request_id 噪声
-    error_surface: list[str] = []
+    error_surface: list = []
     for error in context.get("errors", []) or []:
         if isinstance(error, dict):
             error_surface.append(
-                f"{error.get('type') or error.get('exception_type') or ''}"
-                f":{error.get('message') or error.get('msg') or ''}"
-                f":{error.get('fingerprint') or ''}"
+                [
+                    error.get("type") or error.get("exception_type") or "",
+                    error.get("message") or error.get("msg") or "",
+                    error.get("fingerprint") or "",
+                ]
             )
         else:
             error_surface.append(str(error))
 
-    key_parts = [
+    key = [
         fingerprint or "",
         exc_type,
         message,
-        "|".join(key_frames),
-        "|".join(error_surface),
+        key_frames,
+        error_surface,
     ]
-    return hashlib.sha256("|".join(key_parts).encode()).hexdigest()[:16]
+    serialized = json.dumps(key, ensure_ascii=False, default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _get_cached_result(fingerprint: str) -> Optional[dict]:

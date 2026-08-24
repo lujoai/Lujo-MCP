@@ -107,6 +107,7 @@
   // ── V5 传输优化状态 ──
   var _batchTimestamps = [];  // 记录每次发送的时间戳，用于节流控制
   var _pendingBatches = [];   // 待发送的批次（节流延迟时暂存）
+  var _pendingTimer = null;   // 节流错开发送定时器（单实例，避免同一时刻齐发）
 
   function _pushRecent(arr, item, maxSize) {
     arr.push(item);
@@ -274,26 +275,55 @@
     var body = JSON.stringify({ events: batch });
     var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
 
+    // 页面关闭/隐藏路径：必须同步冲刷，绝不能延迟到定时器（unload 后定时器不会触发）
+    if (useBeacon) {
+      if (_pendingTimer) {
+        clearTimeout(_pendingTimer);
+        _pendingTimer = null;
+      }
+      // 先排空此前被节流延迟暂存的批次，避免丢数据
+      while (_pendingBatches.length > 0) {
+        _sendBatchWithCompression(url, _pendingBatches.shift(), true);
+      }
+      _sendBatchWithCompression(url, body, true);
+      return;
+    }
+
     // V5 节流控制：检查是否在节流窗口内
     var now = Date.now();
     _batchTimestamps = _batchTimestamps.filter(function(ts) {
       return now - ts < cfg.throttleWindowMs;
     });
-    
+
     if (_batchTimestamps.length >= cfg.maxBatchesPerWindow) {
-      // 超过节流限制，延迟到窗口结束后发送
-      var delay = cfg.throttleWindowMs - (now - _batchTimestamps[0]);
+      // 超过节流限制：入暂存队列，由单一定时器按间隔逐条错开发送（避免齐发尖峰）
       _pendingBatches.push(body);
-      setTimeout(function() {
-        var pendingBody = _pendingBatches.shift();
-        if (pendingBody) {
-          _sendBatchWithCompression(url, pendingBody, useBeacon);
-        }
-      }, delay);
+      if (!_pendingTimer) {
+        var delay = cfg.throttleWindowMs - (now - _batchTimestamps[0]);
+        _pendingTimer = setTimeout(_drainPendingBatches, delay);
+      }
       return;
     }
 
-    _sendBatchWithCompression(url, body, useBeacon);
+    _sendBatchWithCompression(url, body, false);
+  }
+
+  // 节流暂存批次按固定间隔逐条发送（每次只发 1 条，发完再续期），避免同一时刻齐发
+  function _drainPendingBatches() {
+    _pendingTimer = null;
+    if (_pendingBatches.length === 0) return;
+    var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
+    _sendBatchWithCompression(url, _pendingBatches.shift(), false);
+    if (_pendingBatches.length > 0) {
+      _pendingTimer = setTimeout(_drainPendingBatches, _pendingSendInterval());
+    }
+  }
+
+  // 每条暂存批次的发送间隔 = 节流窗口 / 窗口内允许批次数（保证不超限且错开）
+  function _pendingSendInterval() {
+    var windowMs = cfg.throttleWindowMs > 0 ? cfg.throttleWindowMs : 1000;
+    var max = cfg.maxBatchesPerWindow > 0 ? cfg.maxBatchesPerWindow : 1;
+    return Math.ceil(windowMs / max);
   }
 
   // V5 压缩传输：根据 payload 大小决定是否压缩
@@ -349,8 +379,8 @@
             return;
           }
 
-          // 常规 flush：异步 XHR + 指数退避重试
-          _sendBatchXhrCompressed(url, compressedBody, 0);
+          // 常规 flush：异步 XHR + 指数退避重试（透传原始明文供 gzip 回退）
+          _sendBatchXhrCompressed(url, compressedBody, body, 0);
         };
         reader.readAsArrayBuffer(compressedBlob);
       }).catch(function(err) {
@@ -368,21 +398,26 @@
   function _sendBatchDirect(url, body, useBeacon) {
     _batchTimestamps.push(Date.now());
     
-    // 页面关闭场景：优先 sendBeacon
-    if (useBeacon && _hasSendBeacon()) {
-      if (body.length <= _BEACON_SIZE_LIMIT) {
-        if (!_beaconTokenValid()) {
-          // 令牌不可用 → 退回同步 XHR（带 header），避免 URL 暴露永久 Key
-          _sendBatchSync(url, body);
-          return;
+    // 页面关闭场景：必须同步发送（sendBeacon 或同步 XHR），异步 XHR 会在 unload 后被取消
+    if (useBeacon) {
+      if (_hasSendBeacon()) {
+        if (body.length <= _BEACON_SIZE_LIMIT) {
+          if (!_beaconTokenValid()) {
+            // 令牌不可用 → 退回同步 XHR（带 header），避免 URL 暴露永久 Key
+            _sendBatchSync(url, body);
+            return;
+          }
+          var beaconUrl = url + "?token=" + encodeURIComponent(_beaconToken);
+          var blob = new Blob([body], { type: "application/json" });
+          if (navigator.sendBeacon(beaconUrl, blob)) {
+            return; // sendBeacon 成功
+          }
         }
-        var beaconUrl = url + "?token=" + encodeURIComponent(_beaconToken);
-        var blob = new Blob([body], { type: "application/json" });
-        if (navigator.sendBeacon(beaconUrl, blob)) {
-          return; // sendBeacon 成功
-        }
+        // 超限或 sendBeacon 失败 → 同步 XHR 降级
+        _sendBatchSync(url, body);
+        return;
       }
-      // 超限或 sendBeacon 失败 → 同步 XHR 降级
+      // 无 sendBeacon 能力 → 同步 XHR 兜底（不再落到异步 XHR 导致丢数据）
       _sendBatchSync(url, body);
       return;
     }
@@ -464,8 +499,8 @@
     }
   }
 
-  // V5 Compressed XHR send
-  function _sendBatchXhrCompressed(url, compressedBody, attempt) {
+  // V5 Compressed XHR send（body 为原始未压缩 JSON，供 gzip 被拒/失败时明文回退）
+  function _sendBatchXhrCompressed(url, compressedBody, body, attempt) {
     try {
       var xhr = new XMLHttpRequest();
       xhr.open("POST", url, true);
@@ -475,7 +510,13 @@
       xhr.onreadystatechange = function () {
         if (xhr.readyState !== 4) return;
         if (xhr.status >= 200 && xhr.status < 300) return; // success
-        
+
+        // 接收端拒绝 gzip（400/415）→ 用原始未压缩数据重发一次，避免发送损坏数据
+        if (attempt === 0 && (xhr.status === 400 || xhr.status === 415)) {
+          _sendBatchXhr(url, body, 0);
+          return;
+        }
+
         // Fast abort on non-retryable client error
         if (_isNonRetryableStatus(xhr.status)) {
           return;
@@ -486,13 +527,11 @@
           var retryAfterMs = _parseRetryAfter(xhr);
           var delay = _computeRetryDelay(attempt, retryAfterMs);
           setTimeout(function () {
-            _sendBatchXhrCompressed(url, compressedBody, attempt + 1);
+            _sendBatchXhrCompressed(url, compressedBody, body, attempt + 1);
           }, delay);
         } else if (cfg.enableLocalStorageFallback) {
-          // Compressed fallback: decode to string for localStorage
-          var textDecoder = new TextDecoder();
-          var text = textDecoder.decode(compressedBody);
-          _saveToLocalStorage(text);
+          // 回退用原始明文（而非 gzip 字节），否则恢复时 JSON.parse 必然失败
+          _saveToLocalStorage(body);
         }
       };
       xhr.send(compressedBody);
@@ -500,12 +539,10 @@
       if (attempt < cfg.maxRetries) {
         var delay = _computeRetryDelay(attempt, null);
         setTimeout(function () {
-          _sendBatchXhrCompressed(url, compressedBody, attempt + 1);
+          _sendBatchXhrCompressed(url, compressedBody, body, attempt + 1);
         }, delay);
       } else if (cfg.enableLocalStorageFallback) {
-        var textDecoder = new TextDecoder();
-        var text = textDecoder.decode(compressedBody);
-        _saveToLocalStorage(text);
+        _saveToLocalStorage(body);
       }
     }
   }
@@ -1517,6 +1554,7 @@
     _parseRetryAfter: _parseRetryAfter,
     _saveToLocalStorage: _saveToLocalStorage,
     _restorePendingBatches: _restorePendingBatches,
+    _flushBatch: _flushBatch,
   };
 
   // 支持 CommonJS / ES module / 全局变量

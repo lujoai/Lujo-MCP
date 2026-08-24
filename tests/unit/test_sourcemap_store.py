@@ -69,6 +69,21 @@ class TestUpload:
         assert get_uploaded_map("a.js")["sources"] == ["src/other.ts"]
         assert len(sourcemap_store._uploads) == 1
 
+    def test_release_distinguishes_uploads(self):
+        """同 artifact 不同 release（bundle 版本）应独立存储，不再互相覆盖。"""
+        m1 = _valid_map()
+        m1["sources"] = ["src/v1.ts"]
+        m2 = _valid_map()
+        m2["sources"] = ["src/v2.ts"]
+        upload_sourcemap("app.js", m1, release="v1")
+        upload_sourcemap("app.js", m2, release="v2")
+
+        assert get_uploaded_map("app.js", release="v1")["sources"] == ["src/v1.ts"]
+        assert get_uploaded_map("app.js", release="v2")["sources"] == ["src/v2.ts"]
+        # 无 release 的旧键不受影响，也不会误命中版本化条目
+        assert get_uploaded_map("app.js") is None
+        assert len(sourcemap_store._uploads) == 2
+
     @pytest.mark.parametrize("bad_map", [
         "not-a-dict",
         [],
@@ -149,6 +164,23 @@ class TestResolveFramesAuto:
         frame = {"file": "whatever.js", "line": 1, "column": 0, "function": "t"}
         resolved, _ = resolve_frames_auto([frame], artifact="custom-key")
         assert resolved[0]["file"] == "src/app.ts"
+
+    def test_resolve_uses_release_dimension(self, monkeypatch):
+        """解析时应按 release（bundle 版本）命中对应 source map，而非同 basename 混用。"""
+        monkeypatch.setattr(settings, "sourcemap_enabled", True)
+        m1 = _valid_map()
+        m1["sources"] = ["src/v1.ts"]
+        m2 = _valid_map()
+        m2["sources"] = ["src/v2.ts"]
+        upload_sourcemap("app.js", m1, release="v1")
+        upload_sourcemap("app.js", m2, release="v2")
+
+        frame = {"file": "app.js", "line": 1, "column": 0, "function": "t"}
+        r1, _ = resolve_frames_auto([dict(frame)], release="v1")
+        r2, _ = resolve_frames_auto([dict(frame)], release="v2")
+
+        assert r1[0]["file"] == "src/v1.ts"
+        assert r2[0]["file"] == "src/v2.ts"
 
     def test_disk_channel(self, monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "sourcemap_enabled", True)
@@ -236,7 +268,8 @@ class TestSourcemapEndpoint:
         receipt = debug_upload_sourcemap(req)
         assert receipt["stored"] is True
         assert receipt["release"] == "v1.2.3"
-        assert get_uploaded_map("a.js") is not None
+        # release 作为 bundle 版本维度并入存储键，按同 release 检索命中
+        assert get_uploaded_map("a.js", release="v1.2.3") is not None
 
     def test_invalid_map_returns_400(self):
         from fastapi import HTTPException

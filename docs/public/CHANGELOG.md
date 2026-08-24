@@ -5,6 +5,30 @@
 
 ---
 
+## [0.6.7] - 2026-08-25
+
+> v0.6.x 正确性补丁：修复 7 个正确性组 Major 缺陷（SDK 数据采集三件套：gzip 回退乱码、pagehide 丢数据、节流齐发；Python 侧：LLM 指纹碰撞、流式绕熔断、smoke_test 死锁、sourcemap 缓存键版本混淆）。测试基线 **1231 passed / 6 skipped / 0 failed**（新增 14 项测试），零回归，无 Breaking Change。
+
+### 🛠️ SDK 数据采集（browser-sdk）
+
+- **gzip 回退乱码修复**：gzip 压缩发送失败回退时，旧实现把 gzip 二进制字节当文本存 localStorage（恢复时 `JSON.parse` 必然失败），400/415（接收端不支持 gzip）时直接丢数据。现原始明文 `body` 全程透传：localStorage 回退存明文、400/415 用明文重发一次。
+- **pagehide 丢数据修复**：页面关闭/隐藏瞬间，节流暂存队列里攒的批次走 `setTimeout` 延迟发送（unload 后定时器不触发），数据直接丢失。现 beacon 路径同步排空暂存队列 + 当前批次（sendBeacon 或同步 XHR），绝不延迟到定时器。
+- **节流齐发修复**：旧实现每条被节流的批次各自 `setTimeout`，延迟差毫秒级导致同一时刻齐射（节流失效反而形成尖峰）。现改为单一定时器逐条发送，间隔 `ceil(节流窗口/窗口最大批次数)` 错开发送。
+
+### 🛠️ Python 侧
+
+- **LLM 缓存指纹碰撞修复**：`_compute_context_fingerprint` 用 `"|"`/`":"` 裸拼接字段，字段值内含分隔符时不同上下文拼出同一字符串（如 `exc_type="A|B"` 与 `message="B|C"`），且 `[:16]` 截断放大碰撞面——缓存会返回错误分析结果。现改为 `json.dumps` 结构化序列化 + 完整 sha256 摘要。
+- **流式路径绕过熔断修复**：LLM 调用的流式路径（`analyze_stream` / `analyze_stream_async`）此前完全绕过熔断器——非流式路径熔断开启时 fallback，流式路径继续直打 LLM。现两条流式路径接入同一熔断状态机（OPEN 时 fallback、成功/失败计入熔断计数），异步路径锁临界区经 `asyncio.to_thread` 执行。
+- **smoke_test 死锁修复**：`scripts/mcp_smoke_test.py` 的 `stdout.readline()` 无超时（服务端挂死时冒烟脚本永久阻塞）、`stderr=PIPE` 从不排空（管道缓冲写满导致子进程阻塞）。现读超时 10s 兜底 + 后台线程排空 stderr + EOF 哨兵。
+- **sourcemap 缓存键版本混淆修复**：`sourcemap_store` 仅以 artifact 为存储键，同 artifact 不同 release（bundle 版本）的 source map 互相覆盖——旧版本 map 会解析新版本堆栈，位置错误。现用 NUL 分隔符把 release 并入存储键，上传/查找/解析/API 全链路透传 release。
+
+### 📊 测试与质量
+
+- **测试基线**：1231 passed / 6 skipped / 0 failed / 0 errors（v0.6.6 基线 1221 → 1231，新增 14 项：SDK 传输修复 4 项、指纹碰撞 2 项、流式熔断 3 项、smoke_test 3 项、sourcemap 缓存键 2 项）
+- **CI 全门禁绿**：ruff 0.16.4（advisory，777 项零净新增）+ check_doc_links + pytest 单测 + SDK JS 冒烟（4 文件 29 pass）
+- **无 Breaking Change**：全部修复向后兼容，默认行为不变
+- **待复核项**：verify_loop 超时覆盖结果一项经 Python 3.12 `wait_for` 语义分析确认不可复现（协程在取消生效前完成则正常返回），未做改动
+
 ## [0.6.6] - 2026-08-24
 
 > v0.6.x 可用性补丁：修复 4 个可用性组 Major 缺陷（stdio 坏输入杀服务、超时背压槽位竞态、事件循环三处阻塞、async 工具绕过双池），并加固 JSON-RPC 协议层输入校验。测试基线 **1221 passed / 6 skipped / 0 failed**（新增 14 项测试），零回归，无 Breaking Change。

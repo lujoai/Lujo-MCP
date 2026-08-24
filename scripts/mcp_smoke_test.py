@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import subprocess
 import sys
+import threading
 import time
 
 # MCP JSON-RPC 消息 id 计数器
 _ID = 0
+
+# 单条 JSON-RPC 响应的读取超时（秒）：服务端挂死时冒烟脚本不得永久阻塞
+_READ_TIMEOUT = 10.0
 
 
 def _next_id() -> int:
@@ -31,8 +36,30 @@ def _next_id() -> int:
     return _ID
 
 
-def _send(proc: subprocess.Popen, method: str, params: dict) -> dict:
-    """向 stdio 发送一条 JSON-RPC 请求并读取对应响应。"""
+def _start_readers(proc: subprocess.Popen) -> queue.Queue[str]:
+    """后台线程分别读取 stdout / stderr。
+
+    stdout 逐行入队供主线程带超时消费；stderr 持续排空避免管道缓冲写满
+    导致子进程阻塞（死锁）。EOF 时向 stdout 队列推入 None 哨兵。
+    """
+    out_q: queue.Queue[str] = queue.Queue()
+
+    def _drain_out() -> None:
+        for raw in iter(proc.stdout.readline, ""):
+            out_q.put(raw)
+        out_q.put(None)
+
+    def _drain_err() -> None:
+        for _ in iter(proc.stderr.readline, ""):
+            pass
+
+    threading.Thread(target=_drain_out, daemon=True).start()
+    threading.Thread(target=_drain_err, daemon=True).start()
+    return out_q
+
+
+def _send(proc: subprocess.Popen, out_q: queue.Queue[str], method: str, params: dict) -> dict:
+    """向 stdio 发送一条 JSON-RPC 请求并读取对应响应（带超时兜底）。"""
     msg = {
         "jsonrpc": "2.0",
         "id": _next_id(),
@@ -43,10 +70,17 @@ def _send(proc: subprocess.Popen, method: str, params: dict) -> dict:
     proc.stdin.write(line + "\n")
     proc.stdin.flush()
 
-    # stdio server 每行一条 JSON 响应；读取直到找到匹配 id
+    # stdio server 每行一条 JSON 响应；读取直到找到匹配 id，超时/EOF 时失败
+    deadline = time.monotonic() + _READ_TIMEOUT
     for _ in range(50):
-        raw = proc.stdout.readline()
-        if not raw:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"等待 id={msg['id']} 响应超时（>{_READ_TIMEOUT}s）")
+        try:
+            raw = out_q.get(timeout=remaining)
+        except queue.Empty:
+            raise TimeoutError(f"等待 id={msg['id']} 响应超时（>{_READ_TIMEOUT}s）")
+        if raw is None:
             raise RuntimeError("stdio 流提前关闭（读取响应失败）")
         try:
             resp = json.loads(raw)
@@ -68,9 +102,10 @@ def _run_smoke(tool: str | None) -> int:
         encoding="utf-8",
         bufsize=1,
     )
+    out_q = _start_readers(proc)
     try:
         # 1. initialize 握手
-        init = _send(proc, "initialize", {
+        init = _send(proc, out_q, "initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": "lujo-smoke-test", "version": "0.4.1-beta"},
@@ -91,7 +126,7 @@ def _run_smoke(tool: str | None) -> int:
         proc.stdin.flush()
 
         # 3. tools/list 枚举
-        tools_resp = _send(proc, "tools/list", {})
+        tools_resp = _send(proc, out_q, "tools/list", {})
         if "error" in tools_resp:
             print(f"[FAIL] tools/list 失败: {tools_resp['error']}", file=sys.stderr)
             return 1
@@ -106,7 +141,7 @@ def _run_smoke(tool: str | None) -> int:
         target = tool if tool in names else "debug"
         if target not in names:
             target = names[0]
-        call = _send(proc, "tools/call", {
+        call = _send(proc, out_q, "tools/call", {
             "name": target,
             "arguments": {},
         })
