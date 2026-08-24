@@ -5,9 +5,9 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v6.4（v0.6.0 架构重构与生产就绪发布同步） |
+| 文档版本 | v6.4（v0.6.1 稳定维护期同步） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v0.6.0 |
+| 当前产品版本 | v0.6.1 |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
 | 最后更新 | 2026-08-21 |
@@ -552,15 +552,16 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `API_KEY_ROTATION_ENABLED` | false | ✅ FR18 |
 | RBAC | `RBAC_ENABLED` | false | ✅ FR18（false=全 admin 向后兼容） |
 | | `RBAC_ROLE_MAPPING` | 空 | ✅ FR18（如 `key1:admin,key2:viewer`） |
-| AI Debug Agent | `AGENT_ENABLED` | false | ✅ FR19（false=路由仍挂载但调用返回 501） |
+| AI Debug Agent | `AGENT_MODE` | off | ✅ FR19（有效值：off / single / dag / verify_loop；显式设置后优先于旧布尔开关，显式 off 保持关闭） |
+| | `AGENT_ENABLED` | false | ✅ FR19（仅在未显式设置 `AGENT_MODE` 时作为兼容回退；false=路由仍挂载但调用返回 501） |
 | | `AGENT_QUEUE_MAXSIZE` | 50 | ✅ FR19 |
 | | `AGENT_QUEUE_WORKERS` | 2 | ✅ FR19 |
 | | `AGENT_QUEUE_DRAIN_TIMEOUT` | **60** | ✅ FR19（实际默认 60s，非 30s） |
 | | `AGENT_PRIOR_ANALYSIS_ENABLED` | true | ✅ FR19（控制 RepairContextAssembler 是否调用 analyze_async） |
-| | `AGENT_MODEL` | 空 | ✅ FR19（空则继承 `LLM_MODEL`） |
+| | `AGENT_MULTI_AGENT_ENABLED` | false | ✅ FR19（仅在未显式设置 `AGENT_MODE` 时作为 DAG 兼容回退；false 时走 Phase 1 单 Agent 串行） |
 | | `AGENT_MAX_RETRIES` | 2 | ✅ FR19 |
 | | `AGENT_TIMEOUT` | 90 | ✅ FR19 |
-| | `AGENT_MULTI_AGENT_ENABLED` | false | ✅ FR19（Phase 2 多 Agent DAG 已实现（2026-07-30，`AGENT-002`）；false 时走 Phase 1 单 Agent 串行） |
+| | `AGENT_VERIFY_LOOP_ENABLED` | false | ✅ FR19（仅在未显式设置 `AGENT_MODE` 时参与兼容派生） |
 | L3 缓存预热（P3-7） | `LLM_CACHE_PREWARM_ENABLED` | false | ✅ Phase 7 |
 | | `LLM_CACHE_PREWARM_TOP_N` | 20 | ✅ Phase 7 |
 | | `LLM_CACHE_PREWARM_INTERVAL_SECONDS` | 3600 | ✅ Phase 7 |

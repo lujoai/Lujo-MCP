@@ -1,7 +1,7 @@
 # Release Notes / 发布说明
 
 > 最新版本：**v0.6.1（2026-08-21）**。架构重构与生产就绪里程碑版本：完成 `pg_store.py` 与 `analyzer.py` 的 God Object 单一职责拆解，补齐 Prometheus 细粒度业务指标体系与生产部署编排套件。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.1`。
-> 测试基线：单元 **1161 passed / 6 skipped / 0 failed** + e2e 10 passed，文档链接 100% 校验通过。
+**测试基线**：v0.6.1 发布时为单元 **1161 passed / 6 skipped / 0 failed** + e2e 10 passed；v0.6.1 发布后进入 `origin/main` 的稳定性补丁，当前 main 的最新回归结果以实际 CI/pytest 执行为准。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 依赖方向已冻结。允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、禁止 RAG → Agent/Runtime/LLM/MCP。
 
@@ -30,7 +30,7 @@ v0.6.1 是智能排障 RAG 经验库扩充与多 Agent 协同上下文优化版�
 
 v0.6.1 发布后又合入一组稳定性与正确性补丁，全部落在 `origin/main`，均不改变对外契约（无字段变更、无 Breaking Change），版本号仍为 **v0.6.1**。
 
-- **同步工具背压与 TOOL_BUSY 快速拒绝**：同步工具调用在高负载下不再无限排队等待，达到容量上限后快速返回 `TOOL_BUSY`，避免调用长时间占用线程导致超时堆积，日志文案同步修正
+- **同步工具背压与 TOOL_BUSY 快速拒绝**：同步工具调用通过有界槽位与超时控制，在槽位满且等待超时（或 timeout=0）时快速返回 `TOOL_BUSY` 业务错误，避免无界排队与线程堆积，日志文案同步修正
 - **TraceEntry/TraceStep schema 去重**：统一入口数据模型定义，消除重复 schema，对外字段与结构零变更
 - **agent_mode 显式优先语义修复**：显式配置的 agent 模式不再被隐式默认值覆盖，避免错误回退默认模式
 - **测试环境与集成测试 API key 隔离加固**：测试执行不受本机/外部凭据干扰，缺失凭据时快速回退而非挂起等待，环境无关性更强
@@ -40,7 +40,7 @@ v0.6.1 发布后又合入一组稳定性与正确性补丁，全部落在 `origi
 
 Additional stability and correctness patches landed on `origin/main` after the v0.6.1 release. None change the external contract (no field changes, no breaking changes) and the version stays at v0.6.1:
 
-- **Sync-tool backpressure & fast `TOOL_BUSY` refusal**: overloaded sync-tool calls no longer queue indefinitely; once the capacity cap is reached they fail fast with `TOOL_BUSY`, holding worker threads no longer and timeouts no longer pile up; log text aligned as well
+- **Sync-tool backpressure & fast `TOOL_BUSY` refusal**: bounded sync-tool slots and timeout controls fail fast with business-level `TOOL_BUSY` error when slots are saturated or timed out (immediate when timeout=0), avoiding unbounded queuing and thread starvation; log text aligned as well
 - **TraceEntry/TraceStep schema dedup**: unified internal data-model definitions, zero external field changes
 - **agent_mode explicit-priority fix**: an explicitly configured agent mode is no longer overridden by an implicit default
 - **API-key isolation for test & integration environments**: tests no longer depend on ambient credentials and fall back fast when none are present instead of hanging

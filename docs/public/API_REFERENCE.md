@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 版本：v0.6.0（2026-08-21）
+> 版本：v0.6.1（2026-08-21）
 > 本文档覆盖 Lujo-MCP 对外暴露的两类接口：**REST API** 与 **MCP 工具**。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -58,7 +58,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | POST | `/api/debug/analyze/stream` | developer | 流式 LLM 分析（SSE） |
 | POST | `/api/debug/analyze/async` | developer | 异步 LLM 分析（削峰队列，返回 job_id） |
 | GET | `/api/debug/analyze/result/{job_id}` | viewer | 查询异步分析任务状态/结果 |
-| POST | `/api/debug/repair/async` | developer | 异步生成修复方案（AI Debug Agent，需 `AGENT_ENABLED=true`） |
+| POST | `/api/debug/repair/async` | developer | 异步生成修复方案（AI Debug Agent；有效 Agent 模式非 `off`，显式 `AGENT_MODE` 优先，未显式时兼容旧布尔开关） |
 | GET | `/api/debug/repair/result/{job_id}` | viewer | 查询异步修复任务状态/结果 |
 | GET | `/api/debug/runtime` | viewer | 获取当前进程运行时快照（CPU/内存/线程） |
 | GET | `/api/debug/session` | viewer | 列出活跃调试会话 |
@@ -243,8 +243,8 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | 工具名 | 角色 | 说明 | 前置条件 |
 |--------|------|------|----------|
 | `auto_test` | developer | 自动遍历页面可交互元素并捕获控制台错误 + 网络 4xx/5xx | Playwright |
-| `repair_async` | developer | 异步生成修复方案（AI Debug Agent） | `AGENT_MODE` 非 off（或旧配置 `AGENT_ENABLED=true`） |
-| `repair_result` | viewer | 查询 repair_async 任务状态/结果 | `AGENT_MODE` 非 off（或旧配置 `AGENT_ENABLED=true`） |
+| `repair_async` | developer | 异步生成修复方案（AI Debug Agent） | 有效 Agent 模式非 `off`（显式 `AGENT_MODE` 优先；未显式时按旧布尔开关兼容派生） |
+| `repair_result` | viewer | 查询 repair_async 任务状态/结果 | 有效 Agent 模式非 `off`（显式 `AGENT_MODE` 优先；未显式时按旧布尔开关兼容派生） |
 | `resolve_stack` | viewer | 用 Source Map 还原 minified 堆栈 | `SOURCEMAP_ENABLED=true` + 已上传 .map |
 
 **关键参数**：
@@ -256,17 +256,22 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | `repair_result` | `job_id`*(string) |
 | `resolve_stack` | `frames`*(array, 帧含 file/line/column/function), `artifact`(string) |
 
-### 3.4 工具执行控制与错误码
+### 3.4 工具执行控制与错误处理
 
-- **背压与并发控制**：同步工具调用通过有界工作线程池执行（`TOOL_EXECUTOR_WORKERS`，默认 8）。排队等待超过 `TOOL_BUSY_QUEUE_TIMEOUT`（默认 1.5s；设为 0 时立即拒绝）将快速返回错误，避免请求在过载时无限堆积。
-- **错误码约定**：
+- **背压与并发控制**：同步工具调用通过有界并发槽位执行（`tool_executor_workers`，默认 8）。排队等待超过 `tool_busy_queue_timeout`（默认 1.5s；设为 0 时立即拒绝）将快速返回业务级错误，避免高负载下请求无限堆积。
+- **返回结构与错误层级说明**：
+  - **工具执行结果中的业务错误（当前实现）**：工具调用超时（`TOOL_TIMEOUT`）、服务繁忙（`TOOL_BUSY`）或内部异常（`TOOL_INTERNAL`）时，服务端在 JSON-RPC 的 `result` 中返回业务错误信息（`isError: true` 及对应的 `error_code` 字段），而非顶层 JSON-RPC `error`。
+  - **JSON-RPC 顶层协议错误**：当请求无法解析（如 `-32700` Parse Error）、方法未找到（`-32601` Method Not Found）或入参结构校验失败（`-32602` Invalid Params）时，服务端返回顶层 JSON-RPC `error` 对象。
+  - **错误码常量定义**：代码中预定义了 `TOOL_BUSY_ERROR = -32004` 等扩展错误码常量供协议层备用；客户端在处理工具调用结果时，应以 `result.error_code`（如 `"TOOL_BUSY"`）作为判定标准。
 
-| JSON-RPC Code | error_code | 说明 | 处理建议 |
-|---------------|------------|------|----------|
-| `-32004` | `TOOL_BUSY` | 同步工具执行器达到容量上限且等待超时（或 timeout=0 立即拒绝） | 客户端指数退避重试或调大 `TOOL_EXECUTOR_WORKERS` |
-| `-32000` | `TOOL_TIMEOUT` | 工具执行超过 `TOOL_TIMEOUT_SECONDS`（默认 60s） | 检查目标操作或适当调大超时阈值 |
-| `-32602` | `INVALID_PARAMS` | 工具入参校验失败（Pydantic 校验不通过） | 检查参数类型与必填项 |
-| `-32603` | `INTERNAL_ERROR` | 工具执行内部未捕获异常 | 检查服务日志与堆栈 |
+| 错误标识 | 出现层级 | 触发条件 | 处理建议 |
+|---------|---------|---------|----------|
+| `TOOL_BUSY` | `result.error_code`（常量 `-32004`） | 同步工具执行槽位满且等待超时（或 timeout=0 立即拒绝） | 客户端稍后重试 / 指数退避，或调大 `TOOL_EXECUTOR_WORKERS` |
+| `TOOL_TIMEOUT` | `result.error_code`（当前工具响应不使用顶层数字错误码） | 工具执行耗时超过 `tool_timeout_seconds`（默认 60s） | 检查操作耗时或调大超时阈值 |
+| `TOOL_INTERNAL` | `result.error_code` | 工具执行中抛出未捕获异常 | 检查服务端日志排查工具内部异常 |
+| `INVALID_PARAMS` | 顶层 `error.code = -32602` | 工具入参 Schema 校验失败（Pydantic 校验不通过） | 检查参数类型与必填字段 |
+| `METHOD_NOT_FOUND` | 顶层 `error.code = -32601` | 请求了不存在的 MCP 方法或工具 | 检查方法名与工具注册列表 |
+| `INTERNAL_ERROR` | 顶层 `error.code = -32603` | MCP 协议层未捕获内部错误 | 检查服务端日志与运行环境 |
 
 ---
 
