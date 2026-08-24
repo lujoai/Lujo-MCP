@@ -148,11 +148,16 @@ async def lifespan(app: FastAPI):
                     acquired = False
             else:
                 # 单机模式：asyncio.Lock 防同进程重复
-                try:
-                    _local_lock.acquire_nowait()
-                    acquired = True
-                except RuntimeError:
+                # FIX: asyncio.Lock 无 acquire_nowait()（threading API 误用），
+                # 必抛 AttributeError 且 except RuntimeError 捕获不到，
+                # 导致清理任务在启动 _CLEANUP_INTERVAL 后静默死亡。
+                # 无竞争时 acquire() 无挂起点，locked() 预检在同一事件
+                # 循环内不存在竞态窗口。
+                if _local_lock.locked():
                     acquired = False  # 上次清理尚未完成
+                else:
+                    await _local_lock.acquire()
+                    acquired = True
 
             if not acquired:
                 continue

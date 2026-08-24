@@ -96,7 +96,11 @@ def resolve_link(url: str, doc_path: Path) -> tuple[str, str, bool, str]:
         file_path_str = unquote(url[8:])  # 去掉 file:///
         file_path = Path(file_path_str)
         exists = file_path.exists()
-        rel = str(file_path.relative_to(ROOT)) if file_path.exists() else file_path_str
+        try:
+            rel = str(file_path.relative_to(ROOT))
+        except ValueError:
+            # 文件存在但位于仓库 ROOT 之外：保留原始路径，避免整脚本崩溃
+            rel = file_path_str
         return ("file://", rel, exists, "⚠️ file:// 链接在 GitHub 上不可用，建议改为相对路径" if exists else "文件不存在")
 
     # 纯锚点

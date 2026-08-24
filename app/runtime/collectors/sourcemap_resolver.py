@@ -120,7 +120,8 @@ class SourceMapParser:
     # ── 解析 ──
 
     def _parse_mappings(self, mappings: str) -> None:
-        # source/line/col/name 四段是全文件级相对值（跨行延续），gen_col 每行重置
+        # source/line/col/name 四段是全文件级相对值（跨行延续）；
+        # gen_col 是行内相对值（相对同行前一段的增量，行首基准 0，换行重置）
         src_idx = 0
         src_line = 0
         src_col = 0
@@ -129,13 +130,16 @@ class SourceMapParser:
             if not line_str:
                 continue
             segments: list[_Segment] = []
+            gen_col = 0
             for seg_str in line_str.split(","):
                 if not seg_str:
                     continue
                 fields = decode_vlq(seg_str)
                 if not fields:
                     continue
-                gen_col = fields[0]
+                # FIX: 规范要求行内累加；此前直接取 fields[0] 当绝对值，
+                # 多 segment 行（生产 minified bundle 常态）除首段外全部错位
+                gen_col += fields[0]
                 if len(fields) != 1 and len(fields) not in (4, 5):
                     raise SourceMapError(f"mapping 段字段数非法: {len(fields)}")
                 seg = _Segment(gen_col=gen_col)

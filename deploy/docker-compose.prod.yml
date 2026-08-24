@@ -1,4 +1,4 @@
-﻿version: "3.8"
+version: "3.8"
 
 services:
   postgres:
@@ -21,7 +21,9 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
-networks:
+    # FIX: 此处 networks 原为零缩进（被解析为顶层键），导致整个文件 YAML 解析
+    # 失败、docker compose 无法加载；缩进回归 postgres 服务层级（与 redis/app 一致）
+    networks:
       - lujo-internal-network
 
   redis:
@@ -110,9 +112,12 @@ networks:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
-      - "--web.enable-lifecycle"
+    # 安全：Prometheus 无内置认证。
+    # 1) 端口仅绑定 loopback，不对公网/局域网发布（容器间仍走内部网络抓取）；
+    # 2) 不启用 --web.enable-lifecycle（无认证的远程 reload/quit 端点），
+    #    配置变更通过容器重启完成。
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
       - app
     networks:
@@ -124,5 +129,7 @@ volumes:
   promdata:
 
 networks:
-lujo-internal-network:
+  # FIX: lujo-internal-network 原为零缩进（被解析为顶层键，networks 值为 null），
+  # 服务引用的网络实际未定义；缩进回归 networks 子键层级
+  lujo-internal-network:
     driver: bridge
