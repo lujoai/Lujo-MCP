@@ -116,5 +116,9 @@ def get_code_snippet(file_path: str, line_no: int, context_lines: int | None = N
 
 
 def get_snippets_for_frames(frames: list[dict], context_lines: int | None = None) -> list[CodeSnippet]:
-    """批量处理堆栈里的每一帧,frames 结构对应 StackFrame.model_dump()"""
-    return [get_code_snippet(f["file"], f["line"], context_lines) for f in frames]
+    """批量获取调用栈中每一帧的源码片段，自动过滤折叠帧与虚拟文件。"""
+    valid_frames = [
+        f for f in frames
+        if f and not f.get("is_folded") and f.get("file") and not str(f.get("file")).startswith("<")
+    ]
+    return [get_code_snippet(f["file"], f["line"], context_lines) for f in valid_frames]
