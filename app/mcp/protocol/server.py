@@ -82,7 +82,7 @@ def _get_tool_executor_and_slots(tool_name: str) -> tuple[ThreadPoolExecutor, as
 async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: float) -> bool:
     """竞态安全地获取执行槽位；超时/无槽位 fast-fail 返回 False。
 
-    FIX: v0.6.5 超时背压竞态 —— 原 ``asyncio.wait_for(slots.acquire(), timeout)``
+    FIX: v0.6.6 超时背压竞态 —— 原 ``asyncio.wait_for(slots.acquire(), timeout)``
     在超时与获取完成同拍（典型：busy_timeout=0/极小且并发释放槽位）时，
     槽位可能已实际转移到本调用方，但调用方只看到 TimeoutError 并按
     TOOL_BUSY fast-fail 返回且永不 release → 槽位泄漏，重复 N 次后池永久
@@ -206,7 +206,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     handler = tool["handler"]
 
     if asyncio.iscoroutinefunction(handler):
-        # FIX: v0.6.5 async 工具绕过双池 —— 此前 async handler 直接 await 执行，
+        # FIX: v0.6.6 async 工具绕过双池 —— 此前 async handler 直接 await 执行，
         # 完全绕过 light/heavy 双池槽位门控：无并发上限，重型 async 工具
         # （auto_test 等）可打满事件循环并与同步工具互相影响。现按同一
         # heavy 判定获取对应池槽位（async 无需线程池，仅信号量门控），

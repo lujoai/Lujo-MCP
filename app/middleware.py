@@ -163,7 +163,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             limit, window = self._get_endpoint_limit(path)
             key = f"ratelimit:{client_ip}:{path}"
 
-            # FIX: v0.6.5 事件循环阻塞 —— RedisStateStore.allow 是同步 Redis
+            # FIX: v0.6.6 事件循环阻塞 —— RedisStateStore.allow 是同步 Redis
             # 调用（Lua 脚本 + socket_timeout=2s），直接调用在 Redis 慢/不可达
             # 时会卡住整个事件循环（所有请求随之停顿），移入线程池执行
             allowed = await asyncio.to_thread(store.allow, key, limit, window)

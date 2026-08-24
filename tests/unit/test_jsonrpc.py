@@ -219,7 +219,7 @@ class TestDispatchRawErrorCodes:
 
 
 class TestBadMethodAndIdIsolated:
-    """FIX: v0.6.5 stdio 坏输入隔离 —— 错误 method / 错误 id 均按 -32600 结构化返回，
+    """FIX: v0.6.6 stdio 坏输入隔离 —— 错误 method / 错误 id 均按 -32600 结构化返回，
     单条坏消息不影响后续请求（不逃逸杀进程、不退化为 500/-32603）。"""
 
     def test_non_string_method_returns_32600(self):

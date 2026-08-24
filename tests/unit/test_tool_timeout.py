@@ -143,7 +143,7 @@ async def test_sync_tool_slots_released_after_completion(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_tool_gated_by_light_pool(monkeypatch):
-    """FIX: v0.6.5 async 工具绕过双池 —— async 轻量工具不再绕过 light 池门控。
+    """FIX: v0.6.6 async 工具绕过双池 —— async 轻量工具不再绕过 light 池门控。
 
     旧行为（缺陷）：async handler 直接 await 执行，完全绕过 light/heavy 双池
     槽位，无并发上限并与同步工具互相影响。
@@ -180,7 +180,7 @@ async def test_async_tool_gated_by_light_pool(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
-    """FIX: v0.6.5 async 工具绕过双池 —— 重型 async 工具走 heavy 池。
+    """FIX: v0.6.6 async 工具绕过双池 —— 重型 async 工具走 heavy 池。
 
     light 池被同步工具占满时，heavy 池的 async 工具不受影响（双池隔离）。
     """
@@ -215,7 +215,7 @@ async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_tool_releases_slot_after_completion(monkeypatch):
-    """FIX: v0.6.5 —— async 工具执行完毕后释放槽位，连续调用不会耗尽池。"""
+    """FIX: v0.6.6 —— async 工具执行完毕后释放槽位，连续调用不会耗尽池。"""
     monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
 
@@ -236,7 +236,7 @@ async def test_async_tool_releases_slot_after_completion(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_slot_acquire_timeout_zero_with_free_slot_succeeds():
-    """FIX: v0.6.5 超时背压 —— busy_timeout=0 且有空位时必须成功获取。
+    """FIX: v0.6.6 超时背压 —— busy_timeout=0 且有空位时必须成功获取。
 
     防止 ensure_future 包装后 timeout=0 定时器把"有空位的快路径获取"
     误杀成 TOOL_BUSY（回归保护：快路径不挂起、不受定时器影响）。
@@ -267,7 +267,7 @@ async def test_slot_acquire_wait_timeout_no_leak():
 
 @pytest.mark.asyncio
 async def test_slot_acquire_same_tick_race_releases_slot(monkeypatch):
-    """FIX: v0.6.5 超时背压竞态 —— 完成与超时同拍时槽位必须归还。
+    """FIX: v0.6.6 超时背压竞态 —— 完成与超时同拍时槽位必须归还。
 
     模拟 CPython wait_for 竞态窗口：acquire 任务已成功取得槽位（返回 True），
     但 wait_for 仍向调用方抛 TimeoutError。旧实现按 fast-fail 返回且永不

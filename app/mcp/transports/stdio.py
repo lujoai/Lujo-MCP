@@ -67,7 +67,7 @@ async def run_stdio():
     lines: asyncio.Queue = asyncio.Queue()
 
     def _stdin_reader():
-        # FIX: v0.6.5 坏输入杀服务 —— sys.stdin 按 errors="strict" 解码，
+        # FIX: v0.6.6 坏输入杀服务 —— sys.stdin 按 errors="strict" 解码，
         # 坏 UTF-8 字节会让 readline() 抛 UnicodeDecodeError，且此后 TextIOWrapper
         # 永久损坏（后续读取恒为空 = EOF）；旧实现把异常一律按 EOF 处理，
         # 单条坏帧即让整个服务退出。改为读底层 buffer 并以 errors="replace"

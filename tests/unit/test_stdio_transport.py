@@ -74,7 +74,7 @@ class _BufferedStdin:
 
 @pytest.mark.asyncio
 async def test_run_stdio_bad_utf8_frame_does_not_kill_service(monkeypatch, capsys):
-    """FIX: v0.6.5 坏输入杀服务 —— 坏 UTF-8 字节帧不再被当 EOF。
+    """FIX: v0.6.6 坏输入杀服务 —— 坏 UTF-8 字节帧不再被当 EOF。
 
     旧行为：sys.stdin(errors=strict) 的 readline() 遇坏字节抛 UnicodeDecodeError
     且此后流永久损坏（后续读取恒为空=EOF），reader 把异常一律按 EOF 处理，

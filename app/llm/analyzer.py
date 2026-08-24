@@ -328,7 +328,7 @@ async def _call_async_through_breaker(cb, coro_factory):
     也能走 AsyncOpenAI（不再退回 to_thread 同步客户端），判定语义与同步 ``analyze`` 一致。
     OPEN 且未到重置时间 → 抛 ``pybreaker.CircuitBreakerError``（由调用方转 fallback）。
 
-    FIX: v0.6.5 事件循环阻塞 —— pybreaker 内部为 threading.RLock，与同步路径
+    FIX: v0.6.6 事件循环阻塞 —— pybreaker 内部为 threading.RLock，与同步路径
     （to_thread 中的 ``analyze``/``cb.call``）争锁时事件循环线程会持锁等待。
     三段锁临界区（状态检查/失败计数/成功计数）整体移入线程池执行，
     锁争用不再发生在事件循环线程；状态对象仍在同一临界区内捕获/使用，语义不变。

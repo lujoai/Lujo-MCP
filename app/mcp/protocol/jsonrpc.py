@@ -85,13 +85,13 @@ def parse_request(raw: str | bytes) -> JSONRPCRequest:
     if "method" not in data:
         raise InvalidRequestError("缺少 method 字段")
 
-    # FIX: v0.6.5 错误 method —— 非 str 的 method（list/dict 等）会经
+    # FIX: v0.6.6 错误 method —— 非 str 的 method（list/dict 等）会经
     # model_construct 原样透传，dispatch 路由时 _METHOD_MAP.get(不可哈希对象)
     # 抛 TypeError 且该查找位于 dispatch 的 try 之外，错误码退化为 500/-32603。
     if not isinstance(data["method"], str):
         raise InvalidRequestError("method 必须为字符串")
 
-    # FIX: v0.6.5 错误 id —— id 必须为 String/Number/NULL；dict/list/bool 会被
+    # FIX: v0.6.6 错误 id —— id 必须为 String/Number/NULL；dict/list/bool 会被
     # model_construct 原样透传并回显到响应，NaN/Infinity 更会产出非法 JSON
     # （{"id": NaN}）。此处前置校验，坏 id 按 -32600 返回且响应 id 为 null。
     req_id = data.get("id")
