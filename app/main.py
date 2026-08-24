@@ -90,18 +90,18 @@ async def lifespan(app: FastAPI):
     import uuid
     from app.runtime.core.storage.factory import get_trace_store, get_session_store
     from app.state.store import get_state_store, RedisStateStore
-    
+
     # 启动期 fail-fast：主动触发 factory 校验，非法 STORAGE_BACKEND 立即崩，
     # 避免拼解错误（如 "postgrsql"）静默回退到 memory 导致生产环境数据丢失。
     # 仅 HTTP 入口覆盖；stdio 入口在首次 add_log 时触发校验。
     get_trace_store()
     get_session_store()
-    
+
     # ── 分布式锁常量 ──
     _CLEANUP_INTERVAL = 300          # 清理周期（秒）
     _LOCK_KEY = "ai-debug:cleanup:lock"
     _LOCK_TTL = 310                  # 略大于清理周期，worker 崩溃后下个周期锁已过期
-    
+
     # ── Lua 脚本：原子性“比较并删除”锁 ──
     # 防止误删其他 worker 持有的锁：先 GET 比较值，匹配才 DEL。
     # 场景：worker A 清理耗时超过 TTL → 锁过期 → worker B 获取新锁 →

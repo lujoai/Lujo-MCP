@@ -114,8 +114,8 @@ def _get_cached_result(fingerprint: str) -> Optional[dict]:
             raw = redis_client.get(f"ai-debug:llm:cache:{fingerprint}")
             if raw:
                 result = json.loads(raw)
-                # L2 命中 → 回填 L1
-                _set_cache_result(fingerprint, result)
+                # L2 命中 → 回填 L1（用 _set_l1_only 不刷新 L2 TTL，否则热条目永不过期）
+                _set_l1_only(fingerprint, result)
                 logger.info("LLM cache L2 hit (fingerprint=%s)", fingerprint)
                 return copy.deepcopy(result)
         except Exception:

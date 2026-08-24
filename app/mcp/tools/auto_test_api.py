@@ -42,6 +42,11 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
 
+        # SSRF 逐跳守卫：初始 URL 经 is_safe_url 校验，但 goto 重定向 / 点击触发的
+        # 导航默认不校验，攻击者可借 302/JS 跳转内网绕过。复用 ui_runner 守卫逐跳拦截。
+        from app.runtime.verifier.ui_runner import _install_ssrf_guard
+        _install_ssrf_guard(page.context)
+
         if capture_console:
             page.on("console", lambda msg: (
                 msg.type in ("error", "warning") and

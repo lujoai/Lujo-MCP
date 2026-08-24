@@ -20,5 +20,11 @@ def wrap_evidence(content: str) -> str:
 
     使用 <debug_evidence> 标签使 LLM 能区分“指令”与“证据”，
     降低 prompt injection 成功率。标签内容为 JSON 字符串。
+
+    安全处理：转义 content 内的闭合标签 ``</debug_evidence>``，防止
+    不可信数据（如异常消息中嵌入的标签）提前结束证据区域导致 injection 逃逸。
     """
-    return f"<debug_evidence>\n{content}\n</debug_evidence>"
+    if content is None:
+        content = ""
+    safe = str(content).replace("</debug_evidence>", "&lt;/debug_evidence&gt;")
+    return f"<debug_evidence>\n{safe}\n</debug_evidence>"

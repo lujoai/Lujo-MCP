@@ -159,22 +159,22 @@ def discover_spec_files(project_root: str | Path) -> list[Path]:
         candidate = root / name
         if candidate.exists() and candidate.is_file():
             found.add(candidate.resolve())
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        try:
-            if path.stat().st_size > _MAX_FILE_BYTES:
+    # os.walk + 就地剪枝：跳过 _SKIP_DIRS 目录，避免 rglob 全量遍历 node_modules 等大目录
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fname in filenames:
+            path = Path(dirpath) / fname
+            try:
+                if path.stat().st_size > _MAX_FILE_BYTES:
+                    continue
+            except OSError:
                 continue
-        except OSError:
-            continue
-        name = path.name.lower()
-        if name in {c.lower() for c in SPEC_CANDIDATES}:
-            found.add(path.resolve())
-            continue
-        if name.endswith(SPEC_SUFFIXES):
-            found.add(path.resolve())
+            name = path.name.lower()
+            if name in {c.lower() for c in SPEC_CANDIDATES}:
+                found.add(path.resolve())
+                continue
+            if name.endswith(SPEC_SUFFIXES):
+                found.add(path.resolve())
     return sorted(found)
 
 

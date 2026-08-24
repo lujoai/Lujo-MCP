@@ -171,11 +171,11 @@ def test_sdk_v6_ui_silent_failure_detection(page: Page):
     silent_button = page.query_selector("#silentButton")
     if silent_button:
         print("Clicking silentButton...")
-        
+
         # 检查 SDK 配置（经 _getPublicConfig 只读视图读取）
         sdk_config = page.evaluate("JSON.stringify(AiDebug._getPublicConfig())")
         print(f"SDK config: {sdk_config}")
-        
+
         # 点击前检查内部状态
         before_click = page.evaluate("""
             JSON.stringify({
@@ -185,7 +185,7 @@ def test_sdk_v6_ui_silent_failure_detection(page: Page):
             })
         """)
         print(f"Before click: {before_click}")
-        
+
         silent_button.click()
 
         # 等待 500ms，检查中间状态

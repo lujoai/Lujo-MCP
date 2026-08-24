@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import logging
-import sys
+import sysconfig
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -44,9 +44,13 @@ _IGNORED_PATH_PARTS = (
     "lib/python",
     "Lib/site-packages",
 )
-# Python 标准库根目录（真实路径，避免误判 sys 前缀）
+# Python 标准库根目录（用 sysconfig 取真实 stdlib 路径，避免把 sys.path 里的
+# cwd / 项目根 / 脚本目录误判为 stdlib —— 旧实现用整个 sys.path 导致项目帧被降权）
 _STDLIB_DIRS: tuple[str, ...] = tuple(
-    str(p).replace("\\", "/") for p in getattr(sys, "path", []) if p
+    str(p).replace("\\", "/")
+    for key in ("stdlib", "platstdlib")
+    for p in [sysconfig.get_paths().get(key)]
+    if p
 )
 
 

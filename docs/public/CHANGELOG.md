@@ -5,6 +5,40 @@
 
 ---
 
+## [0.6.3] - 2026-08-24
+
+> v0.6.x 稳定性维护补丁：全量代码审查后修复 2 个 Critical + 10 个 Major 缺陷，ruff 门禁从 advisory 升级为硬门禁。测试基线 **1207 passed / 6 skipped / 0 failed**，零回归，无 Breaking Change。
+
+### 🔒 安全
+
+- **auto_test SSRF 逐跳守卫**：`auto_test` 工具此前仅校验初始 URL，goto 重定向与点击触发的导航不经过 SSRF 检查，攻击者可借 302/JS 跳转访问内网。现复用 `ui_runner._install_ssrf_guard` 逐跳拦截所有网络请求。
+- **injection_guard 闭合标签逃逸修复**：`wrap_evidence` 未转义 content 内的 `</debug_evidence>` 标签，不可信数据（如异常消息）可提前结束证据区域导致 prompt injection 逃逸。现对闭合标签做 HTML 实体转义。
+
+### 🛠️ 修复
+
+- **运行时内存指标恒 0**：`runtime.py` 的 `_safe_get` 将 psutil `pmem` namedtuple 当普通 tuple 转 list，丢失 `.rss`/`.vms` 属性导致内存采集恒返回 0。现 namedtuple 保留原对象。
+- **fault_localizer 项目根误判**：`_STDLIB_DIRS` 用整个 `sys.path` 作标准库前缀，导致 cwd/项目根被误判为 stdlib，项目帧丢失加分。改用 `sysconfig` 取真实 stdlib 路径。
+- **JSON 日志丢失 extra 字段与 traceback**：`JSONFormatter` 仅注入 `trace_id`，丢弃 `elapsed_ms`/`method`/`path`/`status` 等请求级 extra 字段；异常日志无 traceback 行。现注入全部 extra 字段并附 traceback。
+- **LLM 缓存 L2 TTL 续期导致热条目永不过期**：L2（Redis）命中回填时调用 `_set_cache_result` 刷新 L2 TTL，持续访问的热键永不自然淘汰。改用 `_set_l1_only` 仅回填 L1。
+- **上下文截断不复验总长度**：`truncate_context` 截断后未二次校验，errors/exception 自身超大时仍超 `max_chars` 发往 LLM。现截断后二次校验并对超大字段硬截断兜底。
+- **periodic_cleanup 死锁修复（Critical）**：`main.py` 的 `asyncio.Lock.acquire_nowait()` 是不存在的 threading API，默认配置下清理任务启动 300s 后必死且停机异常逃逸。改为 `locked()` 预检 + `await acquire()`。
+- **Source Map VLQ 解析修复（Critical）**：`sourcemap_resolver.py` 的 `gen_col` 未按规范行内累加，生产 bundle 还原位置几乎全错。改为 `gen_col += fields[0]` + 每行重置。
+
+### ⚡ 性能
+
+- **spec.py 规范文件扫描全量遍历**：`discover_spec_files` 用 `rglob("*")` 遍历整树（含 node_modules/.git）后过滤，大项目秒级卡顿。改用 `os.walk` + 就地剪枝，跳过 `_SKIP_DIRS` 目录不递归进入。
+
+### 🔧 工程质量
+
+- **ruff 门禁从 advisory 升级为硬门禁**：CI 中 ruff 此前以 `continue-on-error: true` advisory 模式运行；经核查 F401/F841/E402/E401 均为 0，`ruff check .` 全绿，故移除 `continue-on-error` 转为硬门禁。额外清理 46 文件 93 处 W29x 空白/换行 safe fix。
+- **CI YAML 修复与安全收敛**：`docker-compose.prod.yml` 两处预存缩进缺陷（YAML 从未加载成功）修复 + Prometheus 端口改 loopback 绑定、移除无认证 `--web.enable-lifecycle`。
+- **演示页 XSS 修复**：两个 `network_capture_demo.html` 的 `updateCaptures()` 未转义捕获数据直接拼 innerHTML，现增加 `esc()` HTML 转义。
+- **check_doc_links.py 崩溃修复**：file:// 链接指向仓库 ROOT 之外时 `relative_to()` 抛 ValueError 无兜底，现补 try/except。
+
+> **测试基线**：1207 passed / 6 skipped / 0 failed（v0.6.2 基线 1198 → 1207，含本轮增量与最近新增）
+
+---
+
 ## [0.6.2] - 2026-08-24
 
 > MCP 执行器双池隔离、调试上下文智能折叠、Prometheus 细粒度可观测性与 Browser SDK 弹性增强版本。无 Breaking Change，全仓测试 100% 绿灯。

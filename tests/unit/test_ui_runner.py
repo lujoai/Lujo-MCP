@@ -87,7 +87,7 @@ class TestUIRunner:
 
     def test_form_assertion_success(self):
         """表单断言成功时返回正确结果。"""
-        
+
         class FakePage:
             def query_selector(self, selector):
                 assert selector == "#user-form"
@@ -97,12 +97,12 @@ class TestUIRunner:
             def query_selector_all(self, selectors):
                 if selectors == "input, textarea, select":
                     return [FakeInput("name", "John Doe"), FakeInput("email", "john@example.com"), FakeInput("age", "30")]
-        
+
         class FakeInput:
             def __init__(self, name, value):
                 self.name = name
                 self.value = value
-                
+
             def get_attribute(self, attr):
                 if attr == "name":
                     return self.name
@@ -111,10 +111,10 @@ class TestUIRunner:
                 elif attr == "placeholder":
                     return self.name
                 return None
-                
+
             def input_value(self):
                 return self.value
-                
+
             @property
             def tag_name(self):
                 return "input"
@@ -143,7 +143,7 @@ class TestUIRunner:
 
     def test_form_assertion_failure(self):
         """表单断言失败时返回正确错误信息。"""
-        
+
         class FakePage:
             def query_selector(self, selector):
                 assert selector == "#user-form"
@@ -153,12 +153,12 @@ class TestUIRunner:
             def query_selector_all(self, selectors):
                 if selectors == "input, textarea, select":
                     return [FakeInput("name", "Jane Doe"), FakeInput("email", "jane@example.com"), FakeInput("age", "25")]
-        
+
         class FakeInput:
             def __init__(self, name, value):
                 self.name = name
                 self.value = value
-                
+
             def get_attribute(self, attr):
                 if attr == "name":
                     return self.name
@@ -167,10 +167,10 @@ class TestUIRunner:
                 elif attr == "placeholder":
                     return self.name
                 return None
-                
+
             def input_value(self):
                 return self.value
-                
+
             @property
             def tag_name(self):
                 return "input"
@@ -202,7 +202,7 @@ class TestUIRunner:
 
     def test_data_table_assertion_success(self):
         """数据表格断言成功时返回正确结果。"""
-        
+
         class FakePage:
             def query_selector(self, selector):
                 assert selector == "#data-table"
@@ -217,15 +217,15 @@ class TestUIRunner:
                     return [FakeThElement("Name"), FakeThElement("Age"), FakeThElement("City")]
                 else:
                     return []
-        
+
         class FakeTrElement:
             def __init__(self, is_header):
                 self.is_header = is_header
-        
+
         class FakeThElement:
             def __init__(self, text):
                 self.text = text
-                
+
             def text_content(self):
                 return self.text
 
@@ -251,7 +251,7 @@ class TestUIRunner:
 
     def test_numeric_range_assertion_success(self):
         """数值范围断言成功时返回正确结果。"""
-        
+
         class FakePage:
             def text_content(self, selector, timeout=5000):
                 if selector == "#price":
@@ -282,7 +282,7 @@ class TestUIRunner:
 
     def test_numeric_range_assertion_failure(self):
         """数值范围断言失败时返回正确错误信息。"""
-        
+
         class FakePage:
             def text_content(self, selector, timeout=5000):
                 if selector == "#price":

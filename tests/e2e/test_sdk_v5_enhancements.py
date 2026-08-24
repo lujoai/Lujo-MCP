@@ -150,14 +150,14 @@ def test_throttle_control(page: Page):
 
     # 监听网络请求
     requests_sent = []
-    
+
     def handle_request(request):
         if "/ingest/batch" in request.url:
             requests_sent.append({
                 "url": request.url,
                 "timestamp": time.time()
             })
-    
+
     page.on("request", handle_request)
 
     # 快速触发 3 次批量上报
@@ -169,15 +169,15 @@ def test_throttle_control(page: Page):
 
     # 等待第一批发送
     time.sleep(1)
-    
+
     # 检查发送时间
     print(f"Requests sent: {len(requests_sent)}")
     if len(requests_sent) >= 2:
         print("First 2 requests sent within throttle window")
-    
+
     # 等待节流窗口结束
     time.sleep(5)
-    
+
     # 检查第 3 批是否被延迟发送
     print(f"Total requests after throttle window: {len(requests_sent)}")
 
@@ -227,7 +227,7 @@ def test_localstorage_fallback(page: Page):
         JSON.parse(localStorage.getItem('ai-debug-pending-batches') || '[]')
     """)
     print(f"Pending batches in localStorage: {len(pending)}")
-    
+
     # 恢复 endpoint
     page.evaluate(f"""
         AiDebug._setConfig('endpoint', '{BASE_URL}');
@@ -273,18 +273,18 @@ def test_compression_ratio(page: Page):
             }
         ] * 10  # 10 个事件
     }
-    
+
     body = json.dumps(typical_payload)
     compressed = gzip.compress(body.encode("utf-8"))
-    
+
     original_size = len(body)
     compressed_size = len(compressed)
     ratio = (1 - compressed_size / original_size) * 100
-    
+
     print(f"Original size: {original_size} bytes")
     print(f"Compressed size: {compressed_size} bytes")
     print(f"Compression ratio: {ratio:.1f}%")
-    
+
     # 验证压缩有效（通常 JSON 压缩率 > 50%）
     assert compressed_size < original_size, "Compression should reduce size"
     assert ratio > 30, f"Compression ratio should be > 30%, got {ratio:.1f}%"

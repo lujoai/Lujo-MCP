@@ -158,4 +158,15 @@ def truncate_context(context: dict, max_tokens: "int | None" = None) -> dict:
         if old_output:
             context["output"] = str(old_output)[:500]
 
+    # 二次校验：errors/exception 自身超大时，截断后仍可能超 max_chars
+    serialized2 = json.dumps(context, ensure_ascii=False, default=str)
+    if len(serialized2) > max_chars:
+        budget = max(1000, max_chars // 3)
+        for field in ("errors", "exception"):
+            if field in context:
+                field_str = json.dumps(context[field], ensure_ascii=False, default=str)
+                if len(field_str) > budget:
+                    context[field] = field_str[:budget] + " ...(二次截断)"
+        context["_note"] = f"上下文仍过长，已二次硬截断（{len(serialized2)} 字符）"
+
     return context

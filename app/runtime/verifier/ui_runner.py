@@ -728,9 +728,9 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                 inputs = form_element.query_selector_all("input, textarea, select")
                 for inp in inputs:
                     # 尝试多种方式获取字段标识
-                    name = (inp.get_attribute("name") or 
-                           inp.get_attribute("id") or 
-                           inp.get_attribute("data-testid") or 
+                    name = (inp.get_attribute("name") or
+                           inp.get_attribute("id") or
+                           inp.get_attribute("data-testid") or
                            inp.get_attribute("placeholder"))
                     if name:
                         # 使用 evaluate 获取标签名
@@ -738,7 +738,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                             tag_name = inp.evaluate("el => el.tagName.toLowerCase()")
                         except Exception:
                             tag_name = "input"  # 默认值
-                        
+
                         # 根据元素类型获取值
                         if inp.get_attribute("type") in ["checkbox", "radio"]:
                             actual_values[name] = inp.is_checked()
@@ -763,7 +763,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     },
                     "error_type": "ElementNotFound",
                 }
-            
+
             matched = True
             diff_details = []
             for field, expected_val in expected_values.items():
@@ -775,7 +775,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                         "expected": expected_val,
                         "actual": actual_val
                     })
-                    
+
             return {
                 "type": "form",
                 "matched": matched,
@@ -809,7 +809,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
         expected_rows = assertion.get("rows", 0)
         expected_columns = assertion.get("columns", 0)
         expected_headers = assertion.get("headers", [])
-        
+
         if not selector:
             reason = "data_table 断言需要 selector"
             return {
@@ -848,17 +848,17 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     },
                     "error_type": "ElementNotFound",
                 }
-                
+
             # 计算表格行数和列数
             rows = table_element.query_selector_all("tr")
             actual_rows = len(rows) - 1  # 减去表头
             actual_headers = []
-            
+
             # 获取表头
             header_cells = table_element.query_selector_all("th")
             for cell in header_cells:
                 actual_headers.append(cell.text_content().strip())
-                
+
             # 如果没有找到th，则尝试从第一行td获取
             if not actual_headers:
                 first_row = table_element.query_selector("tr")
@@ -866,13 +866,13 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     header_cells = first_row.query_selector_all("td")
                     for cell in header_cells:
                         actual_headers.append(cell.text_content().strip())
-            
+
             actual_columns = len(actual_headers)
-            
+
             # 检查行数、列数和表头
             matched = True
             diff_details = []
-            
+
             if expected_rows > 0 and actual_rows != expected_rows:
                 matched = False
                 diff_details.append({
@@ -880,7 +880,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     "expected": expected_rows,
                     "actual": actual_rows
                 })
-                
+
             if expected_columns > 0 and actual_columns != expected_columns:
                 matched = False
                 diff_details.append({
@@ -888,7 +888,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     "expected": expected_columns,
                     "actual": actual_columns
                 })
-                
+
             if expected_headers and actual_headers != expected_headers:
                 matched = False
                 diff_details.append({
@@ -896,7 +896,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     "expected": expected_headers,
                     "actual": actual_headers
                 })
-                
+
             return {
                 "type": "data_table",
                 "matched": matched,
@@ -929,7 +929,7 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
         selector = assertion.get("selector", "")
         min_value = assertion.get("min")
         max_value = assertion.get("max")
-        
+
         if not selector or (min_value is None and max_value is None):
             reason = "numeric_range 断言需要 selector 和 min/max 至少一个值"
             return {
@@ -965,15 +965,15 @@ def _evaluate_business_assertion(page, assertion: dict, action: str) -> dict:
                     },
                     "error_type": "NoNumericValue",
                 }
-                
+
             actual_number = float(numbers[0])  # 取第一个找到的数字
-            
+
             matched = True
             if min_value is not None and actual_number < min_value:
                 matched = False
             if max_value is not None and actual_number > max_value:
                 matched = False
-                
+
             return {
                 "type": "numeric_range",
                 "matched": matched,

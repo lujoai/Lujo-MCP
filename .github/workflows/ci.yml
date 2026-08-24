@@ -19,11 +19,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      # 仓库现存既有 lint 债务（F401/F841/E402/E401 等），
-      # 先以 advisory 模式运行（问题仍会输出到日志，但不禁行），
-      # 待 lint 清理后移除 continue-on-error 转为硬门禁。
-      - name: Lint with ruff (advisory)
-        continue-on-error: true
+      # ruff 默认规则集（E4/E7/E9/F）硬门禁。
+      # 经全量核查（2026-08-24）：F401/F841/E402/E401 显式查询均为 0，
+      # `ruff check .` 全绿，故移除 continue-on-error 转为硬门禁。
+      # E501（行长）/W29x（空白）等格式债不在默认规则集内，单独排期清理。
+      - name: Lint with ruff
         run: ruff check .
 
       # 文档链接检查（硬门禁）：扫描 git 跟踪的 Markdown 文件中的
