@@ -243,8 +243,8 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | 工具名 | 角色 | 说明 | 前置条件 |
 |--------|------|------|----------|
 | `auto_test` | developer | 自动遍历页面可交互元素并捕获控制台错误 + 网络 4xx/5xx | Playwright |
-| `repair_async` | developer | 异步生成修复方案（AI Debug Agent） | `AGENT_ENABLED=true` |
-| `repair_result` | viewer | 查询 repair_async 任务状态/结果 | `AGENT_ENABLED=true` |
+| `repair_async` | developer | 异步生成修复方案（AI Debug Agent） | `AGENT_MODE` 非 off（或旧配置 `AGENT_ENABLED=true`） |
+| `repair_result` | viewer | 查询 repair_async 任务状态/结果 | `AGENT_MODE` 非 off（或旧配置 `AGENT_ENABLED=true`） |
 | `resolve_stack` | viewer | 用 Source Map 还原 minified 堆栈 | `SOURCEMAP_ENABLED=true` + 已上传 .map |
 
 **关键参数**：
@@ -255,6 +255,18 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | `repair_async` | `request_id`*(string) 或 `trace_id`(二选一) |
 | `repair_result` | `job_id`*(string) |
 | `resolve_stack` | `frames`*(array, 帧含 file/line/column/function), `artifact`(string) |
+
+### 3.4 工具执行控制与错误码
+
+- **背压与并发控制**：同步工具调用通过有界工作线程池执行（`TOOL_EXECUTOR_WORKERS`，默认 8）。排队等待超过 `TOOL_BUSY_QUEUE_TIMEOUT`（默认 1.5s；设为 0 时立即拒绝）将快速返回错误，避免请求在过载时无限堆积。
+- **错误码约定**：
+
+| JSON-RPC Code | error_code | 说明 | 处理建议 |
+|---------------|------------|------|----------|
+| `-32004` | `TOOL_BUSY` | 同步工具执行器达到容量上限且等待超时（或 timeout=0 立即拒绝） | 客户端指数退避重试或调大 `TOOL_EXECUTOR_WORKERS` |
+| `-32000` | `TOOL_TIMEOUT` | 工具执行超过 `TOOL_TIMEOUT_SECONDS`（默认 60s） | 检查目标操作或适当调大超时阈值 |
+| `-32602` | `INVALID_PARAMS` | 工具入参校验失败（Pydantic 校验不通过） | 检查参数类型与必填项 |
+| `-32603` | `INTERNAL_ERROR` | 工具执行内部未捕获异常 | 检查服务日志与堆栈 |
 
 ---
 

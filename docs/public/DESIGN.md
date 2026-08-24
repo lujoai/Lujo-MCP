@@ -434,7 +434,8 @@ sequenceDiagram
 ## 5. 数据模型（`app/schemas`）
 
 ```python
-# TraceEntry: {step, data, ts}
+# TraceStep: {step, data, ts} (流程步骤模型)
+# TraceEntry: {trace_id, error_type, message, stack_frames, env, ...} (完整链路条目)
 # DebugContext: {trace, runtime?, code_snippets:[CodeSnippet], fault_localization?, note}
 # CodeSnippet: {file, error_line, snippet, found}
 # RuntimeSnapshot: {pid, cpu_percent, memory_mb, thread_count, open_files, python_version, env_hint}

@@ -115,9 +115,9 @@ rag ──▶ 外部向量库（qdrant）
 - 位置：[services/__init__.py](../../app/services/__init__.py)
 - **裁决**：暂不处理。不因 F4 引入 service 层；空占位保持现状，除非后续明确要求清理。
 
-### F5（⏸ 后续单独处理）— schema 重复定义
-- 位置：[schemas/__init__.py](../../app/schemas/__init__.py#L8) 与 [schemas/trace.py](../../app/schemas/trace.py#L15) 均定义 `TraceEntry`
-- **裁决**：后续单独处理，不在架构冻结范围强制。
+### F5（✅ 已完成）— schema 模型职责拆分
+- 位置：[schemas/__init__.py](../../app/schemas/__init__.py#L8)（`TraceStep`，流程步骤模型）与 [schemas/trace.py](../../app/schemas/trace.py#L15)（`TraceEntry`，完整链路条目模型）
+- **裁决**：已完成明确拆分（`9946094`），流程步骤使用 `TraceStep`，完整链路上下文保留 `TraceEntry`，消除名称与语义冲突。
 
 ### ✅ 已确认边界清晰项（无需处理）
 - **`app/runtime/core/storage`（debug trace 持久化）** 与 **`app/state/store.py`（限流/指标共享状态，内存/Redis）**：职责完全不重叠，边界清晰。

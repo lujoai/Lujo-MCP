@@ -590,6 +590,44 @@ curl -X POST http://localhost:8000/mcp \
 
 ---
 
+### E-6. 工具执行器繁忙拒绝（TOOL_BUSY）
+
+**现象 / Symptom**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32004,
+    "message": "Tool execution queue busy for 'debug'; timed out waiting for worker",
+    "data": {
+      "error_code": "TOOL_BUSY",
+      "tool_name": "debug",
+      "timeout_seconds": 1.5,
+      "max_workers": 8
+    }
+  }
+}
+```
+
+**原因 / Cause**:
+高并发或重载场景下，同步工具执行器的工作线程池满负荷运行，且在 `TOOL_BUSY_QUEUE_TIMEOUT` 时间内未能获取空闲 worker（若 timeout=0 则立即拒绝）。
+
+**解决方案 / Solution**:
+1. 调大工具执行器 worker 并发上限：
+   ```env
+   TOOL_EXECUTOR_WORKERS=16  # 默认 8
+   ```
+2. 调整入队等待超时阈值（秒）：
+   ```env
+   TOOL_BUSY_QUEUE_TIMEOUT=3.0  # 默认 1.5 秒；0 为立即拒绝
+   ```
+3. 客户端实现指数退避重试（Exponential Backoff）。
+
+**验证 / Verify**: 查看服务日志未再出现 `Tool executor busy` 警告，客户端请求正常排队或顺利完成。
+
+---
+
 ## F. 安全与鉴权异常 / Security & Auth Errors
 
 ### F-1. 401 Unauthorized
@@ -1085,6 +1123,7 @@ DEBUG=true    # 仅开发环境！
 | 熔断器打开 | D LLM | D-4 | 排查根因后等待恢复 |
 | JSON-RPC -32600 | E MCP | E-1 | 修正请求格式 |
 | 工具超时 | E MCP | E-2 | 增大 TOOL_TIMEOUT_SECONDS |
+| 工具繁忙拒绝 (TOOL_BUSY) | E MCP | E-6 | 增大 TOOL_EXECUTOR_WORKERS / TOOL_BUSY_QUEUE_TIMEOUT |
 | 401 Unauthorized | F 安全 | F-1 | 携带 API_KEY |
 | 429 Rate Limit | F 安全 | F-2 | 降低频率或调高限流 |
 | 413 Too Large | F 安全 | F-3 | 增大 MAX_BODY_SIZE |

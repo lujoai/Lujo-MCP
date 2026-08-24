@@ -518,7 +518,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 
 ### 11.1 现有结构
 
-- `TraceEntry` / `DebugContext{trace,runtime,code_snippets[],note}` / `CodeSnippet{file,error_line,snippet,found}` / `RuntimeSnapshot` / `Session`。
+- `TraceStep`（步骤）/ `TraceEntry`（完整链路）/ `DebugContext{trace,runtime,code_snippets[],note}` / `CodeSnippet{file,error_line,snippet,found}` / `RuntimeSnapshot` / `Session`。
 
 ### 11.2 已实现结构
 

@@ -23,6 +23,8 @@ env/
 .ruff_cache/
 .coverage
 htmlcov/
+.tmp_test/
+test-results.xml
 
 # 本地产物
 *.log

@@ -38,8 +38,8 @@ PG_ASYNC_ENABLED=true
 ### 方案 2：先用 `psql` 验证凭据，再跑项目测试
 
 ```powershell
-$env:PGPASSWORD='你的当前 PostgreSQL 密码'
-& 'C:\Program Files\PostgreSQL\16\bin\psql.exe' -h localhost -U postgres -d postgres -c "SELECT current_user, current_database();"
+$env:PGPASSWORD='your-postgres-password'
+psql -h localhost -U postgres -d postgres -c "SELECT current_user, current_database();"
 ```
 
 若这一步能成功，再继续跑项目测试。
