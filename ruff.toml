@@ -1,0 +1,45 @@
+# Ruff 配置 —— 显式锁定规则集（v0.6.8）
+#
+# 背景：此前项目无 ruff 配置文件，ruff 用「当前版本的默认规则集」，而
+# requirements-dev.txt 只写 ruff>=0.6.0（不锁版本）。ruff 0.16 把 isort(I) /
+# pyupgrade(UP) 等并入默认集后，同一份代码的违规数从 0 跳到 777 —— 代码一行
+# 未改，CI 却从绿变红（v0.6.3 的「本地全绿、CI 776 红」正是此因）。
+#
+# 因此规则集必须显式声明：升级 ruff 不再改变门禁结果，只有改本文件才会。
+#
+# 选择标准：只收「能抓真实缺陷」的规则，当前代码库已全部为 0 违规，故 CI 可
+# 直接转硬门禁。纯风格/现代化建议（导入排序、Optional→|、typing 现代化等）
+# 不纳入——它们需要大面积改动且有回归风险（v0.6.3 曾 --fix 改 591 处后整体回退）。
+
+target-version = "py312"
+line-length = 120
+
+# 测试运行期产生的临时目录（pytest --basetemp 等）内含刻意构造的语法/未定义名
+# 样本文件，不是项目源码，必须排除，否则 lint 结果随「上次跑没跑测试」而漂移。
+extend-exclude = [
+    ".pytest-tmp",
+    ".pytest_cache",
+    "release-assets",
+]
+
+[lint]
+select = [
+    "E4",   # 导入相关错误
+    "E7",   # 语句层错误（比较、语义误用等）
+    "E9",   # 语法 / 运行时错误
+    "F",    # pyflakes：未定义名称、未使用导入、f-string 缺占位符等真实缺陷
+    "C4",   # 推导式误用（不必要的 list/set/dict 构造）
+    "PIE",  # 冗余写法（可简化为内置容器等）
+]
+
+# RUF001/002/003（歧义 Unicode 字符）不启用：本项目注释与 docstring 为中文，
+# 全角标点（，（）：等）会产生 7585 项误报，无实际价值。
+ignore = []
+
+[lint.per-file-ignores]
+# 测试文件容忍未使用导入/局部变量（fixture 与断言辅助的常见写法）
+"tests/**" = ["F401", "F841"]
+
+[format]
+# 暂不启用 ruff format（会大面积重排现有代码），仅用 lint。
+exclude = ["*"]

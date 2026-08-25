@@ -4,4 +4,7 @@
 
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
-ruff>=0.6.0
+# ruff 上界锁定：ruff 每个 minor 版本都可能把新规则加入默认规则集
+# （0.16 加入 isort/pyupgrade 曾导致同一份代码违规数 0 → 777，CI 假红）。
+# 规则集由仓库根 ruff.toml 显式声明，此处锁 minor 防止升级时规则漂移。
+ruff>=0.16.4,<0.17.0

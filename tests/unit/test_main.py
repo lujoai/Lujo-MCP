@@ -61,7 +61,7 @@ def test_internal_health_with_forwarded_header_requires_key(monkeypatch):
     from app.main import internal_health
 
     # 无鉴权配置（隔离 .env 的 API_KEY 污染）
-    monkeypatch.setattr(key_rotation, "get_valid_keys", lambda: [])
+    monkeypatch.setattr(key_rotation, "get_valid_keys", list)
 
     class _FakeRequest:
         client = SimpleNamespace(host="192.168.1.10")

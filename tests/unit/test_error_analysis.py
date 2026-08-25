@@ -42,7 +42,7 @@ class TestAggregateByFingerprint:
 
         aggregates = errors.aggregate_by_fingerprint()
         assert len(aggregates) == 2
-        assert set(g["type"] for g in aggregates) == {"ValueError", "TypeError"}
+        assert {g["type"] for g in aggregates} == {"ValueError", "TypeError"}
 
     def test_counts_affected_sessions(self):
         """统计影响的 session 数量"""

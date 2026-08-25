@@ -19,12 +19,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      # ruff advisory 模式：requirements-dev.txt pin ruff>=0.6.0，CI 装最新 0.16.x。
-      # ruff 0.16 将 isort(I)/pyupgrade(UP) 等加入默认规则集，现有代码 776 个违规
-      # （536 可 --fix，240 需人工判断如 BLE001/S110/G201）。保持 advisory 不阻塞 CI，
-      # 后续单独排期 lint 清理后转硬门禁。
-      - name: Lint with ruff (advisory)
-        continue-on-error: true
+      # ruff 硬门禁（v0.6.8 起）：规则集由仓库根 ruff.toml 显式锁定，
+      # requirements-dev.txt 同时锁定 ruff==0.16.4 —— 二者共同消除
+      # 「ruff 升级改默认规则集导致本地绿 / CI 红」的历史问题（v0.6.3 的 776 项即由此而来）。
+      # 升级 ruff 时必须同步改 requirements-dev.txt 并在本地复验 ruff check . 全绿。
+      - name: Lint with ruff
         run: ruff check .
 
       # 文档链接检查（硬门禁）：扫描 git 跟踪的 Markdown 文件中的
@@ -80,6 +79,14 @@ jobs:
         with:
           node-version: "20"
 
+      # 显式列出全部 SDK 测试文件（不用目录形式：node --test <dir> 在部分
+      # Node 版本下按模块解析导致 MODULE_NOT_FOUND）。新增测试文件需在此登记，
+      # 否则不受 CI 守护 —— v0.6.7 的传输修复测试曾因此漏出门禁。
       - name: Run SDK core contract tests
-        run: node --test browser-sdk/test/sdk-core.test.js browser-sdk/test/sdk-events.test.js
+        run: >-
+          node --test
+          browser-sdk/test/sdk-core.test.js
+          browser-sdk/test/sdk-events.test.js
+          browser-sdk/test/sdk-transport.test.js
+          browser-sdk/test/sdk-transport-fixes.test.js
 

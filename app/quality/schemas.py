@@ -182,7 +182,7 @@ class QualityReport(BaseModel):
         调用方无需判空，直接读取字段即可。
         """
         null_dim = DimensionScore(present=False, score=0.0, reason="评分失败，降级为 null")
-        dims = {d: null_dim for d in ContextDimension}
+        dims = dict.fromkeys(ContextDimension, null_dim)
         return cls(
             context_completeness=ContextCompleteness(
                 overall_score=0.0,

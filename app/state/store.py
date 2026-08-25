@@ -164,7 +164,7 @@ return 1
         return float(val) if val is not None else 0.0
 
     def keys(self, prefix: str) -> List[str]:
-        return [k for k in self._r.scan_iter(match=f"{prefix}*")]
+        return list(self._r.scan_iter(match=f"{prefix}*"))
 
     def close(self) -> None:
         try:
