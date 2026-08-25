@@ -179,7 +179,8 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **1198 passed / 6 skipped / 0 failed / 0 errors**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek base_url 1 项 + 第 3 轮代码审查 P1/P2/P3 收口 24 项 + v0.5.3 KB 持久化 13 项 + P3-9 重连回归 5 项 + v0.5.5 FR12 提示词端点 10 项 + v0.6.0 Prometheus 业务指标 / 生产部署套件 8 项；单测已强制 memory 后端与 CI 一致）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **1231 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7，另有 Browser SDK JS 契约测试 29 项由 CI `sdk-js-smoke` job 守护）
+- ✅ ruff 硬门禁：仓库根 `ruff.toml` 显式锁定规则集（`E4/E7/E9/F` + `C4` + `PIE`），`ruff check .` = All checks passed；`requirements-dev.txt` 锁 `ruff>=0.16.4,<0.17.0` 防规则集随版本漂移
 
 ### v0.3.0 Release Audit 收口 ✅
 
@@ -202,7 +203,14 @@ Verifier 验证
 
 **当前阶段**：核心能力已成型；"真实完成度收口 + MCP HTTP 流式闭环 + 稳定性落地验证"已完成；Browser SDK V3-V6 + 指纹知识库 + 向量检索版 RAG（in-process + Qdrant 语义召回）+ AI Debug Agent Phase 1（单 Agent `RepairAgent`）+ Phase 2（多 Agent DAG：`GitAgent` + `TestAgent` + `SecurityAgent` 编排）+ **P1 Debug Experience RAG（D1-D4：DebugExperienceRecord + 三层检索 Retriever + Context Assembler 解耦集成，`debug_experience_enabled` 默认 False）** 均已落地；**v0.5.0 已发布（2026-08-13）**：工程质量加固 + Runtime 数据契约对齐（DebugContext 7→20 字段、MCP Tool Category Metadata、Prompt Injection Guard、API Schema Validation、Session 安全加固）；**v0.5.1 已发布（2026-08-15）**：Source Map 解析（纯 Python VLQ 解码 + 上传/磁盘双获取通道 + `resolve_stack` MCP 工具（18/18）+ QualityScorer/Benchmark A/B 实证，`sourcemap_enabled` 默认关闭；Browser SDK column 保留 + release 透传）；**v0.5.2 已发布（2026-08-15）**：品牌统一（ai-debug-mcp → lujo-mcp）。第 3 轮代码审查 P1/P2/P3 收口（2026-08-16 基线 1105/6/0；P3-9 pg_store 重连修复 2026-08-17 后全部清零）。**v0.5.3 已发布（2026-08-18）**：RAG 知识库 PostgreSQL 持久化（kb_entries 表 + 写穿落库 + 启动回灌，learned 经验跨重启保留）+ 数据库改名 `lujo_mcp` + P3-9 pg_store 重连缺陷修复。**v0.5.4 已发布（2026-08-18）**：工程收口 + 文档补全（分发链 smoke + SDK JS 契约测试纳入 CI + API 参考/SDK 手册 + CSP 统一）。**v0.5.5 已发布（2026-08-19）**：FR12 调试提示词端点（`GET /api/debug/prompt` 纯文本提示词一键复制 + `PROMPT_TEMPLATE_PATH` 自定义模板）+ 单测存储后端隔离修复。**v0.6.0 已发布（2026-08-21）**：God Object 彻底拆解（`pg_store.py` → `pg_executor.py` + `pg_partitions.py` + 5 个 Store；`analyzer.py` 1175→474 行并拆出 `app/llm/` 6 个单一职责子模块）+ Prometheus 可观测性体系 + 生产部署套件。测试基线 1161/6/0（历史发布基线）。
 
-**v0.6.2 已发布（2026-08-21）**：在 v0.6.0 之上做稳定性维护补丁（同步工具执行器背压、schema 去重、agent_mode 语义修复、测试环境隔离、PG 集成加固），npm `latest` → `0.6.1`，代码已合入 main 分支；后续补丁仍在 v0.6.x 稳定维护线上，v0.6.2 尚未发布。
+**v0.6.2 已发布（2026-08-24）**：在 v0.6.0 之上做稳定性维护补丁（MCP 工具轻重双池隔离、调试上下文框架栈帧折叠、MCP 工具 Prometheus 指标、Browser SDK 弹性传输），npm `latest` → `0.6.2`。
+
+**v0.6.3 ~ v0.6.7 已发布（2026-08-24 ~ 2026-08-25）**：全量代码审查后按缺陷组分档发布补丁，npm `latest` → **0.6.7**。
+
+- **v0.6.3**（2026-08-24）：2 Critical + 10 Major —— `periodic_cleanup` 死锁、Source Map VLQ 行内累加、auto_test SSRF 逐跳守卫、injection_guard 闭合标签逃逸等；ruff 门禁首次从 advisory 升级为硬门禁。基线 1198 → 1207。
+- **v0.6.4**（2026-08-24）：安全组 3 Major —— embedding 未脱敏外发、verify_loop 安全门失效、限流键反代绕过。基线 1207。
+- **v0.6.6**（2026-08-24）：可用性组 4 Major —— stdio 坏输入杀服务、超时背压槽位竞态、事件循环三处阻塞、async 工具绕过双池；含 JSON-RPC 输入校验加固。基线 1207 → 1221。（v0.6.5 因 package.json 编码事故未发布成功，npm 版本不可覆盖，故跳版重发为 v0.6.6。）
+- **v0.6.7**（2026-08-25）：正确性组 7 Major —— Browser SDK 传输三件套（gzip 回退乱码 / pagehide 丢数据 / 节流齐发）+ LLM 缓存指纹碰撞 + 流式路径绕过熔断 + smoke_test 死锁 + sourcemap 缓存键版本混淆。基线 1221 → **1231**。
 
 **当前路线**：进入 **v0.6.x 稳定性维护与运行反馈收集阶段**；v0.6.x 后续补丁评估，是否进入 v0.7.0 需另行规划。当前无已确认 P0/P1 阻塞项。
 
@@ -244,7 +252,7 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1198 passed / 6 skipped / 0 failed / 0 errors**（含 AI Debug Agent Phase 1 新增 63 项 + Phase 2 新增 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 新增 48 项 + Dashboard 质量报告 6 项 + P1 Debug Experience RAG 新增 26 项 + CODE_REVIEW_FIX_PROMPT 回归测试 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek base_url 1 项 + 第 3 轮代码审查 P1/P2/P3 收口 24 项 + v0.5.3 KB 持久化 13 项 + P3-9 重连回归 5 项 + v0.5.5 FR12 提示词端点 10 项 + v0.6.0 Prometheus 业务指标 / 生产部署套件 8 项；单测已强制 memory 后端与 CI 一致）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1231 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7；单测已强制 memory 后端与 CI 一致）。Browser SDK 另有 29 项 Node 契约测试（`browser-sdk/test/`，CI `sdk-js-smoke` job 守护，不计入 pytest 基线）。
 
 **当前优先级**：
 

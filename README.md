@@ -71,9 +71,10 @@ npm install -g @lujoai/lujo-mcp
 
 ## 当前状态（Current Status）
 
-**Lujo-MCP v0.6.2**（npm `@lujoai/lujo-mcp@0.6.2`，开箱即用）
+**Lujo-MCP v0.6.7**（npm `@lujoai/lujo-mcp@0.6.7`，开箱即用）
 
-> 版本统一：app / npm / README / CHANGELOG / MCP serverInfo / git tag 均为 `0.6.1`。
+> 版本统一：app / npm / README / CHANGELOG / MCP serverInfo / git tag 均为 `0.6.7`。
+> v0.6.3~v0.6.7 为 v0.6.x 补丁线：安全组（embedding 脱敏 / verify_loop 安全门 / 限流键）、可用性组（stdio 坏输入 / 超时背压 / 事件循环阻塞 / async 双池）、正确性组（SDK 传输三件套 / LLM 指纹碰撞 / 流式绕熔断 / smoke_test 死锁 / sourcemap 缓存键）逐档修复。
 > v0.6.0 为架构重构与生产就绪里程碑：god object 拆分、Prometheus 细粒度业务指标、生产部署套件。
 > 架构冻结（Architecture Frozen）：允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、RAG → Agent/Runtime/LLM/MCP。
 
@@ -286,7 +287,7 @@ LLM_PROVIDER=zhipu           # openai | zhipu | deepseek | custom（智谱免 VP
 
 ```bash
 curl http://localhost:8000/
-# → {"status":"ok","service":"Lujo-MCP","version":"0.6.2"}
+# → {"status":"ok","service":"Lujo-MCP","version":"0.6.7"}
 ```
 
 ## MCP Client 接入（MCP Client Setup）
@@ -386,7 +387,7 @@ python -m benchmark.runner quality        # QualityScorer 旁证评估
 | 指标      | 状态                                                                                                                                                                                                                                                                                                                             |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | MCP 工具数 | HTTP 18 / stdio 18（含 `repair_async` / `repair_result` / `resolve_stack`）                                                                                                                                                                                                                                                                   |
-| 测试基线    | 单元 `1153 passed / 6 skipped / 0 failed`（含 AI Debug Agent Phase 1 63 项 + Phase 2 53 项 + Dashboard SSE 18 项 + Quality System 86 项 + Verify Loop 38 项 + M3 Fault Localization 2.0 48 项 + P1 Debug Experience RAG 26 项 + CODE\_REVIEW\_FIX\_PROMPT 回归测试 17 项 + stacktrace 工具与存储工厂边界 17 项 + D5 MCP 可观测性 16 项 + D6 Benchmark 框架 19 项 + v0.5.0 DebugContext Schema/Runtime Integration 与 Tool Category Metadata 45 项 + v0.5.1 Source Map 解析 94 项 + deepseek provider base_url 1 项 + 第 3 轮代码审查 P1/P2/P3 收口 24 项 + v0.5.3 KB 持久化 15 项 + P3-9 重连回归 5 项 + v0.5.5 FR12 提示词端点 10 项；单测已强制 memory 后端与 CI 一致） |
+| 测试基线    | 单元 `1231 passed / 6 skipped / 0 failed`（v0.6.7 基线）+ Browser SDK JS `29 passed`；单测已强制 memory 后端与 CI 一致。历史演进：992（v0.5.1 前）→ 1087 → 1134 → 1153 → 1161 → 1198 → 1207 → 1221 → **1231** |
 | 存储后端    | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境                                                                                                                                                                                                                                                                                    |
 | 稳定性能力   | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证                                                                                                                                                                                                                                                                    |
 | 安全能力    | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护                                                                                                                                                                                                                                               |

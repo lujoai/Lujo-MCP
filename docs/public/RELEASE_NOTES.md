@@ -1,13 +1,162 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.6.2（2026-08-24）**。MCP 执行器双池隔离、调试上下文智能折叠、Prometheus 细粒度可观测性与 Browser SDK 弹性增强里程碑版本。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.2`。
-> **测试基线**：单元 **1200+ passed / 6 skipped / 0 failed** + Browser SDK 18 passed。
+> 最新版本：**v0.6.7（2026-08-25）**。正确性补丁：Browser SDK 传输三件套 + LLM 缓存指纹 + 流式熔断 + 冒烟脚本死锁 + sourcemap 版本键。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.7`。
+> **测试基线**：单元 **1231 passed / 6 skipped / 0 failed** + Browser SDK JS 29 passed。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.6.2  
-**Release Date / 发布日期**: 2026-08-24  
-**Codename / 代号**: 执行器双池隔离与上下文智能折叠 ｜ Dual-Pool Isolation & Intelligent Context Folding
+**Version / 版本**: v0.6.7  
+**Release Date / 发布日期**: 2026-08-25  
+**Codename / 代号**: 正确性补丁 ｜ Correctness Patch
+
+---
+
+## v0.6.7（2026-08-25）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.6.7 是 v0.6.x 线的**正确性补丁**版本：修复全量代码审查第三档 8 项中的 7 项 Major 正确性缺陷（Browser SDK 数据采集三件套 + Python 侧四项），第 8 项经 Python 3.12 `asyncio.wait_for` 语义分析确认不可复现，标注待复核未做改动。无 Breaking Change，零回归。测试基线 1221 → **1231 passed / 6 skipped / 0 failed**（Python 新增 10 项），Browser SDK JS 25 → **29 passed**（新增 4 项）。
+
+#### 🛠️ Browser SDK 数据采集（`browser-sdk/ai-debug.js`）
+
+- **gzip 回退乱码修复**：gzip 压缩发送失败回退时，旧实现把 gzip 二进制字节当文本存 localStorage（恢复时 `JSON.parse` 必然失败），400/415（接收端不支持 gzip）时直接丢数据。现原始明文 `body` 全程透传：localStorage 回退存明文、400/415 用明文重发一次。
+- **pagehide 丢数据修复**：页面关闭/隐藏瞬间，节流暂存队列里攒的批次走 `setTimeout` 延迟发送（unload 后定时器不触发），数据直接丢失。现 beacon 路径同步排空暂存队列 + 当前批次（sendBeacon 或同步 XHR），绝不延迟到定时器。
+- **节流齐发修复**：旧实现每条被节流的批次各自 `setTimeout`，延迟差毫秒级导致同一时刻齐射（节流失效反而形成请求尖峰）。现改为单一定时器逐条发送，间隔 `ceil(节流窗口 / 窗口最大批次数)` 错开发送。
+
+#### 🛠️ Python 侧
+
+- **LLM 缓存指纹碰撞修复**（`app/llm/cache.py`）：`_compute_context_fingerprint` 用 `"|"` / `":"` 裸拼接字段，字段值内含分隔符时不同上下文拼出同一字符串（如 `exc_type="A|B"` 与 `message="B|C"`），且 `[:16]` 截断放大碰撞面——缓存会返回错误分析结果。现改为 `json.dumps` 结构化序列化 + 完整 sha256 摘要。
+- **流式路径绕过熔断修复**（`app/llm/analyzer.py`）：`analyze_stream` / `analyze_stream_async` 此前完全绕过熔断器——非流式路径熔断开启时 fallback，流式路径继续直打 LLM。现两条流式路径接入同一熔断状态机（OPEN 时 yield 结构化 fallback、成功/失败计入熔断计数），异步路径锁临界区经 `asyncio.to_thread` 执行避免阻塞事件循环。
+- **smoke_test 死锁修复**（`scripts/mcp_smoke_test.py`）：`stdout.readline()` 无超时（服务端挂死时冒烟脚本永久阻塞）、`stderr=PIPE` 从不排空（管道缓冲写满导致子进程阻塞）。现读超时 10s 兜底 + 后台线程排空 stderr + EOF 哨兵。
+- **sourcemap 缓存键版本混淆修复**（`app/runtime/collectors/sourcemap_store.py`）：仅以 artifact 为存储键，同 artifact 不同 release（bundle 版本）的 source map 互相覆盖——旧版本 map 会解析新版本堆栈，还原位置错误。现用 NUL 分隔符把 release 并入存储键，上传/查找/解析/API 全链路透传 release。
+
+#### 📊 测试与质量
+
+- **测试基线**：1231 passed / 6 skipped / 0 failed（Python 新增 10 项：指纹碰撞 2 + 流式熔断 3 + smoke_test 3 + sourcemap 2）；Browser SDK JS 新增 4 项（`browser-sdk/test/sdk-transport-fixes.test.js`），JS 合计 29 passed
+- **待复核项**：verify_loop 单轮超时覆盖结果一项经 Python 3.12 `asyncio.wait_for` / `asyncio.timeout` 源码级分析确认不可复现（协程在取消生效前完成则正常返回，`except TimeoutError` 分支仅在确无结果时执行），未做改动
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.6.7 is the **correctness patch** release on the v0.6.x line: it fixes 7 of the 8 third-tier Major correctness defects (Browser SDK transport trio + 4 Python-side items). The 8th was confirmed non-reproducible under Python 3.12 `asyncio.wait_for` semantics and is flagged for re-review without code changes. No breaking changes, zero regression. Test baseline 1221 → **1231 passed / 6 skipped / 0 failed** (10 new Python tests); Browser SDK JS 25 → **29 passed** (4 new).
+
+#### 🛠️ Browser SDK Data Collection
+
+- **gzip fallback corruption fix**: on gzip send failure the old code stored raw gzip bytes as text in localStorage (guaranteeing `JSON.parse` failure on restore) and dropped data outright on 400/415. The original plaintext `body` is now threaded through: localStorage stores plaintext, and 400/415 retries once uncompressed.
+- **pagehide data-loss fix**: on page hide/close, throttled batches were deferred via `setTimeout`, which never fires after unload. The beacon path now synchronously drains the pending queue plus the current batch (sendBeacon or sync XHR).
+- **Throttle burst fix**: each throttled batch previously got its own `setTimeout` milliseconds apart, firing simultaneously and creating a request spike. Now a single pacer timer sends one batch at a time, spaced `ceil(window / maxBatchesPerWindow)`.
+
+#### 🛠️ Python Side
+
+- **LLM cache fingerprint collision fix** (`app/llm/cache.py`): bare `"|"` / `":"` concatenation let different contexts produce identical fingerprints when field values contained the separators, and `[:16]` truncation widened the collision surface — returning wrong cached analyses. Now uses `json.dumps` structured serialization plus a full sha256 digest.
+- **Streaming bypassed circuit breaker fix** (`app/llm/analyzer.py`): `analyze_stream` / `analyze_stream_async` bypassed the breaker entirely while non-streaming paths fell back. Both streaming paths now share the same breaker state machine (fallback on OPEN, success/failure accounted), with async lock sections offloaded via `asyncio.to_thread`.
+- **smoke_test deadlock fix** (`scripts/mcp_smoke_test.py`): `stdout.readline()` had no timeout and `stderr=PIPE` was never drained (pipe buffer saturation blocked the child). Now a 10s read timeout, a background stderr drainer, and an EOF sentinel.
+- **sourcemap cache-key version confusion fix** (`app/runtime/collectors/sourcemap_store.py`): keying only by artifact let source maps of different releases overwrite each other, so a stale map resolved new stacks to wrong locations. `release` is now folded into the storage key (NUL-separated) and threaded through upload/lookup/resolve/API paths.
+
+---
+
+## v0.6.6（2026-08-24）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.6.6 是 v0.6.5 的**重发版本**（0.6.5 因 `package.json` 编码损坏导致发布中断，npm 上从未存在完整的 0.6.5，故跳版重发）。内容为 v0.6.x 可用性补丁：修复 4 个可用性组 Major 缺陷（stdio 坏输入杀服务、超时背压槽位竞态、事件循环三处阻塞、async 工具绕过双池），并加固 JSON-RPC 协议层输入校验。测试基线 **1221 passed / 6 skipped / 0 failed**（新增 14 项），零回归，无 Breaking Change。
+
+#### 🛠️ 可用性
+
+- **stdio 坏输入杀服务修复**：单条畸形输入即可终止 stdio 服务进程，MCP 客户端连接被整体切断；现坏帧被隔离处理，服务持续可用。
+- **超时背压槽位竞态修复**：同步工具槽位在超时路径下存在竞态，可能导致槽位泄漏、并发能力逐步退化；现槽位释放与超时判定原子化。
+- **事件循环阻塞修复（三处）**：KB 写回、熔断器锁临界区等同步 IO 直接在事件循环线程执行，阻塞全部并发请求；现统一移入线程池（`asyncio.to_thread`）。
+- **async 工具绕过双池修复**：异步工具未经双池门控，可绕过 heavy/light 隔离打满资源；现纳入统一门控。
+
+#### 🛡️ 协议加固
+
+- **JSON-RPC 输入校验**：`method` / `id` 字段类型与取值校验前置，非法请求快速返回标准错误体而非进入业务链路。
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.6.6 is a **respin of v0.6.5** (0.6.5 aborted mid-publish due to `package.json` encoding corruption and never existed completely on npm, so the version was skipped). Content is the v0.6.x availability patch: 4 availability-group Major fixes (stdio bad input killing the service, timeout backpressure slot race, three event-loop blocking sites, async tools bypassing the dual pool) plus JSON-RPC input validation hardening. Test baseline **1221 passed / 6 skipped / 0 failed** (14 new tests), zero regression, no breaking changes.
+
+---
+
+## v0.6.4（2026-08-24）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.6.4 是 v0.6.x 线的**安全补丁**版本：修复 3 个安全组 Major 缺陷，覆盖数据外发、验证绕过、DoS 防护失效三类风险。测试基线 **1207 passed / 6 skipped / 0 failed**，零回归，无 Breaking Change。
+
+#### 🔒 安全
+
+- **embedding 未脱敏外发修复**：`qdrant_vector_store._embed_texts` 将文档原文直接传给外部 embedding API（OpenAI / 智谱），未经脱敏处理，密钥 / token / 手机号等敏感数据会外发。现外发前对每个 text 调用 `_redact_for_embedding` 脱敏（内联复制脱敏规则正则，遵守架构冻结禁 rag→runtime import 的约束）。
+- **verify_loop 安全门失效修复**：`compute_verify_score` 当 `security_review` 缺失（SecurityAgent 跳过/失败）时按 0 计，但不阻止 verdict 通过——只要 repair_plan(0.4) + test_plan(0.3) + git_attribution(0.1) = 0.8 即达 HIGH_CONFIDENCE，完全绕过安全审查。现当 security_review 缺失或含 critical/high 发现时，score 钳制为 PARTIAL 阈值，确保 verdict 不会越级到 PASSED / HIGH_CONFIDENCE，仍允许 PARTIAL 继续迭代补全安全审查。
+- **限流键绕过修复**：`RateLimitMiddleware` 用 `request.client.host` 构造限流 key，反代场景（nginx / CloudFlare）下所有真实用户共享代理 IP 的限流桶（互相误伤），攻击者也可用代理池变化 IP 绕过。现优先读 `X-Forwarded-For` 最左客户端 IP，再读 `X-Real-IP`，缺失时回退 `request.client.host`。
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.6.4 is the **security patch** release on the v0.6.x line: 3 security-group Major fixes covering data exfiltration, verification bypass, and DoS-protection failure. Test baseline **1207 passed / 6 skipped / 0 failed**, zero regression, no breaking changes.
+
+- **Unredacted embedding exfiltration**: `qdrant_vector_store._embed_texts` sent raw document text to external embedding APIs; each text is now redacted before egress.
+- **verify_loop security gate bypass**: a missing `security_review` scored 0 but did not block the verdict, so 0.8 from other dimensions still reached HIGH_CONFIDENCE. Scores are now clamped to the PARTIAL threshold when security review is missing or contains critical/high findings.
+- **Rate-limit key bypass**: the limiter keyed on `request.client.host`, collapsing all users behind a reverse proxy into one bucket. It now prefers the leftmost `X-Forwarded-For` client IP, then `X-Real-IP`, falling back to `request.client.host`.
+
+---
+
+## v0.6.3（2026-08-24）
+
+### 中文版本
+
+#### 📋 版本概述
+
+v0.6.3 是 v0.6.x 线的**稳定性维护补丁**：全量代码审查后修复 2 个 Critical + 10 个 Major 缺陷，ruff 门禁从 advisory 升级为硬门禁。测试基线 v0.6.2 的 1198 → **1207 passed / 6 skipped / 0 failed**，零回归，无 Breaking Change。
+
+#### 🔒 安全
+
+- **auto_test SSRF 逐跳守卫**：`auto_test` 工具此前仅校验初始 URL，goto 重定向与点击触发的导航不经过 SSRF 检查，攻击者可借 302 / JS 跳转访问内网。现复用 `ui_runner._install_ssrf_guard` 逐跳拦截所有网络请求。
+- **injection_guard 闭合标签逃逸修复**：`wrap_evidence` 未转义 content 内的 `</debug_evidence>` 标签，不可信数据（如异常消息）可提前结束证据区域导致 prompt injection 逃逸。现对闭合标签做 HTML 实体转义。
+
+#### 🛠️ 修复（含 2 个 Critical）
+
+- **periodic_cleanup 死锁（Critical）**：`main.py` 使用了不存在的 `asyncio.Lock.acquire_nowait()`（threading API），默认配置下清理任务启动 300s 后必死且停机异常逃逸。改为 `locked()` 预检 + `await acquire()`。
+- **Source Map VLQ 解析错误（Critical）**：`sourcemap_resolver.py` 的 `gen_col` 未按规范做行内累加，生产 bundle 还原位置几乎全错。改为 `gen_col += fields[0]` + 每行重置。
+- **运行时内存指标恒 0**：`runtime.py` 的 `_safe_get` 把 psutil `pmem` namedtuple 当普通 tuple 转 list，丢失 `.rss` / `.vms` 属性。现保留原 namedtuple。
+- **fault_localizer 项目根误判**：`_STDLIB_DIRS` 用整个 `sys.path` 作标准库前缀，导致 cwd / 项目根被误判为 stdlib、项目帧丢失加分。改用 `sysconfig` 取真实 stdlib 路径。
+- **JSON 日志丢失 extra 字段与 traceback**：`JSONFormatter` 仅注入 `trace_id`，丢弃 `elapsed_ms` / `method` / `path` / `status` 等请求级字段，异常日志无 traceback。现注入全部 extra 字段并附 traceback。
+- **LLM 缓存 L2 TTL 续期致热条目永不过期**：L2（Redis）命中回填时调用 `_set_cache_result` 刷新 L2 TTL，热键永不自然淘汰。改用 `_set_l1_only` 仅回填 L1。
+- **上下文截断不复验总长度**：`truncate_context` 截断后未二次校验，errors / exception 自身超大时仍超 `max_chars` 发往 LLM。现二次校验并对超大字段硬截断兜底。
+
+#### ⚡ 性能
+
+- **spec 文件扫描全量遍历**：`discover_spec_files` 用 `rglob("*")` 遍历整树（含 node_modules / .git）后过滤，大项目秒级卡顿。改用 `os.walk` + 就地剪枝跳过 `_SKIP_DIRS`。
+
+#### 🔧 工程质量
+
+- **ruff 门禁从 advisory 升级为硬门禁**：核查 F401 / F841 / E402 / E401 均为 0、`ruff check .` 全绿后移除 `continue-on-error`；额外清理 46 文件 93 处空白/换行 safe fix。
+- **CI YAML 修复与安全收敛**：`docker-compose.prod.yml` 两处预存缩进缺陷（YAML 从未加载成功）修复；Prometheus 端口改 loopback 绑定、移除无认证 `--web.enable-lifecycle`。
+- **演示页 XSS 修复**：`network_capture_demo.html` 的 `updateCaptures()` 未转义捕获数据直接拼 innerHTML，现增加 `esc()` HTML 转义。
+- **check_doc_links.py 崩溃修复**：file:// 链接指向仓库 ROOT 之外时 `relative_to()` 抛 ValueError 无兜底，现补 try/except。
+
+### English Version
+
+#### 📋 Release Overview
+
+v0.6.3 is the **stability maintenance patch** on the v0.6.x line: 2 Critical + 10 Major fixes from a full code review, and the ruff gate was promoted from advisory to a hard gate. Test baseline 1198 → **1207 passed / 6 skipped / 0 failed**, zero regression, no breaking changes.
+
+- **Critical — periodic_cleanup deadlock**: `main.py` called the nonexistent `asyncio.Lock.acquire_nowait()`; the cleanup task died 300s after startup under default config. Replaced with `locked()` pre-check + `await acquire()`.
+- **Critical — Source Map VLQ parsing**: `gen_col` was not accumulated per line as the spec requires, making production bundle resolution almost always wrong. Fixed to `gen_col += fields[0]` with per-line reset.
+- **Security**: per-hop SSRF guard for `auto_test` navigations; HTML-escaped closing tags in `wrap_evidence` to prevent prompt-injection escape.
+- **Fixes**: psutil namedtuple preserved for memory metrics; real stdlib paths via `sysconfig` in fault_localizer; JSON logs now carry all extra fields plus traceback; L2 cache no longer refreshes TTL on read-through; context truncation re-validates total length.
+- **Performance**: spec file discovery switched to `os.walk` with in-place pruning.
+- **Engineering**: ruff promoted to a hard gate; prod compose YAML indentation fixed with Prometheus bound to loopback; demo page XSS escaped; doc-link checker no longer crashes on out-of-root `file://` links.
 
 ---
 
