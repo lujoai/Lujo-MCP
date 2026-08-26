@@ -1,3 +1,8 @@
+# 运行依赖锁定文件（== 固定到直接依赖的具体版本）。
+# FIX: P2-F5 —— 说明：本文件只锁直接依赖，传递依赖版本随解析浮动。如需完整锁定
+# （含传递依赖与 hash），可用 `pip-compile --generate-hashes` 维护一份全量锁定文件。
+# 发布构建用的 PyInstaller 构建工具在 .github/workflows/release-npm.yml 中显式 pin 版本，
+# 本文件不含构建工具，仅含运行时依赖。
 # 核心框架
 fastapi==0.115.0
 uvicorn[standard]==0.51.0

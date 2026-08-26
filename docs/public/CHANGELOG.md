@@ -60,9 +60,9 @@
 
 > 测试基线：unit 口径 **1298 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7 基线 1231 → 1251（P0 +20）→ 1290（P1 +39）→ 1298（P2 六项 +8：D5×1、D6×2、E2×1、F2×4）；另 integration 口径新增 A2 直写脱敏 3 项 + D2 两段式安装 2 项）。本地全量复验（unit+integration+e2e）：**1419+ tests / 1377+ passed / 42 skipped / 0 failed / 0 errors**。SDK JS 5 文件 **35/35 pass**，ruff 硬门禁全绿，check_doc_links 164 链接 0 错误。
 
-### 🛠️ P2 修复（安全/可靠性六项，2026-08-27，非发布工程）
+### 🛠️ P2 修复（安全/可靠性六项 + 发布工程四项，2026-08-27，非发布工程）
 
-> 第 6 轮审查 P2 十六项中的安全/可靠性项优先修复；发布工程项 F4-F7 与其余 P2（B2/B4/B5/C2/G3）暂不处理，留待后续排期。**本批仅提交、不发布**，等全部待办复核后再发 v0.6.8。
+> 第 6 轮审查 P2 十六项中的安全/可靠性项与发布工程项优先修复；其余 P2（B2/B4/B5/C2/G3）并入 v0.7.0 取舍。**本批仅提交、不发布**，等全部待办复核后再发 v0.6.8。
 
 - **traces_archive 迁移文件补齐（D4）**：`ddl.py` 已定义 `DDL_TRACES_ARCHIVE` 但 `migrations/` 无对应迁移文件——纯迁移方式部署开启 `pg_archive_enabled` 后归档静默失败。新增 `20260827_create_traces_archive_table.sql`（与代码 DDL 对齐，`CREATE TABLE IF NOT EXISTS` 幂等）。
 - **capture_exception 局部变量 repr 截断（D5）**：异常路径一个大局部变量（dict / DataFrame 等）的 `repr` 无长度上限，可膨胀到数十 MB 进入内存缓冲/PG/响应（`parse_network_record` 等模块有 10KB 截断纪律，此处缺失）。现单变量 repr 超 10KB 截断并附标记，正常小对象零开销。
@@ -70,6 +70,10 @@
 - **spec 缓存刷新限频（E2）**：缓存命中时 `_cache_needs_refresh` 仍执行全项目 os.walk，一次 Debug Context 构建多次调用 `get_project_specs` 触发多次全目录遍历。现缓存刷新检查限频（30s 间隔），间隔期满仍按 mtime 精确判断；`reload_specs` 同步清限频时间戳保证强制刷新。
 - **生产 compose 端口回环绑定（F1）**：app 端口此前绑 `0.0.0.0` 全网开放（API Key 明文 HTTP 传输、入口无 TLS）。现只绑 `127.0.0.1`，由同宿主前置反代（nginx/ALB/tunnel）做 TLS 终止，与 prometheus 的 loopback-only 发布一致。
 - **/metrics 全局中间件豁免（F2）**：`METRICS_AUTH_ENABLED` 此前只控制端点层额外鉴权，无法豁免全局 AuthMiddleware——生产强制 API_KEY 时 Prometheus 抓 `/metrics` 恒 401、监控链路静默失效。现 `METRICS_AUTH_ENABLED=False`（默认）时 `/metrics` 在全局中间件放行（端点层同样不额外鉴权，供监控栈无凭据抓取，应只发布到可信内网）；`True` 时保留全局中间件保护，端点层再校验一次。
+- **发布脚本命令注入修复（F4）**：release-npm.yml 把 `workflow_dispatch` 的 version 输入经 `${{ }}` 直接内插进 shell，含 `$(...)`/反引号时可在 runner 执行任意命令（GitHub 官方反模式）。现所有注入点改由 env 变量隔离传递，shell 内仅引用 `$VAR`。
+- **发布构建可复现（F5）**：pyinstaller 此前裸装取最新，发布构建产物可能漂移。现固定 `pyinstaller==6.11.1`；`requirements-locked.txt` 补充注释说明以 `==` 锁直接依赖、如要完整锁传递依赖用 `pip-compile --generate-hashes`。
+- **非支持平台安装指引修复（F6）**：linux-arm64 / osx-x64 用户此前 `npm install` 硬失败，且报错指引装一个"不存在的平台包"。现 `check.js`/`cli.js` 识别非 CI 构建平台并给出源码运行指引，且不再阻断安装。
+- **发布前运行时验证（F7）**：build job 此前只 `test -f` 校验产物存在，从不真正启动二进制（hiddenimports 漏一项即"发布即启动即崩"）。现 `mcp_smoke_test.py` 支持 `--cmd` 指定启动命令，build 在各平台原生运行打包产物走完整 stdio 冒烟（启动→initialize→tools/list→tools/call），失败即阻断构建。
 
 ## [0.6.7] - 2026-08-25
 

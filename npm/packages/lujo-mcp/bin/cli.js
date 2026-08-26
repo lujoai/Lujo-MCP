@@ -56,6 +56,17 @@ function binaryNameFor(pkg) {
 
 function run() {
   const pkg = platformPackageName();
+  // FIX: P2-F6 —— 与 check.js 一致：非 CI 构建平台无官方预编译包，给出清晰指引而非
+  // 提示安装一个不存在的平台包。支持集需与 gen-platform-packages.js 平台数组保持同步。
+  const supportedPlatforms = new Set(['win32-x64', 'linux-x64', 'osx-arm64']);
+  if (!supportedPlatforms.has(pkg)) {
+    console.error(
+      `[lujo-mcp-server] 当前平台（${pkg}）暂无官方预编译二进制。\n` +
+        '官方预编译包仅支持: win32-x64, linux-x64, osx-arm64。\n' +
+        '请改用 Python 源码方式运行（见项目 README），或在 GitHub issues 反馈需要支持该平台。'
+    );
+    process.exit(1);
+  }
   const bin = binaryNameFor(pkg);
   if (!bin) {
     console.error(`[lujo-mcp-server] could not locate the ${pkg} binary.

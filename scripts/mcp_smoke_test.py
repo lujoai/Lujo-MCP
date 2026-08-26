@@ -8,6 +8,7 @@
 用法：
     python scripts/mcp_smoke_test.py
     python scripts/mcp_smoke_test.py --tool debug
+    python scripts/mcp_smoke_test.py --cmd "./dist/lujo-mcp-server"   # 发布前验证打包二进制
 
 退出码：
     0 = 冒烟通过；1 = 启动/握手/枚举/调用任一环节失败。
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import queue
+import shlex
 import subprocess
 import sys
 import threading
@@ -91,8 +93,18 @@ def _send(proc: subprocess.Popen, out_q: queue.Queue[str], method: str, params: 
     raise RuntimeError(f"未在预期内收到 id={msg['id']} 的响应")
 
 
-def _run_smoke(tool: str | None) -> int:
-    cmd = [sys.executable, "-m", "app.mcp_server"]
+def _resolve_cmd(cmd) -> list[str]:
+    """解析 --cmd 启动命令：None 用默认的 `python -m app.mcp_server`，
+    字符串按 shell 规则拆分成 argv（支持发布二进制 `./dist/lujo-mcp-server`）。"""
+    if cmd is None:
+        return [sys.executable, "-m", "app.mcp_server"]
+    if isinstance(cmd, str):
+        return shlex.split(cmd)
+    return list(cmd)
+
+
+def _run_smoke(tool: str | None, cmd=None) -> int:
+    cmd = _resolve_cmd(cmd)
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
@@ -168,9 +180,15 @@ def _run_smoke(tool: str | None) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lujo-MCP stdio 接入冒烟验证")
     parser.add_argument("--tool", default=None, help="要调用的工具名（默认 debug）")
+    parser.add_argument(
+        "--cmd",
+        default=None,
+        help="要启动的 MCP server 命令（默认：python -m app.mcp_server；"
+        "发布前验证二进制时传 ./dist/lujo-mcp-server(.exe)）",
+    )
     args = parser.parse_args(argv)
     start = time.monotonic()
-    rc = _run_smoke(args.tool)
+    rc = _run_smoke(args.tool, args.cmd)
     print(f"耗时 {(time.monotonic() - start) * 1000:.0f}ms，退出码 {rc}")
     return rc
 

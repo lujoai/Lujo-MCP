@@ -43,7 +43,10 @@ jobs:
       - name: Install build deps
         run: |
           pip install -r requirements-locked.txt
-          pip install pyinstaller
+          # FIX: P2-F5 —— 固定 pyinstaller 版本：此前裸装取"最新"，每次发布构建
+          # 可能在编译器/打包行为上漂移，导致产物不可复现。运行依赖由
+          # requirements-locked.txt（== 锁定直接依赖）提供；构建工具在此处显式 pin。
+          pip install "pyinstaller==6.11.1"
 
       - name: Build binary with PyInstaller
         shell: bash
@@ -54,6 +57,18 @@ jobs:
         run: |
           ls -la dist/
           test -f "dist/${{ matrix.artifact }}" || exit 1
+
+      # FIX: P2-F7 —— 发布前运行时验证：此前只 test -f 校验文件存在，从不真正启动
+      # 产出的二进制；hiddenimports/动态导入漏一项即为"发布即启动即崩"的包且无告警。
+      # 这里在各自平台原生运行打包产物，走完整 stdio 冒烟（启动→initialize→tools/list
+      # →tools/call），任一步骤失败即阻断构建。mcp_smoke_test.py 已支持 --cmd 指定启动命令。
+      - name: Smoke test binary (runtime verification)
+        shell: bash
+        run: |
+          set -e
+          BIN="dist/${{ matrix.artifact }}"
+          chmod +x "$BIN" 2>/dev/null || true
+          python scripts/mcp_smoke_test.py --cmd "./$BIN"
 
       - name: Upload platform binary
         uses: actions/upload-artifact@v4
@@ -77,14 +92,23 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@lujoai"
 
+      # FIX: P2-F4 —— 不再把 ${{ github.event.inputs.version }} 直接拼进 shell。
+      # 此前 workflow_dispatch 的 version 输入（仓库协作者可控）经 ${{ }} 在前置求值阶段
+      # 内插进 run 脚本，含 $(...)/反引号时会在 runner shell 中执行任意命令（GitHub 官方
+      # 反模式）。这里通过 env 把系统生成的 event_name / ref 与外部输入分开传递，shell
+      # 内仅引用 $VAR，杜绝注入面。
       - name: Resolve version
         id: ver
+        env:
+          IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          TAGGED_REF: ${{ github.ref }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ "$IS_WORKFLOW_DISPATCH" = "true" ]; then
+            echo "value=${DISPATCH_VERSION}" >> "$GITHUB_OUTPUT"
           else
             # 从 tag vX.Y.Z 提取 X.Y.Z
-            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            echo "value=${TAGGED_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           fi
 
       # FIX: P1-F3 —— 发布版本与 app.__version__ 一致性硬校验。
@@ -92,12 +116,15 @@ jobs:
       # app/__init__.py：打 tag v0.6.8 但忘改 app/__init__.py（仍是 0.6.7）
       # 会发布"npm 版本 0.6.8、MCP 握手 serverInfo 报 0.6.7"的错版包且无告警。
       - name: Verify version matches app.__version__
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
         run: |
           python3 - <<'EOF'
+          import os
           import re
           import sys
 
-          release_ver = "${{ steps.ver.outputs.value }}"
+          release_ver = os.environ["RELEASE_VERSION"]
           src = open("app/__init__.py", encoding="utf-8").read()
           m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', src)
           app_ver = m.group(1) if m else "<not found>"
@@ -113,7 +140,9 @@ jobs:
           EOF
 
       - name: Generate platform package skeletons
-        run: node npm/scripts/gen-platform-packages.js "${{ steps.ver.outputs.value }}"
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
+        run: node npm/scripts/gen-platform-packages.js "$RELEASE_VERSION"
 
       - name: Download all platform binaries
         uses: actions/download-artifact@v4
@@ -142,9 +171,10 @@ jobs:
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
         run: |
           set -e
-          ver="${{ steps.ver.outputs.value }}"
+          ver="$RELEASE_VERSION"
           for d in npm/packages/lujo-mcp-win32-x64 npm/packages/lujo-mcp-linux-x64 npm/packages/lujo-mcp-osx-arm64; do
             name=$(node -p "require('./$d/package.json').name")
             echo "Publishing $name@$ver"
@@ -154,8 +184,9 @@ jobs:
       - name: Publish meta package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
         run: |
-          ver="${{ steps.ver.outputs.value }}"
+          ver="$RELEASE_VERSION"
           node -e "
             const fs=require('fs');
             const p='npm/packages/lujo-mcp/package.json';
