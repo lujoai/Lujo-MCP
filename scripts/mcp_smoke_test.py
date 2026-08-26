@@ -25,6 +25,15 @@ import sys
 import threading
 import time
 
+# FIX: P2-F7 —— Windows 冒烟崩溃：发布构建的 windows job 里 Python stdout 默认
+# codec 是 cp1252，本脚本 print 的界面文案含中文（"枚举"/"个工具"等）在
+# UnsupportedOperation/charmap 下抛 UnicodeEncodeError，导致二进制冒烟误判失败
+# （本来 initialize 已通过、二进制正常）。这里把 stdout/stderr 强制切到 utf-8，
+# 保证跨平台（Linux/macOS/Windows）都能正常输出，不因控制台 codec 差异崩溃。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # MCP JSON-RPC 消息 id 计数器
 _ID = 0
 
