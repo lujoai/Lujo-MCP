@@ -7,7 +7,9 @@
 
 ## [Unreleased]
 
-> v0.6.8 候选（P0 安全与正确性补丁 + P1 全量 14 项 + P2 安全/可靠性六项）：第 6 轮全量代码审查 P0 五项（安全门字段错配 CR-1、脱敏复合键缺口 CR-2、SDK 毒批循环 CR-3、XFF 限流绕过 A1、add_log 明文入库 A2）+ **P1 十四项全部修复**（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）+ 顺带 G1 + 测试基础设施两项 + **P2 安全/可靠性六项**（D4/D5/D6/E2/F1/F2，2026-08-27，非发布工程项）。测试基线 **1298 passed / 6 skipped / 0 failed**（unit 口径，v0.6.7 基线 1231 → 1290（P0+P1 +59）→ 1298（P2 六项 +8）），本地全量 **1377+ passed / 0 failed / 0 errors**，零回归。
+## [0.6.8] - 2026-08-27
+
+> round-6 审查修复发布：**P0 安全×5**（CR-1/CR-2/CR-3/A1/A2）+ **P1 十四项全量**（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）+ G1 + 测试基础设施 2 项 + **P2 安全/可靠性×6**（D4/D5/D6/E2/F1/F2）+ **发布工程×4**（F4-F7）。测试基线 **1298 passed / 6 skipped / 0 failed**（unit，v0.6.7 基线 1231 → 1290（P0+P1 +59）→ 1298（P2 六项 +8）；另 integration 新增 A2 直写脱敏 3 项 + D2 两段式安装 2 项），本地全量 **1377+ passed / 0 failed / 0 errors**，SDK JS 35/35，ruff 硬门禁全绿，零回归。
 
 ### 🔒 安全
 
@@ -60,9 +62,9 @@
 
 > 测试基线：unit 口径 **1298 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7 基线 1231 → 1251（P0 +20）→ 1290（P1 +39）→ 1298（P2 六项 +8：D5×1、D6×2、E2×1、F2×4）；另 integration 口径新增 A2 直写脱敏 3 项 + D2 两段式安装 2 项）。本地全量复验（unit+integration+e2e）：**1419+ tests / 1377+ passed / 42 skipped / 0 failed / 0 errors**。SDK JS 5 文件 **35/35 pass**，ruff 硬门禁全绿，check_doc_links 164 链接 0 错误。
 
-### 🛠️ P2 修复（安全/可靠性六项 + 发布工程四项，2026-08-27，非发布工程）
+### 🛠️ P2 修复（安全/可靠性六项 + 发布工程四项）
 
-> 第 6 轮审查 P2 十六项中的安全/可靠性项与发布工程项优先修复；其余 P2（B2/B4/B5/C2/G3）并入 v0.7.0 取舍。**本批仅提交、不发布**，等全部待办复核后再发 v0.6.8。
+> 第 6 轮审查 P2 十六项中的安全/可靠性项与发布工程项已完成并随 v0.6.8 发布；其余 P2（B2/B4/B5/C2/G3）与 90+ Minor 并入 v0.7.0 取舍。
 
 - **traces_archive 迁移文件补齐（D4）**：`ddl.py` 已定义 `DDL_TRACES_ARCHIVE` 但 `migrations/` 无对应迁移文件——纯迁移方式部署开启 `pg_archive_enabled` 后归档静默失败。新增 `20260827_create_traces_archive_table.sql`（与代码 DDL 对齐，`CREATE TABLE IF NOT EXISTS` 幂等）。
 - **capture_exception 局部变量 repr 截断（D5）**：异常路径一个大局部变量（dict / DataFrame 等）的 `repr` 无长度上限，可膨胀到数十 MB 进入内存缓冲/PG/响应（`parse_network_record` 等模块有 10KB 截断纪律，此处缺失）。现单变量 repr 超 10KB 截断并附标记，正常小对象零开销。

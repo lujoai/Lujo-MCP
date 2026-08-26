@@ -2,7 +2,7 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.6.7｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.6.8｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
@@ -623,7 +623,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
 | AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
-| **合计** | — | **1231 passed / 6 skipped / 0 failed** | 当前 v0.6.7 稳定维护期单元基线；本节表格其余数字为历史快照，仅作演进记录 |
+| **合计** | — | **1298 passed / 6 skipped / 0 failed** | 当前 v0.6.8 单元基线；本节表格其余数字为历史快照，仅作演进记录 |
 
 ### 11.2 测试执行
 
