@@ -47,7 +47,13 @@ class PGTraceStore(TraceStorage):
         return _get_conn()
 
     def _put(self, conn):
+        # FIX: P1-D1 —— 归还前 rollback 防止 aborted 事务连接中毒进池
+        # （psycopg2 无活动事务时 rollback 为客户端空操作）
         if conn is not None and not conn.closed:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             _get_pool().putconn(conn)
 
     def save_entry(self, request_id: str, entry: dict) -> None:
@@ -78,7 +84,12 @@ class PGTraceStore(TraceStorage):
                     _ensure_partitions(conn)
                     conn.commit()
                 except Exception as e:
+                    # FIX: P1-D1 —— 分区预创建失败时回滚，防止 aborted 连接进池
                     logger.warning("分区预创建失败（不影响写入）: %s", e)
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
         finally:
             self._put(conn)
 

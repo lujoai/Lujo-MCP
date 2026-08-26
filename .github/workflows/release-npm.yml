@@ -87,6 +87,31 @@ jobs:
             echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           fi
 
+      # FIX: P1-F3 —— 发布版本与 app.__version__ 一致性硬校验。
+      # 此前版本号完全来自 tag 名/手工输入，而二进制内的 __version__ 来自
+      # app/__init__.py：打 tag v0.6.8 但忘改 app/__init__.py（仍是 0.6.7）
+      # 会发布"npm 版本 0.6.8、MCP 握手 serverInfo 报 0.6.7"的错版包且无告警。
+      - name: Verify version matches app.__version__
+        run: |
+          python3 - <<'EOF'
+          import re
+          import sys
+
+          release_ver = "${{ steps.ver.outputs.value }}"
+          src = open("app/__init__.py", encoding="utf-8").read()
+          m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', src)
+          app_ver = m.group(1) if m else "<not found>"
+          if app_ver != release_ver:
+              print(
+                  f"::error::Version mismatch: releasing {release_ver} but "
+                  f"app/__init__.py __version__ is {app_ver}. Bump the version "
+                  "set (app/__init__.py + browser-sdk/package.json + npm meta "
+                  "+ 3 platform packages) before tagging."
+              )
+              sys.exit(1)
+          print(f"Version consistency OK: {release_ver}")
+          EOF
+
       - name: Generate platform package skeletons
         run: node npm/scripts/gen-platform-packages.js "${{ steps.ver.outputs.value }}"
 

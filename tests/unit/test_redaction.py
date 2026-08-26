@@ -90,6 +90,66 @@ def test_json_no_false_positive():
     assert redact('{"email":"test@example.com"}') == '{"email":"test@example.com"}'
 
 
+# ── CR-2 回归：下划线/连字符复合敏感键（\b 词边界在 '_' 处不成立导致此前漏脱敏）──
+
+
+def test_underscore_compound_keys_masked():
+    """refresh_token / client_secret / session_token 等复合键的 kv 形态必须脱敏。"""
+    assert redact("refresh_token=eyJhbGciOiJIUzI1NiJ9.sig") == 'refresh_token="***"'
+    assert redact("client_secret: abc-123") == 'client_secret="***"'
+    assert redact("session_token=xyz") == 'session_token="***"'
+    assert redact("api_secret=s3cr3t") == 'api_secret="***"'
+    assert redact("id_token=eyJ") == 'id_token="***"'
+    assert redact("my_secret_value=v") == 'my_secret_value="***"'
+
+
+def test_compound_key_suffix_key_masked():
+    """以 _key/-key 结尾的复合键（api_key / access_key / consumer_key）必须脱敏。"""
+    assert redact("access_key=AKIA123") == 'access_key="***"'
+    assert redact("consumer_key=ck-1") == 'consumer_key="***"'
+    assert redact("X-API-KEY: v1") == 'X-API-KEY="***"'
+
+
+def test_compound_keys_not_overredacted():
+    """keyword / monkey / author 等正常词不得误伤。"""
+    assert redact("keyword=rank") == "keyword=rank"
+    assert redact("monkey=see") == "monkey=see"
+    assert redact("author=alice") == "author=alice"
+
+
+def test_json_compound_keys_masked():
+    """JSON 字符串形态的复合敏感键（浏览器 SDK 最常见的序列化形态）必须脱敏。"""
+    assert redact('{"refresh_token":"eyJxxx"}') == '{"refresh_token":"***"}'
+    assert redact('{"client_secret":"cs-1"}') == '{"client_secret":"***"}'
+    assert redact('{"session_token": "st-1"}') == '{"session_token":"***"}'
+
+
+def test_url_query_compound_token_masked():
+    """URL 查询串中的复合 token 参数必须脱敏。"""
+    out = redact("https://api.example.com/auth?refresh_token=eyJsecret&next=/home")
+    assert "eyJsecret" not in out
+    assert 'refresh_token="***"' in out
+
+
+def test_capture_exception_locals_compound_keys_redacted():
+    """CR-2 捕获路径：capture_exception 的 locals 复合敏感键 → ***REDACTED***。"""
+    from app.runtime.collectors.stacktrace import capture_exception
+
+    try:
+        refresh_token = "eyJ-compound-secret"  # noqa: F841
+        client_secret = "cs-secret"  # noqa: F841
+        password_hash = "$2b$12$abc"  # noqa: F841  # 白名单字段应保留
+        raise RuntimeError("auth failed")
+    except RuntimeError as e:
+        data = capture_exception(e, source="test")
+
+    local_vars = data["frames"][0]["locals"]
+    assert local_vars["refresh_token"] == "***REDACTED***"
+    assert local_vars["client_secret"] == "***REDACTED***"
+    # 白名单字段（trace_repo._DEFAULT_ALLOWLIST）在捕获期仍保留原值
+    assert local_vars["password_hash"] == "'$2b$12$abc'"
+
+
 def test_capture_exception_message_redacted():
     """exception_hook 路径：capture_exception 返回的 message 经 _redact_exception_data 后被脱敏"""
     from app.runtime.collectors.stacktrace import capture_exception

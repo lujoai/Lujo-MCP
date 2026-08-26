@@ -31,14 +31,77 @@ class SSEHub:
         self._lock = threading.Lock()
 
     @staticmethod
-    def _publish_locked(q: asyncio.Queue, message: dict) -> None:
-        """在事件循环线程内执行：队列满时丢最旧一条，再入队（参考 dashboard_events）。"""
-        if q.full():
+    def _is_response(message) -> bool:
+        """是否为 JSON-RPC 响应（带 id 无 method）。
+
+        带响应的请求方（mcp_post 已回 202）在等待匹配该 id 的响应——
+        丢弃响应 = 客户端该请求永久悬挂。通知（有 method 无 id）则可容忍丢失。
+        """
+        return isinstance(message, dict) and "id" in message and "method" not in message
+
+    @classmethod
+    def _publish_locked(cls, q: asyncio.Queue, message: dict) -> None:
+        """在事件循环线程内执行：队列满时的分级丢弃策略。
+
+        FIX: P1-C3 —— 旧策略无条件"丢最旧"会静默丢弃带 id 的 JSON-RPC 响应
+        （mcp_post 已对该请求返回 202，客户端将永久悬挂），且无日志无指标。
+        现按消息类别分级：
+        - close 控制事件：必须送达（否则连接悬挂），无条件丢最旧腾位；
+        - 响应类：优先挤掉最旧的**通知类**消息腾位（丢通知可接受）；
+          队列全为在途响应（客户端实质失联）才丢弃最旧响应，并记 error；
+        - 通知类：优先挤掉最旧通知；队列全为在途响应时直接不投递本条通知
+          （宁可丢新通知，不丢任何在途响应），记 warning。
+        扫描在事件循环线程内同步完成（无 await），不存在并发消费窗口。
+        """
+        if not q.full():
+            q.put_nowait(message)
+            return
+
+        # close 控制事件必须送达（P3-11：丢 close 会让客户端连接悬挂）
+        if cls.is_close_event(message):
             try:
                 q.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-        q.put_nowait(message)
+            q.put_nowait(message)
+            return
+
+        # 挤掉最旧的一条通知类消息（其余相对顺序不变）
+        items: list = []
+        while True:
+            try:
+                items.append(q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        dropped_notification = None
+        for old in items:
+            if dropped_notification is None and not cls._is_response(old):
+                dropped_notification = old
+                continue
+            q.put_nowait(old)
+
+        if cls._is_response(message):
+            if dropped_notification is not None:
+                logger.warning("SSE 队列满：丢弃最旧通知为响应腾位（响应不可丢）")
+                q.put_nowait(message)
+            else:
+                # 队列全为在途未消费响应：客户端实质失联
+                try:
+                    evicted = q.get_nowait()
+                except asyncio.QueueEmpty:
+                    evicted = None
+                if evicted is not None:
+                    logger.error(
+                        "SSE 队列满且均为未消费响应，丢弃最旧响应 id=%r（该请求将悬挂）",
+                        evicted.get("id"),
+                    )
+                q.put_nowait(message)
+        else:
+            if dropped_notification is not None:
+                logger.warning("SSE 队列满：丢弃最旧通知")
+                q.put_nowait(message)
+            else:
+                logger.warning("SSE 队列满且均为在途响应：丢弃本条通知（保住在途响应）")
 
     def subscribe(self, session_id: str) -> asyncio.Queue:
         """订阅 SSE 流。

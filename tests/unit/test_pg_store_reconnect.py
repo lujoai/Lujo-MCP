@@ -167,3 +167,96 @@ def test_store_caller_returns_latest_conn_to_pool(monkeypatch, fake_pool):
     assert (old, False) not in fake_pool.putconn_conns
     # 旧连接在重连时已被 close 归还
     assert old.closed is True
+
+
+# ---------------------------------------------------------------------------
+# FIX: P1-D1 —— 非 OperationalError 后回滚，防止 aborted 连接中毒进池
+# ---------------------------------------------------------------------------
+
+
+class SqlErrorCursor:
+    """总是抛出非 OperationalError 的 SQL 业务异常（如 IntegrityError）。"""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def execute(self, sql, params=()):
+        raise self.exc
+
+    def fetchall(self):
+        return []
+
+    def fetchone(self):
+        return None
+
+
+class RollbackTrackingConn(FakeConn):
+    """记录 rollback 调用次数的连接。"""
+
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+        self.rollback_calls = 0
+
+    def cursor(self):
+        return SqlErrorCursor(self.exc)
+
+    def rollback(self):
+        self.rollback_calls += 1
+
+
+def test_execute_with_retry_rolls_back_on_non_operational_error(monkeypatch, fake_pool):
+    """UniqueViolation 等业务异常：原样抛出（不重试）且连接被 rollback。"""
+    conn = RollbackTrackingConn(psycopg2.IntegrityError("duplicate key value"))
+
+    with pytest.raises(psycopg2.IntegrityError):
+        pg_store._execute_with_retry(conn, "INSERT INTO t VALUES (1)")
+
+    # 抛出前已回滚（连接回到干净状态，调用方 finally 归还不再中毒）
+    assert conn.rollback_calls == 1
+    # 未触发重连（业务错误不重试）
+    assert fake_pool.putconn_conns == []
+
+
+def test_query_with_retry_rolls_back_on_non_operational_error(monkeypatch, fake_pool):
+    """查询路径同修：ProgrammingError 等业务异常 rollback 后原样抛出。"""
+    conn = RollbackTrackingConn(psycopg2.ProgrammingError("column does not exist"))
+
+    with pytest.raises(psycopg2.ProgrammingError):
+        pg_store._query_with_retry(conn, "SELECT no_such_col FROM t")
+
+    assert conn.rollback_calls == 1
+    assert fake_pool.putconn_conns == []
+
+
+def test_safe_put_rolls_back_before_return_to_pool(monkeypatch, fake_pool):
+    """_safe_put 归还前统一 rollback（正常路径幂等：连接已干净时也无害）。"""
+    conn = RollbackTrackingConn(psycopg2.IntegrityError("unused"))
+
+    pg_store._safe_put(conn)
+
+    assert conn.rollback_calls == 1
+    assert (conn, False) in fake_pool.putconn_conns
+
+
+def test_safe_put_skips_closed_conn(monkeypatch, fake_pool):
+    """已关闭连接不回滚不归还。"""
+    conn = RollbackTrackingConn(psycopg2.IntegrityError("unused"))
+    conn.closed = True
+
+    pg_store._safe_put(conn)
+
+    assert conn.rollback_calls == 0
+    assert fake_pool.putconn_conns == []
+
+
+def test_operational_error_retry_path_unaffected(monkeypatch, fake_pool):
+    """非回归：OperationalError 仍走重连重试路径（不落入新 rollback 分支）。"""
+    old = FakeConn(fail_times=1)
+    new = FakeConn(fail_times=0)
+    _patch_reconnect(monkeypatch, [new])
+
+    rows, conn = pg_store._query_with_retry(old, "SELECT 1")
+
+    assert conn is new
+    assert rows == [(1, "ok")]

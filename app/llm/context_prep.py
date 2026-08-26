@@ -9,8 +9,7 @@ import copy
 import json
 
 from app.config import settings
-from app.runtime.core.redaction import redact
-from app.runtime.core.trace_repo import _is_sensitive_key
+from app.runtime.core.redaction import redact, is_sensitive_key
 
 
 def _get_error_signal(context: dict) -> tuple[str, str, "str | None"]:
@@ -46,13 +45,13 @@ def _get_error_fingerprint(context: dict) -> "str | None":
 def _redact_value_for_llm(value):
     """递归脱敏发送给外部 LLM 的上下文。
 
-    键名判定复用 trace_repo._is_sensitive_key（子串包含 + 白名单），
-    使 user_token / db_password / apikey / x-api-key 等复合键同样被脱敏，
-    与入库脱敏策略保持一致。"""
+    键名判定复用 redaction.is_sensitive_key（子串包含 + 白名单，FIX: A2
+    自 trace_repo 下沉），使 user_token / db_password / apikey / x-api-key
+    等复合键同样被脱敏，与入库脱敏策略保持一致。"""
     if isinstance(value, dict):
         sanitized = {}
         for key, item in value.items():
-            if _is_sensitive_key(key):
+            if is_sensitive_key(key):
                 sanitized[key] = "***REDACTED***"
             else:
                 sanitized[key] = _redact_value_for_llm(item)

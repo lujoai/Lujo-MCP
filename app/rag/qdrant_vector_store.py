@@ -38,24 +38,26 @@ _PROVIDER_BASE_URLS = {
 # ── 脱敏正则（与 app/runtime/core/redaction.py 的 _DEFAULT_RULES 保持一致）────
 # 架构冻结禁止 rag → runtime import，故此处内联复制（与 _PROVIDER_BASE_URLS 同样手法）。
 # embedding 把文档原文发往外部 LLM 服务，必须先脱敏，否则密钥/token/手机号会外发。
+# FIX: CR-2 —— 键名匹配改为"包含敏感词干"语义，覆盖 refresh_token / client_secret
+# 等下划线复合键（\b 词边界在 '_' 处不成立导致此前漏脱敏），与 redaction.py 同步。
+_SENSITIVE_KEY_NAME = (
+    r"[\w.-]*(?:password|passwd|pwd|secret|token|apikey|credential|private[_-]?key)[\w.-]*"
+    r"|[\w.-]*[_-]key"
+)
 _REDACT_RULES: list[tuple[re.Pattern[str], str]] = [
-    # password = "x", pwd: xxx, passwd='y'
-    (re.compile(r"(?i)\b(password|pwd|passwd)\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)"), r'\1="***"'),
-    # api_key / api-key / token / secret / access_token / private_key = ...
+    # password = "x", pwd: xxx, refresh_token=eyJ..., client_secret=xxx ...
     (
         re.compile(
-            r"(?i)\b(api[_-]?key|apikey|secret|token|access[_-]?token|auth[_-]?token|private[_-]?key)\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
+            r"(?i)\b(" + _SENSITIVE_KEY_NAME + r")\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
         ),
         r'\1="***"',
     ),
     # Authorization: Bearer xxx
     (re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+))(?:'[^']*'|\"[^\"]*\"|\S+)"), r"\1***"),
-    # JSON 格式: {"password":"xxx"}
-    (re.compile(r"(?i)\"(password|pwd|passwd)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)"), r'"\1":"***"'),
-    # JSON 格式: {"api_key":"xxx"}, {"token":"xxx"}, {"secret":"xxx"}, {"authorization":"xxx"}
+    # JSON 格式: {"password":"xxx"}, {"refresh_token":"xxx"}, {"api_key":"xxx"} ...
     (
         re.compile(
-            r"(?i)\"(api[_-]?key|apikey|secret|token|access[_-]?token|auth[_-]?token|private[_-]?key|authorization)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
+            r"(?i)\"(" + _SENSITIVE_KEY_NAME + r"|authorization)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
         ),
         r'"\1":"***"',
     ),

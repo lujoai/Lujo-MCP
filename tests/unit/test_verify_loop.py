@@ -34,7 +34,7 @@ class TestVerifyScore:
         result = {
             "repair_plan": {"fix": "x"},
             "test_plan": {"test_cases": ["t1"]},
-            "security_review": {"findings": [{"severity": "low"}]},
+            "security_review": {"risks": [], "recommendations": [], "overall_severity": "none", "summary": "ok"},
             "git_attribution": {"file": "a.py"},
         }
         assert compute_verify_score(result) == 1.0
@@ -44,20 +44,102 @@ class TestVerifyScore:
 
         assert compute_verify_score({"repair_plan": {"fix": "x"}}) == 0.4
 
-    def test_security_critical_no_score(self):
+    def test_security_high_risk_no_score(self):
         from app.agent.verify_loop import compute_verify_score
 
         result = {
             "repair_plan": {"fix": "x"},
-            "security_review": {"findings": [{"severity": "critical"}]},
+            "security_review": {
+                "risks": [{"category": "SSRF", "severity": "high", "description": "d", "location": "l"}],
+                "recommendations": ["r"],
+                "overall_severity": "high",
+                "summary": "s",
+            },
         }
-        # repair 0.4 + security 0（critical 不加分）
+        # repair 0.4 + security 0（high 风险不加分）
         assert compute_verify_score(result) == 0.4
 
     def test_empty_result_zero(self):
         from app.agent.verify_loop import compute_verify_score
 
         assert compute_verify_score({}) == 0.0
+
+
+class TestSecurityGateContract:
+    """CR-1 契约测试：SecurityAgent 真实输出 shape → compute_verify_score 安全门。
+
+    此前 fixture 用不存在的 "findings" 键自证清白，掩盖了安全门字段错配。
+    """
+
+    @staticmethod
+    def _make_result(review: dict) -> dict:
+        return {
+            "repair_plan": {"fix": "x"},
+            "test_plan": {"test_cases": ["t1"]},
+            "security_review": review,
+            "git_attribution": {"file": "a.py"},
+        }
+
+    def test_clean_review_from_real_agent_output_scores_full(self):
+        """_validate_security_review 的无风险输出 → 安全门通过，满分。"""
+        import json
+
+        from app.agent.security_agent import _validate_security_review
+        from app.agent.verify_loop import compute_verify_score
+
+        review = _validate_security_review(json.dumps({
+            "risks": [],
+            "recommendations": [],
+            "overall_severity": "none",
+            "summary": "no obvious risk",
+        }))
+        assert compute_verify_score(self._make_result(review)) == 1.0
+
+    def test_high_risk_review_clamped_to_partial(self):
+        """_validate_security_review 的高风险输出 → 0.2 不给且钳制到 PARTIAL 阈值。"""
+        import json
+
+        from app.agent.security_agent import _validate_security_review
+        from app.agent.verify_loop import compute_verify_score
+        from app.config import settings
+
+        review = _validate_security_review(json.dumps({
+            "risks": [{"category": "SSRF", "severity": "high",
+                       "description": "d", "location": "l"}],
+            "recommendations": ["r"],
+            "overall_severity": "high",
+            "summary": "s",
+        }))
+        # repair 0.4 + test 0.3 + git 0.1 = 0.8 ≥ pass 阈值，但安全门未过 → 钳制
+        score = compute_verify_score(self._make_result(review))
+        assert score == settings.agent_verify_loop_partial_threshold
+
+    def test_invalid_overall_severity_fails_gate(self):
+        """overall_severity 非法值（归一为 unknown）→ fail-safe 不通过安全门。"""
+        import json
+
+        from app.agent.security_agent import _validate_security_review
+        from app.agent.verify_loop import compute_verify_score
+        from app.config import settings
+
+        review = _validate_security_review(json.dumps({
+            "risks": [],
+            "recommendations": [],
+            "overall_severity": "香蕉皮",  # 非法值 → unknown
+            "summary": "s",
+        }))
+        assert review["overall_severity"] == "unknown"
+        score = compute_verify_score(self._make_result(review))
+        assert score == settings.agent_verify_loop_partial_threshold
+
+    def test_malformed_findings_shape_fails_gate(self):
+        """畸形 security_review（旧 findings 形态，无 risks/overall_severity 键）→ 门不通过。"""
+        from app.agent.verify_loop import compute_verify_score
+        from app.config import settings
+
+        legacy = self._make_result({"findings": [{"severity": "high"}]})
+        score = compute_verify_score(legacy)
+        assert score == settings.agent_verify_loop_partial_threshold
 
 
 class TestRunVerifyLoop:
@@ -72,7 +154,7 @@ class TestRunVerifyLoop:
             return {
                 "repair_plan": {"fix": "x"},
                 "test_plan": {"test_cases": ["t1"]},
-                "security_review": {"findings": [{"severity": "low"}]},
+                "security_review": {"risks": [], "recommendations": [], "overall_severity": "none", "summary": "ok"},
                 "git_attribution": {"file": "a.py"},
             }
 
@@ -131,7 +213,7 @@ class TestRunVerifyLoop:
             return {
                 "repair_plan": {"fix": "x"},
                 "test_plan": {"test_cases": ["t1"]},
-                "security_review": {"findings": [{"severity": "low"}]},
+                "security_review": {"risks": [], "recommendations": [], "overall_severity": "none", "summary": "ok"},
                 "git_attribution": {"file": "a.py"},
             }
 
@@ -163,7 +245,7 @@ class TestRunVerifyLoop:
                 return {
                     "repair_plan": {"fix": "x"},
                     "test_plan": {"test_cases": ["t1"]},
-                    "security_review": {"findings": [{"severity": "low"}]},
+                    "security_review": {"risks": [], "recommendations": [], "overall_severity": "none", "summary": "ok"},
                     "git_attribution": {"file": "a.py"},
                 }
 
@@ -220,7 +302,7 @@ class TestRunVerifyLoop:
                 return {
                     "repair_plan": {"fix": "x"},
                     "test_plan": {"test_cases": ["t1"]},
-                    "security_review": {"findings": [{"severity": "low"}]},
+                    "security_review": {"risks": [], "recommendations": [], "overall_severity": "none", "summary": "ok"},
                     "git_attribution": {"file": "a.py"},
                 }
 

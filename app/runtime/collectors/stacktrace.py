@@ -6,18 +6,12 @@ import sys
 import traceback
 from typing import Optional
 
-from app.runtime.core.redaction import redact
+from app.runtime.core.redaction import redact, is_sensitive_key
 
-SENSITIVE_KEYS = {
-    "api_key",
-    "token",
-    "password",
-    "secret",
-    "authorization",
-    "cookie",
-    "passwd",
-    "pwd",
-}
+# FIX: CR-2 —— 此前 SENSITIVE_KEYS 为 8 个键名的精确匹配集合，refresh_token /
+# client_secret / session_token 等复合键在捕获 locals 时漏脱敏。
+# 改为复用 redaction 的白名单感知子串判定（含 redaction_key_allowlist，
+# password_hash / public_key 等白名单字段仍可在捕获期保留原值）。
 
 _FRAMEWORK_PATH_PARTS = (
     "site-packages",
@@ -188,7 +182,7 @@ def capture_exception(
         local_vars = {}
         for key, val in frame.f_locals.items():
             try:
-                if key.lower() in SENSITIVE_KEYS:
+                if is_sensitive_key(key):
                     local_vars[key] = "***REDACTED***"
                 else:
                     local_vars[key] = redact(repr(val))

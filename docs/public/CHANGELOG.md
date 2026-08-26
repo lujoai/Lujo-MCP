@@ -5,6 +5,61 @@
 
 ---
 
+## [Unreleased]
+
+> v0.6.8 候选（P0 安全与正确性补丁 + P1 全量 14 项修复）：第 6 轮全量代码审查 P0 五项（安全门字段错配 CR-1、脱敏复合键缺口 CR-2、SDK 毒批循环 CR-3、XFF 限流绕过 A1、add_log 明文入库 A2）+ **P1 十四项全部修复**（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）+ 顺带 G1 + 测试基础设施两项。测试基线 **1290 passed / 6 skipped / 0 failed**（unit 口径，v0.6.7 基线 1231 → 1290，P0+P1 合计新增 59 项），本地全量 **1377 passed / 0 failed / 0 errors**，零回归。
+
+### 🔒 安全
+
+- **verify_loop 安全门字段错配修复（CR-1）**：`compute_verify_score` 读取 SecurityAgent 输出中不存在的 `findings` 键（真实契约为 `risks` / `overall_severity`），恒为空导致含 high 风险（SSRF、硬编码密钥等）的修复方案也能通过安全门并获得 PASSED/HIGH_CONFIDENCE 判定——v0.6.x 专门加的安全门钳制完全失效。现按真实契约双检 `risks`（severity 含 critical/high）与 `overall_severity`（high/unknown 不通过），并对畸形 shape（既无 risks 也无 overall_severity，如旧 findings 形态）fail-safe 拒绝；全部测试 fixture 改为真实输出契约并新增端到端契约测试。
+- **脱敏正则下划线复合键缺口修复（CR-2）**：`redact()` 默认规则用 `\b(固定键名列表)` 匹配，词边界在 `_`（word 字符）处不成立，`refresh_token` / `client_secret` / `session_token` / `api_secret` 等复合键在纯文本与 JSON 字符串路径整体漏脱敏（如 SDK 序列化的 request_body 原样入库 PG）。现键名匹配改为"包含敏感词干"语义（password/passwd/pwd/secret/token/apikey/credential/private_key 词干 + `[_-]key` 后缀），`keyword` / `monkey` / `author` 等正常词不误伤；Qdrant embedding 外发路径的内联规则副本同步修复；`capture_exception` 的 locals 键名判定从 8 个精确键名改为白名单感知的子串匹配。
+- **XFF 伪造绕过限流修复（A1）**：限流键的客户端 IP 无条件信任 `X-Forwarded-For` 最左值——该字段首段可被客户端任意伪造，直连部署下攻击者每个请求换一个伪造 IP 即获得全新限流桶，完全绕过 `/api/debug/analyze` 10/min 与全局限流。现引入 `TRUSTED_PROXY_COUNT`（默认 0 = 不信任转发头，一律用直连对端 IP）；配置 N>0 时仅当直连对端为私网/回环（自有反代）才取 XFF 右起第 N+1 个地址。**反代部署升级后须配置该值**，否则所有用户共享代理 IP 的限流桶（互相误伤，限流仍有效）。
+- **add_log 直写路径明文入库修复（A2）**：`logs.add_log` / `add_logs_batch` 直接透传 data 写存储（`POST /debug` 的 request_start 等入口把用户原始 payload 含 password/token 明文入库，viewer 角色经 dashboard 可读），违背"存储边界统一脱敏"承诺。现键名判定与嵌套递归脱敏统一下沉到 `redaction` 模块（`is_sensitive_key` / `redact_nested` 公开 API），trace_repo / logs / stacktrace / context_prep 全部存储与外发边界共用一份实现。
+
+### 🛠️ SDK 数据采集（browser-sdk）
+
+- **批量恢复毒批循环修复（CR-3）**：服务端 `/ingest/batch` 单请求上限 100 条（超限 413），SDK 恢复 localStorage 暂存批次时把全部事件合并进队列单次 flush——endpoint 宕机过夜后恢复 10 批 × 20 条 = 200 条必然 413，而 413 被当作可重试错误整批重试 3 次（不拆分），重试耗尽后整批回写 localStorage，下次启动重复该循环：积压事件永远无法送达且负载滚大。现三处同时修复：flush 按服务端上限分片发送（beacon 路径同样分片）；413 触发对半拆分重发（指数收敛到单条，单条仍拒则丢弃防无限循环）；恢复路径经分片 flush 自然安全。新增 `sdk-batch-limit.test.js` 回归测试 4 项并登记入 CI 与 `npm test`（顺带修复 package.json test 脚本遗漏 `sdk-transport-fixes.test.js` 的门禁缺口）。
+
+### 🧪 测试基础设施
+
+- **e2e uvicorn 启动被 SEC-03 误杀修复**：`tests/conftest.py` 的 `HOST=127.0.0.1` 环境哨兵因 `tests/__init__.py` 导入链抢跑而失效（settings 单例在哨兵前已创建并读入默认 `host="0.0.0.0"`，与 M13 的 API_KEY 哨兵同坑），且单例重置漏了 host 字段——e2e 测试服务器实际绑定回环地址，却被 lifespan 里的启动守卫按 `settings.host=0.0.0.0` + 无鉴权判定拒绝启动，e2e 全部 10 个用例 ERROR。现单例重置补齐 `settings.host="127.0.0.1"`（与实际 bind 一致）。
+- **Windows 11 24H2+ 损坏 pytest-current junction 防崩补丁**：旧版 pytest 在 `%TEMP%\pytest-of-<user>\` 留下的 `pytest-current` symlink 被系统标记为不受信任挂载点（WinError 5，需管理员权限才能删除），pytest 8.3.x 的 `cleanup_dead_symlinks` 遍历时 `resolve()` 抛 PermissionError 未捕获，整个测试会话在创建 basetemp 时崩溃（0 tests ran）。conftest 中将该清理函数替换为异常安全版本（单条目失败仅跳过）。
+
+### 🛠️ P1 修复（第 6 轮审查 P1 十四项全量）
+
+**API 与限流**
+
+- **/ingest/batch 畸形 JSON 500 修复（A3）**：顶层非对象（`[1,2]` / `"abc"`）时 `req.get` 抛 AttributeError、events 元素非 dict 时 `event.get` 在 try 块外抛 AttributeError——`{"events":[1]}` 即触发 500 + 完整堆栈日志（可被滥用于日志洪水）。现校验 `isinstance(req, dict)` 与逐 event `isinstance(event, dict)`，按 422 语义化拒绝。
+- **限流 key 路由模板归一化（A4）**：限流 key 含原始 path，动态段端点（`/ingest/network/{trace_id}` 等）每个 ID 独立成桶，攻击者轮换 ID 即绕过该档位限流。现限流中间件在路由解析前用 app.router 路由表预解析模板（与 MetricsMiddleware 事后读 `scope["route"].path` 的语义一致）：静态路径 key 完全不变，动态路径归一化为模板共享桶；404/解析失败回退原始 path。
+
+**Agent / LLM 链路**
+
+- **RepairAgent prompt 大小上限（B1）**：Agent 链路此前无任何 prompt 预算（analyzer 有 truncate_context，Agent 没有）——debug_context 含原始 request body（上限 1MB）时 prompt 可达 MB 级，超上下文、成本失控、agent_timeout 内必然失败。现按与 analyzer 同源的 `max_context_tokens * 3` 字符预算截断并附截断标记，正常大小 payload 零影响。
+- **Agent LLM 调用接入熔断器（B3）**：Agent 链路（repair/test/security + 队列 worker）此前完全绕过 LLM 熔断器（与三个 Agent 文档串"熔断器自动覆盖"的声明相反）——LLM 宕机时持续打满重试拖长队列。现 `BaseAgent._create_completion` 统一经 analyzer 的 `_call_async_through_breaker` 执行：成功/失败计入共享熔断状态机；熔断 OPEN 时 CircuitBreakerError 快速失败（不重试、不打 fallback，不发起任何真实调用）；熔断器未启用（默认）时直连调用，行为与旧实现完全一致。
+- **repair_async 事件循环阻塞修复（C1）**：async handler 内的三步同步重 IO（get_logs 走 PG、build_context 全量聚合、collect_runtime_snapshot 含 psutil 100ms 阻塞采样）此前直接跑在事件循环线程——执行期间整个服务（HTTP/stdio/心跳/SSE）停摆。现统一移入 `asyncio.to_thread`。
+
+**MCP 协议 / 传输**
+
+- **SSE 队列满分级丢弃（C3）**：队列满"丢最旧"曾会静默丢弃带 id 的 JSON-RPC 响应（mcp_post 已对该请求返回 202，客户端永久悬挂）。现按消息类别分级：close 控制事件必须送达；响应类优先挤掉最旧**通知**腾位，队列全为在途响应（客户端实质失联）才丢最旧响应并记 error；通知类在全响应队列下直接不投递（宁可丢新通知，不丢任何在途响应），全部丢弃路径不再静默（warning/error 日志）。
+- **MCP SSE 心跳（C4）**：GET /mcp 流此前无限期等待 `q.get()`——反代（nginx 默认 60s）静默切断空闲流，纯监听会话 30 分钟后被 TTL 清理踢下线。现 15s `: ping` 注释行心跳（与 dashboard 流对齐），心跳同时刷新会话 last_active，两个问题一并解决。
+- **inputSchema 轻量校验（C5）**：inputSchema 此前仅用于 tools/list 展示从不校验——缺 required 参数/类型错误在直接索引型 handler 抛 KeyError/TypeError 被吞成 TOOL_INTERNAL，而 LLM 客户端依赖 -32602 INVALID_PARAMS 做参数自纠错。现入口按注册 schema 校验 arguments 为 dict、required 存在性、顶层类型（integer 容忍整值 float、拒绝 bool 冒充数值、显式 null 按类型错误、未声明额外参数不拒绝保持兼容）；顺带修正 repair_async schema 的 required 与 handler"request_id/trace_id 二选一"契约不符。
+
+**Storage / Runtime**
+
+- **PG 连接中毒修复（D1）**：非 OperationalError（UniqueViolation/ProgrammingError 等）后连接停留在 aborted 事务状态直接归还池，下一个借出者恒抛 InFailedSqlTransaction（25P02 非 OperationalError 不触发重连）——连接永久中毒直至重启，LIFO 取连接放大影响。现四层防护：`_execute_with_retry`/`_query_with_retry` 增加通用 `except psycopg2.Error` 回滚后原样抛出；`_safe_put` 与 pg_trace/pg_session 的 `_put` 归还前统一 rollback（psycopg2 无活动事务时为客户端空操作）；`_ensure_init` DDL 失败与分区预创建失败口同样回滚。
+- **exception_hook 两段式安装（D2）**：单一 `_installed` 标志导致首次在无事件循环上下文安装（asyncio 部分被跳过但标志已置位）后，lifespan 里再调用直接 return——asyncio 任务异常捕获永久失效。现拆分为 excepthook/asyncio 两个独立标志，支持"先装 excepthook、事件循环就绪后补装 asyncio handler"，两部分各自幂等。
+- **errors 迁移脚本顺序修复（D3）**：`CREATE UNIQUE INDEX (fingerprint, session_id)` 排在 `ALTER TABLE ADD COLUMN session_id` 之前——旧 schema 库执行到建索引即报 column does not exist 中断，兼容补列段永远执行不到。现兼容 ALTER 段整体前移（含补 fingerprint 列防御），全新建库时为幂等 no-op。
+
+**API / 发布 / SDK**
+
+- **Dashboard 缓存 limit 固化修复（E1）**：概览缓存按首个请求的 limit 计算并缓存整个 result——30s TTL 窗口内小 limit（10）先缓存，后续大 limit（1000）命中 `cached[:1000]` 却只有 10 条（L2 Redis 跨实例共享污染面更大）。现缓存统一按最大档 1000 计算存储，调用方按需切片。
+- **release-npm 版本一致性硬校验（F3）**：发布版本号完全来自 tag 名/手工输入，与二进制内 `app.__version__` 无校验——打 tag v0.6.8 但忘改 `app/__init__.py` 会发布"npm 0.6.8 / MCP 握手 serverInfo 报 0.6.7"的错版包且无告警。现 publish 前硬校验发布版本 == `app.__version__`，不一致直接 fail 并给出修复指引。
+- **SDK 错误类上报豁免采样（G2）**：sampleRate 对所有事件统一门控，手动 reportError/reportSilentFailure/reportNetworkError 与全局异常捕获（window.onerror/unhandledrejection）在 sampleRate=0.5 时有一半概率被无提示丢弃——业界惯例错误类事件不参与采样。现错误类路径 force=true 绕过采样；遥测类（network 自动捕获/ui-event/console）保持原有采样行为不变。
+
+### 📊 测试与质量
+
+> 测试基线：unit 口径 **1290 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7 基线 1231 → 1251（P0 +20）→ 1290（P1 +39）；另 integration 口径新增 A2 直写脱敏 3 项 + D2 两段式安装 2 项）。本地全量复验（unit+integration+e2e）：**1419 tests / 1377 passed / 42 skipped / 0 failed / 0 errors**（P0 后 1336 → 1377）。SDK JS 5 文件 **35/35 pass**（G2 新增 2 项），ruff 硬门禁全绿，check_doc_links 164 链接 0 错误。
+
 ## [0.6.7] - 2026-08-25
 
 > v0.6.x 正确性补丁：修复 7 个正确性组 Major 缺陷（SDK 数据采集三件套：gzip 回退乱码、pagehide 丢数据、节流齐发；Python 侧：LLM 指纹碰撞、流式绕熔断、smoke_test 死锁、sourcemap 缓存键版本混淆）。测试基线 **1231 passed / 6 skipped / 0 failed**（新增 14 项测试），零回归，无 Breaking Change。

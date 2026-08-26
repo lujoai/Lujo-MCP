@@ -4,6 +4,7 @@ import time
 import uuid
 from typing import Any
 
+from app.runtime.core.redaction import redact_nested
 from app.runtime.core.storage.factory import get_trace_store
 
 
@@ -16,7 +17,10 @@ def add_log(request_id: str, step: str, data=None) -> None:
     store.save_entry(request_id, {
         "timestamp": time.time(),
         "step": step,
-        "data": data,
+        # FIX: A2 —— data 可能是调用方透传的原始用户 payload（如 POST /debug
+        # 的 request body），入库前必须脱敏；此前仅 trace_repo 的 save_* 系列
+        # 脱敏，本直写路径绕过了"存储边界统一脱敏"承诺（重复脱敏幂等无害）
+        "data": redact_nested(data),
     })
     # 持久化新 trace 数据后失效 Dashboard 概览缓存，使新数据立即可见
     # （save_entry 路径：覆盖 save_trace/network/ui/console 等所有写入）。
@@ -37,7 +41,8 @@ def add_logs_batch(request_id: str, items: list[tuple[str, Any]]) -> None:
     store = get_trace_store()
     now = time.time()
     entries = [
-        {"timestamp": now, "step": step, "data": data}
+        # FIX: A2 —— 与 add_log 一致，批量直写路径同样在存储边界脱敏
+        {"timestamp": now, "step": step, "data": redact_nested(data)}
         for step, data in items
     ]
     store.save_entries(request_id, entries)

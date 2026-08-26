@@ -9,6 +9,7 @@ repair_result：查询修复任务状态/结果。
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -42,7 +43,10 @@ REPAIR_ASYNC_DEF = {
                 "description": "等价于 request_id，二选一",
             },
         },
-        "required": ["request_id"],
+        # FIX: P1-C5 —— request_id 与 trace_id 二选一（handler 层 get or 链），
+        # required 无法表达 anyOf 语义；两者全缺由 handler 的
+        # "must provide request_id or trace_id" 运行时检查兜底
+        "required": [],
     },
 }
 
@@ -67,6 +71,12 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     """repair_async 工具处理函数。
 
     与 /api/debug/repair/async 端点共享逻辑：build_debug_context → enqueue。
+
+    FIX: P1-C1 —— 本 handler 为 async（enqueue 需 await），但前置三步是同步
+    重 IO（get_logs 走 PG 查询、build_context 全量日志聚合、
+    collect_runtime_snapshot 含 psutil.cpu_percent(interval=0.1) 阻塞采样），
+    此前直接跑在事件循环线程——执行期间整个服务（HTTP/stdio/心跳/SSE）停摆。
+    现统一移入 asyncio.to_thread（与同步 handler 走线程池的隔离语义对齐）。
     """
     if not settings.agent_enabled:
         return {"error": "agent disabled", "_hint": "set AGENT_ENABLED=true"}
@@ -76,7 +86,7 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         return {"error": "must provide request_id or trace_id"}
 
     try:
-        trace = get_logs(request_id)
+        trace = await asyncio.to_thread(get_logs, request_id)
     except Exception as e:
         logger.error(str(e), exc_info=True)
         return {"error": "internal error"}
@@ -85,7 +95,7 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"request {request_id} not found"}
 
     try:
-        context = build_context(request_id, trace)
+        context = await asyncio.to_thread(build_context, request_id, trace)
     except Exception as e:
         logger.error(str(e), exc_info=True)
         return {"error": "build context failed"}
@@ -97,7 +107,7 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
             break
 
     try:
-        context["runtime"] = collect_runtime_snapshot()
+        context["runtime"] = await asyncio.to_thread(collect_runtime_snapshot)
     except Exception:
         context["runtime"] = {}
 

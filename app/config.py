@@ -137,6 +137,14 @@ class Settings(BaseSettings):
     api_key: Optional[str] = None  # 不设置 = 不鉴权
     cors_origins: str = ""  # 空串=不下发 CORS 头（默认收紧）；"*"=显式开放所有来源（opt-in）
     rate_limit_per_minute: int = 60
+    # FIX: A1 —— 限流客户端 IP 的可信代理跳数。
+    # 0（默认）= 不信任 X-Forwarded-For / X-Real-IP（首段可被客户端任意伪造，
+    #   轮换伪造 XFF 即可绕过限流），一律使用直连对端 IP；
+    # N > 0 = 仅当直连对端为私网/回环地址（自有内网反代）时信任 XFF，
+    #   取"从右往左第 N+1 个"地址为真实客户端 IP（跳过 N 层可信代理）。
+    # 反代部署（nginx/ALB/Cloudflare tunnel 等）必须按实际代理层数配置，
+    # 否则所有真实用户会共享代理 IP 的限流桶（互相误伤，但限流仍有效）。
+    trusted_proxy_count: int = 0
     # 请求体最大字节数（防御超大请求体 OOM / DoS）
     max_body_size: int = 1_048_576
     # 诊断端点开关（/api/debug/echo, /api/debug/token），生产环境保持关闭

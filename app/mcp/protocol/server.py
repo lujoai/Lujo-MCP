@@ -188,6 +188,62 @@ def _handle_tools_list(req: JSONRPCRequest) -> dict:
     return make_response(req.id, {"tools": tools})
 
 
+def _validate_tool_arguments(tool: dict, arguments) -> "str | None":
+    """FIX: P1-C5 —— 按注册的 inputSchema 做轻量校验，返回错误描述或 None。
+
+    此前 inputSchema 仅用于 tools/list 展示、从不校验：缺 required 参数或参数
+    类型错误时，直接索引型 handler（network/git/spec/auto_test 等）抛
+    KeyError/TypeError 被兜底捕获成 TOOL_INTERNAL，而 LLM 客户端依赖
+    -32602 INVALID_PARAMS 语义做参数自纠错重试。
+
+    只做两层轻量校验（不实现完整 JSON Schema，嵌套结构不递归）：
+    1. arguments 必须为 dict（含显式 null）；
+    2. required 字段存在性；
+    3. 顶层字段类型与声明的 JSON 类型一致（string/number/integer/boolean/
+       array/object；未声明的额外参数不拒绝——保持旧兼容）。
+    """
+    if not isinstance(arguments, dict):
+        return "arguments 必须为对象"
+
+    schema = tool.get("inputSchema") or {}
+    for field_name in schema.get("required") or []:
+        if field_name not in arguments:
+            return f"缺少必填参数: {field_name}"
+
+    properties = schema.get("properties") or {}
+    type_map = {
+        "string": str,
+        "number": (int, float),
+        "integer": int,
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+    for field_name, value in arguments.items():
+        declared = properties.get(field_name)
+        if not isinstance(declared, dict):
+            continue
+        expected = declared.get("type")
+        py_types = type_map.get(expected)
+        if py_types is None:
+            continue
+        # 显式 null：本项目所有声明类型的字段均不可为 null；放行会在
+        # ingest_network/get_blame_for_frame 等索引/realpath 路径崩溃成
+        # TOOL_INTERNAL，此处按类型错误归入 -32602
+        if value is None:
+            return f"参数 {field_name} 类型应为 {expected}，不接受 null"
+        # bool 是 int 的子类：integer/number 不接受布尔值
+        if isinstance(value, bool) and expected in ("integer", "number"):
+            return f"参数 {field_name} 类型应为 {expected}"
+        # integer 容忍整值 float（JSON 反序列化 20.0 为 float，handler 的
+        # int()/min() 本可正常处理，不应收紧拒绝）
+        if expected == "integer" and isinstance(value, float) and value.is_integer():
+            continue
+        if not isinstance(value, py_types):
+            return f"参数 {field_name} 类型应为 {expected}"
+    return None
+
+
 async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     """处理 tools/call"""
     # FIX: P1-9i params 非 dict（list/str/null）时返回 -32602，避免 AttributeError → 500
@@ -200,6 +256,13 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     tool = _tool_registry.get(tool_name)
     if not tool:
         return make_error(req.id, METHOD_NOT_FOUND, f"未知工具: {tool_name}")
+
+    # FIX: P1-C5 —— inputSchema 轻量校验：参数错误 → -32602（LLM 自纠错依据），
+    # 而非进入 handler 抛 KeyError/TypeError 被吞成 TOOL_INTERNAL
+    validation_error = _validate_tool_arguments(tool, arguments)
+    if validation_error:
+        record_mcp_tool_call(tool_name, "invalid_params", 0.0)
+        return make_error(req.id, INVALID_PARAMS, validation_error)
 
     timeout = settings.tool_timeout_seconds
     _tool_start = time.monotonic()

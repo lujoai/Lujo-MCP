@@ -24,6 +24,10 @@ from app.mcp.tools import TOOL_ROLE_REQUIREMENTS
 logger = logging.getLogger("lujo-mcp.api.mcp")
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
+# FIX: P1-C4 —— SSE 心跳间隔（秒），与 dashboard_stream 的 15s 心跳对齐。
+# 模块级常量便于测试缩短（真实流式响应测试不宜等待真实 15s）。
+_SSE_HEARTBEAT_SECONDS = 15.0
+
 
 def _health_payload() -> dict:
     return {
@@ -182,10 +186,22 @@ async def mcp_get(request: Request):
         return JSONResponse({"detail": "Too many SSE subscribers"}, status_code=429)
 
     async def event_stream():
+        # FIX: P1-C4 —— SSE 心跳（与 dashboard_stream 的 15s 心跳对齐）。
+        # ① 无心跳时反代（nginx proxy_read_timeout 默认 60s / 云 LB）会静默切断
+        #    空闲 SSE 流，客户端表现为莫名断流且无法检测半开连接；
+        # ② 会话 TTL 基于 registry.get() 刷新的 last_active，而 GET /mcp 只在
+        #    建立订阅时 get 一次——纯监听（不 POST）的客户端 30 分钟后被
+        #    periodic_cleanup 判过期踢下线。心跳同时刷新活跃时间，两个问题一并解决。
         try:
             yield ": connected\n\n"
             while True:
-                msg = await q.get()
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    # SSE 注释行心跳：对客户端透明，仅保持链路活性
+                    yield ": ping\n\n"
+                    registry.get(session_id)  # 刷新会话 last_active
+                    continue
                 if hub.is_close_event(msg):
                     break
                 yield hub.format_event(msg)

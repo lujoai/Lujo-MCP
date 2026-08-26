@@ -36,6 +36,30 @@ M13 宿主 API_KEY 泄漏阻断（方案 B：直接重置单例）
 
 - 需要鉴权的测试必须用 monkeypatch 显式设置 key（不要依赖本处兜底）。
 - 本修改只影响 pytest 进程，不影响生产运行时。
+
+FIX: e2e uvicorn 启动被 SEC-03 误杀（host 哨兵时序失效）
+==========================================================
+背景：下方第 49 行的 `os.environ.setdefault("HOST", "127.0.0.1")` 哨兵与 M13 的
+API_KEY 哨兵踩同一个坑——`tests/__init__.py` 顶层导入链在 conftest 执行之前就把
+settings 单例创建出来（此时读入默认 `host="0.0.0.0"`），env 哨兵来晚不再被读取。
+结果：e2e/conftest.py 用 `uvicorn.Config(host="127.0.0.1")` 启动测试服务器，但 app
+lifespan 里的 SEC-03 守卫 `validate_startup_configuration()` 无参调用读的是
+`settings.host`（仍为 0.0.0.0）+ `auth_enabled()=False`（M13 已重置）→ RuntimeError
+"Refusing to start" → e2e 全部 10 个用例 ERROR（uvicorn 起不来）。
+
+处置：与 M13 同法兜底——在下方「直接重置单例」处一并重置 `settings.host` 为
+"127.0.0.1"（与 e2e 测试服务器的实际 bind 地址一致，回环地址安全）。
+
+FIX: Windows 11 24H2+ 损坏 pytest-current junction 防崩补丁
+==============================================================
+背景：旧版 pytest 在 `%TEMP%\\pytest-of-<user>\\` 创建的 `pytest-current` symlink
+被 Windows 11 24H2+ 标记为不受信任挂载点（WinError 5/448），任何 stat/resolve 均
+被拒。pytest 8.3.x `_pytest.pathlib.cleanup_dead_symlinks` 遍历该目录时
+`left_dir.resolve().exists()` 抛 PermissionError 未捕获 → 整个测试会话在创建
+basetemp 时崩溃（0 tests ran，退出码 1）。损坏 junction 本身需管理员权限才能删除。
+
+处置：conftest 加载早于 basetemp 创建，此处把 `cleanup_dead_symlinks` 替换为异常
+安全版本——单条目清理失败仅跳过（该清理只是 best-effort 回收旧临时目录，失败无碍）。
 """
 import os
 
@@ -46,6 +70,7 @@ import os
 #    真正的兜底在下方「直接重置单例」。
 os.environ["API_KEY"] = ""
 # SEC-03：默认 host=0.0.0.0 + 空 api_key 会拒绝启动；测试用本地回环避开。
+# ⚠️ 与 API_KEY 哨兵同样存在时序失效（见上方 FIX 说明），真正兜底在下方单例重置。
 os.environ.setdefault("HOST", "127.0.0.1")
 
 import pydantic_settings
@@ -66,3 +91,30 @@ from app.config import settings  # noqa: E402
 
 settings.api_key = None
 settings.api_keys = ""
+# FIX: e2e 误杀——HOST env 哨兵因导入链抢跑失效，此处直接重置单例 host
+# 为回环地址（与 e2e/conftest.py 的 uvicorn bind 一致），SEC-03 守卫放行。
+settings.host = "127.0.0.1"
+
+# ── FIX: pytest-current 损坏 junction 防崩补丁（Windows 11 24H2+）──
+# 替换 pytest 内部的死链清理函数为异常安全版本。conftest 加载早于 tmpdir factory
+# 创建 basetemp，补丁一定在崩溃点（cleanup_dead_symlinks）之前生效。
+import _pytest.pathlib as _pytest_pathlib  # noqa: E402
+
+
+def _safe_cleanup_dead_symlinks(root) -> None:
+    """cleanup_dead_symlinks 的异常安全版本：单条目 resolve/unlink 失败仅跳过。
+
+    覆盖场景：%TEMP%\\pytest-of-<user>\\pytest-current 被系统标记为不受信任
+    挂载点（WinError 5），原实现在 resolve() 处抛 PermissionError 使整个
+    测试会话崩溃。清理本身是 best-effort 回收，失败跳过无碍正确性。
+    """
+    for left_dir in root.iterdir():
+        try:
+            if left_dir.is_symlink() and not left_dir.resolve().exists():
+                left_dir.unlink()
+        except OSError:
+            # 不可访问的 symlink/junction：跳过该条目（可能需要管理员权限清理）
+            continue
+
+
+_pytest_pathlib.cleanup_dead_symlinks = _safe_cleanup_dead_symlinks

@@ -1,6 +1,7 @@
 """中间件层 —— 鉴权、CORS、速率限制、请求体限流、安全头、请求追踪"""
 
 import asyncio
+import ipaddress
 import time
 import logging
 from fastapi import FastAPI, Request, Response
@@ -12,6 +13,24 @@ from app.config import settings
 from app.state.store import get_state_store
 
 logger = logging.getLogger("lujo-mcp.middleware")
+
+
+def _is_valid_ip(ip: str) -> bool:
+    """是否为可解析的 IP 地址（IPv4/IPv6）。"""
+    try:
+        ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_private_ip(ip: str) -> bool:
+    """是否私网/回环地址（可信反代所在网段）。解析失败视为非私网（fail-safe）。"""
+    try:
+        addr = ipaddress.ip_address(ip)
+        return addr.is_private or addr.is_loopback
+    except ValueError:
+        return False
 
 
 # ── API Key 鉴权中间件 ──
@@ -161,7 +180,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             path = request.url.path
 
             limit, window = self._get_endpoint_limit(path)
-            key = f"ratelimit:{client_ip}:{path}"
+            # FIX: P1-A4 —— 限流 key 用路由模板而非原始 path：
+            # 动态段端点（/ingest/network/{trace_id} 等）此前每个 ID 独立成桶，
+            # 攻击者轮换 ID 即绕过该档位限流。归一化为模板后同端点共享桶
+            # （静态路径模板 == 原始 path，行为完全不变）。
+            key = f"ratelimit:{client_ip}:{self._get_route_template(request)}"
 
             # FIX: v0.6.6 事件循环阻塞 —— RedisStateStore.allow 是同步 Redis
             # 调用（Lua 脚本 + socket_timeout=2s），直接调用在 Redis 慢/不可达
@@ -186,27 +209,70 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _get_client_ip(request: Request) -> str:
-        """SEC: 取真实客户端 IP，修复反代场景下限流键共享/绕过。
+        """SEC: 取真实客户端 IP 作为限流键。
 
-        - 反代场景（nginx/CloudFlare）：``request.client.host`` 是代理 IP，所有真实用户
-          共享同一限流桶（互相误伤）；攻击者也可用代理池变化 IP 绕过。
-        - 优先读 X-Forwarded-For 最左 IP（最原始客户端），再读 X-Real-IP。
-        - 都缺失时回退 ``request.client.host``，兜底 "unknown"。
+        FIX: A1 —— 此前无条件信任 X-Forwarded-For 最左值，而 XFF 首段正是
+        客户端可任意伪造的字段：直连部署下攻击者每个请求换一个伪造 IP 即可
+        获得全新限流桶，完全绕过端点级与全局限流。
 
-        X-Forwarded-For 形如 ``client, proxy1, proxy2``，取最左 client。空串跳过。
+        现改为可信代理模式（settings.trusted_proxy_count）：
+        - 0（默认）：忽略 XFF / X-Real-IP，一律使用直连对端 IP（安全默认，
+          伪造转发头对限流键无任何影响）。
+        - N > 0：仅当直连对端是私网/回环地址（流量确实经过自有内网反代）时
+          才信任 XFF，取"从右往左第 N+1 个"条目（跳过 N 层可信代理，余下
+          即真实客户端；右侧 N 段由可信代理追加，不可伪造）。条目不足或
+          非法时回退 X-Real-IP（由反代设置的私有头），再回退直连对端 IP。
         """
+        peer = request.client.host if request.client else "unknown"
+
+        count = settings.trusted_proxy_count
+        if count <= 0:
+            return peer
+
+        # 直连对端必须是私网/回环（我们的反代）；公网直连时 XFF 视为伪造
+        if not _is_private_ip(peer):
+            return peer
+
         xff = request.headers.get("x-forwarded-for", "")
         if xff:
-            # 取最左非空 IP（最原始客户端），防代理链注入伪造后续段
-            first = next((ip.strip() for ip in xff.split(",") if ip.strip()), "")
-            if first:
-                return first
-        xri = request.headers.get("x-real-ip", "")
-        if xri:
-            ip = xri.strip()
-            if ip:
-                return ip
-        return request.client.host if request.client else "unknown"
+            entries = [ip.strip() for ip in xff.split(",") if ip.strip()]
+            # 从右往左跳过 count 个可信代理追加的条目，下一个即真实客户端
+            if len(entries) > count:
+                candidate = entries[-(count + 1)]
+                if _is_valid_ip(candidate):
+                    return candidate
+            # 条目不足（反代未按预期追加客户端 IP）→ 继续尝试 X-Real-IP
+        xri = request.headers.get("x-real-ip", "").strip()
+        if xri and _is_valid_ip(xri):
+            return xri
+        return peer
+
+    @staticmethod
+    def _get_route_template(request: Request) -> str:
+        """FIX: P1-A4 —— 解析请求对应的路由模板（如 /ingest/network/{trace_id}）。
+
+        限流中间件在路由解析之前执行（scope["route"] 尚未写入），此处用
+        app.router 的路由表自行匹配——与 MetricsMiddleware 在 call_next 之后
+        读 scope["route"].path 的模板语义一致（observability.py:438-440）。
+        - 静态路径：模板 == 原始 path，key 行为完全不变；
+        - 动态路径：归一化为模板，同端点不同 ID 共享限流桶（修复轮换 ID 绕过）；
+        - 解析失败 / 404 / 无 app：回退原始 path（保守，与旧行为一致）。
+        """
+        try:
+            from starlette.routing import Match
+
+            app = request.scope.get("app")
+            if app is None:
+                return request.url.path
+            for route in app.routes:
+                # PARTIAL = 路径匹配但方法不匹配（如 OPTIONS 打 GET 路由），
+                # 限流按路径聚合，两种都算命中模板
+                match, _child = route.matches(request.scope)
+                if match in (Match.FULL, Match.PARTIAL):
+                    return getattr(route, "path", None) or request.url.path
+        except Exception:
+            pass
+        return request.url.path
 
     @staticmethod
     def _get_endpoint_limit(path: str) -> tuple[int, int]:

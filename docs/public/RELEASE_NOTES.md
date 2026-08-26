@@ -1,13 +1,34 @@
 # Release Notes / 发布说明
 
 > 最新版本：**v0.6.7（2026-08-25）**。正确性补丁：Browser SDK 传输三件套 + LLM 缓存指纹 + 流式熔断 + 冒烟脚本死锁 + sourcemap 版本键。无 Breaking Change。npm `latest` → `@lujoai/lujo-mcp@0.6.7`。
-> **测试基线**：单元 **1231 passed / 6 skipped / 0 failed** + Browser SDK JS 29 passed。
+> **v0.6.8 候选（2026-08-26，未发布）**：第 6 轮全量代码审查 P0 五项 + P1 十四项已修复于工作区（详见 CHANGELOG `[Unreleased]`）。测试基线 **1231 → 1290 passed / 6 skipped / 0 failed**（单元）+ Browser SDK JS 29 → **35 passed**；本地全量 **1419 tests / 1377 passed / 0 failed**。本轮含 3 处行为变更（见下「v0.6.8 发布注意事项」）。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
 **Version / 版本**: v0.6.7  
 **Release Date / 发布日期**: 2026-08-25  
 **Codename / 代号**: 正确性补丁 ｜ Correctness Patch
+
+---
+
+## v0.6.8 发布注意事项（候选，未发布）
+
+> 本节为 v0.6.8 发布时的必读项 —— 与潜在外来升级相关的**行为变更**与**待办**。待正式发布时，将本节内容落为正式 v0.6.8 章节并在"最新版本"标注切换。
+
+### ⚠️ 部署注意（反代必须配置）
+
+- **新增 `TRUSTED_PROXY_COUNT`**：默认 `0` = 不信任 X-Forwarded-For / X-Real-IP（首段可被客户端伪造，历史上轮换伪造 IP 即可绕过限流），一律用直连对端 IP。**反代部署（nginx/ALB/Cloudflare tunnel 等）升级 v0.6.8 后必须按实际代理层数配置该值**；未配置则所有真实用户共享代理 IP 的限流桶（互相误伤，但限流仍有效、无安全回退）。配置见 `.env.example`。
+
+### 行为变更（Breaking Note）
+
+1. **MCP SSE 流新增 15s 心跳**：GET /mcp 流空闲时每 15s 发送 `: ping` 注释行（对客户端透明），防止反代空闲断流并刷新会话活跃时间。纯解析 SSE data 的客户端不受影响。
+2. **tools/call 参数校验收紧**：缺 required 参数 / 参数类型错误现返回 `-32602 INVALID_PARAMS`（此前落入 TOOL_INTERNAL）。LLM 客户端可据此自纠错重试；合法参数行为不变（未声明额外参数不拒绝）。
+3. **SDK 错误类上报豁免采样**：`sampleRate` 不再作用于 `reportError` / `reportSilentFailure` / `reportNetworkError` 与全局异常捕获（window.onerror / unhandledrejection）——错误类事件必达；遥测类（network 自动捕获 / ui-event / console）采样行为不变。
+
+### 未完成项（随本版或后续排期）
+
+- **P2 规划 16 项**：B2/B4/B5、C2、D4/D5/D6、E2、F1/F2/F4/F5/F6/F7、G3 —— 其中 **F4-F7 发布工程四项**（release-npm 输入内插注入面、构建可复现锁版本、平台覆盖 linux-arm64/osx-x64、发布前二进制 smoke）建议在 v0.6.8 发布前评估，其余可并入 v0.7.0。完整清单见内部 CODE_REVIEW 第 6 轮记录。
+- **Minor 90+ 项**：择机清理（内部索引）。
 
 ---
 

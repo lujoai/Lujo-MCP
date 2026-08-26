@@ -102,6 +102,11 @@
   var _batchQueue = [];       // 批量事件队列：[{ path, payload }, ...]
   var _batchTimer = null;     // 定时 flush 定时器
   var _BEACON_SIZE_LIMIT = 65536; // sendBeacon 64KB 限制
+  // FIX: CR-3 服务端 /ingest/batch 单次最多接受 100 条事件（app/api/ingest.py
+  // _MAX_BATCH_EVENTS，超限 413）。SDK 单请求必须按此上限分片，否则
+  // 恢复暂存批次时合并 >100 条必然 413，且 413 曾被当作可重试错误整批重试、
+  // 整批回写 localStorage，形成"毒批"自增强循环（事件永远无法送达）。
+  var _MAX_BATCH_EVENTS = 100;
   var _onSilentFailureReport = null;
 
   // ── V5 传输优化状态 ──
@@ -205,8 +210,14 @@
   }
 
   // ── V2 批量上报 ──
-  function _send(path, payload) {
-    if (!cfg.endpoint || !_shouldSample()) return;
+  function _send(path, payload, force) {
+    // FIX: P1-G2 —— 错误类上报豁免采样：sampleRate 此前对所有事件统一门控，
+    // 手动 reportError / reportSilentFailure / reportNetworkError 与全局异常捕获
+    // （window.onerror / unhandledrejection）在 sampleRate=0.5 时有一半概率
+    // 被无提示丢弃——业界惯例错误类事件不参与采样（采样面向高频遥测）。
+    // force=true 绕过采样；其余遥测（network / ui-event / console）保持原有
+    // 采样行为不变。
+    if (!cfg.endpoint || (!force && !_shouldSample())) return;
     var redacted = _redact(payload);
     _batchQueue.push({ path: path, payload: redacted });
 
@@ -271,8 +282,6 @@
       _batchTimer = null;
     }
 
-    var batch = _batchQueue.splice(0, _batchQueue.length);
-    var body = JSON.stringify({ events: batch });
     var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
 
     // 页面关闭/隐藏路径：必须同步冲刷，绝不能延迟到定时器（unload 后定时器不会触发）
@@ -285,27 +294,41 @@
       while (_pendingBatches.length > 0) {
         _sendBatchWithCompression(url, _pendingBatches.shift(), true);
       }
-      _sendBatchWithCompression(url, body, true);
-      return;
-    }
-
-    // V5 节流控制：检查是否在节流窗口内
-    var now = Date.now();
-    _batchTimestamps = _batchTimestamps.filter(function(ts) {
-      return now - ts < cfg.throttleWindowMs;
-    });
-
-    if (_batchTimestamps.length >= cfg.maxBatchesPerWindow) {
-      // 超过节流限制：入暂存队列，由单一定时器按间隔逐条错开发送（避免齐发尖峰）
-      _pendingBatches.push(body);
-      if (!_pendingTimer) {
-        var delay = cfg.throttleWindowMs - (now - _batchTimestamps[0]);
-        _pendingTimer = setTimeout(_drainPendingBatches, delay);
+      // FIX: CR-3 同样按服务端上限分片，避免恢复/积压场景单次 beacon 超 100 条被 413
+      while (_batchQueue.length > 0) {
+        var beaconBatch = _batchQueue.splice(0, _MAX_BATCH_EVENTS);
+        _sendBatchWithCompression(url, JSON.stringify({ events: beaconBatch }), true);
       }
       return;
     }
 
-    _sendBatchWithCompression(url, body, false);
+    // FIX: CR-3 按服务端 _MAX_BATCH_EVENTS(100) 分片发送：
+    // 每片独立走节流检查，超出节流限额的片进入 _pendingBatches 由
+    // _drainPendingBatches 定时器错开发送 —— 不丢数据也不触发 413。
+    while (_batchQueue.length > 0) {
+      var batch = _batchQueue.splice(0, _MAX_BATCH_EVENTS);
+      var body = JSON.stringify({ events: batch });
+
+      // V5 节流控制：检查是否在节流窗口内
+      var now = Date.now();
+      _batchTimestamps = _batchTimestamps.filter(function(ts) {
+        return now - ts < cfg.throttleWindowMs;
+      });
+
+      if (_batchTimestamps.length >= cfg.maxBatchesPerWindow) {
+        // 超过节流限制：入暂存队列，由单一定时器按间隔逐条错开发送（避免齐发尖峰）
+        _pendingBatches.push(body);
+        if (!_pendingTimer) {
+          var delay = cfg.throttleWindowMs - (now - _batchTimestamps[0]);
+          _pendingTimer = setTimeout(_drainPendingBatches, delay);
+        }
+        // 剩余分片一并交给暂存队列逐条错发：splice 已取出当前片，
+        // 后续循环继续取片入队，避免同窗口内齐发
+        continue;
+      }
+
+      _sendBatchWithCompression(url, body, false);
+    }
   }
 
   // 节流暂存批次按固定间隔逐条发送（每次只发 1 条，发完再续期），避免同一时刻齐发
@@ -431,6 +454,21 @@
     return status === 400 || status === 401 || status === 403;
   }
 
+  // FIX: CR-3 413 = 批次条数超过服务端上限（/ingest/batch 最多 100 条）。
+  // 整批重试毫无意义（重试同样大小的批次必然再次 413），且重试耗尽后把
+  // 整批回写 localStorage 会在下次启动时形成更大的"毒批"。
+  // 正确策略：对半拆分后作为两个独立请求重发，反复 413 时指数收敛到单条；
+  // 单条仍被拒（服务端上限被调低到 1 或事件本身异常）则丢弃，避免无限循环。
+  function _handleBatchTooLarge(url, body) {
+    var parsed;
+    try { parsed = JSON.parse(body); } catch (err) { return; }
+    var events = (parsed && Array.isArray(parsed.events)) ? parsed.events : [];
+    if (events.length <= 1) return; // 单条仍超限：丢弃（不无限重试）
+    var mid = Math.ceil(events.length / 2);
+    _sendBatchXhr(url, JSON.stringify({ events: events.slice(0, mid) }), 0);
+    _sendBatchXhr(url, JSON.stringify({ events: events.slice(mid) }), 0);
+  }
+
   // Parse Retry-After header (seconds)
   function _parseRetryAfter(xhr) {
     try {
@@ -468,7 +506,13 @@
       xhr.onreadystatechange = function () {
         if (xhr.readyState !== 4) return;
         if (xhr.status >= 200 && xhr.status < 300) return; // success
-        
+
+        // FIX: CR-3 批次过大（413）：拆分重发，不整批重试
+        if (xhr.status === 413) {
+          _handleBatchTooLarge(url, body);
+          return;
+        }
+
         // Fast abort on non-retryable client error
         if (_isNonRetryableStatus(xhr.status)) {
           return;
@@ -514,6 +558,12 @@
         // 接收端拒绝 gzip（400/415）→ 用原始未压缩数据重发一次，避免发送损坏数据
         if (attempt === 0 && (xhr.status === 400 || xhr.status === 415)) {
           _sendBatchXhr(url, body, 0);
+          return;
+        }
+
+        // FIX: CR-3 批次过大（413）：拆分重发，不整批重试（body 为原始明文）
+        if (xhr.status === 413) {
+          _handleBatchTooLarge(url, body);
           return;
         }
 
@@ -651,6 +701,9 @@
       });
       
       if (_batchQueue.length > 0) {
+        // FIX: CR-3 所有暂存批次的事件合入队列后，由 _flushBatch 按
+        // _MAX_BATCH_EVENTS(100) 分片发送 —— 旧实现单次 flush 整个队列，
+        // 恢复 10 批 × 20 条 = 200 条时必然触发服务端 413 毒批循环。
         _flushBatch(false);
       }
     } catch (err) {
@@ -721,7 +774,7 @@
           user_agent: navigator ? navigator.userAgent : "",
           release: cfg.release || undefined,
         },
-      });
+      }, true);
       if (_onerror) _onerror.apply(this, arguments);
     };
 
@@ -739,7 +792,7 @@
           url: global.location ? global.location.href : "",
           release: cfg.release || undefined,
         },
-      });
+      }, true);
     });
   }
 
@@ -844,7 +897,7 @@
     return String(body);
   }
 
-  function _reportNetworkRecord(record) {
+  function _reportNetworkRecord(record, force) {
     try {
       if (record && record.url) {
         record.url = _redact(record.url);
@@ -870,7 +923,7 @@
         trace_id: _traceId,
         source: "browser-sdk",
         extra: { session_id: _sessionId },
-      });
+      }, force);
     } catch (e) {
     }
   }
@@ -1432,7 +1485,7 @@
       trace_id: silentPayload.trace_id,
       source: silentPayload.source,
       extra: silentPayload.extra,
-    });
+    }, true);
   }
 
   /**
@@ -1441,7 +1494,8 @@
    */
   function reportNetworkError(error) {
     var record = _normalizeNetworkError(error);
-    _reportNetworkRecord(record);
+    // FIX: P1-G2 —— 手动 API 豁免采样（force=true）
+    _reportNetworkRecord(record, true);
     _autoReportNetworkError(record);
   }
 
@@ -1462,7 +1516,7 @@
         url: global.location ? global.location.href : "",
         release: cfg.release || undefined,
       }, extra || {}),
-    });
+    }, true);
   }
 
   /**

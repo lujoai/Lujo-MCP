@@ -247,3 +247,99 @@ class TestCallLlmFallback:
         assert "fake LLM 调用失败" in str(excinfo.value)
         assert "fallback also down" in str(excinfo.value)
         assert client.chat.completions.create.call_count == 2
+
+
+class TestCreateCompletionBreaker:
+    """FIX: P1-B3 —— Agent LLM 调用接入熔断器。
+
+    熔断器默认关闭（circuit_breaker_enabled=False）：直连调用，行为与旧实现
+    完全一致；启用后经 analyzer 的 _call_async_through_breaker 执行（OPEN 时
+    CircuitBreakerError 快速失败，成功/失败计入共享状态机）。
+    """
+
+    @staticmethod
+    def _make_agent():
+        class FakeAgent(BaseAgent):
+            name = "fake"
+
+            async def run(self, ctx: AgentContext) -> AgentResult:
+                return AgentResult(agent_name=self.name, status=AgentStatus.SUCCESS, output={})
+
+        return FakeAgent()
+
+    @pytest.mark.asyncio
+    async def test_breaker_disabled_calls_directly(self, monkeypatch):
+        """熔断器未启用 → 直连调用（默认配置行为不变）。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.llm import analyzer as analyzer_mod
+
+        monkeypatch.setattr(
+            analyzer_mod, "_get_llm_circuit_breaker", lambda: None
+        )
+        agent = self._make_agent()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value="resp")
+
+        out = await agent._create_completion(client, "m", [], 0.3)
+        assert out == "resp"
+        client.chat.completions.create.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_breaker_enabled_goes_through_breaker(self, monkeypatch):
+        """启用熔断器 → 经 _call_async_through_breaker 执行（调用 1 次、计入计数）。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.llm import analyzer as analyzer_mod
+
+        calls = {"breaker": 0, "direct": 0}
+
+        async def fake_through_breaker(cb, coro_factory):
+            calls["breaker"] += 1
+            return await coro_factory()
+
+        monkeypatch.setattr(analyzer_mod, "_get_llm_circuit_breaker", lambda: object())
+        monkeypatch.setattr(analyzer_mod, "_call_async_through_breaker", fake_through_breaker)
+
+        agent = self._make_agent()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value="resp")
+
+        out = await agent._create_completion(client, "m", [], 0.3)
+        assert out == "resp"
+        assert calls["breaker"] == 1
+        client.chat.completions.create.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_breaker_open_fails_fast_without_retries(self, monkeypatch):
+        """熔断 OPEN（CircuitBreakerError）→ 快速失败：不重试、不打 fallback。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import pybreaker
+
+        from app.llm import analyzer as analyzer_mod
+
+        async def fake_through_breaker(cb, coro_factory):
+            raise pybreaker.CircuitBreakerError("open")
+
+        monkeypatch.setattr(analyzer_mod, "_get_llm_circuit_breaker", lambda: object())
+        monkeypatch.setattr(analyzer_mod, "_call_async_through_breaker", fake_through_breaker)
+
+        agent = self._make_agent()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock()
+
+        # CircuitBreakerError 不在可重试异常元组内 → 直接穿透 _call_llm（快速失败），
+        # 不消耗重试、不触发 fallback 调用
+        with pytest.raises(pybreaker.CircuitBreakerError):
+            await agent._call_llm(
+                client=client,
+                model="primary",
+                messages=[{"role": "user", "content": "hi"}],
+                temperature=0.3,
+                max_retries=3,
+                validate_fn=lambda content: {},
+                fallback_model="fallback",
+            )
+        # 熔断 OPEN 时不得发起任何真实 LLM 调用
+        client.chat.completions.create.assert_not_awaited()

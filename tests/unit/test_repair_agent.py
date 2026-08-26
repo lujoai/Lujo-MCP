@@ -299,3 +299,53 @@ class TestRepairAgentBuildMessages:
         assert "debug_experience" in user_content
         assert "quality_report" in user_content
         assert "exp-1" in user_content
+
+    def test_oversized_prompt_truncated_to_budget(self):
+        """FIX: P1-B1 —— 超预算 payload 截断到 max_context_tokens*3 字符。
+
+        debug_context 含原始 request body（上限 1MB）时 prompt 曾可达 MB 级
+        （超上下文、成本失控、agent_timeout 内必然失败）。
+        """
+        from app.config import settings
+
+        agent = RepairAgent()
+        ctx = AgentContext(
+            debug_context={"request_id": "req-big"},
+            repair_context={
+                "debug_context": {"request_id": "req-big", "input": "x" * 500_000},
+                "prior_analysis": None,
+                "vector_recall": [],
+                "debug_experience": None,
+                "git_context": [],
+                "quality_report": None,
+                "repair_plan": None,
+            },
+        )
+        messages = agent._build_messages(ctx)
+        user_content = messages[1]["content"]
+
+        budget = settings.max_context_tokens * 3
+        # 截断标记 + 换行 + 标记文本本身有少量字符开销
+        assert len(user_content) <= budget + 100, (
+            f"user content {len(user_content)} 未按预算 {budget} 截断"
+        )
+        assert "payload truncated" in user_content
+        assert "original 500198 chars" in user_content  # 标记含原始长度（500k payload + JSON 结构）
+
+    def test_normal_size_prompt_not_truncated(self):
+        """正常大小 payload 不截断（无标记、内容完整）。"""
+        agent = RepairAgent()
+        ctx = AgentContext(
+            debug_context={"request_id": "req-1"},
+            repair_context={
+                "debug_context": {"request_id": "req-1"},
+                "prior_analysis": None,
+                "vector_recall": [],
+                "debug_experience": None,
+                "git_context": [],
+                "quality_report": None,
+                "repair_plan": None,
+            },
+        )
+        messages = agent._build_messages(ctx)
+        assert "payload truncated" not in messages[1]["content"]

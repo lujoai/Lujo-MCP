@@ -1,4 +1,4 @@
-﻿"""PG 存储执行基础设施 —— 连接池、重连重试、熔断器、DDL 初始化、连接便捷封装。
+"""PG 存储执行基础设施 —— 连接池、重连重试、熔断器、DDL 初始化、连接便捷封装。
 
 从 pg_store.py 拆出（god object 重构）：本模块只关心"如何安全地拿到连接并执行 SQL"，
 不包含任何业务表 CRUD。5 个 PG*Store 类与 errors.py 聚合层均基于本模块。
@@ -152,8 +152,19 @@ def _get_conn(timeout: float = 5.0):
 
 
 def _safe_put(conn) -> None:
-    """归还连接到池（关闭/空连接安全跳过）。"""
+    """归还连接到池（关闭/空连接安全跳过）。
+
+    FIX: P1-D1 —— 归还前统一 rollback：异常路径（UniqueViolation/
+    ProgrammingError 等非 OperationalError）后连接可能停留在 aborted 事务
+    状态，直接归还会让下一个借出者恒抛 InFailedSqlTransaction（25P02 非
+    OperationalError 不触发重连）——连接永久中毒直至重启。psycopg2 在
+    无活动事务时 rollback() 为客户端空操作，正常路径零开销。
+    """
     if conn is not None and not conn.closed:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         _get_pool().putconn(conn)
 
 
@@ -216,6 +227,12 @@ def _ensure_init():
             _initialized = True
             logger.info("PostgreSQL 表初始化完成")
         finally:
+            # FIX: P1-D1 —— DDL 中途失败时连接处于 aborted 状态，归还前回滚
+            # 防止中毒连接进池（初始化失败本就上抛，回滚不影响错误传播）
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             pool.putconn(conn)
 
 
@@ -273,6 +290,18 @@ def _execute_with_retry(
                     except Exception:
                         pass
                     raise last_error
+            except psycopg2.Error:
+                # FIX: P1-D1 —— 非 OperationalError 的 SQL 业务异常
+                # （UniqueViolation/ProgrammingError/DataError 等）后连接停留在
+                # aborted 事务状态，直接归还池（调用方 finally _put）会让下一个
+                # 借出者恒抛 InFailedSqlTransaction——连接永久中毒直至重启。
+                # 此处回滚后原样抛出（不重试：业务错误重试无意义），调用方
+                # finally 归还的是已回滚的干净连接。
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
 
     cb = _get_pg_circuit_breaker()
     if cb:
@@ -341,6 +370,14 @@ def _query_with_retry(
                     except Exception:
                         pass
                     raise last_error
+            except psycopg2.Error:
+                # FIX: P1-D1 —— 同 _execute_with_retry：非 OperationalError 的
+                # SQL 异常回滚后原样抛出，防止中毒连接归还进池
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
 
     cb = _get_pg_circuit_breaker()
     if cb:

@@ -75,6 +75,7 @@ npm install -g @lujoai/lujo-mcp
 
 > 版本统一：app / npm / README / CHANGELOG / MCP serverInfo / git tag 均为 `0.6.7`。
 > v0.6.3~v0.6.7 为 v0.6.x 补丁线：安全组（embedding 脱敏 / verify_loop 安全门 / 限流键）、可用性组（stdio 坏输入 / 超时背压 / 事件循环阻塞 / async 双池）、正确性组（SDK 传输三件套 / LLM 指纹碰撞 / 流式绕熔断 / smoke_test 死锁 / sourcemap 缓存键）逐档修复。
+> **v0.6.8 候选（2026-08-26 工作区）**：第 6 轮全量代码审查 P0 五项（verify_loop 安全门字段错配 / 脱敏复合键缺口 / SDK 毒批循环 / XFF 限流绕过（新增 `TRUSTED_PROXY_COUNT`）/ add_log 明文入库）+ P1 十四项（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）已全部修复，测试基线 1231 → **1290**（JS 29 → **35**）。**⚠️ 反代部署升级后须配置 `TRUSTED_PROXY_COUNT`**（默认 0=不信任转发头；反代环境不配置则所有用户共享代理 IP 的限流桶）。P2 十六项待排期。
 > v0.6.0 为架构重构与生产就绪里程碑：god object 拆分、Prometheus 细粒度业务指标、生产部署套件。
 > 架构冻结（Architecture Frozen）：允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、RAG → Agent/Runtime/LLM/MCP。
 
@@ -387,7 +388,7 @@ python -m benchmark.runner quality        # QualityScorer 旁证评估
 | 指标      | 状态                                                                                                                                                                                                                                                                                                                             |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | MCP 工具数 | HTTP 18 / stdio 18（含 `repair_async` / `repair_result` / `resolve_stack`）                                                                                                                                                                                                                                                                   |
-| 测试基线    | 单元 `1231 passed / 6 skipped / 0 failed`（v0.6.7 基线）+ Browser SDK JS `29 passed`；单测已强制 memory 后端与 CI 一致。历史演进：992（v0.5.1 前）→ 1087 → 1134 → 1153 → 1161 → 1198 → 1207 → 1221 → **1231** |
+| 测试基线    | 单元 `1290 passed / 6 skipped / 0 failed`（v0.6.7 基线 1231 + 第 6 轮审查 P0+P1 修复新增 59 项，v0.6.8 候选工作区）+ Browser SDK JS `35 passed`；本地全量（unit+integration+e2e）**1419 tests / 1377 passed / 42 skipped / 0 failed / 0 errors**。历史演进：… → 1221 → **1231**（v0.6.7 发布）→ **1290**（v0.6.8 候选） |
 | 存储后端    | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境                                                                                                                                                                                                                                                                                    |
 | 稳定性能力   | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证                                                                                                                                                                                                                                                                    |
 | 安全能力    | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护                                                                                                                                                                                                                                               |

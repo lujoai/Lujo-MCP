@@ -143,6 +143,20 @@ class RepairAgent(BaseAgent):
             "prior_repair_plan": repair_ctx.get("repair_plan"),
         }
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
+
+        # FIX: P1-B1 —— Agent 链路的 prompt 大小上限。
+        # analyzer 链路有 truncate_context（max_context_tokens 预算），Agent 链路
+        # 此前完全没有：debug_context 含原始 request body（上限 max_body_size=1MB）
+        # 时 prompt 可达 MB 级 → 超上下文报错、成本失控、agent_timeout 内必然失败。
+        # 预算与 truncate_context 同源（max_tokens * 3 字符，1 token ≈ 3 字符）；
+        # 正常大小的 payload 不受影响（仅超预算时截断）。
+        max_chars = settings.max_context_tokens * 3
+        if len(user_content) > max_chars:
+            user_content = (
+                user_content[:max_chars]
+                + f"\n...(payload truncated, original {len(user_content)} chars)"
+            )
+
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": wrap_evidence(user_content)},

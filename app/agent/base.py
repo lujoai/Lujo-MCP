@@ -104,6 +104,44 @@ class BaseAgent(ABC):
             finished_at=cls._now(),
         )
 
+    async def _create_completion(
+        self,
+        client: AsyncOpenAI,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+    ):
+        """单次 chat.completions.create 调用。
+
+        FIX: P1-B3 —— Agent 链路接入 analyzer 的 LLM 熔断器。此前 Agent 的
+        LLM 调用完全绕过熔断器（与三个 Agent 文档串"熔断器自动覆盖"的声明
+        相反）：LLM 宕机时队列 K worker × 重试 × fallback 持续打满。
+        - 熔断 OPEN 时抛 CircuitBreakerError 快速失败（不重试、不打满队列）；
+        - 成功/失败计入熔断计数，与 analyzer 主链路共享同一状态机；
+        - 熔断器未启用（circuit_breaker_enabled=False，默认）或 pybreaker
+          不可用时直连调用，行为与旧实现完全一致。
+        """
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            from app.llm.analyzer import (
+                _call_async_through_breaker,
+                _get_llm_circuit_breaker,
+            )
+        except ImportError:
+            return await client.chat.completions.create(**kwargs)
+
+        cb = _get_llm_circuit_breaker()
+        if cb is None:
+            return await client.chat.completions.create(**kwargs)
+        return await _call_async_through_breaker(
+            cb, lambda: client.chat.completions.create(**kwargs)
+        )
+
     async def _call_llm(
         self,
         client: AsyncOpenAI,
@@ -119,16 +157,17 @@ class BaseAgent(ABC):
         重试 RateLimitError / APITimeoutError / APIError；
         耗尽后尝试 fallback_model（若配置）；仍失败抛 RuntimeError。
         validate_fn 由各 Agent 传入自己的 _validate_* 函数。
+
+        FIX: P1-B3 —— 熔断开启（CircuitBreakerError）时不属于可重试错误，
+        直接快速失败（跳过重试与 fallback——熔断器已判定服务不可用，
+        继续调用只会拖长队列），由调用方按既有 FAILED 路径静默降级。
         """
         last_error: Optional[Exception] = None
 
         for attempt in range(max_retries + 1):
             try:
-                response = await client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    response_format={"type": "json_object"},
+                response = await self._create_completion(
+                    client, model, messages, temperature
                 )
                 choice = response.choices[0]
                 content = choice.message.content or "{}"
@@ -158,11 +197,8 @@ class BaseAgent(ABC):
                 self.name, model, fallback_model,
             )
             try:
-                response = await client.chat.completions.create(
-                    model=fallback_model,
-                    messages=messages,
-                    temperature=temperature,
-                    response_format={"type": "json_object"},
+                response = await self._create_completion(
+                    client, fallback_model, messages, temperature
                 )
                 choice = response.choices[0]
                 content = choice.message.content or "{}"

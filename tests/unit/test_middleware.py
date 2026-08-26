@@ -147,6 +147,228 @@ class TestEndpointRateLimit:
 
 
 # ---------------------------------------------------------------------------
+# FIX: A1 —— XFF 伪造绕过限流（trusted_proxy_count 可信代理模式）
+# ---------------------------------------------------------------------------
+
+def _ip_request(peer: str, headers: dict | None = None):
+    """构造最小 Request 桩：_get_client_ip 只访问 client.host 与 headers.get()。"""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        client=SimpleNamespace(host=peer),
+        headers={k.lower(): v for k, v in (headers or {}).items()},
+    )
+
+
+class TestClientIpResolution:
+    """A1 回归：限流键的客户端 IP 解析不得信任可伪造的转发头首段。"""
+
+    def test_default_config_ignores_forged_xff(self, monkeypatch):
+        """trusted_proxy_count=0（默认）：伪造 XFF 不得改变限流键 —— A1 核心。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 0)
+        req = _ip_request(
+            "203.0.113.99",
+            {"X-Forwarded-For": "1.2.3.4", "X-Real-IP": "5.6.7.8"},
+        )
+        # 旧实现返回伪造的 1.2.3.4 → 每请求换一个伪造 IP 即绕过限流
+        assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.99"
+
+    def test_trusted_proxy_resolves_real_client(self, monkeypatch):
+        """count=1 + 私网对端（自有反代）：取 XFF 从右数第 2 个为客户端 IP。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+        req = _ip_request(
+            "192.168.1.10",
+            {"X-Forwarded-For": "203.0.113.5, 192.168.1.10"},
+        )
+        assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.5"
+
+    def test_trusted_proxy_multi_hop(self, monkeypatch):
+        """count=2（两层代理）：跳过右起 2 段取真实客户端。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 2)
+        req = _ip_request(
+            "172.16.0.5",
+            {"X-Forwarded-For": "203.0.113.5, 10.0.0.1, 172.16.0.5"},
+        )
+        assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.5"
+
+    def test_trusted_proxy_public_peer_ignores_xff(self, monkeypatch):
+        """count=1 但对端是公网直连：XFF 视为伪造，忽略。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+        req = _ip_request(
+            "8.8.8.8",  # 攻击者公网直连（非自有反代）
+            {"X-Forwarded-For": "1.2.3.4, 5.6.7.8"},
+        )
+        assert RateLimitMiddleware._get_client_ip(req) == "8.8.8.8"
+
+    def test_forged_leftmost_segment_not_trusted(self, monkeypatch):
+        """攻击者在 XFF 最左伪造额外段：解析结果不受影响（只取右起第 N+1 段）。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+        req = _ip_request(
+            "192.168.1.10",
+            {"X-Forwarded-For": "1.2.3.4, 203.0.113.5, 192.168.1.10"},
+        )
+        # 右起第 2 段是 203.0.113.5（真实客户端），伪造的 1.2.3.4 被忽略
+        assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.5"
+
+    def test_insufficient_xff_falls_back_to_x_real_ip(self, monkeypatch):
+        """XFF 条目不足以越过可信代理数 → 回退 X-Real-IP。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+        req = _ip_request(
+            "192.168.1.10",
+            {"X-Forwarded-For": "203.0.113.5", "X-Real-IP": "198.51.100.7"},
+        )
+        assert RateLimitMiddleware._get_client_ip(req) == "198.51.100.7"
+
+    def test_invalid_xff_candidate_falls_back(self, monkeypatch):
+        """候选段不是合法 IP → 回退 X-Real-IP，再回退对端 IP。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+        req = _ip_request(
+            "192.168.1.10",
+            {"X-Forwarded-For": "not-an-ip, 192.168.1.10", "X-Real-IP": "198.51.100.7"},
+        )
+        assert RateLimitMiddleware._get_client_ip(req) == "198.51.100.7"
+
+    def test_no_forward_headers_returns_peer(self, monkeypatch):
+        """无任何转发头：返回直连对端 IP。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+        req = _ip_request("10.0.0.5")
+        assert RateLimitMiddleware._get_client_ip(req) == "10.0.0.5"
+
+    def test_missing_client_returns_unknown(self, monkeypatch):
+        """无 client 信息（TestClient 边界场景）：兜底 unknown，不抛异常。"""
+        from types import SimpleNamespace
+
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 0)
+        req = SimpleNamespace(client=None, headers={})
+        assert RateLimitMiddleware._get_client_ip(req) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# FIX: P1-A4 —— 限流 key 用路由模板（动态段端点共享桶，防轮换 ID 绕过）
+# ---------------------------------------------------------------------------
+
+def _scope(app, method: str, path: str):
+    """构造最小 http scope：_get_route_template 只需要 app/method/path。"""
+    return {
+        "type": "http",
+        "app": app,
+        "method": method,
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+    }
+
+
+class TestRouteTemplateResolution:
+    """A4 回归：限流 key 的路由模板归一化。"""
+
+    def _make_app(self):
+        from fastapi import FastAPI
+
+        app = FastAPI()
+
+        @app.get("/ingest/network/{trace_id}")
+        def _network(trace_id: str):  # pragma: no cover - 仅注册路由
+            return {}
+
+        @app.get("/api/dashboard/traces")
+        def _static():  # pragma: no cover
+            return {}
+
+        return app
+
+    def test_dynamic_path_normalized_to_template(self):
+        """动态段路径 → 路由模板（不同 ID 得到同一 key）。"""
+        from fastapi import Request
+
+        from app.middleware import RateLimitMiddleware
+
+        app = self._make_app()
+        for tid in ("abc123", "def456", "rec-xyz789abc123"):
+            req = Request(_scope(app, "GET", f"/ingest/network/{tid}"))
+            assert RateLimitMiddleware._get_route_template(req) == "/ingest/network/{trace_id}"
+
+    def test_static_path_unchanged(self):
+        """静态路径：模板 == 原始 path（行为不变）。"""
+        from fastapi import Request
+
+        from app.middleware import RateLimitMiddleware
+
+        app = self._make_app()
+        req = Request(_scope(app, "GET", "/api/dashboard/traces"))
+        assert RateLimitMiddleware._get_route_template(req) == "/api/dashboard/traces"
+
+    def test_method_mismatch_still_resolves_template(self):
+        """方法不匹配（PARTIAL）也按路径模板聚合（限流按路径聚合）。"""
+        from fastapi import Request
+
+        from app.middleware import RateLimitMiddleware
+
+        app = self._make_app()
+        req = Request(_scope(app, "POST", "/api/dashboard/traces"))
+        assert RateLimitMiddleware._get_route_template(req) == "/api/dashboard/traces"
+
+    def test_unknown_path_falls_back_to_raw(self):
+        """404 路径：回退原始 path（保守）。"""
+        from fastapi import Request
+
+        from app.middleware import RateLimitMiddleware
+
+        app = self._make_app()
+        req = Request(_scope(app, "GET", "/no/such/route"))
+        assert RateLimitMiddleware._get_route_template(req) == "/no/such/route"
+
+    def test_no_app_in_scope_falls_back_to_raw(self):
+        """scope 无 app：回退原始 path，不抛异常。"""
+        from fastapi import Request
+
+        from app.middleware import RateLimitMiddleware
+
+        req = Request(_scope(None, "GET", "/ingest/network/abc"))
+        assert RateLimitMiddleware._get_route_template(req) == "/ingest/network/abc"
+
+    def test_dynamic_ids_share_rate_limit_bucket(self, monkeypatch):
+        """行为验证：轮换动态 ID 不再各自成桶 —— 同模板共享限额。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "rate_limit_per_minute", 2)
+        app = FastAPI()
+        app.add_middleware(RateLimitMiddleware)
+
+        @app.get("/items/{item_id}")
+        def _items(item_id: str):
+            return {"ok": True}
+
+        client = TestClient(app)
+        # 旧实现：3 个不同 ID = 3 个独立桶，全部 200（限流被绕过）
+        # 新实现：同模板共享桶，第 3 次触发 429
+        assert client.get("/items/a").status_code == 200
+        assert client.get("/items/b").status_code == 200
+        assert client.get("/items/c").status_code == 429
+
+
+# ---------------------------------------------------------------------------
 # SEC-07: 限流 fail-closed（Redis 不可用 → 429）
 # ---------------------------------------------------------------------------
 

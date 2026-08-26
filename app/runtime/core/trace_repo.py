@@ -22,75 +22,20 @@ C3/C4 修复（v0.3.0 Release Audit）：
 import time
 import uuid
 import logging
-import threading
-from typing import Any, Optional
+from typing import Optional
 
-from app.config import settings
 from app.runtime.core.logs import add_log, add_logs_batch, get_logs
 from app.runtime.core.errors import record as _record_error, get_by_id as _get_error, get_latest as _get_latest
-from app.runtime.core.redaction import redact
+# FIX: A2 —— 键名判定/嵌套脱敏统一下沉到 redaction 模块（logs.add_log 等
+# 直接写存储的路径此前无法复用本模块内联实现，导致原始 payload 明文入库）
+from app.runtime.core.redaction import redact, redact_nested
 
 logger = logging.getLogger("lujo-mcp.trace_repo")
 _MAX_RETRY_ATTEMPTS = 3
 _RETRY_DELAY_SECONDS = 0.1
 
-# Phase 2：复合键名脱敏扩展
-# 敏感子串集合：键名（小写）包含任一子串即视为敏感键，
-# 覆盖 db_password / user_token / auth_header / secret_config 等复合键名。
-_SENSITIVE_SUBSTRINGS = {
-    "password",
-    "passwd",
-    "pwd",
-    "token",
-    "secret",
-    "key",
-    "auth",
-    "cookie",
-}
-
-# 内置白名单：含敏感子串但属于正常字段（不应脱敏）。
-# password_hash=哈希后密码（非明文）、public_key=公钥（非私钥）、
-# key_count/key_id/key_type=键数量/标识/类型（非密钥本身）。
-_DEFAULT_ALLOWLIST = {
-    "password_hash",
-    "public_key",
-    "key_count",
-    "key_id",
-    "key_type",
-}
-
-# 白名单缓存（按配置签名，配置变化时重建）
-_allowlist_cache: Optional[set[str]] = None
-_allowlist_signature: Optional[str] = None
-_allowlist_lock = threading.Lock()
-
-
-def _get_allowlist() -> set[str]:
-    """获取生效的白名单（内置默认 + 用户配置 redaction_key_allowlist）。配置变化时重建。"""
-    global _allowlist_cache, _allowlist_signature
-    raw = settings.redaction_key_allowlist or ""
-    if _allowlist_cache is not None and _allowlist_signature == raw:
-        return _allowlist_cache
-    with _allowlist_lock:
-        if _allowlist_cache is not None and _allowlist_signature == raw:
-            return _allowlist_cache
-        base = set(_DEFAULT_ALLOWLIST)
-        for name in raw.split(","):
-            name = name.strip().lower()
-            if name:
-                base.add(name)
-        _allowlist_cache = base
-        _allowlist_signature = raw
-        return base
-
-
-def _is_sensitive_key(key) -> bool:
-    """判断键名是否敏感：白名单优先（命中不脱敏），其次子串包含匹配。"""
-    key_lower = str(key).lower()
-    if key_lower in _get_allowlist():
-        return False
-    return any(s in key_lower for s in _SENSITIVE_SUBSTRINGS)
-
+# Phase 2：复合键名脱敏扩展 —— 敏感子串/白名单/嵌套递归实现已统一下沉至
+# app.runtime.core.redaction（is_sensitive_key / redact_nested），本模块仅消费。
 
 # trace 条目 step 命名
 _STEP_DATA = "trace_data"       # 完整异常数据（C4：落库到 trace_store）
@@ -103,25 +48,6 @@ _STEP_CONSOLE = "console"
 
 def _new_id(prefix: str = "rec") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
-
-
-def _redact_nested(value: Any) -> Any:
-    """递归脱敏 frames / extra 等嵌套结构中的字符串值。"""
-    if isinstance(value, dict):
-        sanitized = {}
-        for key, item in value.items():
-            if _is_sensitive_key(key):
-                sanitized[key] = "***REDACTED***"
-            else:
-                sanitized[key] = _redact_nested(item)
-        return sanitized
-    if isinstance(value, list):
-        return [_redact_nested(item) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_nested(item) for item in value]
-    if isinstance(value, str):
-        return redact(value) or value
-    return value
 
 
 # ── trace（异常/静默失败）──
@@ -144,7 +70,7 @@ def save_trace(
     记录在 error_id 下，用于审计与反向查询，但不再作为返回值或存储 key。
     """
     extra = extra or {}
-    frames = _redact_nested(frames or [])
+    frames = redact_nested(frames or [])
     exc_data = {
         "type": exc_type,
         "message": redact(message) or "",
@@ -163,7 +89,7 @@ def save_trace(
         _STEP_META,
         {
             "trace_kind": trace_kind,
-            "extra": _redact_nested(extra),
+            "extra": redact_nested(extra),
             "error_id": error_id,
             "ts": time.time(),
         },
@@ -314,11 +240,11 @@ def save_network_record(
     payload["timestamp"] = payload.get("timestamp") or time.time()
     payload["direction"] = payload.get("direction") or "outbound"
     # 入库前脱敏（FIX: P1-6 request/response body 可能是 dict/list，递归脱敏）
-    payload["url"] = _redact_nested(payload.get("url"))
-    payload["request_body"] = _redact_nested(payload.get("request_body"))
-    payload["response_body"] = _redact_nested(payload.get("response_body"))
+    payload["url"] = redact_nested(payload.get("url"))
+    payload["request_body"] = redact_nested(payload.get("request_body"))
+    payload["response_body"] = redact_nested(payload.get("response_body"))
     if extra:
-        payload["extra"] = _redact_nested(extra)
+        payload["extra"] = redact_nested(extra)
 
     add_log(key, _STEP_NETWORK, payload)
     return record_id
@@ -347,10 +273,10 @@ def save_ui_event(
     payload["timestamp"] = payload.get("timestamp") or time.time()
     payload["event_type"] = payload.get("event_type") or "click"
     # 入库前脱敏（FIX: P1-6 payload_json 可能是 dict/list，递归脱敏）
-    payload["route_path"] = _redact_nested(payload.get("route_path"))
-    payload["payload_json"] = _redact_nested(payload.get("payload_json"))
+    payload["route_path"] = redact_nested(payload.get("route_path"))
+    payload["payload_json"] = redact_nested(payload.get("payload_json"))
     if extra:
-        payload["extra"] = _redact_nested(extra)
+        payload["extra"] = redact_nested(extra)
 
     add_log(key, _STEP_UI, payload)
     return event_id
@@ -383,11 +309,11 @@ def save_console_log(
         "timestamp": time.time(),
         "level": level or "info",
         # FIX: P1-6 message 可能含敏感键值，统一递归脱敏
-        "message": _redact_nested(message),
+        "message": redact_nested(message),
         "source": source,
     }
     if extra:
-        payload["extra"] = _redact_nested(extra)
+        payload["extra"] = redact_nested(extra)
 
     add_log(key, _STEP_CONSOLE, payload)
     return record_id

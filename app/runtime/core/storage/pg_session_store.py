@@ -29,7 +29,13 @@ class PGSessionStore(SessionStorage):
         return _get_conn()
 
     def _put(self, conn):
+        # FIX: P1-D1 —— 归还前 rollback 防止 aborted 事务连接中毒进池
+        # （psycopg2 无活动事务时 rollback 为客户端空操作）
         if conn is not None and not conn.closed:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             _get_pool().putconn(conn)
 
     def save(self, session_id: str, data: dict) -> None:

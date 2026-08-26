@@ -226,9 +226,20 @@ async def ingest_batch(request: Request):
         logger.error(f"Failed to parse request body: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid request body")
 
+    # FIX: P1-A3 畸形 JSON 结构校验——顶层非对象（如 [1,2] / "abc" / 123）时
+    # req.get 抛 AttributeError、events 元素非 dict 时 event.get 在 try 块外
+    # 抛 AttributeError，均退化为未捕获 500 + 完整堆栈日志（可被滥用于日志洪水）。
+    # 现按 422 语义化拒绝。
+    if not isinstance(req, dict):
+        raise HTTPException(status_code=422, detail="Request body must be a JSON object")
+
     events = req.get("events", [])
     if not isinstance(events, list):
         events = [events] if events else []
+
+    # FIX: P1-A3 events 元素必须为 dict（{"events":[1]} 曾触发 500）
+    if any(not isinstance(event, dict) for event in events):
+        raise HTTPException(status_code=422, detail="Each event must be a JSON object")
 
     # FIX: P3-6 条数上限（含非 list 被包装为单元素后的情况）
     if len(events) > _MAX_BATCH_EVENTS:

@@ -115,6 +115,102 @@ async def test_delete_session_closes_sse_subscribers():
     assert hub.subscriber_count(session_id) == 0
 
 
+# ── FIX: P1-C4 —— MCP SSE 心跳（防反代空闲断流 + 刷新会话活跃时间）────
+# 说明：与 test_dashboard_sse_stream.py 同理，SSE 流式测试直接驱动
+# body_iterator（绕过 HTTP 层）——TestClient 的 httpx ASGITransport 与
+# BaseHTTPMiddleware 在无限流场景下存在兼容性问题（会挂起）。
+
+
+def _sse_request(session_id: str):
+    """构造 GET /mcp SSE 请求桩（仅 headers 参与 mcp_get 逻辑）。"""
+    from starlette.requests import Request
+
+    return Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"mcp-session-id", session_id.encode()),
+                (b"accept", b"text/event-stream"),
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_emits_heartbeat_and_refreshes_session(monkeypatch):
+    """空闲 SSE 流周期性发送 `: ping` 注释行心跳，且心跳刷新会话 last_active。
+
+    旧实现 q.get() 无限期等待：反代 60s 空闲即断流；纯监听会话 30 分钟后被
+    TTL 清理踢下线。心跳间隔经模块常量缩短以避免真实等待。
+    """
+    from app.api import mcp_routes
+    from app.mcp.transports.session import MCPSession
+
+    monkeypatch.setattr(mcp_routes, "_SSE_HEARTBEAT_SECONDS", 0.05)
+    sid = "hb-test-session"
+    registry._sessions[sid] = MCPSession(session_id=sid)
+    base_active = registry._sessions[sid].last_active
+    await asyncio.sleep(0.01)
+
+    response = None
+    try:
+        response = await mcp_routes.mcp_get(_sse_request(sid))
+        assert response.status_code == 200
+        assert "text/event-stream" in response.media_type
+
+        saw_ping = False
+        async for chunk in response.body_iterator:
+            text = chunk.decode() if isinstance(chunk, bytes) else chunk
+            if ": ping" in text:
+                saw_ping = True
+                break
+        assert saw_ping, "空闲 SSE 流应周期性发送 : ping 心跳"
+
+        # 心跳刷新了会话活跃时间（大于订阅前基准）
+        assert registry._sessions[sid].last_active > base_active
+    finally:
+        # 终止流（close 事件让生成器退出 → finally unsubscribe）
+        hub.close_session(sid)
+        if response is not None:
+            async for _ in response.body_iterator:
+                pass
+        registry._sessions.pop(sid, None)
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_delivers_messages_between_heartbeats(monkeypatch):
+    """心跳不干扰正常消息投递：有消息时即时下发，非等满心跳间隔。"""
+    from app.api import mcp_routes
+    from app.mcp.transports.session import MCPSession
+
+    monkeypatch.setattr(mcp_routes, "_SSE_HEARTBEAT_SECONDS", 15.0)
+    sid = "hb-test-session-2"
+    registry._sessions[sid] = MCPSession(session_id=sid)
+
+    try:
+        response = await mcp_routes.mcp_get(_sse_request(sid))
+        it = response.body_iterator.__aiter__()
+
+        first = await it.__anext__()
+        first_text = first.decode() if isinstance(first, bytes) else first
+        assert ": connected" in first_text
+
+        # 发布一条 JSON-RPC 响应（同事件循环线程，sleep(0) 让投递回调执行）
+        hub.publish(sid, {"jsonrpc": "2.0", "id": 2, "result": {}})
+        await asyncio.sleep(0)
+
+        second = await it.__anext__()
+        second_text = second.decode() if isinstance(second, bytes) else second
+        assert '"id"' in second_text and '"result"' in second_text
+        # 不是心跳（即时投递，未等 15s 心跳间隔）
+        assert ": ping" not in second_text
+    finally:
+        hub.close_session(sid)
+        async for _ in response.body_iterator:
+            pass
+        registry._sessions.pop(sid, None)
+
+
 def test_initialize_with_existing_session_creates_new():
     """P3-8: initialize 携带已有 session_id 时必须新建会话，而非复用（防会话固定/通知流劫持）。"""
     client = _client()

@@ -253,3 +253,52 @@ class TestDashboardCache:
             mock_time.monotonic.return_value = 100.0 + dashboard_module._CACHE_TTL + 1
             dashboard_module._collect_all_traces(limit=10)
             assert dashboard_module._cache["all_traces"][0] == 100.0 + dashboard_module._CACHE_TTL + 1
+
+
+# ---------------------------------------------------------------------------
+# FIX: P1-E1 —— 缓存不被首个请求的 limit 固化
+# ---------------------------------------------------------------------------
+
+
+class TestDashboardCacheLimitIsolation:
+    """E1 回归：小 limit 先缓存，大 limit 后命中不得返回截断数据。"""
+
+    def test_small_then_large_limit_returns_full(self):
+        """先 limit=1（缓存 1000 条）再 limit=1000：缓存命中返回完整数据。
+
+        旧实现：首个请求按 limit=1 计算并缓存 → 后续大 limit 命中缓存
+        `cached[:1000]` 却只有 1 条。
+        """
+        # 造 3 条 trace 数据
+        for i in range(3):
+            trace_repo.save_trace(
+                f"ValueError{i}", f"msg-{i}",
+                [{"file": "a.py", "line": 1, "function": "f"}],
+                source="test",
+            )
+
+        first = dashboard_module._collect_all_traces(limit=1)
+        assert len(first) == 1  # 小 limit 正常切片
+
+        # 缓存里存的是完整数据（≥3 条），不是被 limit=1 截断的
+        cached_result = dashboard_module._cache["all_traces"][1]
+        assert len(cached_result) >= 3
+
+        # 大 limit 命中缓存：返回完整数据（旧实现此处只返回 1 条）
+        second = dashboard_module._collect_all_traces(limit=1000)
+        assert len(second) >= 3
+
+    def test_cached_result_independent_of_first_caller_limit(self):
+        """缓存内容长度与首个调用方的 limit 无关（按最大档 1000 计算）。"""
+        trace_repo.save_trace(
+            "ValueError", "msg",
+            [{"file": "a.py", "line": 1, "function": "f"}],
+            source="test",
+        )
+        dashboard_module._collect_all_traces(limit=2)
+        cached_result = dashboard_module._cache["all_traces"][1]
+        # 缓存未被 limit=2 截断（至少含刚造的 1 条且长度不等于 2 的钳制）
+        assert len(cached_result) >= 1
+        # 再以任意 limit 取，均从同一份完整缓存切片
+        assert dashboard_module._collect_all_traces(limit=1) == cached_result[:1]
+        assert dashboard_module._collect_all_traces(limit=5) == cached_result[:5]

@@ -328,6 +328,22 @@ class TestEmbedTexts:
     def test_embed_empty_texts_returns_empty(self):
         assert _embed_texts([]) == []
 
+    def test_redact_for_embedding_compound_keys_masked(self):
+        """CR-2 回归：embedding 外发文本中的下划线复合敏感键必须脱敏。"""
+        from app.rag.qdrant_vector_store import _redact_for_embedding
+
+        out = _redact_for_embedding(
+            "auth failed refresh_token=eyJsecret client_secret=cs-1"
+        )
+        assert "eyJsecret" not in out
+        assert "cs-1" not in out
+        assert 'refresh_token="***"' in out
+        assert 'client_secret="***"' in out
+
+        out2 = _redact_for_embedding('{"session_token":"st-1"}')
+        assert "st-1" not in out2
+        assert '"session_token":"***"' in out2
+
     def test_embed_client_unavailable_returns_none(self, monkeypatch):
         monkeypatch.setattr(qdrant_module, "_get_embedding_client", lambda: None)
         assert _embed_texts(["text"]) is None

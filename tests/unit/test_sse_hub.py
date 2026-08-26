@@ -207,3 +207,123 @@ async def test_close_session_drops_oldest_when_queue_full(hub, mock_session):
     # 第一项已被移出，最后一项必须是 _CLOSE_EVENT
     assert hub.is_close_event(items[-1])
     assert items[0]["msg"] == "data-1"
+
+
+# ── FIX: P1-C3 —— 队列满时按消息类别分级丢弃（响应不可丢）─────────────
+
+
+def _notification(seq):
+    """通知类消息：有 method 无 id。"""
+    return {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"seq": seq}}
+
+
+def _response(rid):
+    """响应类消息：有 id 无 method（客户端在等待匹配该 id）。"""
+    return {"jsonrpc": "2.0", "id": rid, "result": {"ok": True}}
+
+
+@pytest.mark.asyncio
+async def test_is_response_classification(hub):
+    """消息分类：带 id 无 method = 响应；带 method = 通知；close 控制事件 = 非响应。"""
+    assert hub._is_response(_response(1)) is True
+    assert hub._is_response({"jsonrpc": "2.0", "id": 1, "error": {"code": -32600}}) is True
+    assert hub._is_response(_notification(1)) is False
+    # server→client 请求（id + method）按通知类处理（当前服务端不发请求）
+    assert hub._is_response({"jsonrpc": "2.0", "id": 1, "method": "x"}) is False
+    assert hub._is_response(_CLOSE_EVENT) is False
+    assert hub._is_response("not-a-dict") is False
+
+
+@pytest.mark.asyncio
+async def test_response_never_dropped_while_notification_evictable(hub, mock_session):
+    """队列满时发布响应：挤掉最旧通知腾位，全部在途响应保留。"""
+    q = hub.subscribe(mock_session)
+
+    # 前半通知、后半响应，填满 256
+    for i in range(128):
+        q.put_nowait(_notification(i))
+    for i in range(128):
+        q.put_nowait(_response(i))
+    assert q.full()
+
+    hub.publish(mock_session, _response(999))
+    await asyncio.sleep(0)  # 执行 call_soon_threadsafe 回调
+
+    assert q.qsize() == SSEHub._QUEUE_MAXSIZE
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+
+    # 通知被挤掉 1 条（最旧的通知 0），其余通知全保留
+    notifications = [m for m in items if hub._is_response(m) is False]
+    assert len(notifications) == 127
+    assert all(m["params"]["seq"] != 0 for m in notifications)
+    # 全部 128 条在途响应 + 新响应 999 都在
+    responses = [m for m in items if hub._is_response(m)]
+    assert len(responses) == 129
+    assert items[-1]["id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_notification_dropped_when_queue_full_of_responses(hub, mock_session):
+    """队列全为在途响应时发布通知：丢本条通知，不丢任何响应。"""
+    q = hub.subscribe(mock_session)
+
+    for i in range(SSEHub._QUEUE_MAXSIZE):
+        q.put_nowait(_response(i))
+    assert q.full()
+
+    hub.publish(mock_session, _notification(42))
+    await asyncio.sleep(0)
+
+    # 通知未入队，响应一条不少
+    assert q.qsize() == SSEHub._QUEUE_MAXSIZE
+    ids = set()
+    while not q.empty():
+        ids.add(q.get_nowait()["id"])
+    assert len(ids) == SSEHub._QUEUE_MAXSIZE  # 0..255 全部响应保留
+
+
+@pytest.mark.asyncio
+async def test_response_dropped_only_when_queue_all_responses(hub, mock_session):
+    """队列全为在途响应时发布响应：丢弃最旧响应（记 error），新响应入队。"""
+    q = hub.subscribe(mock_session)
+
+    for i in range(SSEHub._QUEUE_MAXSIZE):
+        q.put_nowait(_response(i))
+    assert q.full()
+
+    hub.publish(mock_session, _response(999))
+    await asyncio.sleep(0)
+
+    assert q.qsize() == SSEHub._QUEUE_MAXSIZE
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    # 最旧响应（id=0）被挤掉，其余响应 + 新响应 999 在
+    ids = {m["id"] for m in items}
+    assert 0 not in ids
+    assert 999 in ids
+    assert len(items) == SSEHub._QUEUE_MAXSIZE
+
+
+@pytest.mark.asyncio
+async def test_close_event_always_delivered_when_full(hub, mock_session):
+    """队列满（无论内容）时 close 事件必须送达（P3-11 保证不回归）。"""
+    q = hub.subscribe(mock_session)
+
+    for i in range(SSEHub._QUEUE_MAXSIZE):
+        q.put_nowait(_response(i))
+    assert q.full()
+
+    closed = hub.close_session(mock_session)
+    assert closed == 1
+    await asyncio.sleep(0)
+
+    # 队列仍满（挤掉一条最旧响应），队尾为 close 事件
+    assert q.qsize() == SSEHub._QUEUE_MAXSIZE
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    assert hub.is_close_event(items[-1])
+    assert items[0]["id"] == 1  # 最旧响应 id=0 被挤掉

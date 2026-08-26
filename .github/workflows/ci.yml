@@ -89,4 +89,5 @@ jobs:
           browser-sdk/test/sdk-events.test.js
           browser-sdk/test/sdk-transport.test.js
           browser-sdk/test/sdk-transport-fixes.test.js
+          browser-sdk/test/sdk-batch-limit.test.js
 

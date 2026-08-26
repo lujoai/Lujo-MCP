@@ -228,3 +228,55 @@ def test_ingest_batch_exact_limit_ok():
     assert resp.status_code == 200
     assert resp.json()["count"] == 100
 
+
+# ── FIX: P1-A3 畸形 JSON 结构不产生 500 ──────────────────────────────
+
+
+def _batch_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_ingest_batch_top_level_array_returns_422():
+    """顶层 JSON 为数组（合法 JSON、非法结构）→ 422 而非 500。"""
+    client = _batch_client()
+    resp = client.post("/ingest/batch", json=[1, 2, 3])
+    assert resp.status_code == 422
+
+
+def test_ingest_batch_top_level_string_returns_422():
+    """顶层 JSON 为字符串 → 422 而非 500。"""
+    client = _batch_client()
+    resp = client.post("/ingest/batch", json="abc")
+    assert resp.status_code == 422
+
+
+def test_ingest_batch_non_dict_event_returns_422():
+    """events 元素非 dict（{"events":[1]}）→ 422 而非 500。"""
+    client = _batch_client()
+    resp = client.post("/ingest/batch", json={"events": [1]})
+    assert resp.status_code == 422
+
+
+def test_ingest_batch_mixed_bad_event_returns_422():
+    """events 混入非 dict 元素 → 422。"""
+    client = _batch_client()
+    resp = client.post("/ingest/batch", json={
+        "events": [{"path": "/ingest/error", "payload": {}}, "oops"]
+    })
+    assert resp.status_code == 422
+
+
+def test_ingest_batch_empty_events_still_ok():
+    """空 events 仍正常（非回归）。"""
+    client = _batch_client()
+    resp = client.post("/ingest/batch", json={"events": []})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+

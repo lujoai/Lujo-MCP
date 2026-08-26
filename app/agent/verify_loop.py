@@ -60,13 +60,14 @@ def compute_verify_score(result: dict[str, Any]) -> float:
     评分维度（权重合计 1.0）：
     - repair_plan 存在：+0.4
     - test_plan 存在且含 test_cases：+0.3
-    - security_review 存在且无 critical 发现：+0.2
+    - security_review 存在且无 high 风险（risks 与 overall_severity 双检）：+0.2
     - git_attribution 存在：+0.1
 
     任一维度缺失按 0 计，最终分值 = 各项得分之和。
 
-    SEC: 安全门——当 security_review 缺失（SecurityAgent 跳过/失败）或含 critical/high
-    发现时，score 上限钳制为 PARTIAL 阈值（含），确保 verdict 不会达到 PASSED/HIGH_CONFIDENCE，
+    SEC: 安全门——当 security_review 缺失（SecurityAgent 跳过/失败）、含 high 风险、
+    或 overall_severity 为 high/unknown 时，score 上限钳制为 PARTIAL 阈值（含），
+    确保 verdict 不会达到 PASSED/HIGH_CONFIDENCE，
     防止"安全审查缺失即绕过"。仍允许 PARTIAL 以继续迭代补全安全审查。
     """
     score = 0.0
@@ -81,15 +82,24 @@ def compute_verify_score(result: dict[str, Any]) -> float:
 
     security_review = result.get("security_review") or {}
     if security_review:
-        findings = security_review.get("findings") or []
-        critical = any(
-            str(f.get("severity", "")).lower() in ("critical", "high")
-            for f in findings
-        )
-        if not critical:
-            score += 0.2
-            security_pass = True
-    # security_review 缺失或含 critical → security_pass 保持 False
+        # FIX: CR-1 —— SecurityAgent 的输出契约是 risks/overall_severity
+        # （见 security_agent._validate_security_review），不存在 "findings" 键。
+        # 此前误读 findings 恒为空列表，导致含 high 风险的方案也能通过安全门。
+        # 形状防御：既无 risks 也无 overall_severity 键（如误传旧 findings 形态）
+        # 视为畸形输出，门不通过（fail-safe）。
+        if "risks" in security_review or "overall_severity" in security_review:
+            risks = security_review.get("risks") or []
+            has_high_risk = any(
+                str(r.get("severity", "")).lower() in ("critical", "high")
+                for r in risks
+                if isinstance(r, dict)
+            )
+            overall = str(security_review.get("overall_severity", "none")).lower()
+            # overall_severity 为 unknown（LLM 输出非法值）时同样视为不通过（fail-safe）
+            if not has_high_risk and overall not in ("high", "unknown"):
+                score += 0.2
+                security_pass = True
+    # security_review 缺失 / 畸形 / 含 high 风险 / overall 无法判定 → security_pass 保持 False
 
     if result.get("git_attribution"):
         score += 0.1

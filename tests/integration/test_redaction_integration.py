@@ -397,6 +397,67 @@ class TestSaveConsoleLogRedacts:
         assert log["level"] == "error"
 
 
+class TestAddLogRedactsPayload:
+    """FIX: A2 —— logs.add_log / add_logs_batch 直写路径的脱敏。
+
+    此前仅 trace_repo 的 save_* 系列在存储边界脱敏，add_log 直接透传
+    data（POST /debug 的 request_start 等入口把用户原始 payload 明文入库，
+    viewer 角色经 dashboard 即可读取）。
+    """
+
+    def test_add_log_payload_sensitive_keys_masked(self):
+        """add_log 的 data 含 password/token/复合敏感键 → 入库后掩码。"""
+        from app.runtime.core.logs import add_log, get_logs
+
+        request_id = _unique_trace_id("a2log")
+        add_log(request_id, "request_start", {
+            "user": "alice",
+            "password": "plain-secret",
+            "refresh_token": "eyJ-compound",
+            "nested": {"api_key": "sk-123", "ok": 1},
+        })
+
+        entries = get_logs(request_id)
+        data = entries[-1]["data"]
+        assert data["user"] == "alice"
+        assert data["password"] == "***REDACTED***"
+        assert data["refresh_token"] == "***REDACTED***"
+        assert data["nested"]["api_key"] == "***REDACTED***"
+        assert data["nested"]["ok"] == 1
+
+    def test_add_log_string_payload_regex_redacted(self):
+        """data 为字符串（JSON 序列化 payload）→ 走 redact() 正则路径。"""
+        import json
+
+        from app.runtime.core.logs import add_log, get_logs
+
+        request_id = _unique_trace_id("a2str")
+        add_log(request_id, "request_start", json.dumps({
+            "client_secret": "cs-1", "note": "hello"
+        }))
+
+        entries = get_logs(request_id)
+        data = entries[-1]["data"]
+        assert "cs-1" not in data
+        assert '"client_secret":"***"' in data
+        assert "hello" in data
+
+    def test_add_logs_batch_payloads_masked(self):
+        """add_logs_batch 批量直写路径同样脱敏。"""
+        from app.runtime.core.logs import add_logs_batch, get_logs
+
+        request_id = _unique_trace_id("a2batch")
+        add_logs_batch(request_id, [
+            ("step_a", {"session_token": "st-1"}),
+            ("step_b", {"public_key": "keep-me"}),  # 白名单字段保留
+        ])
+
+        entries = get_logs(request_id)
+        by_step = {e["step"]: e["data"] for e in entries}
+        assert by_step["step_a"]["session_token"] == "***REDACTED***"
+        assert by_step["step_b"]["public_key"] == "keep-me"
+
+
 class TestRedactionNonRegression:
     """脱敏策略的非回归边界用例 —— 验证非敏感数据不被误伤。"""
 

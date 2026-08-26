@@ -162,8 +162,18 @@ def _extract_trace_summary(request_id: str) -> dict | None:
 
 
 def _collect_all_traces(limit: int = 100) -> list[dict]:
-    """合并 errors 缓冲和 TraceStorage 中的 trace 摘要（带多级缓存 L1+L2）"""
+    """合并 errors 缓冲和 TraceStorage 中的 trace 摘要（带多级缓存 L1+L2）
+
+    FIX: P1-E1 —— 缓存按最大 limit（1000）计算并缓存完整结果，调用方按需切片。
+    此前按首个请求的 limit 计算并缓存整个 result：30s TTL 窗口内小 limit 请求
+    （如 10）先执行并缓存 10 条，后续大 limit 请求（如 1000）命中缓存
+    `cached[1][:1000]` 却只有 10 条——返回被首个请求截断的数据（L2 Redis
+    跨实例共享，污染面更大）。
+    """
     limit = min(max(limit, 1), 1000)
+    # 缓存计算/存储统一用最大档（与 limit 的钳制上限一致），保证缓存结果
+    # 对任意后续请求都足够长
+    cache_limit = 1000
 
     now = time.monotonic()
 
@@ -185,17 +195,17 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
         except Exception:
             logger.warning("Dashboard L2 Redis 缓存读取失败", exc_info=True)
 
-    # ── 计算 ──
+    # ── 计算（按 cache_limit，而非调用方 limit）──
     result = []
     seen_ids = set()
 
-    for err in errors.list_recent(limit=limit):
+    for err in errors.list_recent(limit=cache_limit):
         summary = _extract_error_summary(err)
         if summary and summary["trace_id"] not in seen_ids:
             result.append(summary)
             seen_ids.add(summary["trace_id"])
 
-    for rid in logs.list_request_ids(limit=limit):
+    for rid in logs.list_request_ids(limit=cache_limit):
         if rid not in seen_ids:
             summary = _extract_trace_summary(rid)
             if summary:
@@ -204,7 +214,7 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
 
     result.sort(key=lambda t: t.get("timestamp", 0), reverse=True)
 
-    # ── 写 L1 + L2 ──
+    # ── 写 L1 + L2（完整 cache_limit 长度）──
     _cache["all_traces"] = (now, result)
     if redis_client is not None:
         try:

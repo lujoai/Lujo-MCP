@@ -435,14 +435,15 @@ class TestUninstallGlobalHook:
         try:
             exception_hook.install_global_hook()
             assert sys.excepthook is not original  # 已被替换
-            assert exception_hook._installed is True
+            assert exception_hook._excepthook_installed is True
 
             exception_hook.uninstall_global_hook()
             assert sys.excepthook is original  # 恢复
-            assert exception_hook._installed is False
+            assert exception_hook._excepthook_installed is False
         finally:
             # 强制恢复，避免污染其他测试
-            exception_hook._installed = False
+            exception_hook._excepthook_installed = False
+            exception_hook._asyncio_installed = False
             exception_hook._original_hook = None
             exception_hook._original_asyncio_handler = None
             sys.excepthook = original
@@ -453,14 +454,91 @@ class TestUninstallGlobalHook:
         original = sys.excepthook
         try:
             # 未安装时调用 uninstall 不应抛异常
-            exception_hook._installed = False
+            exception_hook._excepthook_installed = False
+            exception_hook._asyncio_installed = False
             exception_hook.uninstall_global_hook()
             exception_hook.uninstall_global_hook()
             assert sys.excepthook is original
         finally:
             sys.excepthook = original
-            exception_hook._installed = False
+            exception_hook._excepthook_installed = False
+            exception_hook._asyncio_installed = False
             exception_hook._original_hook = None
+
+
+# ---------------------------------------------------------------------------
+# FIX: P1-D2 —— 两段式安装：无事件循环首装后，事件循环就绪时补装 asyncio handler
+# ---------------------------------------------------------------------------
+
+
+class TestTwoPhaseInstall:
+    """P1-D2 回归：单标志版在补装时直接 return，asyncio 捕获永久失效。"""
+
+    def test_asyncio_handler_installed_on_second_call_in_loop(self):
+        """无 loop 首装（仅 excepthook）→ 事件循环内再调用补装 asyncio handler。"""
+        import asyncio
+
+        from app.runtime.hooks import exception_hook
+
+        original = sys.excepthook
+
+        async def _scenario():
+            loop = asyncio.get_running_loop()
+            loop_handler_before = loop.get_exception_handler()
+
+            # 构造"无 loop 首装后"的状态：excepthook 已装、asyncio 未装
+            # （等价于 install_global_hook 在无事件循环上下文执行的路径：
+            #   excepthook 置位 + asyncio RuntimeError 跳过）
+            exception_hook._excepthook_installed = True
+            exception_hook._original_hook = original
+            exception_hook._asyncio_installed = False
+            exception_hook._original_asyncio_handler = None
+            sys.excepthook = original
+
+            # 第二段：事件循环就绪后再调用 install_global_hook 补装
+            exception_hook.install_global_hook()
+
+            # 旧实现（单一 _installed 标志）此处直接 return，asyncio 永不补装
+            assert exception_hook._asyncio_installed is True
+            assert loop.get_exception_handler() is not None
+            assert loop.get_exception_handler() is not loop_handler_before
+
+        try:
+            asyncio.run(_scenario())
+        finally:
+            # 清理（_scenario 的 loop 已随 asyncio.run 关闭）
+            exception_hook._excepthook_installed = False
+            exception_hook._asyncio_installed = False
+            exception_hook._original_hook = None
+            exception_hook._original_asyncio_handler = None
+            sys.excepthook = original
+
+    def test_both_installed_second_call_is_noop(self):
+        """两部分均已安装时再调用为纯幂等 no-op（不二次包裹 excepthook）。"""
+        import asyncio
+
+        from app.runtime.hooks import exception_hook
+
+        original = sys.excepthook
+
+        async def _scenario():
+            exception_hook.install_global_hook()
+            hook_once = sys.excepthook
+            handler_once = asyncio.get_running_loop().get_exception_handler()
+
+            # 再次调用：excepthook 不被二次包裹，asyncio handler 不变
+            exception_hook.install_global_hook()
+            assert sys.excepthook is hook_once
+            assert asyncio.get_running_loop().get_exception_handler() is handler_once
+
+        try:
+            asyncio.run(_scenario())
+        finally:
+            exception_hook._excepthook_installed = False
+            exception_hook._asyncio_installed = False
+            exception_hook._original_hook = None
+            exception_hook._original_asyncio_handler = None
+            sys.excepthook = original
 
 
 class TestCleanupResources:
