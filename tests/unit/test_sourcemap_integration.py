@@ -209,6 +209,22 @@ class TestBuilderIntegration:
         assert ctx.exception["frames"] == _MINIFIED_FRAMES
 
 
+# ── P2-D6：单份上传 map 大小上限 ──
+
+
+class TestUploadSizeLimit:
+    def test_oversized_map_rejected(self, monkeypatch):
+        """超过 sourcemap_max_upload_bytes 的 map 应被拒绝（ValueError → 400）。"""
+        monkeypatch.setattr(settings, "sourcemap_max_upload_bytes", 10)
+        with pytest.raises(ValueError):
+            sourcemap_store.upload_sourcemap("app.js", _map_with_content())
+
+    def test_normal_map_accepted_at_default_limit(self):
+        """默认上限（20MB）下正常 map 可上传，不破坏原有行为。"""
+        receipt = sourcemap_store.upload_sourcemap("app.9f3b2c.js", _map_with_content())
+        assert receipt["stored"] is True
+
+
 # ── DebugContext schema 兼容 ──
 
 

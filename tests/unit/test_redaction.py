@@ -185,6 +185,29 @@ def test_capture_exception_traceback_redacted():
     assert "ghp_abc123secrettoken" not in data["traceback"]
 
 
+def test_capture_exception_locals_repr_truncated():
+    """P2-D5：超大局部变量的 repr 被截断，防止数十 MB 字符串膨胀 OOM。"""
+    from app.runtime.collectors.stacktrace import capture_exception
+
+    def boom():
+        huge_local = "x" * 500000  # ~500KB，捕获期应被截断
+        raise ValueError("boom")
+
+    try:
+        boom()
+    except ValueError as e:
+        data = capture_exception(e, source="test")
+
+    hit = None
+    for f in data["frames"]:
+        if "locals" in f and "huge_local" in f["locals"]:
+            hit = f["locals"]["huge_local"]
+            break
+    assert hit is not None, "应能捕获到 boom 帧的 huge_local 局部变量"
+    assert "<truncated" in hit
+    assert len(hit) < 20000
+
+
 def test_format_trace_for_ai_redacted():
     """format_trace_for_ai 输出文本中敏感信息已被 redact() 掩码"""
     from app.runtime.collectors.stacktrace import format_trace_for_ai

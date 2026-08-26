@@ -246,6 +246,101 @@ class TestShutdownObservability:
         shutdown_observability()
 
 
+class TestMetricsAuthExemption:
+    """P2-F2：/metrics 在全局 AuthMiddleware 的豁免与 METRICS_AUTH_ENABLED 解耦。
+
+    修复生产强制 API_KEY 下 Prometheus 抓 /metrics 恒 401、监控链路静默失效的问题：
+    - METRICS_AUTH_ENABLED=False：/metrics 在全局中间件豁免（供监控栈无凭据抓取）
+    - METRICS_AUTH_ENABLED=True：/metrics 保留全局中间件保护（端点层还会再校验）
+    """
+
+    @staticmethod
+    def _make_request(path: str):
+        from starlette.requests import Request
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 1234),
+            "server": ("test", 80),
+            "scheme": "http",
+            "state": {},
+        }
+        return Request(scope)
+
+    @staticmethod
+    def _run(dispatch, req, call_next):
+        import asyncio
+        return asyncio.run(dispatch(req, call_next))
+
+    def test_metrics_exempt_when_metrics_auth_disabled(self, monkeypatch):
+        """metrics_auth_enabled=False 且鉴权开启时，/metrics 直接放行（call_next 被调用）。"""
+        from app.config import settings
+        from app.middleware import AuthMiddleware
+        from starlette.responses import JSONResponse
+
+        monkeypatch.setattr(settings, "metrics_auth_enabled", False)
+        mw = AuthMiddleware.__new__(AuthMiddleware)
+        mw.enabled = True
+
+        async def call_next(req):
+            return JSONResponse(content={"ok": True})
+
+        resp = self._run(mw.dispatch, self._make_request("/metrics"), call_next)
+        assert resp.status_code == 200
+
+    def test_metrics_requires_key_when_metrics_auth_enabled(self, monkeypatch):
+        """metrics_auth_enabled=True 时 /metrics 不豁免，无 key 请求被 401 拒绝。"""
+        from app.config import settings
+        from app.middleware import AuthMiddleware
+        from starlette.responses import JSONResponse
+
+        monkeypatch.setattr(settings, "metrics_auth_enabled", True)
+        mw = AuthMiddleware.__new__(AuthMiddleware)
+        mw.enabled = True
+
+        async def call_next(req):
+            return JSONResponse(content={"never": True})
+
+        resp = self._run(mw.dispatch, self._make_request("/metrics"), call_next)
+        assert resp.status_code == 401
+
+    def test_non_metrics_still_auth_required(self, monkeypatch):
+        """豁免仅限 /metrics，其余路径在无 key 时仍被 401 拒绝（不扩大放行面）。"""
+        from app.config import settings
+        from app.middleware import AuthMiddleware
+        from starlette.responses import JSONResponse
+
+        monkeypatch.setattr(settings, "metrics_auth_enabled", False)
+        mw = AuthMiddleware.__new__(AuthMiddleware)
+        mw.enabled = True
+
+        async def call_next(req):
+            return JSONResponse(content={"ok": True})
+
+        resp = self._run(mw.dispatch, self._make_request("/api/debug/analyze"), call_next)
+        assert resp.status_code == 401
+
+    def test_metrics_exempt_when_auth_disabled(self, monkeypatch):
+        """鉴权本身关闭时 /metrics 同样放行（不因豁免逻辑而回退到鉴权）。"""
+        from app.config import settings
+        from app.middleware import AuthMiddleware
+        from starlette.responses import JSONResponse
+
+        monkeypatch.setattr(settings, "metrics_auth_enabled", False)
+        mw = AuthMiddleware.__new__(AuthMiddleware)
+        mw.enabled = False  # auth 关闭
+
+        async def call_next(req):
+            return JSONResponse(content={"ok": True})
+
+        resp = self._run(mw.dispatch, self._make_request("/metrics"), call_next)
+        assert resp.status_code == 200
+
+
 class TestPrometheusEndpointBackwardCompat:
     """测试 /metrics 端点向后兼容性"""
 

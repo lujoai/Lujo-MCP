@@ -67,6 +67,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in self.PUBLIC_PATHS:
             return await call_next(request)
 
+        # FIX: P2-F2 —— /metrics 在全局中间件的豁免与 endpoint 层独立鉴权解耦：
+        # METRICS_AUTH_ENABLED=False（默认，监控栈无凭据抓取）时 /metrics 在全局
+        # 中间件放行（observability.metrics 端点此时也不额外鉴权，供 Prometheus 抓取）；
+        # METRICS_AUTH_ENABLED=True 时保留全局中间件保护（端点层本身还会再校验一次）。
+        # 修复生产强制 API_KEY 下 Prometheus 抓 /metrics 恒 401、监控链路静默失效的问题。
+        if request.url.path == "/metrics" and not settings.metrics_auth_enabled:
+            return await call_next(request)
+
         # 多 key 轮换：恒定时间比较在 app.auth.key_rotation 内部完成（遍历所有 key 不短路）
         key = self._extract_key(request)
         from app.auth.key_rotation import verify_api_key

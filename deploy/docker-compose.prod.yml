@@ -78,8 +78,12 @@ services:
       API_KEY: ${API_KEY:?必须设置 API_KEY}
       SOURCEMAP_ENABLED: ${SOURCEMAP_ENABLED:-true}
       PROMETHEUS_ENABLED: "true"
+    # FIX: P2-F1 —— 端口仅绑定回环 127.0.0.1，不向公网/局域网发布 app 端口
+    # （此前全网开放 => API Key 明文 HTTP 传输且入口无 TLS）。
+    # 生产 TLS 终止由前置反代（nginx/ALB/tunnel 等）在同一宿主机上完成，
+    # 反代可通过 127.0.0.1:8000 反代到 app（与下方 prometheus 一致的分有界发布）。
     ports:
-      - "${LUJO_HTTP_PORT:-8000}:8000"
+      - "127.0.0.1:${LUJO_HTTP_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s

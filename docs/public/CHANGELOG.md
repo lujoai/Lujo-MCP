@@ -7,7 +7,7 @@
 
 ## [Unreleased]
 
-> v0.6.8 候选（P0 安全与正确性补丁 + P1 全量 14 项修复）：第 6 轮全量代码审查 P0 五项（安全门字段错配 CR-1、脱敏复合键缺口 CR-2、SDK 毒批循环 CR-3、XFF 限流绕过 A1、add_log 明文入库 A2）+ **P1 十四项全部修复**（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）+ 顺带 G1 + 测试基础设施两项。测试基线 **1290 passed / 6 skipped / 0 failed**（unit 口径，v0.6.7 基线 1231 → 1290，P0+P1 合计新增 59 项），本地全量 **1377 passed / 0 failed / 0 errors**，零回归。
+> v0.6.8 候选（P0 安全与正确性补丁 + P1 全量 14 项 + P2 安全/可靠性六项）：第 6 轮全量代码审查 P0 五项（安全门字段错配 CR-1、脱敏复合键缺口 CR-2、SDK 毒批循环 CR-3、XFF 限流绕过 A1、add_log 明文入库 A2）+ **P1 十四项全部修复**（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）+ 顺带 G1 + 测试基础设施两项 + **P2 安全/可靠性六项**（D4/D5/D6/E2/F1/F2，2026-08-27，非发布工程项）。测试基线 **1298 passed / 6 skipped / 0 failed**（unit 口径，v0.6.7 基线 1231 → 1290（P0+P1 +59）→ 1298（P2 六项 +8）），本地全量 **1377+ passed / 0 failed / 0 errors**，零回归。
 
 ### 🔒 安全
 
@@ -58,7 +58,18 @@
 
 ### 📊 测试与质量
 
-> 测试基线：unit 口径 **1290 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7 基线 1231 → 1251（P0 +20）→ 1290（P1 +39）；另 integration 口径新增 A2 直写脱敏 3 项 + D2 两段式安装 2 项）。本地全量复验（unit+integration+e2e）：**1419 tests / 1377 passed / 42 skipped / 0 failed / 0 errors**（P0 后 1336 → 1377）。SDK JS 5 文件 **35/35 pass**（G2 新增 2 项），ruff 硬门禁全绿，check_doc_links 164 链接 0 错误。
+> 测试基线：unit 口径 **1298 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7 基线 1231 → 1251（P0 +20）→ 1290（P1 +39）→ 1298（P2 六项 +8：D5×1、D6×2、E2×1、F2×4）；另 integration 口径新增 A2 直写脱敏 3 项 + D2 两段式安装 2 项）。本地全量复验（unit+integration+e2e）：**1419+ tests / 1377+ passed / 42 skipped / 0 failed / 0 errors**。SDK JS 5 文件 **35/35 pass**，ruff 硬门禁全绿，check_doc_links 164 链接 0 错误。
+
+### 🛠️ P2 修复（安全/可靠性六项，2026-08-27，非发布工程）
+
+> 第 6 轮审查 P2 十六项中的安全/可靠性项优先修复；发布工程项 F4-F7 与其余 P2（B2/B4/B5/C2/G3）暂不处理，留待后续排期。**本批仅提交、不发布**，等全部待办复核后再发 v0.6.8。
+
+- **traces_archive 迁移文件补齐（D4）**：`ddl.py` 已定义 `DDL_TRACES_ARCHIVE` 但 `migrations/` 无对应迁移文件——纯迁移方式部署开启 `pg_archive_enabled` 后归档静默失败。新增 `20260827_create_traces_archive_table.sql`（与代码 DDL 对齐，`CREATE TABLE IF NOT EXISTS` 幂等）。
+- **capture_exception 局部变量 repr 截断（D5）**：异常路径一个大局部变量（dict / DataFrame 等）的 `repr` 无长度上限，可膨胀到数十 MB 进入内存缓冲/PG/响应（`parse_network_record` 等模块有 10KB 截断纪律，此处缺失）。现单变量 repr 超 10KB 截断并附标记，正常小对象零开销。
+- **sourcemap 单份大小上限（D6）**：上传 channel 条数 100 有界但单份可达几十 MB（`sourcesContent` 内嵌全源码）——OOM 面。新增 `SOURCEMAP_MAX_UPLOAD_BYTES`（默认 20MB），超限拒绝上传（400）。
+- **spec 缓存刷新限频（E2）**：缓存命中时 `_cache_needs_refresh` 仍执行全项目 os.walk，一次 Debug Context 构建多次调用 `get_project_specs` 触发多次全目录遍历。现缓存刷新检查限频（30s 间隔），间隔期满仍按 mtime 精确判断；`reload_specs` 同步清限频时间戳保证强制刷新。
+- **生产 compose 端口回环绑定（F1）**：app 端口此前绑 `0.0.0.0` 全网开放（API Key 明文 HTTP 传输、入口无 TLS）。现只绑 `127.0.0.1`，由同宿主前置反代（nginx/ALB/tunnel）做 TLS 终止，与 prometheus 的 loopback-only 发布一致。
+- **/metrics 全局中间件豁免（F2）**：`METRICS_AUTH_ENABLED` 此前只控制端点层额外鉴权，无法豁免全局 AuthMiddleware——生产强制 API_KEY 时 Prometheus 抓 `/metrics` 恒 401、监控链路静默失效。现 `METRICS_AUTH_ENABLED=False`（默认）时 `/metrics` 在全局中间件放行（端点层同样不额外鉴权，供监控栈无凭据抓取，应只发布到可信内网）；`True` 时保留全局中间件保护，端点层再校验一次。
 
 ## [0.6.7] - 2026-08-25
 

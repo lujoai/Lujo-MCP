@@ -55,8 +55,14 @@ _MAX_FILE_BYTES = 1024 * 1024  # 1MB
 _CHUNK_MAX_CHARS = 800
 _TOTAL_MAX_CHARS = 6000  # 约 2000 tokens
 
+# FIX: P2-E2 —— 缓存刷新检查的限频间隔（秒）。缓存命中时的 `_cache_needs_refresh`
+# 仍会执行全项目 os.walk 以探测文件变化，一次 Debug Context 构建多次调用
+# get_project_specs 会触发多次全目录遍历。加该间隔把 walk 频率从"每次调用"
+# 降为"每间隔一次"，构建热路径零额外遍历。
+_SPEC_REFRESH_INTERVAL = 30
+
 # 进程内缓存（按 project_root）
-_spec_cache: dict = {"project_root": None, "specs": [], "mtime": 0}
+_spec_cache: dict = {"project_root": None, "specs": [], "mtime": 0, "checked_at": 0}
 
 
 def _find_project_root(file_path: str | Path) -> Path:
@@ -185,6 +191,10 @@ def _load_specs(project_root: str | Path) -> list[dict]:
 def _cache_needs_refresh(project_root: Path) -> bool:
     if _spec_cache["project_root"] != str(project_root):
         return True
+    # P2-E2：缓存命中时避免每次调用都全项目 os.walk —— 刷新检查限频。
+    # interval 内数据可能滞后，属可接受的 TTL 语义；interval 到点仍会按 mtime 精确判断。
+    if time.time() - _spec_cache["checked_at"] < _SPEC_REFRESH_INTERVAL:
+        return False
     try:
         files = discover_spec_files(project_root)
         if not files:
@@ -205,6 +215,7 @@ def get_project_specs(project_root: Optional[str | Path] = None) -> list[dict]:
             "project_root": str(root),
             "specs": _load_specs(root),
             "mtime": time.time(),
+            "checked_at": time.time(),
         }
     return _spec_cache["specs"]
 
@@ -213,6 +224,7 @@ def reload_specs(project_root: Optional[str | Path] = None) -> list[dict]:
     """强制刷新规范缓存。"""
     global _spec_cache
     _spec_cache["mtime"] = 0
+    _spec_cache["checked_at"] = 0  # P2-E2：同时清除限频时间戳，确保本次立即重扫
     return get_project_specs(project_root)
 
 

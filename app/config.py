@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     sourcemap_upload_ttl_seconds: int = 3600
     # 上传通道：最多缓存的 map 份数（超出按最旧 LRU 驱逐）；进程内存储，单机有效
     sourcemap_max_uploads: int = 100
+    # FIX: P2-D6 —— 单份上传 map 的最大序列化字节数。sourcesContent 内嵌全源码，
+    # 条数 100 有界但单份可达几十 MB（OOM 面）；超限拒绝上传（400）。
+    sourcemap_max_upload_bytes: int = 20 * 1024 * 1024
 
     # ── 存储 ──
     storage_backend: str = "memory"  # "memory" | "postgresql"
@@ -150,8 +153,10 @@ class Settings(BaseSettings):
     # 诊断端点开关（/api/debug/echo, /api/debug/token），生产环境保持关闭
     debug_endpoints_enabled: bool = False
     # SEC-08: /metrics 端点独立鉴权开关
-    # False（默认）= 不额外鉴权，依赖全局 AuthMiddleware
-    # True = 在 /metrics 端点层独立校验 API Key（Bearer/X-API-Key），与全局中间件解耦
+    # False（默认）= 依赖全局 AuthMiddleware（P2-F2 起：/metrics 同时在全局中间件豁免，
+    #   即不额外鉴权，供 Prometheus 等监控栈无凭据抓取）
+    # True = 在 /metrics 端点层独立校验 API Key（Bearer/X-API-Key），与全局中间件解耦，
+    #   保留全局中间件保护，防止 AuthMiddleware 配置疏漏导致指标泄露
     metrics_auth_enabled: bool = False
 
     # ── OpenTelemetry（P3-4）──

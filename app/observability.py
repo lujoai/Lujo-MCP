@@ -1,4 +1,4 @@
-﻿"""可观测性模块 —— Prometheus 指标 + OpenTelemetry（P3-4 / v0.6.0 扩展）
+"""可观测性模块 —— Prometheus 指标 + OpenTelemetry（P3-4 / v0.6.0 扩展）
 
 P3-4: 双模式设计——保留原有 /metrics Prometheus 文本端点（向后兼容），
 同时引入 OpenTelemetry SDK 作为指标记录的主路径，支持 OTLP 导出。
@@ -619,9 +619,11 @@ def metrics(request: Request):
     """Prometheus 指标端点
 
     SEC-08 独立鉴权 toggle：
-    - METRICS_AUTH_ENABLED=False（默认）：不额外鉴权，依赖全局 AuthMiddleware
+    - METRICS_AUTH_ENABLED=False（默认）：不额外鉴权。P2-F2 起全局 AuthMiddleware 同时
+      豁免 /metrics，即端点无鉴权可访问（供 Prometheus 等监控栈无凭据抓取；生产应按安全
+      策略只把该端点发布到可信内网）。
     - METRICS_AUTH_ENABLED=True：端点层独立校验 API Key（Bearer/X-API-Key），
-      与全局中间件解耦，防止 AuthMiddleware 配置疏漏导致指标泄露。
+      与全局中间件解耦（全局中间件对其保持保护），防止 AuthMiddleware 配置疏漏导致指标泄露。
       支持 API_KEYS 多 key 轮换 + API_KEY 向后兼容（复用 key_rotation.verify_api_key）。
 
     P3-4: 当 OTel 启用时，指标同时通过 OTLP 导出，此端点仍可用（向后兼容）。

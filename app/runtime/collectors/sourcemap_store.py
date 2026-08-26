@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import os
 import threading
@@ -72,6 +73,17 @@ def upload_sourcemap(artifact: str, map_obj: object, ttl_seconds: int | None = N
     if not artifact or len(artifact) > 256:
         raise ValueError("artifact 不能为空且长度需 <= 256")
     _validate_map(map_obj)
+    # FIX: P2-D6 —— 单份 map 序列化大小上限（sourcesContent 可内嵌整份源码，
+    # 几十 MB 的 map 会让进程直接 OOM）。超限拒绝并记录告警，避免被超大 payload 填充。
+    encoded_size = len(json.dumps(map_obj))
+    if encoded_size > settings.sourcemap_max_upload_bytes:
+        logger.warning(
+            "source map 超过单份大小上限 %d 字节（实际 %d），拒绝上传 artifact=%s",
+            settings.sourcemap_max_upload_bytes, encoded_size, artifact,
+        )
+        raise ValueError(
+            f"source map 过大：{encoded_size} 字节超过上限 {settings.sourcemap_max_upload_bytes} 字节"
+        )
 
     ttl = ttl_seconds if ttl_seconds is not None else settings.sourcemap_upload_ttl_seconds
     ttl = max(1, int(ttl))

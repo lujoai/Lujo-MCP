@@ -75,6 +75,25 @@ def test_caching(tmp_path):
     assert second is first  # 同一列表对象 → 缓存命中
 
 
+def test_cache_refresh_limited_to_interval(tmp_path):
+    """P2-E2：缓存命中时不做全项目 os.walk——interval 内对已缓存 project 直接放行。"""
+    _write(tmp_path / "CONVENTION.md", "# c1\n\n## api\nx\n")
+    first = spec_collector.get_project_specs(tmp_path)
+    assert len(first) == 1
+
+    # interval 内：修改文件也不触发重扫（仍返回缓存对象）
+    _write(tmp_path / "CONVENTION.md", "# c2\n\n## api\nx\n")
+    second = spec_collector.get_project_specs(tmp_path)
+    assert second is first
+
+    # 强制刷新：清除限频时间戳（间隔期满）→ 重新 walk 并构造新列表。
+    # 同时清 mtime 避免依赖文件系统时间戳精度（rewrite 可能与首次 populate 同一秒）。
+    spec_collector._spec_cache["checked_at"] = 0
+    spec_collector._spec_cache["mtime"] = 0
+    third = spec_collector.get_project_specs(tmp_path)
+    assert third is not first
+
+
 def test_tool_wrapper():
     res = spec_api.tool_get_related_specs("/no/such/file.py")
     assert res["found"] is False

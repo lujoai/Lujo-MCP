@@ -13,6 +13,11 @@ from app.runtime.core.redaction import redact, is_sensitive_key
 # 改为复用 redaction 的白名单感知子串判定（含 redaction_key_allowlist，
 # password_hash / public_key 等白名单字段仍可在捕获期保留原值）。
 
+# FIX: P2-D5 —— 单个局部变量 repr 的最大字符数。异常路径上一个超大局部变量
+# （大 dict / DataFrame / 长字符串等）的 repr 可达数十 MB，直接进入内存缓冲 /
+# PG / 响应进程 OOM。与 parse_network_record 等模块的 10KB 截断纪律保持一致。
+_LOCALS_REPR_MAX_CHARS = 10000
+
 _FRAMEWORK_PATH_PARTS = (
     "site-packages",
     "dist-packages",
@@ -155,6 +160,18 @@ def fold_stack_frames(frames: list[dict], min_fold_count: int = 2) -> list[dict]
     return result
 
 
+def _truncate_locals_repr(val) -> str:
+    """对局部变量做 repr 并截断到上限，返回安全的字符串。
+
+    P2-D5：repr(repr) 对大对象不产生长度上限，可能膨胀到数十 MB。仅在长度
+    超限时才追加截断标记（正常小对象与旧行为完全一致，零开销）。
+    """
+    s = repr(val)
+    if len(s) > _LOCALS_REPR_MAX_CHARS:
+        s = s[:_LOCALS_REPR_MAX_CHARS] + f"...<truncated {len(s) - _LOCALS_REPR_MAX_CHARS} chars>"
+    return s
+
+
 def capture_exception(
     exc: Optional[BaseException] = None,
     source: str = "manual",
@@ -185,7 +202,7 @@ def capture_exception(
                 if is_sensitive_key(key):
                     local_vars[key] = "***REDACTED***"
                 else:
-                    local_vars[key] = redact(repr(val))
+                    local_vars[key] = redact(_truncate_locals_repr(val))
             except Exception:
                 local_vars[key] = "<unable to render>"
 
