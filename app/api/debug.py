@@ -229,9 +229,9 @@ async def debug_repair_async(req: AnalyzeRequest):
 
     走有界队列 + K 常驻消费协程；返回 job_id，
     客户端轮询 ``/api/debug/repair/result/{job_id}`` 取结果。
-    需 settings.agent_enabled=True，否则返回 501。
+    需 settings.is_agent_active=True，否则返回 501。
     """
-    if not settings.agent_enabled:
+    if not settings.is_agent_active:
         raise HTTPException(status_code=501, detail="agent disabled")
 
     try:
@@ -278,7 +278,7 @@ async def debug_repair_async(req: AnalyzeRequest):
 @router.get("/repair/result/{job_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
 def debug_repair_result(job_id: str):
     """查询异步修复任务状态/结果。结构对称 /analyze/result/{job_id}。"""
-    if not settings.agent_enabled:
+    if not settings.is_agent_active:
         raise HTTPException(status_code=501, detail="agent disabled")
 
     job = get_repair_queue().get_job(job_id)

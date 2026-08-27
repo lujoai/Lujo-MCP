@@ -14,7 +14,7 @@ from app.rag.knowledge_base import (
     get_knowledge_entry,
     get_entry_by_normalized_fingerprint,
     get_entries_by_type_fingerprint,
-    retrieve_similar,
+    retrieve_similar_with_scores,
     upsert_knowledge_entry,
 )
 from app.rag.debug_case import (
@@ -22,7 +22,6 @@ from app.rag.debug_case import (
     compute_type_fingerprint,
     normalize_message_for_similarity,
 )
-from app.rag.vector_store import get_vector_store
 from app.llm.context_prep import _get_error_signal
 
 logger = logging.getLogger("lujo-mcp.llm")
@@ -115,14 +114,22 @@ def _try_vector_rag(context: dict, fingerprint: str) -> Optional[dict]:
     """
     try:
         query_text = json.dumps(context, ensure_ascii=False, default=str)
-        similar = retrieve_similar(query_text)
+        similar_pairs = retrieve_similar_with_scores(query_text)
     except Exception:
         logger.warning("Vector retrieval failed", exc_info=True)
         return None
-    if not similar:
+    if not similar_pairs:
         return None
 
-    doc = similar[0]
+    doc, score = similar_pairs[0]
+    if score < settings.vector_store_min_score:
+        logger.debug(
+            "Vector RAG result below threshold (score=%.3f < %.3f), ignoring",
+            score,
+            settings.vector_store_min_score,
+        )
+        return None
+
     analysis = copy.deepcopy(doc.get("analysis") or {})
     fix_suggestion = doc.get("fix_suggestion") or analysis.get("fix")
     if fix_suggestion and not analysis.get("fix"):
@@ -177,17 +184,4 @@ def _persist_analysis_to_knowledge_base(
             exc_info=True,
         )
 
-    # 向量检索 RAG：将分析结果同步写入向量库，供未来相似问题召回
-    try:
-        get_vector_store().add([{
-            "fingerprint": fingerprint,
-            "analysis": persist_analysis,
-            "fix_suggestion": analysis.get("fix", ""),
-            "source": "llm",
-        }])
-    except Exception:
-        logger.warning(
-            "Vector store persist failed (fingerprint=%s)",
-            fingerprint,
-            exc_info=True,
-        )
+

@@ -164,6 +164,7 @@ class KnowledgeBaseStore:
         source: str,
         verify_count: int | None = None,
         case_confidence: float | None = None,
+        _skip_autosync: bool = False,
     ) -> dict[str, Any]:
         if not fingerprint:
             raise ValueError("fingerprint is required")
@@ -232,7 +233,7 @@ class KnowledgeBaseStore:
             result = entry.to_dict()
 
         # 向量双写同步（锁外执行，避免阻塞 IO；失败静默降级）
-        if settings.kb_vector_index_autosync:
+        if settings.kb_vector_index_autosync and not _skip_autosync:
             self._sync_entry_to_vector_store(result)
 
         # PG 写穿持久化（锁外；LRU 驱逐同步删除，失败 warning 降级）
@@ -481,6 +482,7 @@ class KnowledgeBaseStore:
                 source=case.get("source", "seed"),
                 verify_count=case.get("verify_count"),
                 case_confidence=case.get("case_confidence"),
+                _skip_autosync=True,
             )
             count += 1
         if settings.kb_vector_index_autosync:
@@ -572,3 +574,19 @@ def retrieve_similar(query_text: str, top_k: int | None = None) -> list[dict[str
     effective_top_k = top_k if top_k is not None else settings.vector_store_top_k
     pairs = get_vector_store().search(query_text, effective_top_k)
     return [doc for doc, _score in pairs]
+
+
+def retrieve_similar_with_scores(
+    query_text: str, top_k: int | None = None
+) -> list[tuple[dict[str, Any], float]]:
+    """与 retrieve_similar 相同，但返回 (doc, score) 对，供调用方做二次 score 过滤。
+
+    Args:
+        query_text: 查询文本
+        top_k: 召回数量；None 时使用 settings.vector_store_top_k
+
+    Returns:
+        list[(doc, score)]：按 score 降序；无命中时返回 []
+    """
+    effective_top_k = top_k if top_k is not None else settings.vector_store_top_k
+    return get_vector_store().search(query_text, effective_top_k)

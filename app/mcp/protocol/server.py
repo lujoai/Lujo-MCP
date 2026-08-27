@@ -371,6 +371,12 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
             if sync_future is not None:
                 sync_future.cancel()
             logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
+            logger.warning(
+                "工具 %s 同步线程超时后 cancel() 无法中断已运行线程（%s池），"
+                "线程将继续占用线程池资源直至完成；若持续出现请排查工具耗时。",
+                tool_name,
+                pool_type,
+            )
             return make_response(req.id, {
                 "content": [
                     {

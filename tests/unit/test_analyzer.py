@@ -784,14 +784,14 @@ class TestVectorRagFallback:
         _reset_vector_store()
 
     @patch("app.llm.analyzer._get_client")
-    @patch("app.llm.kb_integration.retrieve_similar")
+    @patch("app.llm.kb_integration.retrieve_similar_with_scores")
     def test_vector_rag_hit_when_fingerprint_misses(
-        self, mock_retrieve_similar, mock_get_client
+        self, mock_retrieve_similar_with_scores, mock_get_client
     ):
         """KB 指纹 miss + 向量召回 hit → 返回 analysis_source=vector_rag，跳过 LLM"""
         from app.llm.analyzer import analyze
 
-        mock_retrieve_similar.return_value = [{
+        mock_retrieve_similar_with_scores.return_value = [({
             "fingerprint": "similar-fp",
             "analysis": {
                 "root_cause": "相似历史根因",
@@ -799,7 +799,7 @@ class TestVectorRagFallback:
                 "confidence": "medium",
             },
             "fix_suggestion": "相似修复",
-        }]
+        }, 0.85)]
 
         ctx = {
             "request_id": "vector-rag-001",
@@ -819,9 +819,9 @@ class TestVectorRagFallback:
         mock_get_client.assert_not_called()
 
     @patch("app.llm.analyzer._get_client")
-    @patch("app.llm.kb_integration.retrieve_similar", return_value=[])
+    @patch("app.llm.kb_integration.retrieve_similar_with_scores", return_value=[])
     def test_vector_rag_miss_falls_through_to_llm(
-        self, mock_retrieve_similar, mock_get_client
+        self, mock_retrieve_similar_with_scores, mock_get_client
     ):
         """KB miss + 向量 miss → 走 LLM，返回 analysis_source=llm"""
         from app.llm.analyzer import analyze
@@ -858,12 +858,12 @@ class TestVectorRagFallback:
         assert result["model"] == "mock-model"
         assert result["usage"]["total_tokens"] == 15
         assert mock_client.chat.completions.create.call_count == 1
-        mock_retrieve_similar.assert_called_once()
+        mock_retrieve_similar_with_scores.assert_called_once()
 
     @patch("app.llm.analyzer._get_client")
-    @patch("app.llm.kb_integration.retrieve_similar", return_value=[])
+    @patch("app.llm.kb_integration.retrieve_similar_with_scores", return_value=[])
     def test_vector_store_disabled_does_not_break_analyze(
-        self, mock_retrieve_similar, mock_get_client
+        self, mock_retrieve_similar_with_scores, mock_get_client
     ):
         """vector_store 关闭（retrieve_similar 返回 []）→ 现有 LLM 行为不回归"""
         from app.llm.analyzer import analyze
@@ -896,12 +896,12 @@ class TestVectorRagFallback:
 
         assert result["analysis_source"] == "llm"
         assert result["model"] == "mock-model"
-        mock_retrieve_similar.assert_called_once()
+        mock_retrieve_similar_with_scores.assert_called_once()
 
-    @patch("app.llm.kb_integration.retrieve_similar")
+    @patch("app.llm.kb_integration.retrieve_similar_with_scores")
     @patch("app.llm.analyzer._get_client")
     def test_exact_fingerprint_takes_priority_over_vector_rag(
-        self, mock_get_client, mock_retrieve_similar
+        self, mock_get_client, mock_retrieve_similar_with_scores
     ):
         """KB 精确指纹命中优先于向量召回（向量检索不应被调用）"""
         from app.llm.analyzer import analyze
@@ -927,5 +927,59 @@ class TestVectorRagFallback:
         assert result["model"] == "__knowledge_base__"
         assert result["analysis"]["root_cause"] == "已知根因"
         # 向量检索 fallback 不应被调用
-        mock_retrieve_similar.assert_not_called()
+        mock_retrieve_similar_with_scores.assert_not_called()
         mock_get_client.assert_not_called()
+
+    @patch("app.llm.analyzer._get_client")
+    @patch(
+        "app.llm.kb_integration.retrieve_similar_with_scores",
+        return_value=[(
+            {
+                "fingerprint": "low-score-fp",
+                "analysis": {"root_cause": "低分历史根因"},
+                "fix_suggestion": "低分修复",
+            },
+            0.1,
+        )],
+    )
+    def test_vector_rag_below_threshold_falls_through_to_llm(
+        self, mock_retrieve_similar_with_scores, mock_get_client
+    ):
+        """向量召回 score 低于 vector_store_min_score → 视为未命中，走 LLM。
+
+        B5 回归：检索返回了 doc 但相似度过低（0.1 < 0.3），必须二次过滤返回 None，
+        避免把不相关的历史结论当作当前分析直接返回。
+        """
+        from app.llm.analyzer import analyze
+        import json
+
+        mock_client = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = json.dumps({
+            "root_cause": "实时根因",
+            "impact": "影响",
+            "fix": "修复",
+            "confidence": "high",
+        })
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "mock-model"
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        ctx = {
+            "request_id": "vector-rag-low-score-001",
+            "exception": {"fingerprint": "no-threshold-fp"},
+            "errors": ["err"],
+        }
+
+        result = analyze(ctx, model="mock-model")
+
+        assert result["analysis_source"] == "llm"
+        assert result["model"] == "mock-model"
+        assert result["analysis"]["root_cause"] == "实时根因"
+        mock_get_client.assert_called_once()
+        mock_retrieve_similar_with_scores.assert_called_once()

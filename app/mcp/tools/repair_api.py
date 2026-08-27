@@ -3,7 +3,7 @@
 repair_async：异步触发修复方案生成，返回 job_id。
 repair_result：查询修复任务状态/结果。
 
-需 settings.agent_enabled=True，否则返回 error。
+需 settings.is_agent_active=True，否则返回 error。
 与 /api/debug/repair/* REST 端点共享业务逻辑（通过 RepairQueue 单例）。
 """
 
@@ -29,7 +29,7 @@ REPAIR_ASYNC_DEF = {
         "git 近期改动，由 RepairAgent 生成结构化修复方案"
         "（含 patch / affected_files / validation_strategy / risk_assessment / confidence）。"
         "返回 job_id，客户端轮询 repair_result 取结果。"
-        "需 settings.agent_enabled=True。"
+        "需 settings.is_agent_active=True。"
     ),
     "inputSchema": {
         "type": "object",
@@ -78,8 +78,8 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     此前直接跑在事件循环线程——执行期间整个服务（HTTP/stdio/心跳/SSE）停摆。
     现统一移入 asyncio.to_thread（与同步 handler 走线程池的隔离语义对齐）。
     """
-    if not settings.agent_enabled:
-        return {"error": "agent disabled", "_hint": "set AGENT_ENABLED=true"}
+    if not settings.is_agent_active:
+        return {"error": "agent disabled", "_hint": "set AGENT_ENABLED=true（或 AGENT_MODE=single|dag|verify_loop）"}
 
     request_id = arguments.get("request_id") or arguments.get("trace_id")
     if not request_id:
@@ -124,8 +124,8 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
 
 async def repair_result_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     """repair_result 工具处理函数。"""
-    if not settings.agent_enabled:
-        return {"error": "agent disabled", "_hint": "set AGENT_ENABLED=true"}
+    if not settings.is_agent_active:
+        return {"error": "agent disabled", "_hint": "set AGENT_ENABLED=true（或 AGENT_MODE=single|dag|verify_loop）"}
 
     job_id = arguments.get("job_id")
     if not job_id:

@@ -216,7 +216,7 @@ async def lifespan(app: FastAPI):
         start_prewarm_task()
 
     # ── AI Debug Agent：启动 K 常驻消费协程（Phase 1）──
-    if settings.agent_enabled:
+    if settings.is_agent_active:
         from app.agent.repair_queue import start_repair_queue
         await start_repair_queue()
 
@@ -249,7 +249,7 @@ async def lifespan(app: FastAPI):
         pass
 
     # ── AI Debug Agent 优雅停机：排空修复队列（限时 agent_queue_drain_timeout 秒）──
-    if settings.agent_enabled:
+    if settings.is_agent_active:
         from app.agent.repair_queue import drain_repair_queue
         repair_drain_stats = await drain_repair_queue(settings.agent_queue_drain_timeout)
         logger.info("repair queue drain stats: %s", repair_drain_stats)
