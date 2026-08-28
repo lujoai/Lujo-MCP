@@ -152,3 +152,34 @@ class TestTestAgentRetry:
             result = await agent.run(_ctx(repair_plan={"patch": "fix"}))
 
         assert result.status == AgentStatus.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-Q5 —— error_message 进 prompt 前必须截断（security/test 双 Agent）
+# ---------------------------------------------------------------------------
+
+
+def test_build_messages_truncates_huge_error_message():
+    """/ingest/error 对 message 无字段级长度上限（整体 1MB），MB 级 message
+    原样进 prompt → 超上下文、并行节点 FAILED。"""
+    import json
+
+    from app.agent.base import AgentContext
+    from app.agent.security_agent import SecurityAgent
+    from app.agent.test_agent import TestAgent
+
+    huge_message = "M" * 200_000
+    ctx = AgentContext(
+        debug_context={"exception": {"type": "E", "message": huge_message}},
+        repair_context={},
+    )
+    repair_plan = {"patch": "p", "affected_files": ["a.py"]}
+
+    for agent in (TestAgent(), SecurityAgent()):
+        messages = agent._build_messages(ctx, repair_plan)
+        user_content = messages[1]["content"]
+        # 修复前 user_content ≥ 200K 字符；截断后 ~8K + 包裹开销
+        assert len(user_content) < 20_000, f"{type(agent).__name__} 未截断 error_message"
+        # payload 仍是合法 JSON 包裹（wrap_evidence 前的结构保持）
+        assert huge_message not in user_content
+        json.dumps({"probe": True})  # sanity：json 可用性

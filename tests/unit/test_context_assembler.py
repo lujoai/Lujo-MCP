@@ -235,7 +235,7 @@ class TestDebugExperienceRecall:
 
     @pytest.mark.asyncio
     async def test_enabled_returns_experience(self, assembler, monkeypatch):
-        """开启：retriever 命中返回 records。"""
+        """开启：retriever 命中返回 records（R7-Q3：to_dict 序列化后的 dict）。"""
         monkeypatch.setattr("app.config.settings.debug_experience_enabled", True)
         from app.rag.experience import DebugExperienceRecord
 
@@ -251,8 +251,12 @@ class TestDebugExperienceRecall:
             result = await assembler.assemble(_make_debug_context())
 
         assert result["debug_experience"] is not None
-        assert result["debug_experience"][0].fingerprint == "fp-1"
-        assert result["debug_experience"][0].source == "fingerprint"
+        record = result["debug_experience"][0]
+        # FIX: R7-Q3 —— dataclass 必须 to_dict 后进上下文（此前直接进
+        # json.dumps(default=str) 退化为 Python repr 噪音）
+        assert isinstance(record, dict)
+        assert record["fingerprint"] == "fp-1"
+        assert record["source"] == "fingerprint"
 
     @pytest.mark.asyncio
     async def test_retriever_exception_degrades(self, assembler, monkeypatch):
@@ -323,3 +327,105 @@ class TestDebugExperienceRecall:
         assert result["sources"]["debug_experience_hit"] is True
         assert result["sources"]["debug_experience_count"] == 1
         assert "vector_recall_count" in result["sources"]
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-Q1 —— 修复链路简化形状 debug_context 用 build_debug_context 富化
+# ---------------------------------------------------------------------------
+
+
+class TestDebugContextEnrichment:
+    """R7-Q1 回归：简化形状（build_context 产物）补齐 scorer 六维度键。"""
+
+    @pytest.mark.asyncio
+    async def test_simple_shape_enriched_from_real_trace(self):
+        """真实生产链路：save_trace 产 trace → 简化形状（无 code_snippets 键）
+        经 enrich 后包含 build_debug_context 的全部维度键。"""
+        from app.runtime.core import trace_repo
+
+        error_id = trace_repo.save_trace(
+            "ValueError", "enrich-contract",
+            [{"file": "a.py", "line": 1, "function": "f"}],
+            source="test",
+        )
+        # 模拟修复链路入口（build_context + promote）产出的简化形状
+        simple = {
+            "request_id": error_id,
+            "flow": ["error"],
+            "input": None,
+            "output": None,
+            "errors": [{"type": "ValueError", "message": "enrich-contract"}],
+            "exception": {
+                "type": "ValueError", "message": "enrich-contract",
+                "frames": [{"file": "a.py", "line": 1, "function": "f"}],
+                "frame_count": 1,
+            },
+            "runtime": {"process": {"pid": 1}},
+        }
+
+        enriched = await RepairContextAssembler()._enrich_debug_context(simple)
+        # 六个此前恒缺失的维度键补齐
+        for key in ("code_snippets", "git_blame", "recent_diffs",
+                    "network_trace", "ui_events", "spec_diffs"):
+            assert key in enriched, f"维度键 {key} 缺失（权重 0.53 恒 0 分的根因）"
+        # 富上下文携带指纹（P1-2）且 input/flow 不丢
+        assert enriched["exception"].get("fingerprint")
+        assert enriched["input"] == simple["input"]
+
+    @pytest.mark.asyncio
+    async def test_enriched_shape_not_reenriched(self):
+        """已富化（含 code_snippets 键）→ 原样返回（幂等，不重复拉存储）。"""
+        assembler = RepairContextAssembler()
+        rich = {"request_id": "r9", "code_snippets": [], "exception": None}
+        assert await assembler._enrich_debug_context(rich) is rich
+
+    @pytest.mark.asyncio
+    async def test_missing_trace_degrades_to_original(self):
+        """build_debug_context 返回 None（trace 不存在）→ 原样返回。"""
+        assembler = RepairContextAssembler()
+        simple = {"request_id": "no-such-trace-xyz", "errors": []}
+        assert await assembler._enrich_debug_context(simple) is simple
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-Q3 —— quality_report / debug_experience 以 JSON 可序列化形态进上下文
+# ---------------------------------------------------------------------------
+
+
+class TestJsonSerializableContext:
+    @pytest.mark.asyncio
+    async def test_quality_report_is_plain_dict(self, assembler, monkeypatch):
+        """quality_report 必须为 dict（Pydantic 直接进 json.dumps(default=str)
+        退化为 repr 噪音，MCP 消费方拿到不可解析字段）。"""
+        import json
+
+        monkeypatch.setattr("app.config.settings.quality_scoring_enabled", True)
+        result = await assembler.assemble(_make_debug_context())
+
+        qr = result["quality_report"]
+        assert isinstance(qr, dict)
+        assert "overall_score" in qr
+        # 可直接 json 序列化（MCP/REST 双通道）
+        json.dumps(qr, ensure_ascii=False)
+
+    @pytest.mark.asyncio
+    async def test_full_repair_context_json_serializable(self, assembler, monkeypatch):
+        """repair_context 整体可 json.dumps（repair_agent prompt 的真实消费方式）。"""
+        import json
+
+        monkeypatch.setattr("app.config.settings.quality_scoring_enabled", True)
+        monkeypatch.setattr("app.config.settings.debug_experience_enabled", True)
+        from app.rag.experience import DebugExperienceRecord
+
+        fake = DebugExperienceRecord(fingerprint="fp-1", exception_type="ValueError")
+
+        with patch(
+            "app.rag.retriever.retrieve_debug_experience", return_value=[fake]
+        ):
+            result = await assembler.assemble(_make_debug_context())
+
+        # 修复前：QualityReport/DebugExperienceRecord 经 default=str 退化为
+        # "<app.quality.schemas.QualityReport object at 0x...>" repr 字符串
+        serialized = json.dumps(result, ensure_ascii=False)
+        assert "QualityReport object at" not in serialized
+        assert "DebugExperienceRecord object at" not in serialized

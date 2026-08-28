@@ -340,3 +340,47 @@ class TestRunVerifyLoop:
             assert result["verify_loop"]["total_iterations"] == 1
         finally:
             settings.agent_verify_loop_round_timeout = saved
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-Q4 —— round_timeout 未配置时按单轮内部预算继承（不再是 agent_timeout 一半）
+# ---------------------------------------------------------------------------
+
+
+def test_loop_round_timeout_inherits_full_round_budget(monkeypatch):
+    """R7-Q4 回归：round_timeout=0 → 单轮预算 = agent_timeout + 并行预算。
+
+    旧实现继承 agent_timeout（90s）= 单轮内部预算（90+90）的一半：
+    RepairAgent 耗时 60-90s 时并行阶段启动数秒即被 watchdog 取消，
+    整轮返回 {"repair_plan": None} 存根、已成功成果丢弃。
+    行为验证：agent_timeout=1 + 并行预算 1 → 单轮预算 2s，
+    耗时 1.5s 的单轮应完成（旧实现 1s 即超时判 failed）。
+    """
+    import asyncio
+
+    from app.agent.verify_loop import run_verify_loop
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_verify_loop_round_timeout", 0)
+    monkeypatch.setattr(settings, "agent_timeout", 1)
+    monkeypatch.setattr(settings, "agent_dag_parallel_timeout", 0)
+    monkeypatch.setattr(settings, "agent_verify_loop_max_iterations", 1)
+
+    async def slow_but_valid_iteration(ctx, sources):
+        await asyncio.sleep(1.5)  # > agent_timeout(1s)，< 单轮预算(2s)
+        return {
+            "repair_plan": {"fix": "x"},
+            "test_plan": {"test_cases": ["t1"]},
+            "security_review": {"risks": [], "recommendations": [],
+                                "overall_severity": "none", "summary": "ok"},
+            "git_attribution": {"file": "a.py"},
+        }
+
+    class Ctx:
+        repair_context = {}
+
+    result = asyncio.run(run_verify_loop(slow_but_valid_iteration, Ctx(), {}))
+    assert result["repair_plan"] is not None, (
+        "单轮耗时 1.5s < 单轮预算 2s，不得被 watchdog 丢弃（旧实现按 agent_timeout=1s 判超时）"
+    )
+    assert result["verify_loop"]["final_verdict"] in ("passed", "high_confidence")

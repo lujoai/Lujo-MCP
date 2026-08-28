@@ -45,6 +45,8 @@ REQUIRED_FIELDS = (
 )
 MAX_FIELD_CHARS = 4000
 MAX_RAW_TRUNCATED = 800
+# FIX: R7-Q5 —— prompt 中 error_message 的字符上限（~8K，与 security_agent 一致）
+_ERROR_MESSAGE_MAX_CHARS = 8000
 MAX_LIST_ITEMS = 30
 
 
@@ -140,7 +142,12 @@ class TestAgent(BaseAgent):
         user_payload = {
             "repair_plan": repair_plan,
             "error_type": exception.get("type", ""),
-            "error_message": exception.get("message", ""),
+            # FIX: R7-Q5 —— error_message 截断（与 security_agent 同一纪律）：
+            # /ingest/error 对 message 无字段级长度上限，MB 级 message 原样
+            # 进 prompt → 超上下文、并行节点 FAILED
+            "error_message": truncate_field(
+                exception.get("message", ""), _ERROR_MESSAGE_MAX_CHARS
+            ),
             "stack_files": [
                 f.get("file", "")
                 for f in (exception.get("frames") or [])[:5]

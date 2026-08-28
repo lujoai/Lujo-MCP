@@ -34,6 +34,11 @@ class RepairContextAssembler:
         返回 dict 包含 quality_report 字段（v0.4.0 新增），
         评分失败时 quality_report 为 QualityReport.null_score()。
         """
+        # FIX: R7-Q1 —— 修复链路入口用 build_context 产出简化形状，scorer
+        # 六个维度键（权重合计 0.53）恒缺失；此处用真实生产者
+        # build_debug_context 重取富上下文补齐（失败/已富化时原样返回）
+        debug_context = await self._enrich_debug_context(debug_context)
+
         # 并发执行：prior_analysis / vector_recall / git_context / debug_experience
         # 各 _safe_* 方法内部吞异常，永不抛出（return_exceptions=False 安全）
         analysis, vector_recall, git_context, debug_experience = await asyncio.gather(
@@ -68,6 +73,39 @@ class RepairContextAssembler:
 
         return repair_context
 
+    async def _enrich_debug_context(
+        self, debug_context: Any
+    ) -> dict[str, Any]:
+        """FIX: R7-Q1 —— 简化形状 debug_context 用 build_debug_context 富化。
+
+        修复链路唯一生产入口（repair_api.py / debug.py repair/async）此前用
+        build_context（仅 {request_id,flow,input,output,errors}），scorer 读
+        code_snippets/git_blame/recent_diffs/network_trace/ui_events/spec_diffs
+        （只由 build_debug_context 产出）→ 权重合计 0.53 恒缺失，quality_report
+        完整度上限 ≈0.47 直接进 RepairAgent prompt 与 API 输出。
+
+        已富化（含 code_snippets 键）或无 trace_id 时原样返回；富化失败
+        静默降级为简化形状（不阻断修复主流程）。
+        """
+        if not isinstance(debug_context, dict) or "code_snippets" in debug_context:
+            return debug_context
+        trace_id = debug_context.get("request_id") or debug_context.get("trace_id")
+        if not trace_id:
+            return debug_context
+        try:
+            from app.runtime.context.builder import build_debug_context
+
+            rich = await asyncio.to_thread(build_debug_context, trace_id)
+            if rich is not None:
+                merged = rich.model_dump()
+                # 富上下文无运行时快照时保留简化形状已有的快照
+                if not merged.get("runtime") and debug_context.get("runtime"):
+                    merged["runtime"] = debug_context["runtime"]
+                return merged
+        except Exception:
+            logger.warning("debug_context 富化失败，以简化形状继续", exc_info=True)
+        return debug_context
+
     def _safe_score_quality(
         self, debug_context: dict[str, Any], repair_context: dict[str, Any]
     ) -> Any:
@@ -86,13 +124,19 @@ class RepairContextAssembler:
                 "debug_context": debug_context,
                 "repair_context": repair_context,
             }
-            return evaluate(agent_ctx)
+            report = evaluate(agent_ctx)
+            # FIX: R7-Q3 —— QualityReport 是 Pydantic 模型，直接经
+            # json.dumps(default=str) 进 prompt/MCP 响应会退化为 Python repr
+            # 字符串（结构信息丢失、token 浪费、MCP 消费方拿到不可解析字段）
+            if hasattr(report, "model_dump"):
+                return report.model_dump()
+            return report
         except Exception:
             logger.warning("QualityScorer 评分失败，降级为 null_score", exc_info=True)
             try:
                 from app.quality.schemas import QualityReport
 
-                return QualityReport.null_score()
+                return QualityReport.null_score().model_dump()
             except Exception:
                 return None
 
@@ -161,7 +205,12 @@ class RepairContextAssembler:
             )
             if not records:
                 return None
-            return list(records)
+            # FIX: R7-Q3 —— DebugExperienceRecord 是 dataclass，直接进
+            # json.dumps(default=str) 退化为 repr 噪音；to_dict() 的 docstring
+            # 明写「供 Agent 上下文 JSON 序列化」，此处为首个消费方
+            return [
+                r.to_dict() if hasattr(r, "to_dict") else r for r in records
+            ]
         except Exception:
             logger.warning("debug experience recall failed", exc_info=True)
             return None

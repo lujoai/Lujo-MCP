@@ -54,6 +54,8 @@ MAX_FIELD_CHARS = 4000
 MAX_RAW_TRUNCATED = 800
 MAX_RISKS = 20
 MAX_RECOMMENDATIONS = 20
+# FIX: R7-Q5 —— prompt 中 error_message 的字符上限（~8K）
+_ERROR_MESSAGE_MAX_CHARS = 8000
 
 
 def _validate_security_review(raw_output: str) -> dict[str, Any]:
@@ -192,7 +194,12 @@ class SecurityAgent(BaseAgent):
         user_payload = {
             "repair_plan": repair_plan,
             "error_type": exception.get("type", ""),
-            "error_message": exception.get("message", ""),
+            # FIX: R7-Q5 —— error_message 截断（对齐 repair_agent 的 prompt
+            # 预算纪律）：/ingest/error 对 message 无字段级长度上限（唯一上界
+            # 是整体 1MB），MB 级 message 原样进 prompt → 超上下文、并行节点 FAILED
+            "error_message": truncate_field(
+                exception.get("message", ""), _ERROR_MESSAGE_MAX_CHARS
+            ),
             "affected_files": repair_plan.get("affected_files", []),
         }
         user_content = json.dumps(user_payload, ensure_ascii=False, default=str)

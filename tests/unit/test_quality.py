@@ -911,3 +911,73 @@ class TestEvidenceTypeEnum:
         }
         actual = {t.value for t in EvidenceType}
         assert expected == actual
+
+
+# ==================================================================
+# FIX: R7-Q2 —— prior_analysis 嵌套形状兼容（analyze_async 真实返回）
+# ==================================================================
+
+
+class TestPriorAnalysisShapeCompatibility:
+    """R7-Q2 回归：analyze_async 真实返回为嵌套形状
+    {analysis: {root_cause, confidence, ...}, analysis_source, cached, ...}，
+    scorer 读顶层 root_cause 恒 None → LLM_ANALYSIS 维度（0.12）恒缺失。
+    """
+
+    @staticmethod
+    def _real_analyze_async_shape():
+        """真实生产者形状（analyzer._llm_fallback_result，熔断兜底路径的
+        analyze_async 返回值——不伪造与消费者同形的 fixture）。"""
+        from app.llm.analyzer import _llm_fallback_result
+
+        return _llm_fallback_result()
+
+    def test_nested_shape_llm_analysis_present(self):
+        from app.quality.scorer import _score_llm_analysis
+
+        prior = self._real_analyze_async_shape()
+        assert "root_cause" not in prior  # 嵌套形状：顶层无 root_cause
+        dim = _score_llm_analysis({}, {"prior_analysis": prior})
+        assert dim.present is True
+        assert dim.score == 0.5  # fallback confidence=low
+
+    def test_nested_shape_evidence_extracted(self):
+        from app.quality.scorer import _extract_evidence
+
+        prior = self._real_analyze_async_shape()
+        evidence = _extract_evidence({}, {"prior_analysis": prior})
+        kinds = [e.type for e in evidence]
+        assert EvidenceType.LLM_REASONING in kinds
+
+    def test_flat_shape_still_supported(self):
+        """旧扁平形状（既有测试 fixture）向后兼容。"""
+        flat = {"root_cause": "x", "confidence": "high", "analysis_source": "llm"}
+        assert _score_llm_analysis({}, {"prior_analysis": flat}).score == 1.0
+
+    def test_nested_shape_none_prior_unchanged(self):
+        assert _score_llm_analysis({}, {"prior_analysis": None}).present is False
+
+
+# ==================================================================
+# FIX: R7-Q1 —— GIT_CONTEXT 维度的 repair_ctx.git_context 回退
+# ==================================================================
+
+
+class TestGitContextRepairFallback:
+    def test_repair_ctx_git_context_scores_when_debug_ctx_empty(self):
+        """debug_context 无 git 维度时，RepairContextAssembler 装配的
+        git_context 参与评分（实现声明此前未落地，_repair_ctx 形参从未使用）。"""
+        dim = _score_git_context({}, {"git_context": [{"file": "a.py"}]})
+        assert dim.present is True
+        assert dim.score == 0.6
+
+    def test_debug_ctx_git_dims_take_precedence(self):
+        dim = _score_git_context(
+            {"git_blame": [{"file": "a.py"}], "recent_diffs": [{"file": "a.py"}]},
+            {"git_context": []},
+        )
+        assert dim.score == 1.0
+
+    def test_both_empty_still_missing(self):
+        dim = _score_git_context({}, {})
+        assert dim.present is False

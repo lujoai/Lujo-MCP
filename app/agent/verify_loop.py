@@ -146,12 +146,26 @@ async def run_verify_loop(
     final_verdict: VerifyVerdict = VerifyVerdict.FAILED
     kb_writeback: Optional[bool] = None
 
-    # 单轮 DAG 执行超时（秒）：0 表示继承 agent_timeout（FIX: P1-9f 始终有 watchdog，
-    # 避免"无单轮超时"时最差 ≈ 轮数 × (repair 90s + 3 并行各 90s) 卡死）
+    # 单轮 DAG 执行超时（秒）：0 表示按单轮内部预算继承（FIX: P1-9f 始终有
+    # watchdog，避免"无单轮超时"时最差 ≈ 轮数 × (repair 90s + 3 并行各 90s) 卡死）
     round_timeout = float(getattr(settings, "agent_verify_loop_round_timeout", 0) or 0)
     if round_timeout <= 0:
-        round_timeout = float(getattr(settings, "agent_timeout", 90) or 90)
-        logger.debug("verify_loop round_timeout 未配置，继承 agent_timeout=%.1fs", round_timeout)
+        # FIX: R7-Q4 —— 轮预算算术。单轮内部预算 = RepairAgent(agent_timeout)
+        # + 并行节点(agent_dag_parallel_timeout or agent_timeout)。此前继承
+        # agent_timeout 等于把单轮预算收紧一半：RepairAgent 耗时 60-90s 时
+        # 并行阶段启动数秒即被 watchdog 取消，整轮返回 {"repair_plan": None}
+        # 存根、已成功成果丢弃。
+        parallel_budget = float(
+            settings.agent_dag_parallel_timeout or settings.agent_timeout
+        )
+        round_timeout = float(settings.agent_timeout or 0) + parallel_budget
+        logger.debug(
+            "verify_loop round_timeout 未配置，按单轮预算继承 %.1fs"
+            "（agent_timeout %s + 并行预算 %.1fs）",
+            round_timeout,
+            settings.agent_timeout,
+            parallel_budget,
+        )
 
     for i in range(1, max_iterations + 1):
         if round_timeout > 0:

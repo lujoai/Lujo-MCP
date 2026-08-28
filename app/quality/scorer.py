@@ -122,6 +122,27 @@ def _score_completeness(
 # ── 各维度评分函数 ──
 
 
+# ── prior_analysis 形状兼容 ──
+
+
+def _unwrap_prior(prior: Any) -> dict[str, Any]:
+    """兼容两形状（FIX: R7-Q2）：
+
+    - 真实生产形状（analyzer.analyze_async / KB 命中）为嵌套：
+      ``{analysis: {root_cause, confidence, ...}, knowledge_base_hit,
+      analysis_source, cached, ...}``；
+    - 旧扁平形状 ``{root_cause, confidence, ...}`` 向后兼容。
+      此前 scorer 读顶层 root_cause 恒 None → LLM_ANALYSIS 维度（0.12）
+      恒缺失 + 丢一条高相关证据。
+    """
+    if not isinstance(prior, dict):
+        return {}
+    analysis = prior.get("analysis")
+    if isinstance(analysis, dict):
+        return analysis
+    return prior
+
+
 def _score_trace(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> DimensionScore:
     """TRACE 维度：异常 + 堆栈帧是否存在（v0.5.1：source map 还原加成）。"""
     base = _score_trace_base(debug_ctx)
@@ -179,11 +200,20 @@ def _score_runtime(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> Di
     return DimensionScore(present=False, score=0.0, reason="无运行时快照（可能采集已关闭）")
 
 
-def _score_git_context(debug_ctx: dict[str, Any], _repair_ctx: dict[str, Any]) -> DimensionScore:
-    """GIT_CONTEXT 维度：git blame + recent diffs 是否可用。"""
+def _score_git_context(debug_ctx: dict[str, Any], repair_ctx: dict[str, Any]) -> DimensionScore:
+    """GIT_CONTEXT 维度：git blame + recent diffs 是否可用。
+
+    FIX: R7-Q1 —— 实现声明的 repair_ctx.git_context 回退此前缺失（形参
+    _repair_ctx 从未使用）：RepairContextAssembler 装配的 git_context
+    （堆栈前 3 帧 recent diff）在 debug_context 无 git 维度时应参与评分。
+    """
     blame = debug_ctx.get("git_blame") or []
     diffs = debug_ctx.get("recent_diffs") or []
     # 同时也检查 repair_ctx 中的 git_context（由 RepairContextAssembler 装配）
+    if not (blame or diffs):
+        git_ctx = repair_ctx.get("git_context") or []
+        if git_ctx:
+            return DimensionScore(present=True, score=0.6, reason=f"repair 装配 git_context {len(git_ctx)} 帧")
     has_blame = bool(blame)
     has_diffs = bool(diffs)
     if has_blame and has_diffs:
@@ -238,10 +268,15 @@ def _score_knowledge_base(debug_ctx: dict[str, Any], repair_ctx: dict[str, Any])
 
 
 def _score_llm_analysis(debug_ctx: dict[str, Any], repair_ctx: dict[str, Any]) -> DimensionScore:
-    """LLM_ANALYSIS 维度：先验 LLM 分析是否可用。"""
+    """LLM_ANALYSIS 维度：先验 LLM 分析是否可用。
+
+    FIX: R7-Q2 —— analyze_async 真实返回为嵌套形状（root_cause/confidence
+    在 analysis 子 dict），经 _unwrap_prior 兼容两形状。
+    """
     prior = repair_ctx.get("prior_analysis") or {}
-    if prior and prior.get("root_cause"):
-        conf = prior.get("confidence", "low")
+    inner = _unwrap_prior(prior)
+    if inner and inner.get("root_cause"):
+        conf = inner.get("confidence", "low")
         src = prior.get("analysis_source", "unknown")
         if conf == "high":
             return DimensionScore(present=True, score=1.0, reason=f"LLM 分析完成（置信度 high，来源 {src}）")
@@ -425,16 +460,18 @@ def _extract_evidence(
                 )
             )
 
-    # 8. LLM 分析证据
-    if prior and prior.get("root_cause"):
+    # 8. LLM 分析证据（FIX: R7-Q2 —— 经 _unwrap_prior 兼容嵌套形状）
+    prior = repair_ctx.get("prior_analysis") or {}
+    prior_inner = _unwrap_prior(prior)
+    if prior_inner and prior_inner.get("root_cause"):
         evidence.append(
             EvidenceItem(
                 type=EvidenceType.LLM_REASONING,
-                description=f"LLM 分析：{prior.get('root_cause', '')[:200]}",
+                description=f"LLM 分析：{prior_inner.get('root_cause', '')[:200]}",
                 source="llm_analyzer",
-                relevance=RelevanceLevel.HIGH if prior.get("confidence") == "high" else RelevanceLevel.MEDIUM,
+                relevance=RelevanceLevel.HIGH if prior_inner.get("confidence") == "high" else RelevanceLevel.MEDIUM,
                 detail={
-                    "confidence": prior.get("confidence"),
+                    "confidence": prior_inner.get("confidence"),
                     "analysis_source": prior.get("analysis_source"),
                     "cached": prior.get("cached", False),
                 },
