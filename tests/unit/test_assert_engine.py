@@ -185,3 +185,72 @@ class TestEdgeCases:
         assert len(result["diffs"]) == 3
         fields = {d["field"] for d in result["diffs"]}
         assert fields == {"status_code", "body.name", "body.version"}
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-V1/V2 —— 断言引擎类型边界
+# ---------------------------------------------------------------------------
+
+
+class TestBoolIntBoundary:
+    """R7-V1 回归：bool 与 int 数值相等但类型不同，不得判相等。
+
+    旧实现 ``if a == b: return True`` 首行短路（True == 1）→ 期望 True 实际 1
+    被判相等 → 漏报（恰是断言引擎要检测的 silent failure 被放过）。
+    """
+
+    def test_values_equal_true_vs_int_one_is_false(self):
+        from app.runtime.verifier.assert_engine import _values_equal
+
+        assert _values_equal(True, 1) is False
+        assert _values_equal(1, True) is False
+        assert _values_equal(False, 0) is False
+        assert _values_equal(0, False) is False
+
+    def test_values_equal_same_bool_types_still_equal(self):
+        from app.runtime.verifier.assert_engine import _values_equal
+
+        assert _values_equal(True, True) is True
+        assert _values_equal(False, False) is True
+
+    def test_values_equal_numeric_normalization_preserved(self):
+        """既有 P2 归一语义不受影响："1"(str) vs 1(int) 仍相等。"""
+        from app.runtime.verifier.assert_engine import _values_equal
+
+        assert _values_equal("1", 1) is True
+        assert _values_equal(1, "1") is True
+        assert _values_equal("200", 200) is True
+
+    def test_api_expect_true_actual_one_reports_diff(self):
+        """端到端：body 布尔期望 True 实际 1 必须产生 diff（修复前漏报）。"""
+        actual = {"status_code": 200, "body": {"enabled": 1}}
+        spec = {"id": "s1", "kind": "api", "expect": {"body_rules": {"enabled": True}}}
+        result = assert_behavior(actual, spec)
+        assert result["matched"] is False
+        assert result["silent_failure"] is True  # 2xx + 不匹配 → 静默失败（不再漏报）
+
+
+class TestStringStatusBoundary:
+    """R7-V2 回归：str status（JSON 反序列化 "500"）不得误判静默失败。"""
+
+    def test_string_5xx_not_silent_failure(self):
+        actual = {"status_code": "500", "body": {"ok": False}}
+        spec = {"id": "s1", "kind": "api", "expect": {"status": 200}}
+        result = assert_behavior(actual, spec)
+        assert result["matched"] is False
+        # 5xx 是显式失败而非静默失败（旧实现把 "500" 判成静默失败）
+        assert result["silent_failure"] is False
+
+    def test_string_2xx_still_silent_failure(self):
+        actual = {"status_code": "200", "body": {"ok": False}}
+        spec = {"id": "s1", "kind": "api", "expect": {"status": 404}}
+        result = assert_behavior(actual, spec)
+        assert result["matched"] is False
+        assert result["silent_failure"] is True
+
+    def test_non_numeric_status_falls_back_to_silent(self):
+        from app.runtime.verifier.assert_engine import _judge_silent_failure
+
+        assert _judge_silent_failure(False, {"status_code": "abc"}) is True
+        assert _judge_silent_failure(False, {"status_code": True}) is True
+        assert _judge_silent_failure(False, {"status_code": 503}) is False

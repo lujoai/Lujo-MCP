@@ -117,7 +117,17 @@ def _judge_silent_failure(matched: bool, actual: dict) -> bool:
     status = actual.get("status_code", 200)
     if status is None:
         return True  # 无状态码 → 归为静默
-    if not isinstance(status, int):
+    # FIX: R7-V2 —— JSON 反序列化后 status 可能是 str("500")：此前非 int
+    # 一律返回 True，5xx 被误判为静默失败（误导 AI 归因）。先归一转数值
+    # 再判 4xx/5xx。
+    if isinstance(status, bool):
+        return True
+    if isinstance(status, (str, float)):
+        try:
+            status = float(status)
+        except (TypeError, ValueError):
+            return True
+    if not isinstance(status, (int, float)):
         return True
     if 400 <= status < 600:
         return False
@@ -133,7 +143,13 @@ def _values_equal(a: Any, b: Any) -> bool:
     FIX: P2 值类型归一 —— JSON 反序列化/不同来源可能产生 "200"(str) vs
     200(int)、"1.5"(str) vs 1.5(float) 的错配，比较前把数值字符串归一到数值。
     bool 是 int 子类，显式排除避免 True == 1 误判。
+
+    FIX: R7-V1 —— bool 排除必须发生在 ``a == b`` 短路之前：``True == 1``
+    首行即返回 True，期望 True 实际 1 被判相等 → 断言引擎漏报（恰是它要
+    检测的 silent failure 被放过）。
     """
+    if isinstance(a, bool) != isinstance(b, bool):
+        return False
     if a == b:
         return True
     if a is None or b is None:

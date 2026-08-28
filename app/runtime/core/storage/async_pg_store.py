@@ -409,7 +409,14 @@ class AsyncPGTraceStore(TraceStorage):
                 try:
                     await _archive_old_traces(conn, settings.pg_archive_days)
                 except Exception as e:
+                    # FIX: R7-V3 —— 归档失败后 asyncpg 连接停留 failed transaction
+                    # 状态，紧接的 DELETE FROM traces 复用同连接必抛 → 每轮清理
+                    # 同位失败，过期清理永久停摆。ROLLBACK 清理事务状态后继续。
                     logger.warning("归档失败，继续执行过期清理: %s", e)
+                    try:
+                        await conn.execute("ROLLBACK")
+                    except Exception:
+                        logger.warning("归档失败后 ROLLBACK 失败", exc_info=True)
 
             cutoff = time.time() - ttl_seconds
             status = await conn.execute(

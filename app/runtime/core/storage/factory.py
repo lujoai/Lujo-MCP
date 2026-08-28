@@ -33,6 +33,10 @@ def _validate_backend() -> None:
         )
 
 
+class _AsyncMixError(RuntimeError):
+    """pg_async_enabled=True 时同步 getter 的配置错误（async-mix）。"""
+
+
 def _raise_async_mix(feature: str) -> None:
     """FIX: P1-4 pg_async_enabled=True 时同步 getter fail-fast。
 
@@ -40,8 +44,13 @@ def _raise_async_mix(feature: str) -> None:
     只会返回 coroutine 对象导致数据静默丢失。开启 pg_async_enabled 后，
     同步存储用户必须走 async 版本，否则启动/首次调用即抛配置错误，
     杜绝"部分丢部分写"的混合行为。
+
+    FIX: R7-V4 —— 专用异常类型：此前抛裸 RuntimeError 被 ``except Exception``
+    fallback 分支吞掉，pg_async_enabled=True + storage_fallback_to_memory=True
+    （默认）时静默降级 memory（重启即丢），与"启动即抛配置错误"的 docstring
+    自相矛盾。_AsyncMixError 在各 getter 中先行 re-raise，不走降级。
     """
-    raise RuntimeError(
+    raise _AsyncMixError(
         f"{feature}: pg_async_enabled=True 要求全链路 async 调用，"
         f"同步 getter 不可用（防止 coroutine 未 await 导致数据静默丢失）。"
         f"请把调用链迁移到 async 版本，或设置 PG_ASYNC_ENABLED=false 保持同步行为。"
@@ -67,6 +76,9 @@ def get_trace_store() -> TraceStorage:
                                 "trace_store initialized: backend=%s, async=disabled (psycopg2 sync)",
                                 settings.storage_backend,
                             )
+                    except _AsyncMixError:
+                        # FIX: R7-V4 —— async-mix 配置错误必须 fail-fast，不允许静默降级 memory
+                        raise
                     except Exception as e:
                         if settings.storage_fallback_to_memory:
                             logger.warning("PG trace_store 初始化失败，降级到 memory: %s", e)
@@ -101,6 +113,9 @@ def get_session_store() -> SessionStorage:
                                 "session_store initialized: backend=%s, async=disabled (psycopg2 sync)",
                                 settings.storage_backend,
                             )
+                    except _AsyncMixError:
+                        # FIX: R7-V4 —— async-mix 配置错误必须 fail-fast，不允许静默降级 memory
+                        raise
                     except Exception as e:
                         if settings.storage_fallback_to_memory:
                             logger.warning("PG session_store 初始化失败，降级到 memory: %s", e)
@@ -135,6 +150,9 @@ def get_error_store() -> ErrorStorage:
                                 "error_store initialized: backend=%s, async=disabled (psycopg2 sync)",
                                 settings.storage_backend,
                             )
+                    except _AsyncMixError:
+                        # FIX: R7-V4 —— async-mix 配置错误必须 fail-fast，不允许静默降级 memory
+                        raise
                     except Exception as e:
                         if settings.storage_fallback_to_memory:
                             logger.warning("PG error_store 初始化失败，降级到 no-op: %s", e)
@@ -169,6 +187,9 @@ def get_spec_store() -> SpecStorage:
                                 "spec_store initialized: backend=%s, async=disabled (psycopg2 sync)",
                                 settings.storage_backend,
                             )
+                    except _AsyncMixError:
+                        # FIX: R7-V4 —— async-mix 配置错误必须 fail-fast，不允许静默降级 memory
+                        raise
                     except Exception as e:
                         if settings.storage_fallback_to_memory:
                             logger.warning("PG spec_store 初始化失败，降级到 no-op: %s", e)
@@ -208,6 +229,9 @@ def get_knowledge_store() -> KnowledgeBaseStorage:
                                 "knowledge_store initialized: backend=%s, async=disabled (psycopg2 sync)",
                                 settings.storage_backend,
                             )
+                    except _AsyncMixError:
+                        # FIX: R7-V4 —— async-mix 配置错误必须 fail-fast，不允许静默降级 memory
+                        raise
                     except Exception as e:
                         if settings.storage_fallback_to_memory:
                             logger.warning("PG knowledge_store 初始化失败，降级到 no-op: %s", e)

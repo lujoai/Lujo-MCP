@@ -145,3 +145,80 @@ def test_async_pg_trace_store_write_counter_initialized():
     store = AsyncPGTraceStore()
     assert hasattr(store, "_write_counter")
     assert store._write_counter == 0
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-V3 —— 归档失败后 ROLLBACK，过期清理不再永久停摆
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_pg_cleanup_expired_rolls_back_after_archive_failure(monkeypatch):
+    """归档失败后必须 ROLLBACK 清理事务状态，紧接的 DELETE 才能正常执行。
+
+    旧实现仅 warning：asyncpg 连接停留 failed transaction，DELETE FROM traces
+    复用同连接必抛 → 每轮清理同位失败，过期清理永久停摆。
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import app.runtime.core.storage.async_pg_store as apg
+
+    executed = []
+
+    class _RecordingConn(AsyncMock):
+        async def execute(self, sql, *args, **kwargs):
+            executed.append(sql)
+            return "DELETE 3"
+
+    conn = _RecordingConn()
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__.return_value = conn
+    pool.acquire.return_value.__aexit__.return_value = None
+
+    async def _archive_boom(_conn, _days):
+        raise RuntimeError("archive table missing")
+
+    monkeypatch.setattr(apg, "_ensure_init", AsyncMock())
+    monkeypatch.setattr(apg, "_get_pool", AsyncMock(return_value=pool))
+    monkeypatch.setattr(apg, "_archive_old_traces", _archive_boom)
+    monkeypatch.setattr("app.config.settings.pg_archive_enabled", True)
+
+    store = apg.AsyncPGTraceStore()
+    affected = await store.cleanup_expired(ttl_seconds=3600)
+
+    assert affected == 3
+    rollback_idx = next(
+        i for i, sql in enumerate(executed) if sql.strip().upper() == "ROLLBACK"
+    )
+    delete_idx = next(i for i, sql in enumerate(executed) if "DELETE FROM traces" in sql)
+    assert rollback_idx < delete_idx, "ROLLBACK 必须先于 DELETE 清理 failed transaction"
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-V4 —— async-mix fail-fast 不允许被 fallback 吞
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("getter,attr", [
+    ("get_trace_store", "_trace_store"),
+    ("get_session_store", "_session_store"),
+    ("get_error_store", "_error_store"),
+    ("get_spec_store", "_spec_store"),
+    ("get_knowledge_store", "_knowledge_store"),
+])
+def test_async_mix_error_not_swallowed_by_fallback(monkeypatch, getter, attr):
+    """pg_async_enabled=True + storage_fallback_to_memory=True（默认）→
+    同步 getter 必须抛配置错误，不得静默降级 memory（重启即丢）。"""
+    import app.runtime.core.storage.factory as f
+
+    setattr(f, attr, None)
+    monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
+    monkeypatch.setattr("app.config.settings.pg_async_enabled", True)
+    monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
+
+    with pytest.raises(RuntimeError, match="pg_async_enabled=True 要求全链路 async 调用"):
+        getattr(f, getter)()
+
+    # 单例不得被静默降级实例污染
+    assert getattr(f, attr) is None
+    setattr(f, attr, None)
