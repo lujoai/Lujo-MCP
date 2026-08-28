@@ -161,7 +161,14 @@ def _ip_request(peer: str, headers: dict | None = None):
 
 
 class TestClientIpResolution:
-    """A1 回归：限流键的客户端 IP 解析不得信任可伪造的转发头首段。"""
+    """A1/R7-P1-1 回归：限流键的客户端 IP 解析不得信任可伪造的转发头首段。
+
+    R7-P1-1 修复后 fixture 按标准 nginx ``$proxy_add_x_forwarded_for`` 真实
+    追加语义构造：每层可信代理追加的是**它收到的对端地址**（$remote_addr），
+    因此 N 层可信代理时 XFF 最右 N 条由代理追加（不可伪造），最左一条即
+    真实客户端。旧 fixture 曾把"代理自身 IP"当作 XFF 最右段——该形状在标准
+    代理行为下不会发生，恰好掩盖了 off-by-one（同形状 fixture 自证失效）。
+    """
 
     def test_default_config_ignores_forged_xff(self, monkeypatch):
         """trusted_proxy_count=0（默认）：伪造 XFF 不得改变限流键 —— A1 核心。"""
@@ -176,24 +183,26 @@ class TestClientIpResolution:
         assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.99"
 
     def test_trusted_proxy_resolves_real_client(self, monkeypatch):
-        """count=1 + 私网对端（自有反代）：取 XFF 从右数第 2 个为客户端 IP。"""
+        """count=1 + 私网对端（自有反代）：反代追加客户端地址后 XFF 仅 1 条，
+        该条即真实客户端（$proxy_add_x_forwarded_for 最右 N=1 条）。"""
         from app.middleware import RateLimitMiddleware
 
         monkeypatch.setattr(settings, "trusted_proxy_count", 1)
         req = _ip_request(
             "192.168.1.10",
-            {"X-Forwarded-For": "203.0.113.5, 192.168.1.10"},
+            {"X-Forwarded-For": "203.0.113.5"},
         )
         assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.5"
 
     def test_trusted_proxy_multi_hop(self, monkeypatch):
-        """count=2（两层代理）：跳过右起 2 段取真实客户端。"""
+        """count=2（两层代理）：proxy1 追加客户端、proxy2 追加 proxy1 的地址，
+        XFF 右起 2 条为 [proxy1, proxy2]，真实客户端为 entries[-2]。"""
         from app.middleware import RateLimitMiddleware
 
         monkeypatch.setattr(settings, "trusted_proxy_count", 2)
         req = _ip_request(
             "172.16.0.5",
-            {"X-Forwarded-For": "203.0.113.5, 10.0.0.1, 172.16.0.5"},
+            {"X-Forwarded-For": "203.0.113.5, 10.0.0.1"},
         )
         assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.5"
 
@@ -208,26 +217,56 @@ class TestClientIpResolution:
         )
         assert RateLimitMiddleware._get_client_ip(req) == "8.8.8.8"
 
-    def test_forged_leftmost_segment_not_trusted(self, monkeypatch):
-        """攻击者在 XFF 最左伪造额外段：解析结果不受影响（只取右起第 N+1 段）。"""
+    def test_forged_prefix_with_standard_proxy_returns_real_client(self, monkeypatch):
+        """R7-P1-1 攻击回归：攻击者伪造 XFF 前缀 + 标准反代追加真实客户端。
+
+        攻击路径（count=1）：攻击者发 ``X-Forwarded-For: 1.1.1.1``，nginx 按
+        $proxy_add_x_forwarded_for 追加其真实 IP 后为 ``[1.1.1.1, 真实客户端]``。
+        修复前取 entries[-2] == 1.1.1.1（伪造值）当限流键 → 轮换伪造 IP 即得
+        全新限流桶，完全绕过限流；修复后必须解析出真实客户端。
+        """
         from app.middleware import RateLimitMiddleware
 
         monkeypatch.setattr(settings, "trusted_proxy_count", 1)
         req = _ip_request(
             "192.168.1.10",
-            {"X-Forwarded-For": "1.2.3.4, 203.0.113.5, 192.168.1.10"},
+            {"X-Forwarded-For": "1.1.1.1, 203.0.113.5"},
         )
-        # 右起第 2 段是 203.0.113.5（真实客户端），伪造的 1.2.3.4 被忽略
+        assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.5"
+
+    def test_forged_prefix_multi_hop_not_trusted(self, monkeypatch):
+        """count=2 + 攻击者伪造两段前缀：反代链追加的仍是最后两条，
+        真实客户端 = entries[-2]，伪造前缀全部被跳过。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 2)
+        # 攻击者发 "9.9.9.9, 1.1.1.1"；proxy1 追加真实客户端，proxy2 追加 proxy1
+        req = _ip_request(
+            "172.16.0.5",
+            {"X-Forwarded-For": "9.9.9.9, 1.1.1.1, 203.0.113.5, 10.0.0.1"},
+        )
         assert RateLimitMiddleware._get_client_ip(req) == "203.0.113.5"
 
     def test_insufficient_xff_falls_back_to_x_real_ip(self, monkeypatch):
-        """XFF 条目不足以越过可信代理数 → 回退 X-Real-IP。"""
+        """XFF 条目数不足可信代理数（反代未按预期追加）→ 回退 X-Real-IP。"""
+        from app.middleware import RateLimitMiddleware
+
+        monkeypatch.setattr(settings, "trusted_proxy_count", 2)
+        # 仅 1 条条目 < count=2：不足以越过两层可信代理
+        req = _ip_request(
+            "172.16.0.5",
+            {"X-Forwarded-For": "203.0.113.5", "X-Real-IP": "198.51.100.7"},
+        )
+        assert RateLimitMiddleware._get_client_ip(req) == "198.51.100.7"
+
+    def test_no_xff_entries_falls_back_to_x_real_ip(self, monkeypatch):
+        """count=1 且无 XFF（反代未追加）→ 回退 X-Real-IP。"""
         from app.middleware import RateLimitMiddleware
 
         monkeypatch.setattr(settings, "trusted_proxy_count", 1)
         req = _ip_request(
             "192.168.1.10",
-            {"X-Forwarded-For": "203.0.113.5", "X-Real-IP": "198.51.100.7"},
+            {"X-Real-IP": "198.51.100.7"},
         )
         assert RateLimitMiddleware._get_client_ip(req) == "198.51.100.7"
 
@@ -238,7 +277,7 @@ class TestClientIpResolution:
         monkeypatch.setattr(settings, "trusted_proxy_count", 1)
         req = _ip_request(
             "192.168.1.10",
-            {"X-Forwarded-For": "not-an-ip, 192.168.1.10", "X-Real-IP": "198.51.100.7"},
+            {"X-Forwarded-For": "not-an-ip", "X-Real-IP": "198.51.100.7"},
         )
         assert RateLimitMiddleware._get_client_ip(req) == "198.51.100.7"
 

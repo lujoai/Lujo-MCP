@@ -227,9 +227,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         - 0（默认）：忽略 XFF / X-Real-IP，一律使用直连对端 IP（安全默认，
           伪造转发头对限流键无任何影响）。
         - N > 0：仅当直连对端是私网/回环地址（流量确实经过自有内网反代）时
-          才信任 XFF，取"从右往左第 N+1 个"条目（跳过 N 层可信代理，余下
-          即真实客户端；右侧 N 段由可信代理追加，不可伪造）。条目不足或
-          非法时回退 X-Real-IP（由反代设置的私有头），再回退直连对端 IP。
+          才信任 XFF，取"从右往左第 N 个"条目（R7-P1-1：标准 nginx
+          ``$proxy_add_x_forwarded_for`` 语义下，每层可信代理追加的是它收到的
+          对端地址（$remote_addr），因此 XFF 最右 N 条由可信代理追加、最左那条
+          即真实客户端）。条目不足或非法时回退 X-Real-IP（由反代设置的私有头），
+          再回退直连对端 IP。
         """
         peer = request.client.host if request.client else "unknown"
 
@@ -244,9 +246,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         xff = request.headers.get("x-forwarded-for", "")
         if xff:
             entries = [ip.strip() for ip in xff.split(",") if ip.strip()]
-            # 从右往左跳过 count 个可信代理追加的条目，下一个即真实客户端
-            if len(entries) > count:
-                candidate = entries[-(count + 1)]
+            # 右起 count 条由可信代理追加（不可伪造），最左一条即真实客户端
+            if len(entries) >= count:
+                candidate = entries[-count]
                 if _is_valid_ip(candidate):
                     return candidate
             # 条目不足（反代未按预期追加客户端 IP）→ 继续尝试 X-Real-IP
