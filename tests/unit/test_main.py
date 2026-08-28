@@ -43,6 +43,33 @@ def test_validate_no_warn_on_loopback_bind_without_api_key(monkeypatch, caplog):
     assert "非回环" not in caplog.text
 
 
+# R7-A1: 绑定检测用 ipaddress 语义，不用子串匹配
+def test_validate_rejects_ipv6_unspecified_without_api_key(monkeypatch):
+    """IPv6 通配 ``::`` 等价全网监听：无鉴权时必须硬拒绝（旧子串匹配漏掉）。"""
+    monkeypatch.setattr(settings, "api_key", None)
+    with pytest.raises(RuntimeError):
+        validate_startup_configuration(host="::", api_key=None)
+
+
+def test_validate_not_misled_by_address_containing_zero_subnet(monkeypatch, caplog):
+    """合法地址 10.0.0.0 / 100.0.0.0 含 "0.0.0.0" 子串：不再被误杀成硬拒绝，
+    走"非回环 + 无鉴权"WARNING 路径。"""
+    monkeypatch.setattr("app.main.auth_enabled", lambda: False)
+    with caplog.at_level(logging.WARNING):
+        validate_startup_configuration(host="10.0.0.0", api_key=None)
+        validate_startup_configuration(host="100.0.0.0", api_key=None)
+    assert "10.0.0.0" in caplog.text
+    assert "100.0.0.0" in caplog.text
+
+
+def test_validate_hostname_bind_warns_without_api_key(monkeypatch, caplog):
+    """无法解析为主机名/地址绑定（如自定义域名）：保留非回环 warning 路径。"""
+    monkeypatch.setattr("app.main.auth_enabled", lambda: False)
+    with caplog.at_level(logging.WARNING):
+        validate_startup_configuration(host="debug.example.com", api_key=None)
+    assert "debug.example.com" in caplog.text
+
+
 def test_validate_no_warn_on_non_loopback_bind_with_api_key(caplog):
     with caplog.at_level(logging.WARNING):
         validate_startup_configuration(host="192.168.1.10", api_key="secret")

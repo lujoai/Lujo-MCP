@@ -35,6 +35,20 @@ register_all_tools()
 logger = logging.getLogger("lujo-mcp")
 
 
+def _is_unspecified_bind(bind_host: str) -> bool:
+    """FIX: R7-A1 —— 是否 IPv4 0.0.0.0 / IPv6 :: 通配绑定。
+
+    此前用子串匹配 ``"0.0.0.0" in str(bind_host)``：漏掉 IPv6 通配 ``::``
+    （SEC-03 对 IPv6 失效），且误杀含子串的合法地址（10.0.0.0 / 100.0.0.0[1:]）。
+    ``ipaddress.ip_address(h).is_unspecified`` 对两类通配均成立；主机名
+    解析失败返回 False（走下方非回环 warning 路径，不阻断）。
+    """
+    try:
+        return ipaddress.ip_address(str(bind_host)).is_unspecified
+    except ValueError:
+        return False
+
+
 def validate_startup_configuration(host: str | None = None, api_key: str | None = None) -> None:
     """拒绝外网监听 + 无鉴权的危险启动方式。"""
     bind_host = host if host is not None else settings.host
@@ -42,14 +56,14 @@ def validate_startup_configuration(host: str | None = None, api_key: str | None 
     # 显式传入的 api_key 参数优先（兼容旧调用），否则按 API_KEYS 解析出的有效 key 列表判定，
     # 避免"只配 API_KEYS 多 key、未配 API_KEY"的合法部署被误拒。
     auth_on = bool(api_key) if api_key is not None else auth_enabled()
-    if "0.0.0.0" in str(bind_host) and not auth_on:
+    if _is_unspecified_bind(bind_host) and not auth_on:
         raise RuntimeError(
             "Refusing to start: host contains 0.0.0.0 but no API key is configured. "
             "Set API_KEY or API_KEYS before exposing the service."
         )
     # FIX S3-4: 绑定非回环地址（局域网/公网 IP）且未配置鉴权时打 WARNING，
     # 避免"默认配置即无鉴权对外暴露"的部署不自知（0.0.0.0 已在上方硬拒绝）。
-    if not auth_on and "0.0.0.0" not in str(bind_host):
+    if not auth_on and not _is_unspecified_bind(bind_host):
         try:
             is_loopback = ipaddress.ip_address(str(bind_host)).is_loopback
         except ValueError:

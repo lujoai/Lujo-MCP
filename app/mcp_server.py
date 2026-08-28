@@ -100,6 +100,15 @@ def cleanup_resources() -> None:
     except Exception as e:
         logger.warning(f"stdio 退出卸载 excepthook 失败: {e}")
 
+    # 4) FIX: R7-A5 —— 关闭同步工具专用线程池。ThreadPoolExecutor 非 daemon，
+    # 此前退出从不 shutdown：超时仍在跑的工具线程在解释器退出时被
+    # concurrent.futures 的 _python_exit join → 进程无法退出直至宿主强杀。
+    # wait=False 不等运行中任务；cancel_futures 撤掉排队未启动的任务。
+    try:
+        _TOOL_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    except Exception as e:
+        logger.warning(f"stdio 退出关闭工具线程池失败: {e}")
+
 
 def _signal_handler(signum, frame):
     """SIGINT/SIGTERM 兜底：触发清理后退出。

@@ -20,6 +20,18 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 _CACHE_TTL = 30  # 秒
 _cache: dict = {}  # key -> (timestamp, data)
 _REDIS_CACHE_KEY = "ai-debug:dashboard:all_traces"
+# FIX: R7-A4 —— 缓存按 limit 分档：Dashboard 常态请求（limit≤100）只按
+# 100 条档计算，避免每个 TTL 周期恒按 1000 条全量算（此前每 error 两次
+# 完整 get_logs 扫描 ≈ 3000 次存储读取/周期）；大 limit 请求走 1000 档。
+_CACHE_TIERS = (100, 1000)
+
+
+def _cache_key(tier: int) -> str:
+    return f"all_traces:{tier}"
+
+
+def _redis_cache_key(tier: int) -> str:
+    return f"{_REDIS_CACHE_KEY}:{tier}"
 
 
 def invalidate_cache(source: str | None = None) -> None:
@@ -31,11 +43,13 @@ def invalidate_cache(source: str | None = None) -> None:
     DASH-SSE-001：同时广播 SSE 变更信号，订阅了 /api/dashboard/stream 的前端
     收到后即时 re-fetch（叠加在轮询之上）。无订阅者或功能关闭时为 no-op。
     """
-    _cache.pop("all_traces", None)
+    for tier in _CACHE_TIERS:
+        _cache.pop(_cache_key(tier), None)
     redis_client = _get_redis_cache()
     if redis_client is not None:
         try:
-            redis_client.delete(_REDIS_CACHE_KEY)
+            for tier in _CACHE_TIERS:
+                redis_client.delete(_redis_cache_key(tier))
         except Exception:
             logger.warning("Dashboard L2 Redis 缓存清除失败", exc_info=True)
 
@@ -60,30 +74,28 @@ def _safe_int(value, default=0):
 
 
 def _extract_error_summary(err: dict) -> dict:
-    """从 errors 缓冲的记录中提取摘要"""
-    trace_id = err.get("error_id", "")
-    meta = {}
-    try:
-        for entry in logs.get_logs(trace_id):
-            if entry.get("step") == "trace_meta":
-                data = entry.get("data")
-                if isinstance(data, dict):
-                    meta = data
-                    break
-    except Exception:
-        pass
+    """从 errors 缓冲的记录中提取摘要（单遍扫描，FIX: R7-A4）。
 
-    trace_kind = meta.get("trace_kind", "exception")
+    此前 trace_meta 与 verify 分别做一次完整 get_logs 扫描，缓存恒按
+    1000 条全量算时成本放大 ~10×（3000 次存储读取/TTL 周期）。
+    """
+    trace_id = err.get("error_id", "")
+    meta: dict = {}
     verify_count = 0
     has_silent_failure = False
     try:
         for entry in logs.get_logs(trace_id):
-            if entry.get("step") == "verify":
-                data = entry.get("data")
-                if isinstance(data, dict):
-                    verify_count += 1
-                    if data.get("silent_failure"):
-                        has_silent_failure = True
+            step = entry.get("step")
+            data = entry.get("data")
+            if not isinstance(data, dict):
+                continue
+            if step == "trace_meta":
+                if not meta:
+                    meta = data
+            elif step == "verify":
+                verify_count += 1
+                if data.get("silent_failure"):
+                    has_silent_failure = True
     except Exception:
         pass
 
@@ -92,7 +104,7 @@ def _extract_error_summary(err: dict) -> dict:
         "timestamp": err.get("timestamp", 0),
         "type": err.get("type", "ERROR"),
         "message": (err.get("message") or "")[:200],
-        "trace_kind": trace_kind,
+        "trace_kind": meta.get("trace_kind", "exception"),
         "occurrence_count": err.get("occurrence_count", 1),
         "has_silent_failure": has_silent_failure,
         "verify_count": verify_count,
@@ -164,21 +176,22 @@ def _extract_trace_summary(request_id: str) -> dict | None:
 def _collect_all_traces(limit: int = 100) -> list[dict]:
     """合并 errors 缓冲和 TraceStorage 中的 trace 摘要（带多级缓存 L1+L2）
 
-    FIX: P1-E1 —— 缓存按最大 limit（1000）计算并缓存完整结果，调用方按需切片。
-    此前按首个请求的 limit 计算并缓存整个 result：30s TTL 窗口内小 limit 请求
-    （如 10）先执行并缓存 10 条，后续大 limit 请求（如 1000）命中缓存
-    `cached[1][:1000]` 却只有 10 条——返回被首个请求截断的数据（L2 Redis
-    跨实例共享，污染面更大）。
+    FIX: P1-E1 —— 缓存按最大档计算并缓存完整结果，调用方按需切片：
+    小 limit 请求先缓存大 limit 后命中不再返回截断数据。
+
+    FIX: R7-A4 —— 缓存按 limit 分档（100/1000）：Dashboard 常态请求
+    （limit≤100）只算 100 条档，不再每 TTL 周期恒按 1000 条全量算；
+    大 limit 请求走 1000 档。各档独立缓存，跨档不截断（E1 语义保持）。
     """
     limit = min(max(limit, 1), 1000)
-    # 缓存计算/存储统一用最大档（与 limit 的钳制上限一致），保证缓存结果
-    # 对任意后续请求都足够长
-    cache_limit = 1000
+    tier = min((t for t in _CACHE_TIERS if t >= limit), default=_CACHE_TIERS[-1])
+    cache_limit = tier
+    key = _cache_key(tier)
 
     now = time.monotonic()
 
     # ── L1: 内存缓存 ──
-    cached = _cache.get("all_traces")
+    cached = _cache.get(key)
     if cached and (now - cached[0]) < _CACHE_TTL:
         return cached[1][:limit]
 
@@ -186,11 +199,11 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
     redis_client = _get_redis_cache()
     if redis_client is not None:
         try:
-            raw = redis_client.get(_REDIS_CACHE_KEY)
+            raw = redis_client.get(_redis_cache_key(tier))
             if raw:
                 result = json.loads(raw)
                 # L2 命中 → 回填 L1
-                _cache["all_traces"] = (now, result)
+                _cache[key] = (now, result)
                 return result[:limit]
         except Exception:
             logger.warning("Dashboard L2 Redis 缓存读取失败", exc_info=True)
@@ -215,11 +228,11 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
     result.sort(key=lambda t: t.get("timestamp", 0), reverse=True)
 
     # ── 写 L1 + L2（完整 cache_limit 长度）──
-    _cache["all_traces"] = (now, result)
+    _cache[key] = (now, result)
     if redis_client is not None:
         try:
             redis_client.setex(
-                _REDIS_CACHE_KEY,
+                _redis_cache_key(tier),
                 _CACHE_TTL,
                 json.dumps(result, ensure_ascii=False, default=str),
             )

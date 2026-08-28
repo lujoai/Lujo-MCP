@@ -336,3 +336,54 @@ class TestToolRoleRequirementsCoverage:
             f"以下工具已注册但未在 TOOL_ROLE_REQUIREMENTS 中定义角色要求: {missing}。"
             f"未定义的工具将默认要求 admin 角色（fail-closed），但应显式声明。"
         )
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-A3 —— SSE 响应统一补缓冲控制头（Cache-Control / X-Accel-Buffering）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_sse_stream_has_buffer_control_headers():
+    """GET /mcp SSE 流必须带 Cache-Control: no-cache 与 X-Accel-Buffering: no。
+
+    缺失时 nginx 默认 proxy_buffering on 会攒批延迟心跳与事件（dashboard
+    流有头、MCP 流没有的修复不对称，R7-A3）。
+    """
+    from app.api import mcp_routes
+    from app.mcp.transports.session import MCPSession
+
+    sid = "sse-header-session"
+    registry._sessions[sid] = MCPSession(session_id=sid)
+    try:
+        response = await mcp_routes.mcp_get(_sse_request(sid))
+        assert response.headers["Cache-Control"] == "no-cache"
+        assert response.headers["X-Accel-Buffering"] == "no"
+        # 关闭生成器（触发 finally 取消订阅），避免悬挂任务
+        await response.body_iterator.aclose()
+    finally:
+        registry._sessions.pop(sid, None)
+
+
+def test_mcp_post_sse_fallback_has_buffer_control_headers():
+    """POST /mcp（Accept: SSE、无订阅者回退为流式响应）同样必须带头。"""
+    client = _client()
+    init_resp = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    session_id = init_resp.headers["Mcp-Session-Id"]
+    client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": session_id},
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+    )
+    resp = client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": session_id, "Accept": "text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    )
+    # 无订阅者 → publish False → 回退为单事件 SSE 流
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    assert resp.headers["Cache-Control"] == "no-cache"
+    assert resp.headers["X-Accel-Buffering"] == "no"

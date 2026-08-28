@@ -4,7 +4,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 import json
 
 from app.config import settings
@@ -21,6 +21,7 @@ from app.schemas import (
     DebugRequest, AnalyzeRequest, DebugResponse, VerifyRequest, VerifyUiRequest,
     SourcemapUploadRequest,
 )
+from app.api.sse import create_sse_response
 from app.auth.rbac import require_role
 
 logger = logging.getLogger("lujo-mcp.api")
@@ -157,7 +158,8 @@ async def debug_analyze_stream(req: AnalyzeRequest):
             logger.error(str(e), exc_info=True)
             yield f"data: {json.dumps({'error': 'Tool execution failed'}, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    # FIX: R7-A3 —— 统一经 create_sse_response 补缓冲控制头
+    return create_sse_response(event_stream())
 
 
 @router.post("/analyze/async", dependencies=[Depends(require_role("admin", "developer"))])

@@ -232,7 +232,7 @@ class TestDashboardCache:
     def test_cache_populated(self):
         """首次调用后缓存被填充"""
         dashboard_module._collect_all_traces(limit=10)
-        assert "all_traces" in dashboard_module._cache
+        assert dashboard_module._cache_key(100) in dashboard_module._cache
 
     def test_cache_returns_same_data(self):
         """TTL 内返回缓存数据"""
@@ -247,12 +247,12 @@ class TestDashboardCache:
         with patch("app.api.dashboard.time") as mock_time:
             mock_time.monotonic.return_value = 100.0
             dashboard_module._collect_all_traces(limit=10)
-            assert dashboard_module._cache["all_traces"][0] == 100.0
+            assert dashboard_module._cache[dashboard_module._cache_key(100)][0] == 100.0
 
             # 模拟时间过了 TTL+1 秒
             mock_time.monotonic.return_value = 100.0 + dashboard_module._CACHE_TTL + 1
             dashboard_module._collect_all_traces(limit=10)
-            assert dashboard_module._cache["all_traces"][0] == 100.0 + dashboard_module._CACHE_TTL + 1
+            assert dashboard_module._cache[dashboard_module._cache_key(100)][0] == 100.0 + dashboard_module._CACHE_TTL + 1
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ class TestDashboardCacheLimitIsolation:
         assert len(first) == 1  # 小 limit 正常切片
 
         # 缓存里存的是完整数据（≥3 条），不是被 limit=1 截断的
-        cached_result = dashboard_module._cache["all_traces"][1]
+        cached_result = dashboard_module._cache[dashboard_module._cache_key(100)][1]
         assert len(cached_result) >= 3
 
         # 大 limit 命中缓存：返回完整数据（旧实现此处只返回 1 条）
@@ -296,9 +296,103 @@ class TestDashboardCacheLimitIsolation:
             source="test",
         )
         dashboard_module._collect_all_traces(limit=2)
-        cached_result = dashboard_module._cache["all_traces"][1]
+        cached_result = dashboard_module._cache[dashboard_module._cache_key(100)][1]
         # 缓存未被 limit=2 截断（至少含刚造的 1 条且长度不等于 2 的钳制）
         assert len(cached_result) >= 1
         # 再以任意 limit 取，均从同一份完整缓存切片
         assert dashboard_module._collect_all_traces(limit=1) == cached_result[:1]
         assert dashboard_module._collect_all_traces(limit=5) == cached_result[:5]
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-A4 —— 缓存按 limit 分档 + 摘要提取单遍扫描
+# ---------------------------------------------------------------------------
+
+
+class TestDashboardCacheTiering:
+    """A4 回归：常态小 limit 请求不再驱动 1000 条全量计算。"""
+
+    def test_small_limit_uses_100_tier(self):
+        """limit≤100 → 缓存 100 档；L1 命中后不再触发 1000 档计算。"""
+        dashboard_module._cache.clear()
+        dashboard_module._collect_all_traces(limit=10)
+        assert dashboard_module._cache_key(100) in dashboard_module._cache
+        assert dashboard_module._cache_key(1000) not in dashboard_module._cache
+
+    def test_large_limit_uses_1000_tier(self):
+        """limit>100 → 缓存 1000 档。"""
+        dashboard_module._cache.clear()
+        dashboard_module._collect_all_traces(limit=1000)
+        assert dashboard_module._cache_key(1000) in dashboard_module._cache
+
+    def test_tiers_independent_no_cross_tier_truncation(self):
+        """E1 语义保持：各档独立缓存，小档先缓存后大档仍拿到完整数据。"""
+        dashboard_module._cache.clear()
+        for i in range(3):
+            trace_repo.save_trace(
+                f"ValueError{i}", f"tier-msg-{i}",
+                [{"file": "a.py", "line": 1, "function": "f"}],
+                source="test",
+            )
+        first = dashboard_module._collect_all_traces(limit=1)
+        assert len(first) == 1
+
+        second = dashboard_module._collect_all_traces(limit=1000)
+        assert len(second) >= 3  # 1000 档独立计算，不被 1 截断
+
+    def test_invalidate_clears_all_tiers(self):
+        """invalidate_cache 清除全部档位（L1 + Redis mock）。"""
+        dashboard_module._cache.clear()
+        dashboard_module._collect_all_traces(limit=10)
+        dashboard_module._collect_all_traces(limit=1000)
+        assert dashboard_module._cache  # 已有缓存
+
+        from unittest.mock import patch
+
+        class _FakeRedis:
+            def __init__(self):
+                self.deleted = []
+
+            def delete(self, key):
+                self.deleted.append(key)
+
+        fake = _FakeRedis()
+        with patch("app.api.dashboard._get_redis_cache", return_value=fake):
+            dashboard_module.invalidate_cache()
+
+        assert dashboard_module._cache == {}
+        assert fake.deleted == [
+            dashboard_module._redis_cache_key(100),
+            dashboard_module._redis_cache_key(1000),
+        ]
+
+
+class TestExtractErrorSummarySinglePass:
+    """A4 回归：摘要提取单遍扫描（此前对每个 error 做两次完整 get_logs）。"""
+
+    def test_get_logs_called_once_per_error(self):
+        from unittest.mock import patch
+
+        import app.runtime.core.logs as logs_module
+
+        from app.runtime.core.errors import record as record_error
+
+        err_id = record_error(
+            {"type": "ValueError", "message": "x",
+             "frames": [{"file": "a.py", "line": 1, "function": "f"}]},
+            source="test",
+        )
+
+        calls = {"n": 0}
+        real_get_logs = logs_module.get_logs
+
+        def counting_get_logs(rid):
+            calls["n"] += 1
+            return real_get_logs(rid)
+
+        with patch.object(logs_module, "get_logs", counting_get_logs):
+            dashboard_module._extract_error_summary(
+                {"error_id": err_id, "timestamp": 0, "type": "ValueError", "message": "x"}
+            )
+
+        assert calls["n"] == 1  # 旧实现为 2 次

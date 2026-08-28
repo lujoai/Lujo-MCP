@@ -103,3 +103,25 @@ async def test_run_stdio_bad_utf8_frame_does_not_kill_service(monkeypatch, capsy
     # 服务未被杀死：后续合法帧正常响应
     assert '"id": 7' in out
     assert '"ok": true' in out
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-A5 —— 退出时关闭同步工具线程池（防解释器退出被 join 阻塞）
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_resources_shuts_down_tool_executor(monkeypatch):
+    """R7-A5 回归：cleanup_resources 必须关闭 _TOOL_EXECUTOR。
+
+    ThreadPoolExecutor 非 daemon，退出从不 shutdown 时超时仍在跑的工具线程
+    会被 _python_exit join，进程无法退出直至宿主强杀。
+    """
+    import app.mcp_server as mcp_server
+
+    mcp_server._cleanup_done = False
+    monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
+
+    mcp_server.cleanup_resources()
+    mcp_server._cleanup_done = False  # 恢复，避免影响其他用例的幂等语义
+
+    assert mcp_server._TOOL_EXECUTOR._shutdown is True

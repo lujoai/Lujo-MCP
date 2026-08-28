@@ -280,3 +280,83 @@ def test_ingest_batch_empty_events_still_ok():
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
 
+
+
+# ---------------------------------------------------------------------------
+# R7-A2：畸形 JSON / 非法 UTF-8 走 400（不再被 413 分支吞掉回显内部信息）
+# ---------------------------------------------------------------------------
+
+
+def _make_batch_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_batch_invalid_json_returns_400_not_413():
+    """非法 JSON（JSONDecodeError 是 ValueError 子类）必须 400 + 固定文案。"""
+    client = _make_batch_client()
+    resp = client.post(
+        "/ingest/batch",
+        content=b"{not-valid-json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid JSON body"
+
+
+def test_batch_invalid_utf8_gzip_returns_400_not_413():
+    """gzip 载荷含非法 UTF-8（UnicodeDecodeError 是 ValueError 子类）→ 400。"""
+    import gzip as _gzip
+
+    client = _make_batch_client()
+    resp = client.post(
+        "/ingest/batch",
+        content=_gzip.compress(b"\xff\xfe not utf8"),
+        headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid JSON body"
+
+
+def test_batch_gzip_bomb_still_413():
+    """gzip 解压炸弹仍 413（专用异常，不再与 JSON 解析错误共用分支）。"""
+    import gzip as _gzip
+    import io as _io
+
+    from app.api.ingest import _MAX_DECOMPRESSED_SIZE
+
+    client = _make_batch_client()
+    # 压缩后远小于 max_body_size(1MB)，解压后超过 10MB 上限
+    bomb = _gzip.compress(b"\x00" * (_MAX_DECOMPRESSED_SIZE + 1))
+    assert len(bomb) < 1024 * 1024
+    resp = client.post(
+        "/ingest/batch",
+        content=bomb,
+        headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
+    )
+    assert resp.status_code == 413
+    assert "too large" in resp.json()["detail"].lower()
+
+
+def test_batch_valid_gzip_payload_ok():
+    """合法 gzip 压缩 batch 上报不受影响。"""
+    import gzip as _gzip
+    import json as _json
+
+    client = _make_batch_client()
+    payload = _json.dumps({
+        "events": [{"path": "/ingest/error", "payload": {"message": "gzip-ok"}}]
+    }).encode()
+    resp = client.post(
+        "/ingest/batch",
+        content=_gzip.compress(payload),
+        headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 1

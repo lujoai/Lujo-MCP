@@ -27,6 +27,16 @@ _MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
 _MAX_BATCH_EVENTS = 100
 
 
+class _DecompressedSizeExceeded(Exception):
+    """gzip 解压后体积超限。
+
+    FIX: R7-A2 —— 必须独立于 ValueError：json.JSONDecodeError /
+    UnicodeDecodeError 都是 ValueError 子类，此前共用 ``except ValueError``
+    分支时，非法 JSON / 非法 UTF-8 被误判为"解压超限"返回 413，
+    且回显解析器内部信息。专用异常让 413 只表达"体积超限"。
+    """
+
+
 def _bounded_gzip_decompress(data: bytes, max_size: int = _MAX_DECOMPRESSED_SIZE) -> bytes:
     with gzip.GzipFile(fileobj=io.BytesIO(data)) as f:
         chunks, total = [], 0
@@ -36,7 +46,9 @@ def _bounded_gzip_decompress(data: bytes, max_size: int = _MAX_DECOMPRESSED_SIZE
                 break
             total += len(chunk)
             if total > max_size:
-                raise ValueError(f"Decompressed size exceeds {max_size} bytes")
+                raise _DecompressedSizeExceeded(
+                    f"Decompressed size exceeds {max_size} bytes"
+                )
             chunks.append(chunk)
     return b"".join(chunks)
 
@@ -213,6 +225,9 @@ async def ingest_batch(request: Request):
     """
     # V5 处理 gzip 压缩请求
     content_encoding = request.headers.get("content-encoding", "").lower()
+    # FIX: R7-A2 —— 异常分支按语义拆分：仅"解压超限"返回 413；
+    # 非法 JSON / 非法 UTF-8（此前同为 ValueError 子类被 413 吞掉）归一
+    # 400 + 固定文案，不回显解析器内部信息。
     try:
         if content_encoding == "gzip":
             body = await request.body()
@@ -220,8 +235,13 @@ async def ingest_batch(request: Request):
             req = json.loads(body.decode("utf-8"))
         else:
             req = await request.json()
-    except ValueError as e:
-        raise HTTPException(status_code=413, detail=str(e))
+    except _DecompressedSizeExceeded:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Decompressed body too large, max {_MAX_DECOMPRESSED_SIZE} bytes",
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
     except Exception as e:
         logger.error(f"Failed to parse request body: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid request body")

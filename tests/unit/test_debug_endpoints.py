@@ -40,3 +40,31 @@ def test_list_sessions_uses_time_for_idle_seconds():
     assert result["count"] == 1
     idle = result["sessions"][0]["idle_seconds"]
     assert isinstance(idle, float)
+
+
+# ---------------------------------------------------------------------------
+# FIX: R7-A3 —— /api/debug/analyze/stream SSE 统一补缓冲控制头
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_stream_has_buffer_control_headers():
+    """R7-A3 回归：analyze/stream 必须带 Cache-Control/X-Accel-Buffering 头
+    （与 dashboard 流对称，防 nginx 默认缓冲攒批延迟事件）。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.debug import router
+    from app.runtime.core.logs import add_log, create_request_id
+
+    rid = create_request_id()
+    add_log(rid, "request_start", {"method": "POST", "url": "/x"})
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    resp = client.post("/api/debug/analyze/stream", json={"request_id": rid})
+
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    assert resp.headers["Cache-Control"] == "no-cache"
+    assert resp.headers["X-Accel-Buffering"] == "no"

@@ -12,13 +12,14 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.config import settings
 from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INVALID_PARAMS, INTERNAL_ERROR
 from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES
 from app.mcp.transports.session import registry, SessionLimitExceeded
 from app.mcp.transports.sse import hub
+from app.api.sse import create_sse_response
 from app.mcp.tools import TOOL_ROLE_REQUIREMENTS
 
 logger = logging.getLogger("lujo-mcp.api.mcp")
@@ -157,7 +158,8 @@ async def mcp_post(request: Request):
     if _accepted_sse(request):
         async def event_gen():
             yield hub.format_event(result)
-        sr = StreamingResponse(event_gen(), media_type="text/event-stream")
+        # FIX: R7-A3 —— 统一经 create_sse_response 补缓冲控制头
+        sr = create_sse_response(event_gen())
         sr.headers["Mcp-Session-Id"] = session_id
         return sr
 
@@ -210,7 +212,8 @@ async def mcp_get(request: Request):
         finally:
             hub.unsubscribe(session_id, q)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    # FIX: R7-A3 —— 统一经 create_sse_response 补缓冲控制头
+    return create_sse_response(event_stream())
 
 
 @router.delete("")
