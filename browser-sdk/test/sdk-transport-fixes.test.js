@@ -198,3 +198,35 @@ test("节流：暂存批次由单一定时器间隔错发，而非齐发", () =>
     Date.now = realNow;
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// FIX: R7-G1 —— 压缩路径节流失效：时间戳必须同步登记在发送决策点
+// ---------------------------------------------------------------------------
+
+test("压缩×节流：压缩异步回调不再绕过节流配额", async () => {
+  const SDK = freshSDK();
+  MockXHR.reset();
+  clearLocalStorage();
+  SDK._setConfig("endpoint", "http://localhost:8000");
+  SDK._setConfig("batchSize", 1);              // 每事件同步 flush（4 事件 → 4 批）
+  SDK._setConfig("enableCompression", true);   // 压缩路径（真实 CompressionStream）
+  SDK._setConfig("compressionThreshold", 1);   // 全部走压缩
+  SDK._setConfig("maxBatchesPerWindow", 2);    // 窗口内只允许 2 个请求
+  SDK._setConfig("throttleWindowMs", 60000);   // 长窗口，测试期间不自然过期
+
+  // 4 次同步 flush：修复前压缩路径的时间戳只在异步回调里登记，JS 单线程下
+  // 同步 while 循环跑完全部分片后回调才执行 → 所有分片看到过期时间戳，
+  // maxBatchesPerWindow:2 时 4 个请求齐发（已实测复现）。
+  for (let i = 0; i < 4; i++) SDK.reportError(new Error("gzip-throttle-" + i));
+
+  await settle(); // 等压缩回调与 XHR 异步完成
+
+  // 窗口配额 2：只应有 2 个请求发出，其余 2 批进入暂存队列
+  assert.equal(MockXHR.instances.length, 2, "压缩路径下节流必须同步生效（修复前 4 个齐发）");
+
+  // 暂存批次不丢数据：pagehide 同步冲刷后补发剩余 2 批
+  MockXHR.reset();
+  SDK._flushBatch(true);
+  assert.equal(MockXHR.instances.length, 2, "pagehide 应同步冲刷暂存批次");
+});

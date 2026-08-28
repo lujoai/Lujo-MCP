@@ -275,7 +275,10 @@
   }
 
   function _flushBatch(useBeacon) {
-    if (_batchQueue.length === 0 || !cfg.endpoint) return;
+    // FIX: R7-G1 —— beacon（pagehide/unload）冲刷不能因事件队列为空而提前
+    // return：节流暂存的 _pendingBatches 同样需要在卸载前同步冲刷，
+    // 否则窗口满后暂存的批次在页面关闭时静默丢失。
+    if ((!useBeacon && _batchQueue.length === 0) || !cfg.endpoint) return;
 
     if (_batchTimer) {
       clearTimeout(_batchTimer);
@@ -327,6 +330,11 @@
         continue;
       }
 
+      // FIX: R7-G1 —— 发送决策点同步登记时间戳。此前压缩路径的时间戳只在
+      // 异步压缩回调里登记，JS 单线程下同步 while 循环跑完全部分片后回调
+      // 才执行 → 所有分片看到过期时间戳，节流失效（maxBatchesPerWindow:2
+      // 时实测 4 个请求齐发）。无论是否压缩，登记都必须发生在本循环内。
+      _batchTimestamps.push(now);
       _sendBatchWithCompression(url, body, false);
     }
   }
@@ -336,6 +344,8 @@
     _pendingTimer = null;
     if (_pendingBatches.length === 0) return;
     var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
+    // FIX: R7-G1 —— 错发送也同步登记（此前由 _sendBatchDirect 内部登记）
+    _batchTimestamps.push(Date.now());
     _sendBatchWithCompression(url, _pendingBatches.shift(), false);
     if (_pendingBatches.length > 0) {
       _pendingTimer = setTimeout(_drainPendingBatches, _pendingSendInterval());
@@ -381,7 +391,9 @@
         var reader = new FileReader();
         reader.onload = function() {
           var compressedBody = reader.result;
-          _batchTimestamps.push(Date.now());
+          // FIX: R7-G1 —— 此处不再登记节流时间戳：登记已前移到
+          // _flushBatch/_drainPendingBatches 的发送决策点（同步），
+          // 异步回调里登记会让节流检查恒看到过期时间戳
           
           // 页面关闭场景：优先 sendBeacon
           if (useBeacon && _hasSendBeacon()) {
@@ -419,8 +431,10 @@
 
   // 未压缩直接发送
   function _sendBatchDirect(url, body, useBeacon) {
-    _batchTimestamps.push(Date.now());
-    
+    // FIX: R7-G1 —— 节流时间戳登记已前移到 _flushBatch/_drainPendingBatches
+    // 的发送决策点（同步），此处不再重复登记（否则压缩/未压缩两条路径
+    // 双重计数，窗口配额被提前耗尽）
+
     // 页面关闭场景：必须同步发送（sendBeacon 或同步 XHR），异步 XHR 会在 unload 后被取消
     if (useBeacon) {
       if (_hasSendBeacon()) {
