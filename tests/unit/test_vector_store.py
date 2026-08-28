@@ -148,9 +148,11 @@ class TestInProcessVectorStore:
         store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "alpha again"}}])
         ids = [doc.get("fingerprint") for _t, doc in store._docs]
         assert ids == ["fp-c", "fp-a"]
-        # 覆盖语义在驱逐后依然成立
+        # 覆盖语义在驱逐后依然成立：fp-a 必须原地覆盖、保持 [fp-c, fp-a]。
+        # 旧断言只查 len==2 与末位内容，FIFO 驱逐把错误状态 [fp-a, fp-a]
+        # （指纹索引重建失效退回 append 的产物）掩盖了——显式校验指纹序列。
         store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "alpha v3"}}])
-        assert len(store._docs) == 2
+        assert [d.get("fingerprint") for _t, d in store._docs] == ["fp-c", "fp-a"]
         assert store._docs[1][1]["analysis"]["root_cause"] == "alpha v3"
 
     # ── R7-T4：delete（KB 驱逐/清空同步删除向量条目）──

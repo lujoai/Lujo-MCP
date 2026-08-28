@@ -126,7 +126,7 @@ class InProcessVectorStore(VectorStore):
                 # 槽位整体左移，按存活 doc 重建指纹索引（驱逐低频发生，O(n) 可接受）
                 self._fingerprint_index = {
                     str(doc["fingerprint"]): i
-                    for i, doc in enumerate(self._docs)
+                    for i, (_text, doc) in enumerate(self._docs)
                     if isinstance(doc, dict) and doc.get("fingerprint")
                 }
 
@@ -154,7 +154,7 @@ class InProcessVectorStore(VectorStore):
             self._doc_tokens = [_tokenize(text) for text, _doc in kept]
             self._fingerprint_index = {
                 str(doc["fingerprint"]): i
-                for i, doc in enumerate(self._docs)
+                for i, (_text, doc) in enumerate(self._docs)
                 if isinstance(doc, dict) and doc.get("fingerprint")
             }
 
