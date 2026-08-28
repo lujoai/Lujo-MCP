@@ -75,10 +75,32 @@ class TestValidateSecurityReview:
         result = _validate_security_review(raw)
         assert result["risks"][0]["category"] == "Other"
 
-    def test_invalid_severity_normalized(self):
+    def test_invalid_severity_normalized_fail_safe(self):
+        """R7-S1 回归：非法 severity 不得静默降级为 low（fail-open）。
+
+        旧实现把 "critical"/"High" 一律降为 "low"，verify_loop 安全门的
+        ("critical", "high") 分支对真实 LLM 输出不可达。现 fail-safe 归 high。
+        """
         raw = json.dumps({"risks": [{"category": "LFI", "severity": "critical"}]})
         result = _validate_security_review(raw)
-        assert result["risks"][0]["severity"] == "low"
+        assert result["risks"][0]["severity"] == "high"
+
+    def test_severity_case_variant_normalized(self):
+        """大小写变体 "High" 归一化为 "high"，不得降级。"""
+        raw = json.dumps({"risks": [{"category": "LFI", "severity": "High"}]})
+        result = _validate_security_review(raw)
+        assert result["risks"][0]["severity"] == "high"
+
+    def test_unknown_severity_fails_safe_to_high(self):
+        """无法识别的 severity 保守按 high 处理，交由安全门钳制。"""
+        raw = json.dumps({"risks": [{"category": "LFI", "severity": "severe"}]})
+        result = _validate_security_review(raw)
+        assert result["risks"][0]["severity"] == "high"
+
+    def test_valid_severity_unchanged(self):
+        raw = json.dumps({"risks": [{"category": "LFI", "severity": "medium"}]})
+        result = _validate_security_review(raw)
+        assert result["risks"][0]["severity"] == "medium"
 
     def test_invalid_overall_severity(self):
         raw = json.dumps({"overall_severity": "critical"})

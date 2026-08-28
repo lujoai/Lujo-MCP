@@ -6,6 +6,7 @@ import sys
 import traceback
 from typing import Optional
 
+from app.runtime.core.errors import compute_fingerprint
 from app.runtime.core.redaction import redact, is_sensitive_key
 
 # FIX: CR-2 —— 此前 SENSITIVE_KEYS 为 8 个键名的精确匹配集合，refresh_token /
@@ -215,11 +216,16 @@ def capture_exception(
         })
         tb = tb.tb_next
 
+    # FIX: R7-P1-2（断点③）—— /api/debug/run 等直接消费 capture_exception 的路径
+    # 此前不产指纹（指纹仅在 errors.record 内计算），异常数据经 add_log 入库后
+    # 下游 KB 命中 / 向量 RAG / 分析回写因"指纹为空"整体短路。此处手上已有全部
+    # 输入（type + frames），与 errors.record 用同一 compute_fingerprint 对齐。
     return {
         "type": type(exc).__name__,
         "message": str(exc),
         "source": source,
         "extra": extra or {},
+        "fingerprint": compute_fingerprint(type(exc).__name__, frames),
         "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         "frames": frames,
         "frame_count": len(frames),

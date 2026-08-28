@@ -114,6 +114,29 @@ class TestSecurityGateContract:
         score = compute_verify_score(self._make_result(review))
         assert score == settings.agent_verify_loop_partial_threshold
 
+    def test_critical_risk_llm_output_clamped_to_partial(self):
+        """R7-S1 回归：LLM 原样输出 severity="critical" → 必须钳制到 PARTIAL。
+
+        修复前 _validate_security_review 把 critical 降为 "low"，该端到端路径
+        下安全门通过、给出满分 —— verify_loop 的 critical 分支是不可达代码。
+        """
+        import json
+
+        from app.agent.security_agent import _validate_security_review
+        from app.agent.verify_loop import compute_verify_score
+        from app.config import settings
+
+        review = _validate_security_review(json.dumps({
+            "risks": [{"category": "SSRF", "severity": "critical",
+                       "description": "d", "location": "l"}],
+            "recommendations": ["r"],
+            "overall_severity": "medium",
+            "summary": "s",
+        }))
+        assert review["risks"][0]["severity"] == "high"  # critical→high（fail-safe）
+        score = compute_verify_score(self._make_result(review))
+        assert score == settings.agent_verify_loop_partial_threshold
+
     def test_invalid_overall_severity_fails_gate(self):
         """overall_severity 非法值（归一为 unknown）→ fail-safe 不通过安全门。"""
         import json

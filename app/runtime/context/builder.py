@@ -3,6 +3,7 @@
 import logging
 
 from app.config import settings
+from app.runtime.core.errors import compute_fingerprint
 from app.schemas import DebugContext
 from app.runtime.context.fault_localizer import localize, to_payload
 
@@ -73,14 +74,29 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         exc_type = "unknown"
         trace_kind = "debug"
         extra = {}
+        error_frames: list = []
+        error_fingerprint: "str | None" = None
+        flow: list = []
+        input_data = None
+        output_data = None
         for e in entries:
             data = e.get("data")
+            step = e.get("step", "")
+            flow.append(step)
+            if step == "request_start":
+                input_data = data
+            elif step == "response_ready":
+                output_data = data
             if not isinstance(data, dict):
                 continue
-            step = e.get("step", "")
             if step == "error":
                 exc_type = data.get("error_type", data.get("type", "unknown"))
                 message = data.get("message", "")
+                # FIX: R7-Q1 —— error 条目携带的完整异常数据（含堆栈帧）必须
+                # 进入合成 trace，否则 fallback 路径丢帧，下游源码片段/故障
+                # 定位/评分维度全部空转
+                error_frames = data.get("frames") or []
+                error_fingerprint = data.get("fingerprint")
                 break
             elif step == "trace_meta":
                 trace_kind = data.get("trace_kind", "exception")
@@ -93,15 +109,22 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
             "timestamp": last_ts,
             "exc_type": exc_type,
             "message": message,
-            "frames": [],
-            "frame_count": 0,
+            "frames": error_frames,
+            "frame_count": len(error_frames),
             "source": "storage",
-            "fingerprint": None,
+            # FIX: R7-P1-2（断点①）—— fallback 合成 trace 不再显式 None：
+            # error 条目自带指纹（capture_exception 产出）时透传，
+            # 否则用与 errors.record 相同的 compute_fingerprint 现算
+            "fingerprint": error_fingerprint or compute_fingerprint(exc_type, error_frames),
             "occurrence_count": 1,
             "first_seen": first_ts,
             "last_seen": last_ts,
             "trace_kind": trace_kind,
             "extra": extra,
+            # R7-Q1：请求载荷/执行流程保留给下游（修复链路 prompt 与评分依赖）
+            "flow": flow,
+            "input": input_data,
+            "output": output_data,
         }
 
     tid = trace["trace_id"]
@@ -226,6 +249,12 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
 
     exc_type = trace.get("exc_type")
     message = trace.get("message")
+    # FIX: R7-P1-2（断点①）—— 指纹上游（errors.record / capture_exception /
+    # trace_repo 回读重算）已算好，此前在 context 构建侧被丢弃，导致
+    # context_prep/_get_error_signal 取不到指纹 → KB 三级命中、向量 RAG、
+    # 分析回写、verify 写回、经验召回整条学习闭环因"指纹为空"短路。
+    # 同时注入 exception/errors[0] 与顶层（context_assembler 经验召回读顶层）。
+    fingerprint = trace.get("fingerprint")
 
     # 故障定位候选（V1）：仅筛选"最值得优先检查的位置"，不声称绝对根因。
     # 失败降级为 None，不影响 Debug Context 其余部分。
@@ -240,18 +269,20 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "request_id": tid,
         "trace_id": tid,
         "trace_kind": trace.get("trace_kind", "exception"),
-        "flow": ["error"],
-        "input": None,
-        "output": None,
-        "errors": [{"type": exc_type, "message": message}],
+        "flow": trace.get("flow") or ["error"],
+        "input": trace.get("input"),
+        "output": trace.get("output"),
+        "errors": [{"type": exc_type, "message": message, "fingerprint": fingerprint}],
         "exception": {
             "type": exc_type,
             "message": message,
             "frames": frames,
             "frame_count": trace.get("frame_count", len(frames)),
+            "fingerprint": fingerprint,
         },
         "source": trace.get("source"),
         "extra": trace.get("extra", {}),
+        "fingerprint": fingerprint,
         "code_snippets": code_snippets,
         "static_analysis": static_analysis,
         "git_blame": git_blame or None,

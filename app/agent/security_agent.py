@@ -71,9 +71,17 @@ def _validate_security_review(raw_output: str) -> dict[str, Any]:
             category = risk.get("category", "Other")
             if category not in VALID_CATEGORIES:
                 category = "Other"
-            severity = risk.get("severity", "low")
+            severity = str(risk.get("severity", "")).strip().lower()
+            # FIX: R7-S1 —— fail-safe 归一化。此前非法 severity 一律降为 "low"：
+            # LLM 输出 prompt 声明外的 "critical" 或大小写变体 "High" 被静默降级，
+            # verify_loop 安全门的 ("critical", "high") 分支对真实输出不可达
+            # （安全姿态与 overall_severity 非法归 "unknown" 被拒绝不一致）。
+            # 现按 fail-safe：critical→high，其余非法/缺失值保守按 high 处理，
+            # 交由安全门钳制（宁可多拦，不可漏放）。
+            if severity == "critical":
+                severity = "high"
             if severity not in {"high", "medium", "low"}:
-                severity = "low"
+                severity = "high"
             risks.append(
                 {
                     "category": category,

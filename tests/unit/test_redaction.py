@@ -117,6 +117,29 @@ def test_compound_keys_not_overredacted():
     assert redact("author=alice") == "author=alice"
 
 
+def test_is_sensitive_key_author_not_redacted():
+    """R7-S2 回归：dict 键名路径（is_sensitive_key / redact_nested）不得误伤 author。
+
+    此前 _SENSITIVE_SUBSTRINGS 的裸 "auth" 子串命中 "author"，git blame 归因
+    字段在送 LLM 前（context_prep._redact_value_for_llm）被整值掩码，
+    "这行谁改的" 核心信息失效。
+    """
+    from app.runtime.core.redaction import is_sensitive_key, redact_nested
+
+    assert not is_sensitive_key("author")
+    assert not is_sensitive_key("author_email")
+    assert not is_sensitive_key("authority")
+
+    blame = {"file": "app/a.py", "line": 3, "author": "Alice <a@x.com>", "date": "2026-01-01"}
+    out = redact_nested(blame)
+    assert out["author"] == "Alice <a@x.com>"
+
+    # 收紧白名单不得引入 CR-2 回归：authorization 头仍是敏感键
+    assert is_sensitive_key("authorization")
+    assert is_sensitive_key("auth_header")
+    assert redact_nested({"authorization": "Bearer xyz"})["authorization"] == "***REDACTED***"
+
+
 def test_json_compound_keys_masked():
     """JSON 字符串形态的复合敏感键（浏览器 SDK 最常见的序列化形态）必须脱敏。"""
     assert redact('{"refresh_token":"eyJxxx"}') == '{"refresh_token":"***"}'

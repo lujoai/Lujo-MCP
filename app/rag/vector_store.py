@@ -81,6 +81,10 @@ class InProcessVectorStore(VectorStore):
         self._max_docs = max(1, max_docs)
         self._docs: list[tuple[str, dict[str, Any]]] = []
         self._doc_tokens: list[set[str]] = []
+        # FIX: R7-T5 —— fingerprint → 槽位索引：同指纹原地覆盖（对齐 Qdrant
+        # uuid5 确定性 point id 的幂等 upsert 语义），避免同指纹第 N 次分析
+        # 产生第 N 份 doc，吃满 FIFO 容量并挤掉多样化条目。
+        self._fingerprint_index: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def add(self, docs: list[dict[str, Any]]) -> None:
@@ -89,13 +93,33 @@ class InProcessVectorStore(VectorStore):
         with self._lock:
             for doc in docs:
                 text = _serialize_doc(doc)
+                tokens = _tokenize(text)
+                fingerprint = (
+                    str(doc["fingerprint"])
+                    if isinstance(doc, dict) and doc.get("fingerprint")
+                    else None
+                )
+                position = self._fingerprint_index.get(fingerprint) if fingerprint else None
+                if fingerprint and position is not None and 0 <= position < len(self._docs):
+                    # 同指纹：原地覆盖，不新增 doc
+                    self._docs[position] = (text, doc)
+                    self._doc_tokens[position] = tokens
+                    continue
+                if fingerprint:
+                    self._fingerprint_index[fingerprint] = len(self._docs)
                 self._docs.append((text, doc))
-                self._doc_tokens.append(_tokenize(text))
+                self._doc_tokens.append(tokens)
             # FIFO 驱逐最旧 doc，直至容量以内（长期运行内存有界）
             overflow = len(self._docs) - self._max_docs
             if overflow > 0:
                 del self._docs[:overflow]
                 del self._doc_tokens[:overflow]
+                # 槽位整体左移，按存活 doc 重建指纹索引（驱逐低频发生，O(n) 可接受）
+                self._fingerprint_index = {
+                    str(doc["fingerprint"]): i
+                    for i, doc in enumerate(self._docs)
+                    if isinstance(doc, dict) and doc.get("fingerprint")
+                }
 
     def search(self, query: str, top_k: int) -> list[tuple[dict[str, Any], float]]:
         if not query or top_k <= 0:

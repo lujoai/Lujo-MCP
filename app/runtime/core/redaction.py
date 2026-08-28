@@ -130,13 +130,22 @@ _SENSITIVE_SUBSTRINGS = {
 
 # 内置白名单：含敏感子串但属于正常字段（不应脱敏）。
 # password_hash=哈希后密码（非明文）、public_key=公钥（非私钥）、
-# key_count/key_id/key_type=键数量/标识/类型（非密钥本身）。
+# key_count/key_id/key_type=键数量/标识/类型（非密钥本身）、
+# author*/authority=git blame 归因字段（FIX: R7-S2 —— 子串 "auth" 曾误伤
+# author，"这行谁改的" 归因核心信息在送 LLM 前被整值掩码；注意
+# authorization 不在白名单，仍按敏感头处理）。
 _DEFAULT_ALLOWLIST = {
     "password_hash",
     "public_key",
     "key_count",
     "key_id",
     "key_type",
+    "author",
+    "author_time",
+    "author_email",
+    "author_mail",
+    "authors",
+    "authority",
 }
 
 # 白名单缓存（按配置签名，配置变化时重建）

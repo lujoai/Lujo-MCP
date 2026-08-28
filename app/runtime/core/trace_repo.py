@@ -25,7 +25,12 @@ import logging
 from typing import Optional
 
 from app.runtime.core.logs import add_log, add_logs_batch, get_logs
-from app.runtime.core.errors import record as _record_error, get_by_id as _get_error, get_latest as _get_latest
+from app.runtime.core.errors import (
+    record as _record_error,
+    get_by_id as _get_error,
+    get_latest as _get_latest,
+    compute_fingerprint,
+)
 # FIX: A2 —— 键名判定/嵌套脱敏统一下沉到 redaction 模块（logs.add_log 等
 # 直接写存储的路径此前无法复用本模块内联实现，导致原始 payload 明文入库）
 from app.runtime.core.redaction import redact, redact_nested
@@ -77,6 +82,10 @@ def save_trace(
         "frames": frames,
         "traceback": "",
         "frame_count": len(frames),
+        # FIX: R7-P1-2（断点②）—— 落库数据持久化指纹：重启/缓冲淘汰后
+        # _rebuild_trace_from_store 回读时可直接恢复（与 errors.record 内
+        # compute_fingerprint 同一算法，保持两路指纹一致）。
+        "fingerprint": compute_fingerprint(exc_type, frames),
     }
     error_id = _record_error(exc_data, source=source, session_id=session_id)
 
@@ -152,7 +161,11 @@ def _rebuild_trace_from_store(error_id: str) -> Optional[dict]:
         "frames": frames,
         "frame_count": trace_data.get("frame_count", len(frames)),
         "source": trace_data.get("source", "storage"),
-        "fingerprint": None,
+        # FIX: R7-P1-2（断点②）—— 不再硬编码 None：优先用落库持久化的指纹，
+        # 旧数据（无 fingerprint 字段）用 compute_fingerprint 重算兜底，
+        # 保证重启/缓冲淘汰后 KB 命中/向量 RAG/回写链路仍可用。
+        "fingerprint": trace_data.get("fingerprint")
+        or compute_fingerprint(trace_data.get("type") or "", frames),
         "occurrence_count": 1,
         "first_seen": timestamp,
         "last_seen": timestamp,

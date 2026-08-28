@@ -100,6 +100,59 @@ class TestInProcessVectorStore:
         # high doc 与 query 重叠更多，应排第一
         assert results[0][0]["id"] == "high"
 
+    # ── R7-T5：同指纹幂等覆盖（对齐 Qdrant uuid5 覆盖语义）──
+
+    def test_same_fingerprint_overwrites_in_place(self):
+        """同指纹重复 add 原地覆盖：不产生重复 doc（修复前纯 append）。"""
+        store = InProcessVectorStore()
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "old cause"}}])
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "new cause"}}])
+
+        assert len(store._docs) == 1
+        # 存储内容已更新为最新分析
+        assert store._docs[0][1]["analysis"]["root_cause"] == "new cause"
+        assert "old cause" not in store._docs[0][0]
+        # 更新后的内容可被召回
+        results = store.search("new cause root analysis", top_k=5)
+        assert len(results) == 1
+        assert results[0][0]["analysis"]["root_cause"] == "new cause"
+
+    def test_different_fingerprints_still_append(self):
+        """不同指纹正常追加，互不影响。"""
+        store = InProcessVectorStore()
+        store.add([
+            {"fingerprint": "fp-a", "analysis": {"root_cause": "alpha"}},
+            {"fingerprint": "fp-b", "analysis": {"root_cause": "bravo"}},
+        ])
+        assert len(store._docs) == 2
+
+    def test_docs_without_fingerprint_still_append(self):
+        """无指纹 doc 保持旧行为（append；与 Qdrant uuid4 兜底一致）。"""
+        store = InProcessVectorStore()
+        store.add([{"id": 1, "root_cause": "timeout error"}])
+        store.add([{"id": 2, "root_cause": "disk error"}])
+        assert len(store._docs) == 2
+
+    def test_eviction_rebuilds_fingerprint_index(self):
+        """FIFO 驱逐后指纹索引随槽位左移重建，被驱逐指纹可重新入库。"""
+        store = InProcessVectorStore(max_docs=2)
+        store.add([
+            {"fingerprint": "fp-a", "analysis": {"root_cause": "alpha"}},
+            {"fingerprint": "fp-b", "analysis": {"root_cause": "bravo"}},
+        ])
+        store.add([{"fingerprint": "fp-c", "analysis": {"root_cause": "charlie"}}])
+        # fp-a 被驱逐，fp-b/fp-c 保留
+        ids = [doc.get("fingerprint") for _t, doc in store._docs]
+        assert ids == ["fp-b", "fp-c"]
+        # 被驱逐的 fp-a 再次写入 → 正常 append 且覆盖索引正确
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "alpha again"}}])
+        ids = [doc.get("fingerprint") for _t, doc in store._docs]
+        assert ids == ["fp-c", "fp-a"]
+        # 覆盖语义在驱逐后依然成立
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "alpha v3"}}])
+        assert len(store._docs) == 2
+        assert store._docs[1][1]["analysis"]["root_cause"] == "alpha v3"
+
 
 class TestNullVectorStore:
     def test_add_is_noop(self):
