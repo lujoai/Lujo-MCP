@@ -1,8 +1,8 @@
 """调用栈追踪收集器 —— 捕获异常的调用栈信息与智能框架栈帧折叠。"""
 
 import linecache
-import os
 import sys
+import sysconfig
 import traceback
 from typing import Optional
 
@@ -32,6 +32,18 @@ _FRAMEWORK_PATH_PARTS = (
     "Lib\\site-packages",
 )
 
+# FIX: R7-T3 —— Python 标准库根目录（sysconfig 真实路径，对齐
+# fault_localizer._STDLIB_DIRS）。旧实现用整个 sys.path 前缀判定框架帧：
+# cwd≠项目根且项目根经 PYTHONPATH 进 sys.path（容器 WORKDIR=/ +
+# PYTHONPATH=/app 等）时，项目帧被误判为框架 → fold_stack_frames 折叠、
+# format_trace_for_ai 丢失 [PROJECT CODE] 标记，喂给 AI 的根因代码被隐藏。
+_STDLIB_DIRS: tuple[str, ...] = tuple(
+    str(p).replace("\\", "/")
+    for key in ("stdlib", "platstdlib")
+    for p in [sysconfig.get_paths().get(key)]
+    if p
+)
+
 _KNOWN_FRAMEWORKS = (
     "starlette",
     "fastapi",
@@ -58,7 +70,12 @@ _KNOWN_FRAMEWORKS = (
 
 
 def is_framework_frame(file_path: str) -> bool:
-    """判定栈帧是否为 Python 标准库、三方库或框架内部代码。"""
+    """判定栈帧是否为 Python 标准库、三方库或框架内部代码。
+
+    FIX: R7-T3 —— stdlib 判定用 sysconfig 真实 stdlib 根目录（对齐
+    fault_localizer），不再用整个 sys.path 前缀扫描：PYTHONPATH 注入的
+    项目根（容器部署常态）曾把项目帧误判为框架帧。
+    """
     if not file_path:
         return True
     p = str(file_path).replace("\\", "/")
@@ -69,18 +86,10 @@ def is_framework_frame(file_path: str) -> bool:
     for part in _FRAMEWORK_PATH_PARTS:
         if part in p:
             return True
-    # 标准库特征
-    for std in getattr(sys, "path", []):
-        if std:
-            std_norm = str(std).replace("\\", "/")
-            if p == std_norm or p.startswith(std_norm + "/"):
-                # 如果 std 是当前工作区路径，则不视作 stdlib
-                try:
-                    if os.path.realpath(std) == os.path.realpath(os.getcwd()):
-                        continue
-                except Exception:
-                    pass
-                return True
+    # 标准库真实路径前缀
+    for std in _STDLIB_DIRS:
+        if std and (p == std or p.startswith(std + "/")):
+            return True
     return False
 
 

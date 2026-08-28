@@ -89,6 +89,26 @@ class TestStacktraceCollector:
         assert is_framework_frame("app/services/payment.py") is False
         assert is_framework_frame("src/controllers/order_controller.py") is False
 
+    def test_pythonpath_project_frame_not_misjudged_as_framework(self, monkeypatch):
+        """R7-T3 回归：项目根经 PYTHONPATH 进 sys.path（容器 WORKDIR=/ +
+        PYTHONPATH=/app 常态）时，项目帧不得被误判为框架帧。
+
+        旧实现用整个 sys.path 前缀判定：/app 在 sys.path 且 realpath != cwd
+        → /app/services/orders.py 被判框架 → 折叠 + 丢 [PROJECT CODE] 标记。
+        新实现只用 sysconfig 真实 stdlib 路径，对 sys.path 免疫。
+        """
+        monkeypatch.syspath_prepend("/app")
+        assert is_framework_frame("/app/services/orders.py") is False
+        assert is_framework_frame("/app/api/routes.py") is False
+
+    def test_real_stdlib_frame_still_detected(self):
+        """真实 stdlib 帧（sysconfig stdlib 目录下）仍判为框架帧。"""
+        import os
+        import sysconfig
+
+        std = sysconfig.get_paths()["stdlib"]
+        assert is_framework_frame(os.path.join(std, "json", "__init__.py")) is True
+
     def test_fold_stack_frames_collapses_consecutive_frameworks(self):
         raw_frames = [
             {"file": "site-packages/uvicorn/main.py", "line": 100, "function": "run"},

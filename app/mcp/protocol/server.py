@@ -109,6 +109,15 @@ async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: floa
     try:
         await asyncio.wait_for(task, timeout=busy_timeout)
         return True
+    except asyncio.CancelledError:
+        # FIX: R7-T1 —— 外层请求协程在等槽位期间被取消（如 HTTP 断连）时
+        # wait_for 传播 CancelledError：若此刻内层 acquire 已完成，槽位已
+        # 取得却无人归还 → 泄漏，重复发生使池容量永久缩减至恒 TOOL_BUSY
+        # （与 v0.6.6 修的"超时同拍"同形）。按完成态检查后归还，并继续
+        # 传播取消。
+        if task.done() and not task.cancelled() and task.exception() is None:
+            slots.release()
+        raise
     except asyncio.TimeoutError:
         if task.done() and not task.cancelled() and task.exception() is None:
             # 完成与超时同拍：槽位已实际取得，归还防泄漏

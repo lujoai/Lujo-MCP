@@ -347,3 +347,41 @@ class TestEmbedTexts:
     def test_embed_client_unavailable_returns_none(self, monkeypatch):
         monkeypatch.setattr(qdrant_module, "_get_embedding_client", lambda: None)
         assert _embed_texts(["text"]) is None
+
+
+# ── R7-T4：delete（KB 驱逐/清空同步删除向量点）────────────────────
+
+
+class TestDelete:
+    def test_delete_calls_client_with_uuid5_point_ids(self, monkeypatch):
+        mock_qdrant = _make_qdrant_client()
+        monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: mock_qdrant)
+        store = QdrantVectorStore()
+
+        store.delete(["fp-a", "fp-b"])
+
+        mock_qdrant.delete.assert_called_once()
+        kwargs = mock_qdrant.delete.call_args.kwargs
+        assert kwargs["collection_name"] == settings.qdrant_collection
+        assert kwargs["wait"] is True
+        expected = [
+            str(uuid.uuid5(uuid.NAMESPACE_DNS, "fp-a")),
+            str(uuid.uuid5(uuid.NAMESPACE_DNS, "fp-b")),
+        ]
+        assert [str(p) for p in kwargs["points_selector"].points] == expected
+
+    def test_delete_empty_list_is_noop(self, monkeypatch):
+        mock_qdrant = _make_qdrant_client()
+        monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: mock_qdrant)
+        QdrantVectorStore().delete([])
+        mock_qdrant.delete.assert_not_called()
+
+    def test_delete_qdrant_unavailable_is_noop(self, monkeypatch):
+        monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: None)
+        QdrantVectorStore().delete(["fp-a"])  # 不抛异常
+
+    def test_delete_failure_is_silent(self, monkeypatch):
+        mock_qdrant = _make_qdrant_client()
+        mock_qdrant.delete.side_effect = RuntimeError("qdrant down")
+        monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: mock_qdrant)
+        QdrantVectorStore().delete(["fp-a"])  # 静默降级，不抛异常

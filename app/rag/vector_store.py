@@ -39,7 +39,8 @@ def _serialize_doc(doc: dict[str, Any]) -> str:
 
 
 class VectorStore(ABC):
-    """检索语义抽象层：add(docs) 写入；search(query, top_k) 召回。"""
+    """检索语义抽象层：add(docs) 写入；search(query, top_k) 召回；
+    delete(fingerprints) 按指纹删除（R7-T4）。"""
 
     @abstractmethod
     def add(self, docs: list[dict[str, Any]]) -> None:
@@ -48,6 +49,14 @@ class VectorStore(ABC):
     @abstractmethod
     def search(self, query: str, top_k: int) -> list[tuple[dict[str, Any], float]]:
         """召回 top_k 个 (doc, score) 对，按 score 降序。"""
+
+    def delete(self, fingerprints: list[str]) -> None:
+        """按指纹删除向量条目（R7-T4：KB 驱逐/清空须同步删向量）。
+
+        默认 no-op：不支持删除的后端（含 NullVectorStore / 未实现该方法的
+        已注册后端）静默跳过，不阻断 KB 主流程。
+        """
+        return None
 
 
 class NullVectorStore(VectorStore):
@@ -120,6 +129,34 @@ class InProcessVectorStore(VectorStore):
                     for i, doc in enumerate(self._docs)
                     if isinstance(doc, dict) and doc.get("fingerprint")
                 }
+
+    def delete(self, fingerprints: list[str]) -> None:
+        """FIX: R7-T4 —— 按指纹删除向量条目（KB 驱逐/清空同步调用）。
+
+        删除后重建指纹索引，保证后续 add 的覆盖/追加语义不受影响。
+        """
+        if not fingerprints:
+            return
+        targets = {str(fp) for fp in fingerprints}
+        with self._lock:
+            kept = [
+                (text, doc)
+                for text, doc in self._docs
+                if not (
+                    isinstance(doc, dict)
+                    and doc.get("fingerprint")
+                    and str(doc["fingerprint"]) in targets
+                )
+            ]
+            if len(kept) == len(self._docs):
+                return
+            self._docs = kept
+            self._doc_tokens = [_tokenize(text) for text, _doc in kept]
+            self._fingerprint_index = {
+                str(doc["fingerprint"]): i
+                for i, doc in enumerate(self._docs)
+                if isinstance(doc, dict) and doc.get("fingerprint")
+            }
 
     def search(self, query: str, top_k: int) -> list[tuple[dict[str, Any], float]]:
         if not query or top_k <= 0:

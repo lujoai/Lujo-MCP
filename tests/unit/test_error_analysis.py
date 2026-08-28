@@ -2,6 +2,7 @@
 
 import pytest
 import time
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from app.runtime.core import errors
@@ -173,6 +174,51 @@ class TestQueryPgErrors:
                 result = errors.query_pg_errors(fingerprint="fp-abc")
                 assert len(result) == 1
                 assert result[0]["fingerprint"] == "fp-abc"
+
+    def test_non_operational_error_connection_not_poisoned(self):
+        """R7-T2 回归：非 OperationalError 后连接归还池前必须 rollback。
+
+        旧实现裸 ``pool.putconn(conn)``：ProgrammingError/DataError 后连接停留
+        aborted 事务直接入池 → 下一借出者恒抛 InFailedSqlTransaction（25P02
+        非 OperationalError 不触发重连）—— 连接池中毒直至重启。
+        """
+        from psycopg2 import ProgrammingError
+
+        class _FakeConn:
+            def __init__(self):
+                self.closed = False
+                self.rollback_calls = 0
+                self.execute_error = None
+
+            def cursor(self):
+                return self
+
+            def execute(self, sql, params=None):
+                raise self.execute_error
+
+            def rollback(self):
+                self.rollback_calls += 1
+
+        conn = _FakeConn()
+        pool = SimpleNamespace(getconn=lambda **kw: conn, put_calls=[])
+
+        def _put(c, **kw):
+            pool.put_calls.append(c)
+
+        pool.putconn = _put
+
+        with patch("app.config.settings") as mock_settings:
+            mock_settings.storage_backend = "postgresql"
+            mock_settings.pg_async_enabled = False
+            with patch("app.runtime.core.storage.pg_executor._ensure_init"), \
+                 patch("app.runtime.core.storage.pg_executor._get_pool", return_value=pool), \
+                 patch("app.runtime.core.storage.pg_executor._get_conn", return_value=conn):
+                conn.execute_error = ProgrammingError("column \"session_id\" does not exist")
+                result = errors.query_pg_errors(fingerprint="fp-x")
+
+        assert result == []                 # 查询失败静默降级（既有语义）
+        assert conn.rollback_calls == 1     # 归还前已 rollback（连接去毒）
+        assert pool.put_calls == [conn]     # 连接已归还池，下一借出者可用
 
 
 class TestDashboardErrorsEndpoints:

@@ -328,6 +328,39 @@ class QdrantVectorStore(VectorStore):
         except Exception:
             logger.warning("Qdrant upsert 失败，本批写入跳过", exc_info=True)
 
+    def delete(self, fingerprints: list[str]) -> None:
+        """FIX: R7-T4 —— 按指纹删除 point（确定性 uuid5 point id 反推）。
+
+        KB LRU 驱逐 / clear() 同步调用，避免被淘汰条目的向量点永久残留、
+        _try_vector_rag 继续召回已淘汰的历史结论。失败静默降级。
+        """
+        if not fingerprints:
+            return
+        client = _get_qdrant_client()
+        if client is None:
+            return
+        try:
+            from qdrant_client.models import PointIdsList
+        except ImportError:
+            logger.warning("qdrant-client 未安装，delete 跳过")
+            return
+
+        point_ids = [
+            str(uuid.uuid5(uuid.NAMESPACE_DNS, str(fp)))
+            for fp in fingerprints
+            if fp
+        ]
+        if not point_ids:
+            return
+        try:
+            client.delete(
+                collection_name=settings.qdrant_collection,
+                points_selector=PointIdsList(points=point_ids),
+                wait=True,
+            )
+        except Exception:
+            logger.warning("Qdrant delete 失败，忽略", exc_info=True)
+
     def search(self, query: str, top_k: int) -> list[tuple[dict[str, Any], float]]:
         if not query or top_k <= 0:
             return []

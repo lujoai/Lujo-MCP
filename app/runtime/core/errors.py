@@ -407,17 +407,19 @@ def query_pg_errors(
         if settings.pg_async_enabled:
             logger.debug("query_pg_errors: pg_async_enabled=True，走 async 路径，跳过同步 psycopg2 池")
             return []
-        from app.runtime.core.storage.pg_executor import _get_pool, _ensure_init, _get_conn, _parse_data
+        from app.runtime.core.storage.pg_executor import (
+            _ensure_init,
+            _get_conn,
+            _parse_data,
+            _safe_put,
+        )
     except Exception:
         return []
 
     try:
         _ensure_init()
-        pool = _get_pool()
-        # FIX P3-10: pool.getconn() 裸获取无超时，池耗尽时永久阻塞。
-        # 改用 pg_store 的 _get_conn(timeout=5.0)（有界等待，超时抛 PoolError，
-        # 由下方 except Exception 兜底 return []）。psycopg2 2.9 的 getconn()
-        # 本身不支持 timeout 参数，故复用既有 helper。
+        # 连接借还统一走 pg_executor：_get_conn(timeout=5.0) 有界等待
+        # （P3-10，池耗尽不永久阻塞），归还 _safe_put（R7-T2，rollback 防中毒）。
         conn = _get_conn(timeout=5.0)
         try:
             cur = conn.cursor()
@@ -472,7 +474,11 @@ def query_pg_errors(
                 })
             return result
         finally:
-            pool.putconn(conn)
+            # FIX: R7-T2 —— 全仓唯一未经 _safe_put 保护的 putconn：非
+            # OperationalError（ProgrammingError/DataError 等）后连接停留
+            # aborted 事务直接入池 → 下一借出者恒抛 InFailedSqlTransaction
+            # （连接池中毒，直至重启）。改用 _safe_put 统一 rollback 后归还。
+            _safe_put(conn)
     except Exception:
         logger.debug("PG errors 查询失败", exc_info=True)
         return []

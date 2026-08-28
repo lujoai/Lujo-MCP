@@ -402,3 +402,71 @@ def test_compute_normalized_fingerprint_colon_handling():
     assert compute_normalized_fingerprint("ValueError", "bad input: 123") == "valueerror:bad input:"
     assert compute_normalized_fingerprint(None, "") == ""
     assert compute_normalized_fingerprint("", None) == ""
+
+
+# ---------------------------------------------------------------------------
+# R7-T4：KB LRU 驱逐 / clear 同步删除向量条目（向量索引只增不减修复）
+# ---------------------------------------------------------------------------
+
+
+class TestVectorIndexEvictionSync:
+    def _make_store_with_vector(self, monkeypatch):
+        """构造 KB store，其向量库替换为可观测的真实 InProcessVectorStore。"""
+        from app.rag.vector_store import InProcessVectorStore
+
+        vector_store = InProcessVectorStore(max_docs=100)
+        monkeypatch.setattr(
+            "app.rag.knowledge_base.get_vector_store", lambda: vector_store
+        )
+        monkeypatch.setattr(settings, "kb_vector_index_autosync", True)
+        return vector_store
+
+    def test_lru_eviction_deletes_vector_entry(self, monkeypatch):
+        vector_store = self._make_store_with_vector(monkeypatch)
+        store = KnowledgeBaseStore(max_entries=1)
+
+        store.upsert(
+            fingerprint="fp-1",
+            analysis={"root_cause": "one"},
+            fix_suggestion="f1",
+            source="llm",
+        )
+        assert len(vector_store._docs) == 1
+
+        # fp-2 触发 LRU 驱逐 fp-1 → 向量条目必须同步删除
+        store.upsert(
+            fingerprint="fp-2",
+            analysis={"root_cause": "two"},
+            fix_suggestion="f2",
+            source="llm",
+        )
+        remaining = [doc.get("fingerprint") for _t, doc in vector_store._docs]
+        assert remaining == ["fp-2"], "被驱逐条目的向量点不得残留（R7-T4）"
+
+    def test_clear_deletes_all_vector_entries(self, monkeypatch):
+        vector_store = self._make_store_with_vector(monkeypatch)
+        store = KnowledgeBaseStore(max_entries=10)
+        for fp in ("fp-1", "fp-2", "fp-3"):
+            store.upsert(
+                fingerprint=fp,
+                analysis={"root_cause": fp},
+                fix_suggestion="f",
+                source="llm",
+            )
+        assert len(vector_store._docs) == 3
+
+        store.clear()
+        assert vector_store._docs == [], "clear 后向量库不得残留任何条目（R7-T4）"
+
+    def test_autosync_off_keeps_legacy_behavior(self, monkeypatch):
+        """kb_vector_index_autosync=False（种子加载路径）不触发向量写/删。"""
+        vector_store = self._make_store_with_vector(monkeypatch)
+        monkeypatch.setattr(settings, "kb_vector_index_autosync", False)
+        store = KnowledgeBaseStore(max_entries=1)
+        store.upsert(
+            fingerprint="fp-1",
+            analysis={"root_cause": "one"},
+            fix_suggestion="f1",
+            source="llm",
+        )
+        assert vector_store._docs == []

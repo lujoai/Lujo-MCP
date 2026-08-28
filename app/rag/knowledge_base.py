@@ -236,6 +236,11 @@ class KnowledgeBaseStore:
         if settings.kb_vector_index_autosync and not _skip_autosync:
             self._sync_entry_to_vector_store(result)
 
+        # FIX: R7-T4 —— LRU 驱逐同步删除向量条目，避免被淘汰条目的向量点
+        # 永久残留、_try_vector_rag 继续召回已淘汰的历史结论
+        if evicted_fingerprint and settings.kb_vector_index_autosync:
+            self._delete_from_vector_store([evicted_fingerprint])
+
         # PG 写穿持久化（锁外；LRU 驱逐同步删除，失败 warning 降级）
         self._persist_upsert(result, evicted_fingerprint)
 
@@ -243,9 +248,14 @@ class KnowledgeBaseStore:
 
     def clear(self) -> None:
         with self._lock:
+            # FIX: R7-T4 —— 清空前收集指纹，同步删除向量条目（否则向量点
+            # 永久残留，_try_vector_rag 继续召回已清空的历史结论）
+            fingerprints = list(self._entries.keys())
             self._entries.clear()
             self._norm_index.clear()
             self._type_index.clear()
+        if settings.kb_vector_index_autosync and fingerprints:
+            self._delete_from_vector_store(fingerprints)
         # PG 写穿：同步清空持久层（锁外执行）
         self._persist_clear()
 
@@ -329,6 +339,17 @@ class KnowledgeBaseStore:
             get_vector_store().add(entries)
         except Exception:
             logger.warning("KB→vector full sync failed", exc_info=True)
+
+    def _delete_from_vector_store(self, fingerprints: list[str]) -> None:
+        """FIX: R7-T4 —— 按指纹删除向量条目（驱逐/clear 同步），失败静默降级。"""
+        try:
+            get_vector_store().delete(fingerprints)
+        except Exception:
+            logger.warning(
+                "KB→vector delete failed (%d fingerprints)",
+                len(fingerprints),
+                exc_info=True,
+            )
 
     # ── PG 写穿持久化（v0.5.3）──
 

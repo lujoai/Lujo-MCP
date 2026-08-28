@@ -315,6 +315,50 @@ async def test_slot_acquire_same_tick_race_releases_slot(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_slot_acquire_cancelled_while_waiting_releases_slot(monkeypatch):
+    """FIX: R7-T1 —— 等槽位期间外层协程被取消：已取得的槽位必须归还。
+
+    模拟 HTTP 断连时序：内层 acquire 已成功取得槽位，外层 wait_for 因
+    调用方取消传播 CancelledError。旧实现只捕获 TimeoutError，取消路径
+    不归还 → 槽位泄漏，重复发生使池容量永久缩减至恒 TOOL_BUSY。
+    """
+    real_wait_for = asyncio.wait_for
+
+    class _RacingSemaphore:
+        def __init__(self):
+            self.acquired = False
+            self.release_count = 0
+
+        def locked(self):
+            return not self.acquired
+
+        async def acquire(self):
+            await asyncio.sleep(0.05)
+            self.acquired = True
+            return True
+
+        def release(self):
+            self.release_count += 1
+            self.acquired = False
+
+    async def _cancelled_wait_for(fut, timeout=None, **kwargs):
+        # 内层 acquire 实际完成（槽位已取得），随后外层取消传播 CancelledError
+        try:
+            await real_wait_for(fut, timeout=10)
+        except asyncio.CancelledError:
+            raise
+        raise asyncio.CancelledError()
+
+    sem = _RacingSemaphore()
+    monkeypatch.setattr(asyncio, "wait_for", _cancelled_wait_for)
+    with pytest.raises(asyncio.CancelledError):
+        await server_module._acquire_slot_or_fastfail(sem, 0.01)
+
+    assert sem.release_count == 1      # 已取得的槽位被归还（防泄漏）
+    assert sem.acquired is False
+
+
+@pytest.mark.asyncio
 async def test_busy_queue_timeout_zero_fast_fail(monkeypatch, caplog):
     """测试 tool_busy_queue_timeout=0 时，槽位被占满后发起新调用立即可靠返回 TOOL_BUSY，不阻塞。"""
     monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))

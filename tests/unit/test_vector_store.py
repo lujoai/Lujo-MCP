@@ -153,6 +153,40 @@ class TestInProcessVectorStore:
         assert len(store._docs) == 2
         assert store._docs[1][1]["analysis"]["root_cause"] == "alpha v3"
 
+    # ── R7-T4：delete（KB 驱逐/清空同步删除向量条目）──
+
+    def test_delete_removes_only_target_fingerprints(self, monkeypatch):
+        monkeypatch.setattr(settings, "vector_store_min_score", 0.0)
+        store = InProcessVectorStore()
+        store.add([
+            {"fingerprint": "fp-a", "analysis": {"root_cause": "alpha"}},
+            {"fingerprint": "fp-b", "analysis": {"root_cause": "bravo"}},
+        ])
+        store.delete(["fp-a"])
+
+        remaining = [doc.get("fingerprint") for _t, doc in store._docs]
+        assert remaining == ["fp-b"]
+        results = store.search("alpha", top_k=5)
+        assert all(doc.get("fingerprint") != "fp-a" for doc, _s in results)
+
+    def test_delete_unknown_fingerprint_is_noop(self):
+        store = InProcessVectorStore()
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "alpha"}}])
+        store.delete(["missing-fp"])
+        assert len(store._docs) == 1
+
+    def test_delete_then_readd_works(self):
+        """删除后重建指纹索引：同指纹重新入库且覆盖语义正常。"""
+        store = InProcessVectorStore()
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "v1"}}])
+        store.delete(["fp-a"])
+        assert len(store._docs) == 0
+
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "v2"}}])
+        store.add([{"fingerprint": "fp-a", "analysis": {"root_cause": "v3"}}])
+        assert len(store._docs) == 1
+        assert store._docs[0][1]["analysis"]["root_cause"] == "v3"
+
 
 class TestNullVectorStore:
     def test_add_is_noop(self):
