@@ -29,7 +29,7 @@
     "developer-productivity"
   ],
   "engines": {
-    "node": ">=16"
+    "node": ">=18"
   },
   "bin": {
     "lujo-mcp-server": "bin/cli.js"
