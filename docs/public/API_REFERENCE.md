@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 版本：v0.6.9（2026-08-27）
+> 版本：v0.7.0（2026-08-29）
 > 本文档覆盖 Lujo-MCP 对外暴露的两类接口：**REST API** 与 **MCP 工具**。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -144,6 +144,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | 方法 | 路径 | 角色 | 说明 |
 |------|------|------|------|
 | GET | `/api/dashboard/stats` | viewer | 控制台概览统计（trace 数 / 静默失败数 / 异常数 / 规范数） |
+| GET | `/api/dashboard/kb-stats` | viewer | KB 学习闭环统计：条目总数 / seed vs llm 来源分布 / 学习占比 / 重复验证条数 + 闭环指标快照（kb_hits/kb_writeback/kb_experience_recall，进程级累计；store 为空返回零值） |
 | GET | `/api/dashboard/traces?limit=100` | viewer | 列出最近 traces（limit 1–1000） |
 | GET | `/api/dashboard/trace/{trace_id}` | viewer | trace 详情（含 spec_diffs + quality_report） |
 | GET | `/api/dashboard/trace/{trace_id}/quality` | viewer | 单独获取 trace 质量报告 |

@@ -43,7 +43,7 @@ python -m app.main
 
 ```bash
 curl http://localhost:8000/
-# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.6.9"}
+# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.7.0"}
 ```
 
 ## 二、验证 Browser SDK

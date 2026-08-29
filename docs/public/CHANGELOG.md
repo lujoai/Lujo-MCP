@@ -7,6 +7,55 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-29
+
+> 主题「稳定 + 可观测 + 债务清理」。v0.7.0 不含 P0/P1 缺陷修复——全部缺陷治理已在 v0.6.x 收口；本版交付 **KB 学习闭环可观测性**（唯一面向用户的新能力）+ **Minor 大扫除两批 20 项**（安全/健壮性 10 项 + 死代码/文档口径 10 项）+ **工程卫生**，并首次达成 **integration 套件全绿**。测试基线：unit **1409 tests / 0 failed / 6 skipped**（junit 权威计数，v0.6.9 基线 1409 同口径持平——本版以加固与清理为主，新增 KB 可观测性测试对冲了死代码删除）、integration **113 tests / 0 failed**（96 passed / 17 skipped）、Browser SDK JS **47/47**、e2e **9 passed / 1 skipped**、ruff 硬门禁全绿。**无 Breaking Change，配置全部向后兼容**（升级注意见下）。
+
+### ⚠️ 升级注意
+
+1. **npm 包要求 Node >=18**（`engines` 自 `>=16` 收紧）：cli.js/check.js 运行时无 Node 20+ 特性依赖，Node 18 为事实最低维护线；Node 16 已 EOL 不再受支持。`npm install` 在旧 Node 上会收到 engine 警告。
+2. **无 breaking change**：全部配置向后兼容；KB 可观测性指标/端点为纯新增，`/api/dashboard/kb-stats` 默认 viewer 可读。
+
+### ✨ 新增：KB 学习闭环可观测性（工作包②）
+
+> v0.6.9 修复了「异常指纹算好被丢」的闭环断点（R7-P1-2），KB 三级命中 / 向量 RAG / 分析回写 / verify 写回 / 经验召回整条学习闭环复活——但没有任何指标能证明"它在学"。本版补齐观测面：
+
+- **Prometheus 指标**（对齐现有 dict counter + `_counter_lock` + 上限治理 + OTel 双写惯例）：
+  - `kb_hits_total{level}`：`l1_fingerprint`（精确指纹）/ `l1_5_normalized`（归一化指纹）/ `l2_type`（类型级 Jaccard）/ `vector_rag` / `miss`——四条命中路径逐一埋点，miss 单独计数（闭环空转的关键信号）；
+  - `kb_writeback_total{kind,status}`：分析回写（`success` / `failed` / `skipped`）与 verify 写回（`success` / `miss` / `skipped`）；
+  - `kb_experience_recall_total{status}`：经验召回 `hit` / `miss`；
+  - 全部 record_* 函数体 try/except：埋点永不影响业务返回值与异常传播。
+- **`GET /api/dashboard/kb-stats`**（viewer 可读）：KB 条目总数 / seed vs llm 来源分布 / 学习条目占比 / verify_count>1 重复验证条数（新增 `KnowledgeBaseStore.stats()` 锁内只读汇总）+ 指标快照；store 或快照失败静默降级零值，不抛 500。
+- **Dashboard 前端「KB Learning Loop」面板**：总条目（学习 n · 占比 · 重复验证）、三级命中分布、分析/verify 回写、经验召回数字；复用现有样式，零新依赖，加载失败静默占位。
+- **埋点挂在真实生产路径**（v0.6.9 教训）：集成测试走真实链路（`save_trace` → `build_debug_context` → `analyzer.analyze` 主入口携带真实生产指纹命中 KB）断言 `l1_fingerprint` counter 增长且 `analysis_source == "knowledge_base"`。
+
+### 🔒 修复与加固（Minor 大扫除第一批，安全/健壮性 10 项）
+
+- **SDK `_redact` 环引用保护**：上报 extra 含循环引用对象（`a.self = a`）此前递归爆栈，`reportError` 抛 RangeError 整条上报丢失；现 WeakSet 标记截断为 null，输出仍可安全序列化。
+- **SDK `_isSelfRequest` 改 URL 解析后比较 host**：`http://localhost:8000.evil.com` 此前命中端点前缀被误判为自请求 → 上报数据静默丢弃；现按 scheme/host 比较（相似域名绕过防丢数据；非安全边界）。
+- **beacon 体积检查改 UTF-8 字节数**（TextEncoder + 老浏览器兜底）：中文等多字节字符约 3 万字（≈9 万字节）此前按字符数误判"可走 sendBeacon"→ 超 64KB 限制丢数据。
+- **spec PATCH 字段白名单**：未知字段此前直接写入规范持久化/回显，现按 Spec 模型对齐过滤（id 保护语义不变）。
+- **`.env.example` 补安全配置段**：`API_KEYS`（多 Key 轮换）/ `RBAC_ENABLED` / `RBAC_ROLE_MAPPING`（fail-closed 说明）/ `BEACON_TOKEN_TTL_SECONDS` / `BEACON_TOKEN_SCOPE`，CORS 补生产建议（防样例部署漏配安全项）。
+- 其余：SDK 压缩路径节流时间戳同步登记配套的空队列 flush 定时器句柄清理（防御性）、`_pendingBatches` 上限 50（丢最旧 + 告警，防长时间断网恢复内存无界）。
+
+### 🧹 清理（Minor 大扫除第二批，死代码 / 文档口径 9 项）
+
+- **死代码删除**（均经全仓零引用验证）：`agent/schemas.py` 四个零消费方 Pydantic 模型（RepairRequest/RepairPlan/RepairJob/Sources——真实契约是 dict 形态 repair_plan）；`_compressAndSend` 内部 useBeacon 恒为 false 的分支与专用 `_sendBatchSyncCompressed`；deploy 两文件的 `PROMETHEUS_ENABLED` 死配置（app 从未读取）。
+- **命名与文档口径修正**：`_safe_blame_frames` → `_collect_frame_changes`（实际语义是逐帧收集可疑改动，非 blame 且非异常安全包装）；SDK 头注释版本同步；agent 三处 docstring 更新为 `agent_mode`/`is_agent_active` 语义（6414fed 后滞后）；`seed_data` 种子计数 30→45（运行时权威 `len(SEED_CASES)==45`）；`analysis_queue.start()` docstring 改为非幂等口径；SDK_GUIDE `sampleRate`/`networkSampleRate` 描述与 G2 后实现对齐（错误类豁免采样、网络事件双重采样如实标注）。
+- **一项按纪律跳过**：`capture_exception` 的 `sys.exc_info()` 分支经核实为受测试保护的公开契约（`test_no_exception` 显式断言无参行为），非死代码——保留。
+
+### 🛠️ 工程与测试（工作包④ + 计划外）
+
+- **npm 5 包**：`engines` 统一 `>=18`（元包自 `>=16` 收紧），browser-sdk 补 `license: MIT`。
+- **CI**：ci.yml 加 concurrency（同分支重复推送取消在途旧 run）+ setup-python pip cache（requirements-locked/dev 双依赖路径）；release-npm.yml 加 concurrency 但 **cancel-in-progress: false**（发布中途取消会留下半发布状态——npm 禁止覆盖已发布版本，v0.6.5 事故即此类窗口）。
+- **pytest 开 `--strict-markers`**：未注册 marker 直接报错；unit 1409 tests 基线不变。
+- **lint.sh 锁定 ruff==0.16.4**（与 requirements-dev 同源）+ smoke_test clientInfo 动态读 `app.__version__`。
+- **integration 套件首次全绿**（计划外）：修复 11 个长期存在的历史盲区失败（B2 门控统一后的 monkeypatch 遗留 ×6、C2 子进程化对闭包 handler/父进程打桩的影响 ×3、断言未适配 ×1、队列串扰根治 ×1）——`pytest tests/integration` **113 tests / 0 failed**（96 passed / 17 skipped）。
+
+### 📊 测试与质量
+
+> unit **1409 tests / 0 failed / 6 skipped**（junit 权威计数）；integration **113 tests / 0 failed**（96 passed / 17 skipped，首次全绿）；Browser SDK JS **47/47**；e2e **9 passed / 1 skipped**；`check_doc_links` 166 链接 0 错误；ruff 硬门禁全绿。
+
 ## [0.6.9] - 2026-08-29
 
 > 第 7 轮全量代码审查修复发布：**P1 两项**（XFF 反代限流绕过复活修复 / 异常指纹"算好被丢"闭环修复）+ **Major·P2 22 项** + **第 6 轮遗留 P2 全部收口**（B2/B4/B5、C2 僵尸线程、G3 SDK 泄漏）。测试基线 unit **1298 → 1386**（+88）/ 6 skipped / 0 failed，Browser SDK JS **35 → 42**（+7），ruff 硬门禁全绿，零回归。反代部署语义不变：仍须配置 `TRUSTED_PROXY_COUNT`（本版修复其 off-by-one 解析错误）；heavy 工具改为子进程执行（见运维注意）。

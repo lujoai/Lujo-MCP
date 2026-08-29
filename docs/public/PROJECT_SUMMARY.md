@@ -179,7 +179,7 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **1386 passed / 6 skipped / 0 failed / 0 errors**（v0.6.7 基线 1231 → 1290（第 6 轮审查 P0+P1 +59）→ 1298（P2 六项 +8）→ 1386（第 7 轮审查 +88），v0.6.9；另有 Browser SDK JS 契约测试 42 项由 CI `sdk-js-smoke` job 守护）
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **unit 1409 tests / 0 failed / 6 skipped**（1403 passed，junit 权威计数；v0.6.7 基线 1231 → 1290 → 1298 → 1386 → 1409，v0.7.0）+ **integration 113 tests / 0 failed**（96 passed / 17 skipped，首次全绿）；另有 Browser SDK JS 契约测试 47 项由 CI `sdk-js-smoke` job 守护
 - ✅ ruff 硬门禁：仓库根 `ruff.toml` 显式锁定规则集（`E4/E7/E9/F` + `C4` + `PIE`），`ruff check .` = All checks passed；`requirements-dev.txt` 锁 `ruff>=0.16.4,<0.17.0` 防规则集随版本漂移
 
 ### v0.3.0 Release Audit 收口 ✅
@@ -213,8 +213,9 @@ Verifier 验证
 - **v0.6.7**（2026-08-25）：正确性组 7 Major —— Browser SDK 传输三件套（gzip 回退乱码 / pagehide 丢数据 / 节流齐发）+ LLM 缓存指纹碰撞 + 流式路径绕过熔断 + smoke_test 死锁 + sourcemap 缓存键版本混淆。基线 1221 → **1231**。
 - **v0.6.8**（2026-08-27）：第 6 轮全量代码审查修复发布 —— P0 安全×5（CR-1 verify_loop 安全门字段错配、CR-2 脱敏复合键缺口、CR-3 SDK 毒批循环、A1 XFF 限流绕过（新增 `TRUSTED_PROXY_COUNT`）、A2 add_log 明文入库）+ P1 十四项（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）+ G1 + 测试基础设施 2 项 + P2 安全/可靠性六项（D4/D5/D6/E2/F1/F2）+ 发布工程四项（F4-F7）。基线 1231 → 1290（P0+P1）→ **1298**（P2 六项）。
 - **v0.6.9**（2026-08-29）：第 7 轮全量代码审查修复发布 —— P1 安全×2（R7-P1-1 XFF 反代限流绕过复活（off-by-one）、R7-P1-2 异常指纹"算好被丢"三断点、KB 学习闭环复活）+ Major·P2 22 项（R7-S1/S2、T1-T5、A1-A5、G1、V1-V4、Q1-Q5）+ 第 6 轮遗留 P2 全部收口（B2/B4/B5、C2 重活子进程隔离+超时强杀、G3 SDK destroy()）。基线 1298 → **1386**（+88），SDK JS 35 → **42**（+7）。
+- **v0.7.0**（2026-08-29）：主题「稳定 + 可观测 + 债务清理」——KB 学习闭环可观测性（Prometheus `kb_hits_total`/`kb_writeback_total`/`kb_experience_recall_total` + `GET /api/dashboard/kb-stats` + Dashboard「KB Learning Loop」面板）；Minor 大扫除两批 20 项（安全/健壮性 10 项：SDK 环引用保护/相似域名防丢数据/beacon UTF-8 字节/spec PATCH 白名单/.env.example 安全段等；死代码/文档口径 9 项：agent/schemas.py 零消费方模型、beacon 死分支、PROMETHEUS_ENABLED 死配置等）；工程卫生（npm 5 包 engines>=18、CI concurrency + pip cache、release 不可取消语义、pytest --strict-markers、lint.sh 锁 ruff）；integration 套件**首次全绿**（修复 11 个历史盲区失败）。unit **1409 tests / 0 failed**，integration 113 tests / 0 failed，SDK JS **47/47**。
 
-**当前路线**：**v0.6.9 发布执行**（第 7 轮审查 24 项修复 + 第 6 轮遗留 P2 全部收口已完成并提交，版本号 5 处已同步 bump，待打 tag `v0.6.9` + push + npm publish；反代部署语义不变仍须配置 `TRUSTED_PROXY_COUNT`）；仅剩第 6/7 轮 Minor 90+ 择机清理；v0.7.0 需另行规划。当前无已确认 P0/P1 阻塞项。
+**当前路线**：**v0.7.0 发布执行**（四工作包全部完成：①Minor 大扫除批1 ②Minor 大扫除批2 ③KB 学习闭环可观测性 ④工程卫生；integration 修复计划外达成首次全绿；版本号 5 处已同步 bump 0.7.0，待打 tag `v0.7.0` + push + npm publish）。剩余：Minor 挂账（批1+批2 已清 19 项）择机清理；v0.8.0 待规划。当前无已确认 P0/P1 阻塞项。
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -263,7 +264,8 @@ Verifier 验证
 | ~~**P1**~~ ✅ | ~~v0.5.1/v0.5.2 迭代：Source Map 解析 + Browser SDK 增强 + 品牌统一~~ | ✅ 已完成（2026-08-15：Source Map 解析 + resolve_stack 18/18 + deepseek 修复 → npm 0.5.1；品牌统一 ai-debug-mcp → lujo-mcp → npm 0.5.2） |
 | ~~**P1**~~ ✅ | ~~v0.5.3 迭代：RAG 知识库 PostgreSQL 持久化 + 数据库改名 + P3-9 重连修复~~ | ✅ 已完成（2026-08-18：kb_entries 表写穿 + 启动回灌 + lujo_mcp + P3-9 → npm 0.5.3） |
 | ~~**P1**~~ ✅ | ~~v0.6.8 发布（第 6 轮审查修复）~~ | ✅ 已发布（2026-08-27，tag v0.6.8，npm 4 包） |
-| **P1** | **v0.6.9 发布**（第 7 轮审查 24 项修复 + 第 6 轮遗留 P2 收口已完成，版本号已 bump） | 待打 tag `v0.6.9` + push + GitHub Release + npm publish，流程见内部 RELEASE_CHECKLIST |
+| ~~**P1**~~ ✅ | ~~v0.6.9 发布（第 7 轮审查修复）~~ | ✅ 已发布（2026-08-29，tag v0.6.9，npm 4 包） |
+| **P1** | **v0.7.0 发布**（四工作包 + integration 首次全绿已完成，版本号已 bump 0.7.0） | 待打 tag `v0.7.0` + push + GitHub Release + npm publish，流程见内部 RELEASE_CHECKLIST |
 | ~~**P2**~~ ✅ | ~~第 6 轮审查 P2 十六项~~ | ✅ 全部收口（F4-F7 随 v0.6.8；B2/B4/B5 由 6e0b23e、C2/G3 随 v0.6.9 修复） |
 | **P3** | 第 6 轮审查 Minor 90+ 项择机清理 | 内部索引见 CODE_REVIEW 第 6 轮记录 |
 | ~~P2~~ ✅ | ~~Browser SDK 压缩 e2e 联调（`SDK-007`）~~ | 已并入 v0.6.7+ 传输修复交付 |

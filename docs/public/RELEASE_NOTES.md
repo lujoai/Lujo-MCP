@@ -1,12 +1,47 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.6.9（2026-08-29）**。第 7 轮全量代码审查修复发布：P1 安全×2（XFF 反代限流绕过复活修复 / 异常指纹闭环）+ Major·P2 22 项 + 第 6 轮遗留 P2 全部收口（B2/B4/B5、C2 僵尸线程、G3 SDK 泄漏）。测试基线 **1386 passed / 6 skipped / 0 failed**（单元，v0.6.8 基线 1298 → 1386）+ Browser SDK JS 42。含升级注意事项（见「v0.6.9」章节）。npm `latest` → `@lujoai/lujo-mcp@0.6.9`。
+> 最新版本：**v0.7.0（2026-08-29）**。主题「稳定 + 可观测 + 债务清理」：新增 KB 学习闭环可观测性（Prometheus 指标 + dashboard 端点与面板）+ Minor 大扫除两批 20 项（安全/健壮性与死代码清理）+ 工程卫生；integration 套件首次全绿。测试基线 unit **1409 tests / 0 failed**、integration **113 tests / 0 failed**、Browser SDK JS 47。含升级注意事项（见「v0.7.0」章节）。npm `latest` → `@lujoai/lujo-mcp@0.7.0`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.6.9  
+**Version / 版本**: v0.7.0  
 **Release Date / 发布日期**: 2026-08-29  
-**Codename / 代号**: 第 7 轮审查修复 ｜ Round-7 Review Fixes
+**Codename / 代号**: 稳定可观测 ｜ Stable & Observable
+
+---
+
+## v0.7.0（2026-08-29）
+
+> 主题「稳定 + 可观测 + 债务清理」。不含 P0/P1 缺陷修复（缺陷治理已在 v0.6.x 收口）——本版交付 KB 学习闭环可观测性（唯一面向用户的新能力）+ Minor 大扫除两批 20 项 + 工程卫生，并首次达成 integration 套件全绿。测试基线：unit **1409 tests / 0 failed / 6 skipped**、integration **113 tests / 0 failed**（96 passed / 17 skipped，首次全绿）、Browser SDK JS **47/47**、e2e 9 passed。**无 Breaking Change，配置全部向后兼容**。
+
+### ⚠️ 升级注意
+
+1. **npm 包要求 Node >=18**（`engines` 自 `>=16` 收紧）：Node 16 已 EOL；`npm install` 在旧 Node 上会收到 engine 警告。
+2. **无 breaking change**：KB 可观测性指标/端点为纯新增，配置全部向后兼容。
+
+### ✨ 新增：KB 学习闭环可观测性
+
+- **Prometheus 指标**：`kb_hits_total{level}`（L1 精确指纹 / L1.5 归一化 / L2 类型级 / vector_rag / miss）、`kb_writeback_total{kind,status}`（分析回写 / verify 写回）、`kb_experience_recall_total{status}`（经验召回）——闭环"在学"的量化证明，miss 单独计数。
+- **`GET /api/dashboard/kb-stats`**（viewer 可读）：条目总数 / seed vs llm 来源分布 / 学习占比 / 重复验证条数 + 指标快照；数据源失败静默降级零值。
+- **Dashboard「KB Learning Loop」面板**：命中分布与回写计数一目了然。
+
+### 🔒 修复与加固（精选用户可感知项）
+
+- SDK 上报 extra 含**循环引用对象不再崩溃**（此前抛 RangeError 整条上报丢失）。
+- **相似域名不再吞数据**：`http://endpoint.evil.com` 此前被误判为 SDK 自请求而静默跳过采集。
+- **中文页面 beacon 上报不再超限丢数据**：64KB 门改按 UTF-8 字节判定（此前按字符数，3 万汉字 ≈ 9 万字节被误放行）。
+- spec PATCH **字段白名单**：未知字段不再写入规范持久化。
+- `.env.example` 补全安全配置样例（API_KEYS / RBAC / beacon 令牌），防样例部署漏配。
+
+### 🧹 清理与工程
+
+- Minor 大扫除第二批：零消费方模型（agent/schemas.py）、不可达 beacon 分支、`PROMETHEUS_ENABLED` 死配置删除；多处 docstring/文档口径与实现对齐（agent_mode 语义、种子计数、SDK 采样率说明）。
+- 工程卫生：npm 5 包 `engines >=18` 统一；CI concurrency + pip cache；release 发布流程 concurrency（发布不可中途取消）；pytest `--strict-markers`。
+- **integration 套件首次全绿**：修复 11 个历史盲区失败（agent 门控 patch 遗留 / C2 子进程化对测试基建的影响 / 断言适配 / 队列串扰）。
+
+### 📊 测试与质量
+
+- unit **1409 tests / 0 failed / 6 skipped**（junit 权威计数）；integration **113 tests / 0 failed**（96 passed / 17 skipped）；SDK JS 47/47；e2e 9 passed / 1 skipped；ruff 全绿。完整技术细节见 [CHANGELOG](./CHANGELOG.md) 的 0.7.0 章节。
 
 ---
 
