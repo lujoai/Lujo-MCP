@@ -48,6 +48,27 @@ VERIFY_UI_DEF = {
 }
 
 
+def verify_ui_prepare_args(arguments: dict) -> dict:
+    """FIX: C2 —— 父进程派发前预处理：把 ``spec_id`` 解析为 ``spec``。
+
+    verify_ui 改在子进程执行后，``spec_store``（memory 后端）是父进程的进程内
+    态，子进程读不到。故在父进程先把 ``spec_id`` 解析成纯 dict 的 ``spec`` 塞回
+    入参，子进程拿到的 handler 因 ``spec is not None`` 直接跳过 spec_id 分支，
+    无需再访问 spec_store。解析失败/无 spec_id 时原样返回，交由 handler 兜底。
+    """
+    spec = arguments.get("spec")
+    spec_id = arguments.get("spec_id")
+    if spec is None and spec_id:
+        from app.runtime.verifier import spec_store
+
+        resolved = spec_store.get(spec_id)
+        if resolved is not None:
+            prepared = dict(arguments)
+            prepared["spec"] = resolved
+            return prepared
+    return arguments
+
+
 def verify_ui_handler(arguments: dict) -> dict:
     """verify_ui 工具处理函数。"""
     spec = arguments.get("spec")

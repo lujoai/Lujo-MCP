@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app import __version__
 from app.config import settings
+from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
 from app.observability import (
     record_mcp_tool_call,
     record_mcp_tool_busy,
@@ -55,8 +56,11 @@ _tool_registry: dict[str, dict] = {}
 _LIGHT_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_executor_workers)
 _light_tool_slots = asyncio.Semaphore(settings.tool_executor_workers)
 
-# 2. 重型长耗时工具专用池（如 auto_test / verify_ui 等 Playwright 自动化，独立隔离防止打满轻量池）
-_HEAVY_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_heavy_executor_workers)
+# 2. 重型工具（FIX: C2 —— 由线程池改为「每次调用独立子进程」）：
+#    旧实现用 ThreadPoolExecutor，超时后 cancel() 无法中断已运行线程 → 僵尸线程
+#    占满仅 2 个 worker 的 heavy 池、恒 TOOL_BUSY。现改为 heavy_process 子进程
+#    执行 + 超时 terminate() 强杀（进程可杀），故不再需要重型线程池，仅保留
+#    信号量做并发门控（限制同时运行的重活子进程数，避免无界拉起浏览器）。
 _heavy_tool_slots = asyncio.Semaphore(settings.tool_heavy_executor_workers)
 
 # 向后兼容旧版直接引用
@@ -72,10 +76,15 @@ def is_heavy_tool(tool_name: str) -> bool:
     return tool_name in settings.heavy_tools
 
 
-def _get_tool_executor_and_slots(tool_name: str) -> tuple[ThreadPoolExecutor, asyncio.Semaphore, str]:
-    """根据工具类型选择执行线程池与并发信号量槽位。"""
+def _get_tool_executor_and_slots(tool_name: str) -> tuple[ThreadPoolExecutor | None, asyncio.Semaphore, str]:
+    """根据工具类型选择执行池与并发信号量槽位。
+
+    FIX: C2 —— 重型工具返回 executor=None（走独立子进程执行，见
+    :func:`app.mcp.protocol.heavy_process.run_heavy_tool_blocking`），仅用信号量
+    门控；轻量工具仍用专用线程池。
+    """
     if is_heavy_tool(tool_name):
-        return _HEAVY_TOOL_EXECUTOR, _heavy_tool_slots, "heavy"
+        return None, _heavy_tool_slots, "heavy"
     return _TOOL_EXECUTOR, _tool_slots, "light"
 
 
@@ -135,6 +144,9 @@ def register_tool(
 
     v0.5: 支持 category 和 experimental 元数据（可选，向后兼容）。
     v0.6.2: 支持 heavy 元数据标记重型工具（默认通过 settings.heavy_tools 判定）。
+    FIX C2: 支持可选 ``prepare_args`` 钩子——重型工具改在子进程执行后，父进程
+    内存态（如 spec_store）对子进程不可见，需在派发前于父进程把入参预处理
+    （如 verify_ui 把 spec_id 解析为 spec）。
     """
     _tool_registry[name] = {
         "name": name,
@@ -144,6 +156,7 @@ def register_tool(
         "category": kwargs.get("category"),
         "experimental": kwargs.get("experimental", False),
         "heavy": kwargs.get("heavy", False),
+        "prepare_args": kwargs.get("prepare_args"),
     }
 
 
@@ -369,23 +382,53 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         wait_sec = time.perf_counter() - wait_start
         record_mcp_tool_wait(tool_name, pool_type, wait_sec)
 
+        # FIX: C2 —— 重型工具在子进程执行，父进程内存态（如 spec_store）对子进程
+        # 不可见，派发前先经 prepare_args 在父进程预处理入参（如 spec_id→spec）。
+        if pool_type == "heavy":
+            prepare = tool.get("prepare_args")
+            if prepare is not None:
+                try:
+                    arguments = prepare(arguments)
+                except Exception:
+                    logger.exception("工具 %s prepare_args 预处理失败，沿用原入参", tool_name)
+
         sync_future: asyncio.Future | None = None
         try:
             loop = asyncio.get_running_loop()
-            sync_future = loop.run_in_executor(executor, handler, arguments)
-            result = await asyncio.wait_for(sync_future, timeout=timeout)
+            if pool_type == "heavy":
+                # FIX: C2 —— 重活进程隔离：子进程执行 + 超时 terminate() 强杀。
+                # 等待动作放在默认线程池的一个线程里（内部按 timeout 自限并强杀子进程），
+                # 事件循环只 await 该线程结果，不阻塞；超时后无僵尸、不打满任何池。
+                sync_future = loop.run_in_executor(
+                    None,
+                    run_heavy_tool_blocking,
+                    handler.__module__,
+                    handler.__name__,
+                    arguments,
+                    float(timeout),
+                )
+                result = await sync_future
+            else:
+                sync_future = loop.run_in_executor(executor, handler, arguments)
+                result = await asyncio.wait_for(sync_future, timeout=timeout)
             record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
         except asyncio.TimeoutError:
             record_mcp_tool_call(tool_name, "timeout", timeout)
             if sync_future is not None:
                 sync_future.cancel()
-            logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
-            logger.warning(
-                "工具 %s 同步线程超时后 cancel() 无法中断已运行线程（%s池），"
-                "线程将继续占用线程池资源直至完成；若持续出现请排查工具耗时。",
-                tool_name,
-                pool_type,
-            )
+            if pool_type == "heavy":
+                logger.warning(
+                    "工具 %s (heavy/子进程) 执行超时(>%ss)，子进程已强杀回收，无僵尸残留",
+                    tool_name, timeout,
+                )
+            else:
+                logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
+                logger.warning(
+                    "工具 %s 同步线程超时后 cancel() 无法中断已运行线程（%s池），"
+                    "线程将继续占用线程池资源直至完成；若持续出现请排查工具耗时。",
+                    tool_name,
+                    pool_type,
+                )
             return make_response(req.id, {
                 "content": [
                     {

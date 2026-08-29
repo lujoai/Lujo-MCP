@@ -29,7 +29,6 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from mcp.server import Server
@@ -39,7 +38,8 @@ from mcp.types import Tool, TextContent
 from app.config import settings
 from app import __version__
 from app.runtime.hooks.exception_hook import install_global_hook, uninstall_global_hook
-from app.mcp.protocol.server import _tool_registry
+from app.mcp.protocol.server import _tool_registry, is_heavy_tool
+from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
 from app.mcp.tools import register_all_tools
 
 logging.basicConfig(level=logging.INFO, stream=None, force=True)  # stdio模式下不要往stdout打日志，避免污染协议流
@@ -142,11 +142,32 @@ def _register_signal_handlers() -> None:
         pass
 
 
-async def _run_registered_tool(handler: Callable, arguments: dict):
+async def _run_registered_tool(name: str, tool: dict, arguments: dict):
     timeout = settings.tool_timeout_seconds
+    handler = tool["handler"]
     if asyncio.iscoroutinefunction(handler):
         return await asyncio.wait_for(handler(arguments), timeout=timeout)
-    # FIX P3-12: 同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
+
+    # FIX: C2 —— 重型同步工具（如 verify_ui）改在子进程执行 + 超时 terminate()
+    # 强杀（进程可杀，无僵尸）；父进程内存态入参先经 prepare_args 预处理。
+    if is_heavy_tool(name):
+        prepare = tool.get("prepare_args")
+        if prepare is not None:
+            try:
+                arguments = prepare(arguments)
+            except Exception:
+                logger.warning("工具 %s prepare_args 失败，沿用原入参", name, exc_info=True)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            run_heavy_tool_blocking,
+            handler.__module__,
+            handler.__name__,
+            arguments,
+            float(timeout),
+        )
+
+    # FIX P3-12: 轻量同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
     # 超时只取消 await，线程继续运行但池有界不增长。
     loop = asyncio.get_running_loop()
     return await asyncio.wait_for(
@@ -177,7 +198,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if tool is None:
             result = {"error": f"未知工具: {name}"}
         else:
-            result = await _run_registered_tool(tool["handler"], arguments)
+            result = await _run_registered_tool(name, tool, arguments)
     except asyncio.TimeoutError:
         logger.warning("工具 %s 执行超时（>%ss），已中止", name, settings.tool_timeout_seconds)
         result = {"error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。", "_timed_out": True}

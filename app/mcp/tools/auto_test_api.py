@@ -40,78 +40,83 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
-        page = await browser.new_page()
-
-        # SSRF 逐跳守卫：初始 URL 经 is_safe_url 校验，但 goto 重定向 / 点击触发的
-        # 导航默认不校验，攻击者可借 302/JS 跳转内网绕过。复用 ui_runner 守卫逐跳拦截。
-        from app.runtime.verifier.ui_runner import _install_ssrf_guard
-        _install_ssrf_guard(page.context)
-
-        if capture_console:
-            page.on("console", lambda msg: (
-                msg.type in ("error", "warning") and
-                console_errors.append({"type": msg.type, "text": msg.text})
-            ) if msg.type in ("error", "warning") else None)
-
-        if capture_network:
-            page.on("response", lambda resp: (
-                resp.status >= 400 and
-                network_errors.append({"url": resp.url, "status": resp.status})
-            ) if resp.status >= 400 else None)
-
         try:
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-        except Exception as e:
-            logger.error(str(e), exc_info=True)
-            await browser.close()
-            return {"error": "Tool execution failed", "url": url}
+            page = await browser.new_page()
 
-        els = await page.query_selector_all(
-            "button, a[href], input:not([type=hidden]), select, textarea, "
-            "[role=button], [onclick]"
-        )
-        found = len(els)
+            # SSRF 逐跳守卫：初始 URL 经 is_safe_url 校验，但 goto 重定向 / 点击触发的
+            # 导航默认不校验，攻击者可借 302/JS 跳转内网绕过。复用 ui_runner 守卫逐跳拦截。
+            from app.runtime.verifier.ui_runner import _install_ssrf_guard
+            _install_ssrf_guard(page.context)
 
-        for idx, el in enumerate(els):
-            if idx >= max_actions:
-                skipped.append({"index": idx, "reason": "超过最大交互数"})
-                continue
+            if capture_console:
+                page.on("console", lambda msg: (
+                    msg.type in ("error", "warning") and
+                    console_errors.append({"type": msg.type, "text": msg.text})
+                ) if msg.type in ("error", "warning") else None)
+
+            if capture_network:
+                page.on("response", lambda resp: (
+                    resp.status >= 400 and
+                    network_errors.append({"url": resp.url, "status": resp.status})
+                ) if resp.status >= 400 else None)
+
             try:
-                tag = await el.evaluate("el => el.tagName.toLowerCase()")
-                text = (await el.inner_text() or "")[:50]
-                hint = await el.evaluate("el => ({ tag: el.tagName, id: el.id, cls: el.className })")
-
-                if not await el.is_visible():
-                    skipped.append({"index": idx, "tag": tag, "text": text, "reason": "不可见"})
-                    continue
-
-                before = page.url
-                await el.click(timeout=5000)
-                await page.wait_for_timeout(500)
-                after = page.url
-
-                executed.append({
-                    "index": idx, "tag": tag, "text": text,
-                    "id": hint.get("id", ""), "class": hint.get("cls", "")[:60],
-                    "changed_url": before != after,
-                })
+                await page.goto(url, wait_until="networkidle", timeout=30000)
             except Exception as e:
                 logger.error(str(e), exc_info=True)
-                executed.append({"index": idx, "error": "Tool execution failed", "silent_failure": False})
+                return {"error": "Tool execution failed", "url": url}
 
-        await browser.close()
+            els = await page.query_selector_all(
+                "button, a[href], input:not([type=hidden]), select, textarea, "
+                "[role=button], [onclick]"
+            )
+            found = len(els)
 
-    return {
-        "url": url,
-        "found_elements": found,
-        "executed_count": len(executed),
-        "skipped_count": len(skipped),
-        "executed": executed,
-        "console_errors": console_errors[:20],
-        "network_errors": network_errors[:20],
-        "silent_failure_detected": len(network_errors) > 0
-            or any(e.get("silent_failure") for e in executed),
-    }
+            for idx, el in enumerate(els):
+                if idx >= max_actions:
+                    skipped.append({"index": idx, "reason": "超过最大交互数"})
+                    continue
+                try:
+                    tag = await el.evaluate("el => el.tagName.toLowerCase()")
+                    text = (await el.inner_text() or "")[:50]
+                    hint = await el.evaluate("el => ({ tag: el.tagName, id: el.id, cls: el.className })")
+
+                    if not await el.is_visible():
+                        skipped.append({"index": idx, "tag": tag, "text": text, "reason": "不可见"})
+                        continue
+
+                    before = page.url
+                    await el.click(timeout=5000)
+                    await page.wait_for_timeout(500)
+                    after = page.url
+
+                    executed.append({
+                        "index": idx, "tag": tag, "text": text,
+                        "id": hint.get("id", ""), "class": hint.get("cls", "")[:60],
+                        "changed_url": before != after,
+                    })
+                except Exception as e:
+                    logger.error(str(e), exc_info=True)
+                    executed.append({"index": idx, "error": "Tool execution failed", "silent_failure": False})
+
+            return {
+                "url": url,
+                "found_elements": found,
+                "executed_count": len(executed),
+                "skipped_count": len(skipped),
+                "executed": executed,
+                "console_errors": console_errors[:20],
+                "network_errors": network_errors[:20],
+                "silent_failure_detected": len(network_errors) > 0
+                    or any(e.get("silent_failure") for e in executed),
+            }
+        finally:
+            # FIX: C2 —— 正常/异常/取消都及时关闭浏览器，避免 chromium 进程残留
+            # （async_playwright 上下文退出为兜底，此处保证尽早释放）
+            try:
+                await browser.close()
+            except Exception:
+                logger.debug("auto_test 关闭浏览器失败（可能已关闭）", exc_info=True)
 
 
 async def auto_test_handler(arguments: dict) -> dict:

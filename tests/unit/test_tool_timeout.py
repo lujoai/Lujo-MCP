@@ -443,6 +443,14 @@ async def test_heavy_tool_saturation_does_not_block_light_tools(monkeypatch):
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 5.0)
 
+    # FIX: C2 —— 同步重活改走子进程（run_heavy_tool_blocking）。本测试聚焦
+    # 槽位背压隔离，故打桩子进程执行器：占用 heavy 槽位 0.3s 模拟慢重活。
+    def _slow_heavy_subprocess(module, name, arguments, timeout):
+        time.sleep(0.3)
+        return {"heavy": "done"}
+
+    monkeypatch.setattr(server_module, "run_heavy_tool_blocking", _slow_heavy_subprocess)
+
     def _slow_heavy(args):
         time.sleep(0.3)
         return {"heavy": "done"}
@@ -488,6 +496,13 @@ async def test_light_tool_saturation_does_not_block_heavy_tools(monkeypatch):
     monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(2))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 5.0)
+
+    # FIX: C2 —— 同步重活改走子进程（run_heavy_tool_blocking）。本测试聚焦
+    # 槽位隔离，打桩子进程执行器为快速返回。
+    def _fast_heavy_subprocess(module, name, arguments, timeout):
+        return {"heavy": "fast"}
+
+    monkeypatch.setattr(server_module, "run_heavy_tool_blocking", _fast_heavy_subprocess)
 
     def _slow_light(args):
         time.sleep(0.3)
