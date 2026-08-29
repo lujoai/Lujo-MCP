@@ -13,7 +13,10 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  # v0.7.0: contents read→write —— publish job 末尾用 gh release create 创建
+  # 带构建产物（三平台二进制 zip）的 GitHub Release，需要写 releases 权限。
+  # 仅此能力放开；npm 发布仍走 NPM_TOKEN secret，与此权限无关。
+  contents: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -210,3 +213,62 @@ jobs:
 
       - name: Tag npm release (optional success notice)
         run: echo "Published lujo-mcp@${{ steps.ver.outputs.value }} to npm ✅"
+
+      # v0.7.0: 创建带构建产物的 GitHub Release。此前（v0.6.7~v0.6.9）Release 页
+      # 只有文字说明，用户必须经 npm 安装；现把三平台二进制打成 zip 附到 Release
+      # Assets，可直接下载运行（PyInstaller 单文件，解压即用，无需 Python/npm）。
+      # 仅 tag 触发时执行（workflow_dispatch 的手动版本没有稳定 tag 可挂）；
+      # 幂等：Release 已存在时 --notes 更新并补传缺失资产（重跑不炸）。
+      - name: Create GitHub Release with build artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
+        shell: bash
+        run: |
+          set -e
+          ver="$RELEASE_VERSION"
+          tag="v$ver"
+
+          # 打包三平台产物（linux/macOS 同名二进制按平台目录区分）
+          mkdir -p release-assets
+          declare -A map=(
+            [win32-x64]=lujo-mcp-server.exe
+            [linux-x64]=lujo-mcp-server
+            [osx-arm64]=lujo-mcp-server
+          )
+          for suffix in "${!map[@]}"; do
+            bin="artifacts/lujo-mcp-$suffix/${map[$suffix]}"
+            zipname="lujo-mcp-$ver-$suffix.zip"
+            (cd "artifacts/lujo-mcp-$suffix" && zip -q "../../release-assets/$zipname" "${map[$suffix]}")
+            echo "packaged release-assets/$zipname"
+          done
+          ls -la release-assets/
+
+          # Release Notes 取仓库 CHANGELOG 对应版本段（存在则用，否则用简短默认文案）
+          # 注意：版本段标题形如 "## [0.7.0] - 2026-08-29"，用 index() 字面匹配
+          # 前缀（正则元字符 [] 会把版本号当字符类，勿用 $0 ~ "^"tag）
+          notes_file="release-notes.md"
+          if [ -f docs/public/CHANGELOG.md ]; then
+            awk -v tag="## [${ver}]" '
+              index($0, tag) == 1 { found=1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' docs/public/CHANGELOG.md > "$notes_file" || true
+          fi
+          if [ ! -s "$notes_file" ]; then
+            echo "lujo-mcp v$ver — see docs/public/CHANGELOG.md for details." > "$notes_file"
+          fi
+
+          # 幂等创建/更新 Release 并上传资产
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists, uploading missing assets"
+            gh release upload "$tag" release-assets/*.zip --clobber
+          else
+            gh release create "$tag" \
+              --title "v$ver" \
+              --latest \
+              --notes-file "$notes_file" \
+              release-assets/*.zip
+          fi
+          echo "GitHub Release $tag created with $(ls release-assets/*.zip | wc -l) artifacts ✅"
