@@ -140,7 +140,7 @@ class TestGitAgentFailure:
         agent = GitAgent()
         # 通过 patch _safe_blame_frames 抛异常模拟内部失败
         with patch.object(
-            GitAgent, "_safe_blame_frames", side_effect=RuntimeError("unexpected")
+            GitAgent, "_collect_frame_changes", side_effect=RuntimeError("unexpected")
         ):
             frames = [{"file": "app/foo.py", "line": 1}]
             result = await agent.run(_ctx(frames=frames))
