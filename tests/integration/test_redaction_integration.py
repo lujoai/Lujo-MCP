@@ -426,7 +426,13 @@ class TestAddLogRedactsPayload:
         assert data["nested"]["ok"] == 1
 
     def test_add_log_string_payload_regex_redacted(self):
-        """data 为字符串（JSON 序列化 payload）→ 走 redact() 正则路径。"""
+        """data 为字符串（JSON 序列化 payload）→ 存储层脱敏（A2 后统一为 dict）。
+
+        FIX(v0.7.0 复审): 第 6 轮 A2 修复后 add_log 对字符串 payload 先
+        json.loads → redact_nested → 存 dict（不再原样存 JSON 字符串）。
+        本断言此前仍检查旧字符串形态（'\"client_secret\":\"***\"' in data），
+        与现行契约不符——改为断言 dict 形态的脱敏结果。
+        """
         import json
 
         from app.runtime.core.logs import add_log, get_logs
@@ -438,9 +444,11 @@ class TestAddLogRedactsPayload:
 
         entries = get_logs(request_id)
         data = entries[-1]["data"]
-        assert "cs-1" not in data
-        assert '"client_secret":"***"' in data
-        assert "hello" in data
+        # A2 契约：字符串 payload 解析后按嵌套路径脱敏，存储为 dict
+        assert isinstance(data, dict)
+        assert data["client_secret"] == "***"
+        assert "cs-1" not in json.dumps(data)
+        assert data["note"] == "hello"
 
     def test_add_logs_batch_payloads_masked(self):
         """add_logs_batch 批量直写路径同样脱敏。"""

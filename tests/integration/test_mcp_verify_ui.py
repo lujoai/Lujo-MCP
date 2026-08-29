@@ -47,6 +47,20 @@ def _make_tools_call_req(name: str, arguments: dict, req_id: int = 1) -> JSONRPC
     )
 
 
+# FIX(v0.7.0 复审): C2 之后 heavy 工具在子进程按「模块:函数名」动态导入执行，
+# 测试内的闭包函数子进程定位不到（AttributeError）——假 handler 必须模块级。
+def _fake_slow_sync_handler(arguments: dict) -> dict:
+    """模拟 sync_playwright 阻塞调用：sleep 0.3s（verify_ui 假 handler）。"""
+    time.sleep(0.3)
+    return {"matched": True, "diffs": [], "silent_failure": False}
+
+
+def _fake_slow_simple_handler(arguments: dict) -> dict:
+    """模拟阻塞调用的轻量假 handler（_run_registered_tool 直调用例）。"""
+    time.sleep(0.3)
+    return {"ok": True}
+
+
 def _parse_content(resp: dict) -> dict:
     """从 dispatch 返回的 JSON-RPC response 中解析工具结果。"""
     assert "result" in resp, f"预期 result 字段，实际: {resp}"
@@ -246,12 +260,41 @@ class TestVerifyUiViaDispatch:
         assert content["failure_evidence"]["stage"] == "security_check"
 
     def test_assertion_failure_returns_structured_evidence(self, monkeypatch):
-        """业务断言失败时经 MCP 返回 assertions 与 failure_evidence。"""
-        monkeypatch.setattr(ui_runner, "_PLAYWRIGHT_AVAILABLE", True)
+        """业务断言失败时经 MCP 返回 assertions 与 failure_evidence。
+
+        FIX(v0.7.0 复审): C2 之后 verify_ui 经子进程执行，monkeypatch
+        ui_runner 模块对象只在父进程生效、子进程重新 import 拿不到假
+        Playwright（元素找不到 → 结构化证据断言全部失配）。改在**子进程
+        边界**打桩：patch server 侧 run_heavy_tool_blocking 直接返回 fake
+        的 ui_runner 输出结构，保持「断言失败 → 结构化证据」的契约断言。
+        （_FakePlaywrightContext 路径仍由 test_process_boundary 等不经
+        子进程的用例覆盖。）
+        """
+        fake_result = {
+            "matched": False,
+            "diffs": [{
+                "field": "click(#submit).text",
+                "expected": "Ready",
+                "actual": "Pending",
+            }],
+            "silent_failure": False,
+            "interactions": [{
+                "action": "click",
+                "selector": "#submit",
+                "assertions": [
+                    {"type": "text", "selector": "#status", "matched": False,
+                     "expected": "Ready", "actual": "Pending"}
+                ],
+                "failure_evidence": {"stage": "assertion", "selector": "#status"},
+            }],
+        }
+
+        def _fake_run_heavy(module, name, arguments, timeout):
+            return fake_result
+
         monkeypatch.setattr(
-            ui_runner, "sync_playwright", lambda: _FakePlaywrightContext(), raising=False
+            "app.mcp.protocol.server.run_heavy_tool_blocking", _fake_run_heavy
         )
-        monkeypatch.setattr(ui_runner, "PlaywrightTimeout", _FakeTimeout, raising=False)
 
         req = _make_tools_call_req("verify_ui", {
             "spec": {
@@ -304,26 +347,26 @@ class TestVerifyUiDoesNotBlockEventLoop:
     通过 monkeypatch.setitem 替换 _tool_registry 中的 verify_ui handler 为
     一个带 sleep 的同步假 handler，验证 dispatch 调用期间事件循环仍能推进。
     monkeypatch 会在测试结束自动还原，不会污染后续测试。
+
+    FIX(v0.7.0 复审): C2 之后 heavy 工具经子进程按「模块:函数名」动态导入执行，
+    闭包/测试内定义的函数在子进程不可定位（AttributeError）。假 handler 必须
+    提升为模块级函数才能继续验证「不阻塞事件循环」语义。
     """
 
     def test_sync_handler_runs_in_thread_not_blocking_loop(self, monkeypatch):
-        """同步 handler 应在线程池中执行，事件循环并发任务能持续推进。"""
-
-        def fake_slow_sync_handler(arguments: dict) -> dict:
-            """模拟 sync_playwright 阻塞调用：sleep 0.3s。"""
-            time.sleep(0.3)
-            return {"matched": True, "diffs": [], "silent_failure": False}
+        """同步 handler 应在子进程执行，事件循环并发任务能持续推进。"""
 
         # 用 monkeypatch.setitem 替换 handler —— pytest 自动还原，不污染后续测试
         # （test_process_boundary 等后续测试调 verify_ui 时仍是原 handler）
+        # 模块级 _fake_slow_sync_handler 保证子进程可按名导入
         monkeypatch.setitem(
             protocol_server._tool_registry["verify_ui"],
             "handler",
-            fake_slow_sync_handler,
+            _fake_slow_sync_handler,
         )
 
-        # 假 handler 必须是同步的（否则走 await handler 路径，不验证 to_thread）
-        assert not asyncio.iscoroutinefunction(fake_slow_sync_handler)
+        # 假 handler 必须是同步的（否则走 await handler 路径，不验证进程隔离）
+        assert not asyncio.iscoroutinefunction(_fake_slow_sync_handler)
 
         async def scenario():
             # 启动一个并发计数任务 —— 若事件循环被阻塞，计数不会推进
@@ -373,12 +416,13 @@ class TestVerifyUiDoesNotBlockEventLoop:
         asyncio.run(scenario())
 
     def test_run_registered_tool_does_not_block_event_loop(self, monkeypatch):
-        """直接验证 stdio 通道的 _run_registered_tool 也不阻塞事件循环。"""
-        from app.mcp_server import _run_registered_tool
+        """直接验证 stdio 通道的 _run_registered_tool 也不阻塞事件循环。
 
-        def fake_slow_sync_handler(arguments: dict) -> dict:
-            time.sleep(0.3)
-            return {"ok": True}
+        FIX(v0.7.0 复审): C2 后 _run_registered_tool 签名为 (name, tool, arguments)，
+        此前旧签名直调挂 TypeError。本用例走轻量路径（非 heavy 工具名 → 线程池），
+        用模块级假 handler 验证同一「不阻塞」语义。
+        """
+        from app.mcp_server import _run_registered_tool
 
         async def scenario():
             counter = {"n": 0}
@@ -394,7 +438,11 @@ class TestVerifyUiDoesNotBlockEventLoop:
                 baseline = counter["n"]
 
                 t0 = time.monotonic()
-                result = await _run_registered_tool(fake_slow_sync_handler, {})
+                result = await _run_registered_tool(
+                    "light_fake_tool",  # 非 heavy 名单 → 轻量线程池路径
+                    {"handler": _fake_slow_simple_handler},
+                    {},
+                )
                 elapsed = time.monotonic() - t0
 
                 assert elapsed >= 0.25, (
