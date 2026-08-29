@@ -77,7 +77,6 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
       API_KEY: ${API_KEY:?必须设置 API_KEY}
       SOURCEMAP_ENABLED: ${SOURCEMAP_ENABLED:-true}
-      PROMETHEUS_ENABLED: "true"
     # FIX: P2-F1 —— 端口仅绑定回环 127.0.0.1，不向公网/局域网发布 app 端口
     # （此前全网开放 => API Key 明文 HTTP 传输且入口无 TLS）。
     # 生产 TLS 终止由前置反代（nginx/ALB/tunnel 等）在同一宿主机上完成，
