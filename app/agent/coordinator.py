@@ -1,8 +1,12 @@
 """Coordinator —— Agent 执行编排器。
 
-Phase 1：单 Agent 串行（RepairAgent only）。
-Phase 2：多 Agent DAG 调度 —— RepairAgent 先行 → GitAgent / TestAgent / SecurityAgent
-并行审查（依赖 repair_plan）。通过 `agent_multi_agent_enabled` 开关切换。
+single：单 Agent 串行（RepairAgent only）。
+dag：多 Agent DAG 调度 —— RepairAgent 先行 → GitAgent / TestAgent / SecurityAgent
+并行审查（依赖 repair_plan）。
+verify_loop：在 dag 之上叠加迭代修复闭环（verify_loop.py）。
+
+模式由 ``settings.get_agent_mode()`` 派发（显式 AGENT_MODE 优先，
+未配置时按历史布尔开关向后兼容派生，见 config.py）。
 
 静默降级：
 - RepairAgent 失败 → repair_plan=None + 下游 Agent 自动 SKIPPED + agent_trace[FAILED]

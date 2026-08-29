@@ -1,11 +1,11 @@
 """Agent Verify Loop —— 迭代修复闭环（v0.4.0 M4）。
 
-设计：三层开关控制 + 四级判定 + 验证通过后 KB 写回。
+设计：迭代判定 + 验证通过后 KB 写回。
 
-三层开关（叠加，逐层收紧）：
-1. ``agent_enabled``：Agent 子系统总开关
-2. ``agent_multi_agent_enabled``：多 Agent DAG 开关
-3. ``agent_verify_loop_enabled``：Verify Loop 迭代开关
+启用条件：``settings.get_agent_mode() == AgentMode.VERIFY_LOOP`` ——
+显式配置 AGENT_MODE=verify_loop 时生效；未显式配置 agent_mode 时按历史
+布尔开关向后兼容派生（agent_verify_loop_enabled / agent_iterative_repair_enabled，
+见 config.get_agent_mode）。模式判定与开关体系统一收敛在 is_agent_active / get_agent_mode。
 
 四级判定（按综合验证分 score，0~1）：
 - ``high_confidence``：score >= high_confidence_pass_threshold（0.85）→ 直接通过，快速收敛
