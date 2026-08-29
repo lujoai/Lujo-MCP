@@ -230,3 +230,157 @@ test("压缩×节流：压缩异步回调不再绕过节流配额", async () => 
   SDK._flushBatch(true);
   assert.equal(MockXHR.instances.length, 2, "pagehide 应同步冲刷暂存批次");
 });
+
+
+// ===========================================================================
+// v0.7.0 Minor 批次：_redact 环引用 / _isSelfRequest host 比较 /
+// beacon UTF-8 字节 / 空队列定时器句柄 / _pendingBatches 上限
+// ===========================================================================
+
+test("REDACT 环引用保护：cyclic extra 不抛 RangeError 且输出可序列化", () => {
+  const SDK = freshSDK();
+  MockXHR.reset();
+  SDK._setConfig("endpoint", "http://localhost:8000");
+  SDK._setConfig("batchSize", 1);
+  const a = { name: "ok" };
+  a.self = a; // 循环引用
+  assert.doesNotThrow(() => SDK.reportError(new Error("boom"), { blob: a }));
+  assert.equal(MockXHR.instances.length, 1);
+  const parsed = JSON.parse(MockXHR.instances[0].body);
+  assert.ok(parsed, "环被截断后整体可 JSON 序列化");
+});
+
+test("_isSelfRequest 按 host 比较而非字符串前缀（相似域名不再误判 self）", () => {
+  const SDK = freshSDK();
+  SDK._setConfig("endpoint", "http://localhost:8000");
+  const f = SDK._isSelfRequest;
+  assert.equal(f("http://localhost:8000/ingest/batch"), true);
+  assert.equal(f("http://localhost:8000"), true);
+  // 旧前缀匹配：http://localhost:8000.evil.com 命中前缀 → 误判 self → 丢数据
+  assert.equal(f("http://localhost:8000.evil.com/x"), false);
+  assert.equal(f("http://evil.com/localhost:8000"), false);
+  assert.equal(f(""), false);
+  assert.equal(f("not a url ::"), false);
+});
+
+// init 完整流程（含全局错误钩子安装）需要 SDK 的 IIFE `global` 绑定到真实
+// 全局对象：require 加载时 Node 下 `this` 是孤儿 exports 对象，init 必炸；
+// 用 vm.runInThisContext 加载使 `this` === globalThis（与浏览器 window 一致）。
+function freshSDKOnGlobalThis() {
+  const fs = require("node:fs");
+  const vm = require("node:vm");
+  delete globalThis.AiDebug;
+  const code = fs.readFileSync(MODULE_PATH, "utf8");
+  vm.runInThisContext(code, { filename: "ai-debug-vm.js" });
+  return globalThis.AiDebug;
+}
+
+test("beacon 体积检查用 UTF-8 字节数：多字节大载荷回退同步 XHR", () => {
+  const SDK = freshSDKOnGlobalThis();
+  MockXHR.reset();
+  // Node 无 addEventListener：stub 全局监听器安装（init 的错误钩子需要）
+  const addedListeners = [];
+  const realAddEventListener = globalThis.addEventListener;
+  const realRemoveEventListener = globalThis.removeEventListener;
+  globalThis.addEventListener = (type, fn) => addedListeners.push([type, fn]);
+  globalThis.removeEventListener = () => {};
+  // init 期间换取 beacon 令牌（令牌有效才会走 sendBeacon 分支，体积门才有意义）
+  MockXHR.queue.push({ status: 200, responseText: '{"token":"tk-1","expires_in":3600}' });
+  // 关闭采集钩子面（Node 无 document/MutationObserver）：本测试只关心
+  // beacon 发送路径的体积门，令牌换取与错误/pagehide 钩子仍走真实流程
+  SDK.init({
+    endpoint: "http://localhost:8000",
+    apiKey: "k",
+    captureUI: false,
+    captureConsole: false,
+    captureNetwork: false,
+    autoDetectNetworkErrors: false,
+    autoDetectUISilentFailures: false,
+  });
+  const realNav = globalThis.navigator;
+  let beaconCalls = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { sendBeacon: () => { beaconCalls++; return true; } },
+    configurable: true,
+  });
+  try {
+    // ~30000 字符（< 65536）但 ~90000 UTF-8 字节（> 65536）：
+    // 修复前按字符数误判"可走 sendBeacon"→ 64KB 限制的服务端丢数据
+    SDK.reportError(new Error("错".repeat(30000)));
+    SDK._flushBatch(true);
+    assert.equal(beaconCalls, 0, "超 64KB UTF-8 的载荷不得走 sendBeacon");
+    const sync = MockXHR.instances.filter((x) => x.async === false);
+    assert.ok(sync.length >= 1, "应回退同步 XHR 补发");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: realNav, configurable: true });
+    globalThis.addEventListener = realAddEventListener;
+    globalThis.removeEventListener = realRemoveEventListener;
+    MockXHR.reset();
+    if (typeof SDK.destroy === "function") SDK.destroy();
+    delete globalThis.AiDebug;
+  }
+});
+
+test("空队列 flush 不遗留悬挂的定时 flush 句柄", () => {
+  const SDK = freshSDK();
+  MockXHR.reset();
+  SDK._setConfig("endpoint", "http://localhost:8000");
+  SDK._setConfig("batchSize", 100);
+  SDK._setConfig("batchInterval", 5000);
+  SDK.reportError(new Error("e1")); // queue=1 → 定时 flush 句柄已排
+  assert.equal(SDK._batchTimerScheduled, true);
+  SDK._flushBatch(false); // 正常冲刷：句柄清理
+  assert.equal(SDK._batchTimerScheduled, false);
+  SDK._flushBatch(false); // 空队列 flush：不得遗留/复活句柄
+  assert.equal(SDK._batchTimerScheduled, false);
+  SDK.reportError(new Error("e2")); // 句柄干净 → 下次入队可正常调度
+  assert.equal(SDK._batchTimerScheduled, true);
+});
+
+test("_pendingBatches 上限：超出丢最旧并 console.warn", () => {
+  const SDK = freshSDK();
+  MockXHR.reset();
+  SDK._setConfig("endpoint", "http://localhost:8000");
+  SDK._setConfig("batchSize", 1);
+  SDK._setConfig("enableCompression", false);
+  SDK._setConfig("maxBatchesPerWindow", 1);
+  SDK._setConfig("throttleWindowMs", 60000);
+
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const realWarn = console.warn;
+  const timers = [];
+  const warnings = [];
+  globalThis.setTimeout = (fn, delay) => { const t = { fn: fn, delay: delay }; timers.push(t); return t; };
+  globalThis.clearTimeout = () => {};
+  console.warn = (m) => warnings.push(String(m));
+
+  try {
+    for (let i = 0; i < 55; i++) SDK.reportError(new Error("p" + i));
+    // 1 条直接发送；其余 54 条入暂存 → 上限 50 → 丢最旧 4 条并告警
+    assert.equal(MockXHR.instances.length, 1);
+    assert.equal(
+      warnings.filter((m) => m.indexOf("Pending batch queue full") >= 0).length,
+      4,
+      "54 条入暂存、上限 50 → 恰好丢 4 条最旧并各告警一次"
+    );
+    // 错峰排空：pacer 每次发 1 条 → 最终补发 50 条（不丢最新数据）
+    let drained = 0;
+    while (timers.length > 0 && drained < 60) {
+      timers.shift().fn();
+      drained++;
+    }
+    assert.equal(MockXHR.instances.length, 1 + 50, "排空后共发出 1 + 50 条");
+    const allSent = MockXHR.instances.map((x) => x.body || "").join("");
+    assert.ok(allSent.indexOf('"p54"') >= 0, "最新的 p54 必须保留");
+    assert.ok(allSent.indexOf('"p5"') >= 0, "p5 起全部保留");
+    // 直接发送的是 p0；被丢弃的是暂存队列里最旧的 p1~p4
+    for (const gone of ["p1", "p2", "p3", "p4"]) {
+      assert.ok(allSent.indexOf('"' + gone + '"') < 0, gone + " 应被丢弃");
+    }
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+    console.warn = realWarn;
+  }
+});

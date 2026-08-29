@@ -112,6 +112,9 @@
   // ── V5 传输优化状态 ──
   var _batchTimestamps = [];  // 记录每次发送的时间戳，用于节流控制
   var _pendingBatches = [];   // 待发送的批次（节流延迟时暂存）
+  // FIX(v0.7.0 Minor): 暂存队列上限——极端场景（长时间断网后恢复、节流窗口
+  // 持续打满）下无限堆积；超出丢最旧并告警，保护内存有界。
+  var _MAX_PENDING_BATCHES = 50;
   var _pendingTimer = null;   // 节流错开发送定时器（单实例，避免同一时刻齐发）
 
   // ── FIX: G3 destroy/teardown 所需的模块级引用 ──
@@ -224,9 +227,15 @@
     return text;
   }
 
-  function _redact(obj) {
+  function _redact(obj, _seen) {
     if (typeof obj === "string") return _redactString(obj);
     if (!obj || typeof obj !== "object") return obj;
+    // FIX(v0.7.0 Minor): 环引用保护——已访问对象标记，循环引用截断为 null。
+    // 此前 extra 里含环引用对象（如 a.self = a）时递归爆栈，reportError 直接
+    // 抛 RangeError 整条上报丢失；截断后输出仍可安全 JSON.stringify。
+    var seen = _seen || new WeakSet();
+    if (seen.has(obj)) return null;
+    seen.add(obj);
     var out = Array.isArray(obj) ? [] : {};
     var fields = _getRedactFields();
     // Build lowercase lookup set for case-insensitive matching
@@ -243,7 +252,7 @@
           try {
             var parsed = JSON.parse(obj[k]);
             if (parsed && typeof parsed === "object") {
-              out[k] = JSON.stringify(_redact(parsed));
+              out[k] = JSON.stringify(_redact(parsed, seen));
             } else {
               out[k] = _redactString(obj[k]);
             }
@@ -251,7 +260,7 @@
             out[k] = _redactString(obj[k]);
           }
         } else if (typeof obj[k] === "object") {
-          out[k] = _redact(obj[k]);
+          out[k] = _redact(obj[k], seen);
         } else {
           out[k] = obj[k];
         }
@@ -326,10 +335,18 @@
   }
 
   function _flushBatch(useBeacon) {
-    // FIX: R7-G1 —— beacon（pagehide/unload）冲刷不能因事件队列为空而提前
-    // return：节流暂存的 _pendingBatches 同样需要在卸载前同步冲刷，
-    // 否则窗口满后暂存的批次在页面关闭时静默丢失。
-    if ((!useBeacon && _batchQueue.length === 0) || !cfg.endpoint) return;
+    if (!cfg.endpoint) return;
+
+    // FIX(v0.7.0 Minor): 空队列 flush 清理悬挂的定时 flush 句柄——防句柄悬挂
+    // 抑制下次调度（_addEvent 的 `else if (!_batchTimer)` 分支）。
+    // 注意：beacon 冲刷路径不受影响（G1 语义保持：beacon 不看队列是否为空）。
+    if (!useBeacon && _batchQueue.length === 0) {
+      if (_batchTimer) {
+        clearTimeout(_batchTimer);
+        _batchTimer = null;
+      }
+      return;
+    }
 
     if (_batchTimer) {
       clearTimeout(_batchTimer);
@@ -338,6 +355,9 @@
 
     var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
 
+    // FIX: R7-G1 —— beacon（pagehide/unload）冲刷不看事件队列是否为空：
+    // 节流暂存的 _pendingBatches 同样需要在卸载前同步冲刷，否则窗口满后
+    // 暂存的批次在页面关闭时静默丢失。
     // 页面关闭/隐藏路径：必须同步冲刷，绝不能延迟到定时器（unload 后定时器不会触发）
     if (useBeacon) {
       if (_pendingTimer) {
@@ -371,6 +391,11 @@
 
       if (_batchTimestamps.length >= cfg.maxBatchesPerWindow) {
         // 超过节流限制：入暂存队列，由单一定时器按间隔逐条错开发送（避免齐发尖峰）
+        if (_pendingBatches.length >= _MAX_PENDING_BATCHES) {
+          // FIX(v0.7.0 Minor): 暂存队列满 → 丢最旧并告警（内存有界）
+          _pendingBatches.shift();
+          console.warn("[ai-debug] Pending batch queue full (" + _MAX_PENDING_BATCHES + "), dropping oldest");
+        }
         _pendingBatches.push(body);
         if (!_pendingTimer) {
           var delay = cfg.throttleWindowMs - (now - _batchTimestamps[0]);
@@ -480,6 +505,21 @@
     }
   }
 
+  // FIX(v0.7.0 Minor): beacon 64KB 上限按 UTF-8 字节数判定——此前用字符数，
+  // 中文等多字节字符约 3 万字（≈9 万字节）被误判"可走 sendBeacon"，
+  // 实际超 64KB 限制被服务端截断/丢弃。
+  function _utf8Length(str) {
+    if (typeof TextEncoder !== "undefined") {
+      return new TextEncoder().encode(str).length;
+    }
+    // 老浏览器兜底：unescape(encodeURIComponent(str)) 产生 UTF-8 字节串
+    try {
+      return unescape(encodeURIComponent(str)).length;
+    } catch (e) {
+      return str.length;
+    }
+  }
+
   // 未压缩直接发送
   function _sendBatchDirect(url, body, useBeacon) {
     // FIX: R7-G1 —— 节流时间戳登记已前移到 _flushBatch/_drainPendingBatches
@@ -489,7 +529,7 @@
     // 页面关闭场景：必须同步发送（sendBeacon 或同步 XHR），异步 XHR 会在 unload 后被取消
     if (useBeacon) {
       if (_hasSendBeacon()) {
-        if (body.length <= _BEACON_SIZE_LIMIT) {
+        if (_utf8Length(body) <= _BEACON_SIZE_LIMIT) {
           if (!_beaconTokenValid()) {
             // 令牌不可用 → 退回同步 XHR（带 header），避免 URL 暴露永久 Key
             _sendBatchSync(url, body);
@@ -816,10 +856,23 @@
 
   function _isSelfRequest(url) {
     if (!cfg.endpoint) return false;
-    url = String(url || "");
-    if (!url) return false;
-    var endpoint = cfg.endpoint.replace(/\/+$/, "");
-    return url.indexOf(endpoint) === 0;
+    var raw = String(url || "");
+    if (!raw) return false;
+    // FIX(v0.7.0 Minor): 前缀匹配可被相似域名绕过——http://localhost:8000.evil.com
+    // 命中 http://localhost:8000 前缀 → 误判为自请求 → 上报数据被静默丢弃。
+    // 改为 URL 解析后比较 scheme/host；endpoint 带路径时要求路径前缀一致。
+    // 注意：这是防丢数据的正确性修复，不是安全边界（本判定只决定"是否跳过采集"）。
+    try {
+      var parsed = new URL(raw, typeof location !== "undefined" ? location.href : undefined);
+      var endpoint = new URL(cfg.endpoint);
+      if (parsed.protocol !== endpoint.protocol || parsed.host !== endpoint.host) return false;
+      if (endpoint.pathname && endpoint.pathname !== "/") {
+        return parsed.pathname.indexOf(endpoint.pathname) === 0;
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   // ── 全局异常捕获 ──
@@ -1817,6 +1870,9 @@
     _saveToLocalStorage: _saveToLocalStorage,
     _restorePendingBatches: _restorePendingBatches,
     _flushBatch: _flushBatch,
+    // 测试辅助（v0.7.0 Minor 单测，只读）：自请求判定与定时 flush 句柄状态
+    _isSelfRequest: _isSelfRequest,
+    get _batchTimerScheduled() { return !!_batchTimer; },
   };
 
   // 支持 CommonJS / ES module / 全局变量
