@@ -52,7 +52,7 @@ class GitAgent(BaseAgent):
             # 优先复用 RepairContextAssembler 已装配的 git_context，避免重复 git 调用
             preassembled = (ctx.repair_context or {}).get("git_context", [])
 
-            suspect_commits = await self._safe_blame_frames(
+            suspect_commits = await self._collect_frame_changes(
                 frames[:_MAX_FRAMES_TO_BLAME], preassembled
             )
             recent_changes = list(preassembled)[:_MAX_SUSPECT_COMMITS_PER_FRAME]
@@ -82,7 +82,7 @@ class GitAgent(BaseAgent):
                 finished_at=self._now(),
             )
 
-    async def _safe_blame_frames(
+    async def _collect_frame_changes(
         self,
         frames: list[dict[str, Any]],
         preassembled: list[dict[str, Any]],
