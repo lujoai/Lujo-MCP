@@ -17,6 +17,7 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.observability import record_kb_experience_recall
 
 logger = logging.getLogger("lujo-mcp.agent.assembler")
 
@@ -203,6 +204,8 @@ class RepairContextAssembler:
                 debug_context=ctx,
                 top_k=settings.debug_experience_top_k,
             )
+            # v0.7.0: 经验召回命中/未命中计数（只读埋点，不影响返回）
+            record_kb_experience_recall("hit" if records else "miss")
             if not records:
                 return None
             # FIX: R7-Q3 —— DebugExperienceRecord 是 dataclass，直接进

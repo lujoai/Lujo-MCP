@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth.rbac import require_role
+from app.observability import get_kb_metric_snapshot
 from app.runtime.core import errors, logs
 from app.llm.cache import _get_redis_cache
 
@@ -240,6 +241,45 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
             logger.warning("Dashboard L2 Redis 缓存写入失败", exc_info=True)
 
     return result[:limit]
+
+
+@router.get("/kb-stats", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
+def get_kb_stats():
+    """KB 学习闭环可观测性（v0.7.0 工作包②）。
+
+    返回知识库条目分布（seed vs llm 学习 / 重复验证占比）与闭环指标
+    快照（三级命中 / 回写 / 经验召回，进程级累计）。任一数据源失败
+    静默降级为零值，不抛 500。
+    """
+    try:
+        from app.rag.knowledge_base import get_knowledge_base
+
+        store_stats = get_knowledge_base().stats()
+    except Exception:
+        logger.warning("KB store 统计读取失败，返回零值", exc_info=True)
+        store_stats = {"total_entries": 0, "by_source": {}, "verified_entries": 0}
+
+    try:
+        snapshot = get_kb_metric_snapshot()
+    except Exception:
+        logger.warning("KB 指标快照读取失败，返回零值", exc_info=True)
+        snapshot = {
+            "hits_by_level": {},
+            "writeback": {"analysis": {}, "verify": {}},
+            "experience_recall": {},
+        }
+
+    total = store_stats["total_entries"]
+    learned = store_stats["by_source"].get("llm", 0)
+
+    return {
+        "total_entries": total,
+        "by_source": store_stats["by_source"],
+        "learned_entries": learned,
+        "learned_ratio": round(learned / total, 4) if total else 0.0,
+        "verified_entries": store_stats["verified_entries"],
+        "metrics_snapshot": snapshot,
+    }
 
 
 @router.get("/stats", dependencies=[Depends(require_role("admin", "developer", "viewer"))])

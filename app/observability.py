@@ -56,6 +56,12 @@ _mcp_tool_busy_rejected_total: Dict[Tuple[str, str], int] = defaultdict(int)  # 
 _mcp_tool_wait_latency_sum: Dict[Tuple[str, str], float] = defaultdict(float)   # (tool_name, pool_type) -> sum_sec
 _mcp_tool_wait_latency_count: Dict[Tuple[str, str], int] = defaultdict(int) # (tool_name, pool_type) -> count
 
+# v0.7.0: KB 学习闭环指标（R7-P1-2 闭环复活的观测面）
+_kb_hits_total: Dict[str, int] = defaultdict(int)                   # level -> count
+_kb_writeback_total: Dict[Tuple[str, str], int] = defaultdict(int)  # (kind, status) -> count
+_kb_experience_recall_total: Dict[str, int] = defaultdict(int)      # status -> count
+_KB_HIT_LEVELS = ("l1_fingerprint", "l1_5_normalized", "l2_type", "vector_rag", "miss")
+
 router = APIRouter(tags=["observability"])
 
 # ── OpenTelemetry（P3-4）──
@@ -74,6 +80,9 @@ _otel_mcp_tool_counter = None
 _otel_mcp_tool_lat_hist = None
 _otel_mcp_busy_counter = None
 _otel_mcp_wait_lat_hist = None
+_otel_kb_hit_counter = None
+_otel_kb_writeback_counter = None
+_otel_kb_experience_counter = None
 _otel_shutdown = None
 
 try:
@@ -99,6 +108,7 @@ def _init_otel():
     global _otel_llm_req_counter, _otel_llm_latency_hist, _otel_llm_token_counter, _otel_llm_cache_counter
     global _otel_storage_op_counter, _otel_storage_lat_hist, _otel_pg_retry_counter, _otel_shutdown
     global _otel_mcp_tool_counter, _otel_mcp_tool_lat_hist, _otel_mcp_busy_counter, _otel_mcp_wait_lat_hist
+    global _otel_kb_hit_counter, _otel_kb_writeback_counter, _otel_kb_experience_counter
 
     if _otel_meter is not None:
         return _otel_meter, _otel_request_counter, _otel_error_counter, _otel_latency_histogram, _otel_shutdown
@@ -188,6 +198,18 @@ def _init_otel():
             "mcp_tool_queue_wait_duration_seconds",
             description="MCP tool slot acquisition wait latency in seconds",
         )
+        _otel_kb_hit_counter = meter.create_counter(
+            "kb_hits_total",
+            description="Total KB lookup hits by match level (v0.7.0 learning-loop observability)",
+        )
+        _otel_kb_writeback_counter = meter.create_counter(
+            "kb_writeback_total",
+            description="Total KB writeback attempts by kind and status (v0.7.0)",
+        )
+        _otel_kb_experience_counter = meter.create_counter(
+            "kb_experience_recall_total",
+            description="Total debug-experience recalls by status (v0.7.0)",
+        )
 
         def shutdown():
             provider.shutdown()
@@ -232,6 +254,9 @@ def _trim_metric_tables_if_needed() -> None:
         + len(_storage_ops_total)
         + len(_mcp_tool_calls_total)
         + len(_mcp_tool_busy_rejected_total)
+        + len(_kb_hits_total)
+        + len(_kb_writeback_total)
+        + len(_kb_experience_recall_total)
     )
     if total_keys > _MAX_METRIC_KEYS:
         logger.warning("指标表超上限，清空重置 (total_keys=%d)", total_keys)
@@ -254,6 +279,9 @@ def _trim_metric_tables_if_needed() -> None:
         _mcp_tool_busy_rejected_total.clear()
         _mcp_tool_wait_latency_sum.clear()
         _mcp_tool_wait_latency_count.clear()
+        _kb_hits_total.clear()
+        _kb_writeback_total.clear()
+        _kb_experience_recall_total.clear()
 
 
 # ── v0.6.0: LLM 记录辅助函数 ──
@@ -417,6 +445,90 @@ def record_mcp_tool_wait(
     _init_otel()
     if _otel_mcp_wait_lat_hist:
         _otel_mcp_wait_lat_hist.record(w, {"tool": t, "pool": pool})
+
+
+# ── v0.7.0: KB 学习闭环记录辅助函数 ──
+# 观测目标（R7-P1-2 闭环复活的"在学"证明）：三级命中 / 向量 RAG / 分析与
+# verify 回写 / 经验召回。record_* 全函数体防御：任何异常吞掉记 debug，
+# 埋点永不影响业务返回值/异常传播。
+
+
+def record_kb_hit(level: str) -> None:
+    """记录 KB 命中层级计数。
+
+    level: l1_fingerprint（精确指纹）| l1_5_normalized（归一化指纹）|
+           l2_type（类型级 Jaccard）| vector_rag | miss
+    """
+    try:
+        lv = _sanitize_label(level or "unknown")
+        with _counter_lock:
+            _trim_metric_tables_if_needed()
+            _kb_hits_total[lv] += 1
+
+        _init_otel()
+        if _otel_kb_hit_counter:
+            _otel_kb_hit_counter.add(1, {"level": lv})
+    except Exception:
+        logger.debug("record_kb_hit 埋点失败（忽略）", exc_info=True)
+
+
+def record_kb_writeback(kind: str, status: str) -> None:
+    """记录 KB 回写计数。
+
+    kind: analysis（分析回写）| verify（verify_loop 写回）
+    status: success | failed | skipped（未启用/无指纹等前置短路）| miss（未命中条目）
+    """
+    try:
+        k = _sanitize_label(kind or "unknown")
+        st = _sanitize_label(status or "unknown")
+        with _counter_lock:
+            _trim_metric_tables_if_needed()
+            _kb_writeback_total[(k, st)] += 1
+
+        _init_otel()
+        if _otel_kb_writeback_counter:
+            _otel_kb_writeback_counter.add(1, {"kind": k, "status": st})
+    except Exception:
+        logger.debug("record_kb_writeback 埋点失败（忽略）", exc_info=True)
+
+
+def record_kb_experience_recall(status: str) -> None:
+    """记录调试经验召回计数（status: hit | miss）"""
+    try:
+        st = _sanitize_label(status or "unknown")
+        with _counter_lock:
+            _trim_metric_tables_if_needed()
+            _kb_experience_recall_total[st] += 1
+
+        _init_otel()
+        if _otel_kb_experience_counter:
+            _otel_kb_experience_counter.add(1, {"status": st})
+    except Exception:
+        logger.debug("record_kb_experience_recall 埋点失败（忽略）", exc_info=True)
+
+
+def get_kb_metric_snapshot() -> dict:
+    """KB 学习闭环指标只读快照（dashboard kb-stats 端点用，进程级累计值）。
+
+    键集合恒定（未发生的层级/状态为零值），前端无需判空。
+    """
+    with _counter_lock:
+        return {
+            "hits_by_level": {lvl: int(_kb_hits_total.get(lvl, 0)) for lvl in _KB_HIT_LEVELS},
+            "writeback": {
+                "analysis": {
+                    s: int(_kb_writeback_total.get(("analysis", s), 0))
+                    for s in ("success", "failed", "skipped")
+                },
+                "verify": {
+                    s: int(_kb_writeback_total.get(("verify", s), 0))
+                    for s in ("success", "miss", "skipped")
+                },
+            },
+            "experience_recall": {
+                s: int(_kb_experience_recall_total.get(s, 0)) for s in ("hit", "miss")
+            },
+        }
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
@@ -609,6 +721,31 @@ def _render_prometheus() -> str:
             for (tool, pool), count in _mcp_tool_wait_latency_count.items():
                 lines.append(
                     f'mcp_tool_queue_wait_duration_seconds_count{{tool="{tool}",pool="{pool}"}} {count}'
+                )
+
+        # 5. v0.7.0: KB 学习闭环
+        if _kb_hits_total:
+            lines.append("# HELP kb_hits_total Total KB lookup hits by match level")
+            lines.append("# TYPE kb_hits_total counter")
+            for level, count in _kb_hits_total.items():
+                lines.append(
+                    f'kb_hits_total{{level="{level}"}} {count}'
+                )
+
+        if _kb_writeback_total:
+            lines.append("# HELP kb_writeback_total Total KB writeback attempts by kind/status")
+            lines.append("# TYPE kb_writeback_total counter")
+            for (kind, status), count in _kb_writeback_total.items():
+                lines.append(
+                    f'kb_writeback_total{{kind="{kind}",status="{status}"}} {count}'
+                )
+
+        if _kb_experience_recall_total:
+            lines.append("# HELP kb_experience_recall_total Total debug-experience recalls by status")
+            lines.append("# TYPE kb_experience_recall_total counter")
+            for status, count in _kb_experience_recall_total.items():
+                lines.append(
+                    f'kb_experience_recall_total{{status="{status}"}} {count}'
                 )
 
     return "\n".join(lines) + "\n"

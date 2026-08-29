@@ -290,6 +290,26 @@ class KnowledgeBaseStore:
         with self._lock:
             return len(self._entries)
 
+    def stats(self) -> dict[str, Any]:
+        """只读统计快照（v0.7.0 KB 学习闭环可观测性，dashboard kb-stats 用）。
+
+        返回条目总数 / 按来源（seed vs llm 学习）分布 / verify_count>1 的
+        重复验证条目数。锁内汇总，无外部 IO。
+        """
+        with self._lock:
+            by_source: dict[str, int] = {}
+            verified = 0
+            for entry in self._entries.values():
+                source = entry.source or "unknown"
+                by_source[source] = by_source.get(source, 0) + 1
+                if entry.verify_count > 1:
+                    verified += 1
+            return {
+                "total_entries": len(self._entries),
+                "by_source": by_source,
+                "verified_entries": verified,
+            }
+
     # ── 索引维护 ──
 
     def _add_to_index(self, entry: KnowledgeBaseEntry) -> None:

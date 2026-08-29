@@ -23,6 +23,7 @@ from app.rag.debug_case import (
     normalize_message_for_similarity,
 )
 from app.llm.context_prep import _get_error_signal
+from app.observability import record_kb_hit, record_kb_writeback
 
 logger = logging.getLogger("lujo-mcp.llm")
 
@@ -35,6 +36,8 @@ def _get_knowledge_base_result(context: dict) -> Optional[dict]:
     # L1：精确指纹命中
     entry = get_knowledge_entry(fingerprint)
     if entry is not None:
+        # v0.7.0: KB 学习闭环可观测性——只读埋点（record_* 全函数体防御，不影响返回）
+        record_kb_hit("l1_fingerprint")
         return _build_kb_result(entry, "knowledge_base")
 
     # L1.5：归一化指纹命中（同模式、不同变量值）
@@ -42,6 +45,7 @@ def _get_knowledge_base_result(context: dict) -> Optional[dict]:
         normalized_fp = compute_normalized_fingerprint(exc_type, message)
         entry = get_entry_by_normalized_fingerprint(normalized_fp)
         if entry is not None:
+            record_kb_hit("l1_5_normalized")
             return _build_kb_result(entry, "knowledge_base_normalized")
 
     # L2：类型级 Jaccard 兜底（同类型异常，消息 token 重叠）
@@ -50,10 +54,14 @@ def _get_knowledge_base_result(context: dict) -> Optional[dict]:
         candidates = get_entries_by_type_fingerprint(type_fp, top_k=5)
         entry = _best_type_fallback(candidates, message)
         if entry is not None:
+            record_kb_hit("l2_type")
             return _build_kb_result(entry, "knowledge_base_type")
 
     # 精确指纹 miss → 向量检索 RAG fallback（二级召回）
-    return _try_vector_rag(context, fingerprint)
+    vector_result = _try_vector_rag(context, fingerprint)
+    # v0.7.0: 命中/未命中都计数（miss 是"闭环在空转"的关键观测信号）
+    record_kb_hit("vector_rag" if vector_result else "miss")
+    return vector_result
 
 
 def _best_type_fallback(
@@ -155,10 +163,13 @@ def _persist_analysis_to_knowledge_base(
     fingerprint: Optional[str], result: dict, context: Optional[dict] = None
 ) -> None:
     if not fingerprint:
+        # v0.7.0: 无指纹短路也计数（skipped 是"分析完却没写回"的观测信号）
+        record_kb_writeback("analysis", "skipped")
         return
 
     analysis = result.get("analysis")
     if not isinstance(analysis, dict):
+        record_kb_writeback("analysis", "skipped")
         return
 
     # 注入异常类型/消息，支撑三级 fallback（L1.5 归一化 / L2 类型级）
@@ -177,7 +188,9 @@ def _persist_analysis_to_knowledge_base(
             fix_suggestion=analysis.get("fix", ""),
             source="llm",
         )
+        record_kb_writeback("analysis", "success")
     except Exception:
+        record_kb_writeback("analysis", "failed")
         logger.warning(
             "Knowledge base auto-persist failed (fingerprint=%s)",
             fingerprint,

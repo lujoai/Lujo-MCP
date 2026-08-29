@@ -91,6 +91,11 @@
   <div class="stat-card spec" id="stat-specs"><div class="num">-</div><div class="label">Specs</div></div>
 </div>
 
+<div class="panel" id="kb-panel" style="margin-bottom:16px;">
+  <div class="panel-header">KB Learning Loop</div>
+  <div id="kb-stats" style="font-size:13px;color:#8b949e;">Loading...</div>
+</div>
+
 <div class="container">
   <div class="panel panel-left">
     <div class="panel-header">Recent Traces</div>
@@ -110,6 +115,31 @@ async function fetchJSON(url) {
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(res.statusText);
   return res.json();
+}
+
+async function loadKbStats() {
+  try {
+    const s = await fetchJSON('/api/dashboard/kb-stats');
+    const m = s.metrics_snapshot || {};
+    const h = m.hits_by_level || {};
+    const aw = (m.writeback || {}).analysis || {};
+    const vw = (m.writeback || {}).verify || {};
+    const er = m.experience_recall || {};
+    const ratio = (s.learned_ratio * 100).toFixed(1);
+    document.getElementById('kb-stats').innerHTML =
+      '总条目 <b style="color:#e6edf3">' + s.total_entries + '</b>' +
+      '（学习 ' + (s.learned_entries || 0) + ' · ' + ratio + '% · 重复验证 ' + (s.verified_entries || 0) + '）'
+      + '<br>命中：L1 ' + (h.l1_fingerprint || 0)
+      + ' · L1.5 ' + (h.l1_5_normalized || 0)
+      + ' · L2 ' + (h.l2_type || 0)
+      + ' · 向量 ' + (h.vector_rag || 0)
+      + ' · miss ' + (h.miss || 0)
+      + '<br>回写：分析 成功 ' + (aw.success || 0) + ' / 失败 ' + (aw.failed || 0)
+      + ' ｜ verify 成功 ' + (vw.success || 0) + ' / 未命中 ' + (vw.miss || 0)
+      + ' ｜ 经验召回 命中 ' + (er.hit || 0) + ' / 未命中 ' + (er.miss || 0);
+  } catch(e) {
+    document.getElementById('kb-stats').textContent = 'KB stats unavailable';
+  }
 }
 
 async function loadStats() {
@@ -323,7 +353,7 @@ function renderQualityCard(qr) {
 
 async function refresh() {
   document.getElementById('refresh').textContent = 'Refreshing...';
-  await Promise.all([loadStats(), loadTraces()]);
+  await Promise.all([loadStats(), loadKbStats(), loadTraces()]);
   document.getElementById('refresh').textContent = 'Updated ' + new Date().toLocaleTimeString('zh-CN');
 }
 

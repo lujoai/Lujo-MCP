@@ -30,6 +30,7 @@ from enum import Enum
 from typing import Any, Awaitable, Callable, Optional
 
 from app.config import settings
+from app.observability import record_kb_writeback
 
 logger = logging.getLogger("lujo-mcp.agent.verify_loop")
 
@@ -225,8 +226,12 @@ def _writeback_kb(ctx: Any, result: dict[str, Any], score: float) -> Optional[bo
 
     由 ``settings.agent_verify_loop_kb_writeback_enabled`` 控制。
     未命中 KB 条目（无指纹或不匹配）时返回 None，不抛异常。
+
+    v0.7.0: 三种返回路径埋点（skipped=开关关闭 / miss=无指纹或未命中 /
+    success=写回成功）——只读埋点，不影响返回值与异常传播。
     """
     if not settings.agent_verify_loop_kb_writeback_enabled:
+        record_kb_writeback("verify", "skipped")
         return None
     try:
         from app.rag.knowledge_base import record_verification
@@ -235,10 +240,13 @@ def _writeback_kb(ctx: Any, result: dict[str, Any], score: float) -> Optional[bo
         exception = debug_context.get("exception") or {}
         fingerprint = exception.get("fingerprint")
         if not fingerprint:
+            record_kb_writeback("verify", "miss")
             return None
         updated = record_verification(fingerprint, score)
         if updated is None:
+            record_kb_writeback("verify", "miss")
             return None
+        record_kb_writeback("verify", "success")
         logger.info(
             "Verify Loop KB 写回成功 fingerprint=%s verify_count=%s confidence=%s",
             fingerprint,
