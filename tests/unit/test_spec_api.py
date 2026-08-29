@@ -118,3 +118,38 @@ class TestSpecAPIErrorSanitization:
         assert resp.status_code == 500
         assert resp.json()["detail"] == "列出规范失败"
         assert sensitive not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.0 Minor): spec PATCH 字段白名单 —— 未知字段忽略，不持久化/回显
+# ---------------------------------------------------------------------------
+
+
+def test_update_spec_ignores_unknown_fields(client):
+    """白名单外字段（含疑似内部键）不得写入规范。"""
+    resp = client.post("/api/spec", json={"kind": "api", "target": "GET /wl", "expect": {}})
+    spec_id = resp.json()["spec_id"]
+
+    resp = client.patch(
+        f"/api/spec/{spec_id}",
+        json={"target": "GET /wl-v2", "evil_field": "x", "internal_state": 1, "owner": "attacker"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["target"] == "GET /wl-v2"  # 白名单内字段正常更新
+    for unknown in ("evil_field", "internal_state", "owner"):
+        assert unknown not in body, f"未知字段 {unknown} 不得写入规范"
+
+    # GET 复核：存储里同样没有未知字段
+    resp = client.get(f"/api/spec/{spec_id}")
+    assert "evil_field" not in resp.json()
+
+
+def test_update_spec_still_ignores_id_via_whitelist(client):
+    """既有 id 保护语义保持：id 不在白名单 → 不可修改。"""
+    resp = client.post("/api/spec", json={"kind": "api", "target": "GET /idw", "expect": {}})
+    spec_id = resp.json()["spec_id"]
+
+    resp = client.patch(f"/api/spec/{spec_id}", json={"id": "hijacked"})
+    assert resp.status_code == 200
+    assert resp.json()["id"] == spec_id

@@ -11,6 +11,11 @@ logger = logging.getLogger("lujo-mcp.spec_api")
 
 router = APIRouter(prefix="/api", tags=["spec"])
 
+# FIX(v0.7.0 Minor): PATCH 字段白名单 —— 与 Spec 模型（schemas.Spec）可更新字段
+# 对齐；id 不在其中（不可修改，语义同旧 pop("id")），模型外未知字段一律忽略，
+# 防调用方夹带内部键随 existing.update() 持久化/回显。
+_SPEC_PATCHABLE_FIELDS = frozenset({"kind", "target", "expect", "created_at", "updated_at"})
+
 
 @router.post("/spec", dependencies=[Depends(require_role("admin", "developer"))])
 def create_spec(spec: Spec):
@@ -46,8 +51,8 @@ def get_spec(spec_id: str):
 
 @router.patch("/spec/{spec_id}", dependencies=[Depends(require_role("admin", "developer"))])
 def update_spec(spec_id: str, patch: dict):
-    """部分更新规范（id 不可修改）"""
-    patch.pop("id", None)
+    """部分更新规范（id 不可修改；白名单外未知字段忽略）"""
+    patch = {k: v for k, v in patch.items() if k in _SPEC_PATCHABLE_FIELDS}
     updated = spec_store.update(spec_id, patch)
     if updated is None:
         raise HTTPException(status_code=404, detail=f"规范 {spec_id} 不存在")
