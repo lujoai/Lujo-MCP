@@ -24,6 +24,19 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
+
+# FIX(v0.7.0 Minor): clientInfo 版本此前硬编码 0.4.1-beta（早已失真）。
+# 改为从 app.__version__ 动态读取——脚本须可在任意 cwd 运行（发布构建冒烟），
+# 故先引导仓库根进 sys.path；app 不可导入时兜底 unknown（--cmd 二进制冒烟仍可用）。
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+try:
+    from app import __version__ as _APP_VERSION
+except ImportError:  # pragma: no cover - 独立分发场景兜底
+    _APP_VERSION = "unknown"
 
 # FIX: P2-F7 —— Windows 冒烟崩溃：发布构建的 windows job 里 Python stdout 默认
 # codec 是 cp1252，本脚本 print 的界面文案含中文（"枚举"/"个工具"等）在
@@ -129,7 +142,7 @@ def _run_smoke(tool: str | None, cmd=None) -> int:
         init = _send(proc, out_q, "initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "lujo-smoke-test", "version": "0.4.1-beta"},
+            "clientInfo": {"name": "lujo-smoke-test", "version": _APP_VERSION},
         })
         if "error" in init:
             print(f"[FAIL] initialize 失败: {init['error']}", file=sys.stderr)
