@@ -1,5 +1,8 @@
 /**
- * lujo-mcp Browser SDK v0.5.0
+ * lujo-mcp Browser SDK v0.6.9
+ *
+ * 版本以 browser-sdk/package.json 的 version 为准（本注释仅为可读性，
+ * 升级时随版本 bump 一并更新，避免再次漂移）。
  *
  * V2：批量上报 + sendBeacon 降级 + 指数退避重试。
  * 前端自动采集：全局异常捕获、网络请求记录、UI 事件上报、静默失败标记。
@@ -450,19 +453,16 @@
   }
 
   // V5 gzip 压缩实现（使用 Compression Streams API）
+  // FIX(v0.7.0 Minor): 删除 beacon 分支死代码——本函数仅由 _sendBatchWithCompression
+  // 在 shouldCompress = !useBeacon && ... 成立时调用，useBeacon 恒为 false，
+  // 函数内的 useBeacon 分支与专用的 _sendBatchSyncCompressed 永不可达
+  // （beacon 场景在 _sendBatchDirect 走未压缩同步路径，见 P1-2 修复注释）。
   function _compressAndSend(url, body, useBeacon) {
-    // FIX: P1-2 beacon 分支不压缩（后端仅在 content-encoding: gzip 时解压，
-    // gzip 字节按 JSON 解析必然 400；且 sendBeacon 返回 true 会被 SDK 误判为成功）。
-    // 页面关闭场景数据量小，原始 JSON 直接发送可接受。
-    if (useBeacon) {
-      _sendBatchDirect(url, body, true);
-      return;
-    }
     try {
       var blob = new Blob([body]);
       var cs = new CompressionStream("gzip");
       var compressedStream = blob.stream().pipeThrough(cs);
-      
+
       new Response(compressedStream).blob().then(function(compressedBlob) {
         var reader = new FileReader();
         reader.onload = function() {
@@ -470,25 +470,6 @@
           // FIX: R7-G1 —— 此处不再登记节流时间戳：登记已前移到
           // _flushBatch/_drainPendingBatches 的发送决策点（同步），
           // 异步回调里登记会让节流检查恒看到过期时间戳
-          
-          // 页面关闭场景：优先 sendBeacon
-          if (useBeacon && _hasSendBeacon()) {
-            if (compressedBody.byteLength <= _BEACON_SIZE_LIMIT) {
-              if (!_beaconTokenValid()) {
-                // 令牌不可用 → 退回同步 XHR（带 header），避免 URL 暴露永久 Key
-                _sendBatchSyncCompressed(url, compressedBody);
-                return;
-              }
-              var beaconUrl = url + "?token=" + encodeURIComponent(_beaconToken);
-              var beaconBlob = new Blob([compressedBody], { type: "application/json" });
-              if (navigator.sendBeacon(beaconUrl, beaconBlob)) {
-                return; // sendBeacon 成功
-              }
-            }
-            // 超限或 sendBeacon 失败 → 同步 XHR 降级
-            _sendBatchSyncCompressed(url, compressedBody);
-            return;
-          }
 
           // 常规 flush：异步 XHR + 指数退避重试（透传原始明文供 gzip 回退）
           _sendBatchXhrCompressed(url, compressedBody, body, 0);
@@ -707,19 +688,6 @@
   }
 
   // V5 Compressed sync XHR send (unload / beforeunload)
-  function _sendBatchSyncCompressed(url, compressedBody) {
-    try {
-      var xhr = new XMLHttpRequest();
-      xhr.open("POST", url, false); // sync
-      xhr.setRequestHeader("Content-Type", "application/json");
-      xhr.setRequestHeader("Content-Encoding", "gzip");
-      if (cfg.apiKey) xhr.setRequestHeader("X-API-Key", cfg.apiKey);
-      xhr.send(compressedBody);
-    } catch (err) {
-      // Sync XHR failed during page unload
-    }
-  }
-
   // V5/V6 Fallback: save to localStorage with TTL and metadata wrapper
   function _saveToLocalStorage(body) {
     try {
