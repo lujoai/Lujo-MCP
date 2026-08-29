@@ -15,6 +15,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  # cancel-in-progress 必须为 false：发布中途取消会留下半发布状态
+  # （部分平台包已上 npm、元包未发，且 npm 禁止覆盖已发布版本，无法原地重发——
+  # v0.6.5 编码事故即此类窗口）。同 tag 重复触发时排队等待在途发布完成。
+  cancel-in-progress: false
+
 jobs:
   # ── 矩阵构建：每个平台原生打 PyInstaller 单文件二进制 ──
   build:
