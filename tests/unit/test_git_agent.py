@@ -138,7 +138,7 @@ class TestGitAgentFailure:
     @pytest.mark.asyncio
     async def test_unexpected_exception_returns_failed(self):
         agent = GitAgent()
-        # 通过 patch _safe_blame_frames 抛异常模拟内部失败
+        # 通过 patch _collect_frame_changes 抛异常模拟内部失败
         with patch.object(
             GitAgent, "_collect_frame_changes", side_effect=RuntimeError("unexpected")
         ):
