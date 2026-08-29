@@ -119,7 +119,10 @@ class AnalysisQueue:
             return
 
     async def start(self, n_workers: int) -> None:
-        """启动 n_workers 个常驻消费协程。重复调用幂等（追加不重叠）。"""
+        """启动 n_workers 个常驻消费协程。
+
+        非幂等：重复调用会追加更多 worker（`lifespan` 每进程仅调用一次）。
+        """
         for _ in range(n_workers):
             self._workers.append(asyncio.create_task(self._worker()))
 

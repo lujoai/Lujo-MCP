@@ -1,4 +1,4 @@
-"""知识库种子知识 —— 30 条高频异常模式（v0.4.0 M2）。
+"""知识库种子知识 —— 45 条高频异常模式（v0.4.0 M2）。
 
 覆盖六大类高频异常，为三级 fallback（L1 精确 / L1.5 归一化 / L2 类型级 Jaccard）
 提供初始可匹配样本。每条以 DebugCase 为标准结构，经 to_kb_entry 导出为标准 KB entry。
@@ -430,7 +430,7 @@ _OTHER_CASES = [
     ),
 ]
 
-# 全部 30 条种子（按 KB entry 格式导出，供 load_knowledge_base_seeds 直接导入）
+# 全部 45 条种子（按 KB entry 格式导出，供 load_knowledge_base_seeds 直接导入）
 SEED_CASES: list[dict] = [
     case.to_kb_entry()
     for case in (

@@ -60,8 +60,8 @@ const AiDebug = require("./ai-debug.js");
 | `captureUI` | `true` | UI 交互事件捕获 |
 | `captureConsole` | `true` | 控制台日志捕获 |
 | `redactFields` | `["password","token","secret","authorization"]` | 脱敏字段名单（空数组回退内置默认，防关闭脱敏） |
-| `sampleRate` | `1.0` | 错误采样率 | 
-| `networkSampleRate` | `1.0` | 网络采样率 |
+| `sampleRate` | `1.0` | 遥测事件发送采样率（network 自动捕获 / ui-event / console）；错误类上报（`reportError` / `reportSilentFailure` / `reportNetworkError` 与全局异常捕获）豁免采样必达 |
+| `networkSampleRate` | `1.0` | 网络请求自动捕获采样率。注意：网络事件先过本采样、发送时再过 `sampleRate`（双重采样，实际送达率 ≈ 两者乘积） |
 | `networkThrottleMs` | `0` | 网络上报节流间隔（`0`=无节流） |
 | `autoDetectNetworkErrors` | `true` | V3：fetch/XHR 失败自动转静默失败 |
 | `autoDetectUISilentFailures` | `true` | V6：点击/提交后无 DOM/路由/网络变化自动判定静默失败 |
