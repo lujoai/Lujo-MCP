@@ -1,12 +1,44 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.6.8（2026-08-27）**。第 6 轮全量代码审查修复发布：P0 安全×5 + P1 十四项 + P2 安全/可靠性六项 + 发布工程四项（F4-F7）。测试基线 **1298 passed / 6 skipped / 0 failed**（单元，v0.6.7 基线 1231 → 1290 → 1298）。含 3 处行为变更（见「v0.6.8」章节）。npm `latest` → `@lujoai/lujo-mcp@0.6.8`。
+> 最新版本：**v0.6.9（2026-08-29）**。第 7 轮全量代码审查修复发布：P1 安全×2（XFF 反代限流绕过复活修复 / 异常指纹闭环）+ Major·P2 22 项 + 第 6 轮遗留 P2 全部收口（B2/B4/B5、C2 僵尸线程、G3 SDK 泄漏）。测试基线 **1386 passed / 6 skipped / 0 failed**（单元，v0.6.8 基线 1298 → 1386）+ Browser SDK JS 42。含升级注意事项（见「v0.6.9」章节）。npm `latest` → `@lujoai/lujo-mcp@0.6.9`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.6.8  
-**Release Date / 发布日期**: 2026-08-27  
-**Codename / 代号**: 第 6 轮审查修复 ｜ Round-6 Review Fixes
+**Version / 版本**: v0.6.9  
+**Release Date / 发布日期**: 2026-08-29  
+**Codename / 代号**: 第 7 轮审查修复 ｜ Round-7 Review Fixes
+
+---
+
+## v0.6.9（2026-08-29）
+
+> 第 7 轮全量代码审查修复发布。修复 **P1 安全×2**（XFF 反代限流绕过复活 / 异常指纹"算好被丢"致 KB 学习闭环全死）+ **Major·P2 22 项** + **第 6 轮遗留 P2 全部收口**（B2/B4/B5、C2 重活僵尸线程根治、G3 SDK destroy() 与泄漏）。测试基线 unit v0.6.8 基线 1298 → **1386**（+88 / 6 skipped / 0 failed）；Browser SDK JS 35 → **42**（+7）；ruff 硬门禁全绿，零回归。
+
+### ⚠️ 升级注意事项（Upgrade Notes）
+
+1. **反代部署仍须配置 `TRUSTED_PROXY_COUNT`**（v0.6.8 引入，语义不变）：本版修复该配置的 off-by-one 解析错误——v0.6.8 配置 N>0 后实际取到客户端可伪造的 XFF 前缀区，轮换伪造 IP 即可绕过限流（配置形同虚设）；现按标准 `$proxy_add_x_forwarded_for` 语义正确解析真实客户端 IP。已按 v0.6.8 发布说明配置的部署升级后无需改动配置值。
+2. **heavy 工具（verify_ui / auto_test 等浏览器自动化）改为每次调用独立子进程执行**：僵尸线程打满 heavy 工具池（恒 TOOL_BUSY/TOOL_TIMEOUT、无自愈）的问题根治，超时强杀可靠回收。代价是每次调用有子进程冷启动开销（Windows 用 spawn，略增）；调用方接口不变。
+3. **SDK 新增 `AiDebug.destroy()`**：页面卸载 / Vite HMR 热更新场景建议显式调用，避免监听器叠加与事件重复上报；未调用不影响现有功能（SDK 内部已自带去重表过期与上限清理）。
+
+### 🔒 安全
+
+- **XFF 可信代理解析 off-by-one（R7-P1-1）**：`TRUSTED_PROXY_COUNT` 候选取值多退一格落入客户端可伪造前缀区，反代配置形同虚设；现按标准 `$proxy_add_x_forwarded_for` 语义解析，并按真实代理语义重写测试 fixture + 伪造前缀攻击回归。
+- **SecurityAgent severity 归一化 fail-open（R7-S1）**：`critical` / `High` 被静默降成 `low` 架空 verify_loop 安全门；现 fail-safe 归一（非法/缺失值保守按 high，宁可多拦不漏放）。
+- **redaction 误伤 author（R7-S2）**：git blame 归因字段不再被 `"auth"` 子串脱敏掩码；`authorization` 头仍按敏感处理。
+
+### 🏗️ 结构与可靠性
+
+- **KB 学习闭环复活（R7-P1-2）**：异常指纹三断点修复（builder 注入 / 落库持久化+回读重算 / capture_exception 产指纹）——KB 三级命中、向量 RAG、分析回写、verify 写回、经验召回整条链路恢复，减少无效 LLM 调用。
+- **重活僵尸线程根治（C2）**：heavy 工具改独立子进程隔离 + 超时强杀（`app/mcp/protocol/heavy_process.py`），不再有恒 TOOL_BUSY 的无自愈状态（运维注意见升级注意事项 2）。
+- 其余：槽位取消泄漏（R7-T1）、连接池中毒（R7-T2）、sys.path 误判框架帧（R7-T3）、向量库 delete 同步（R7-T4）、InProcess 幂等覆盖（R7-T5）、畸形 JSON 400（R7-A2）、绑定检测 IPv6（R7-A1）、SSE 缓冲头（R7-A3）、dashboard 缓存分档（R7-A4）、stdio 线程池退出关闭（R7-A5）、断言引擎 bool/str status（R7-V1/V2）、归档失败回滚（R7-V3）、async-mix fail-fast（R7-V4）、评分契约修复（R7-Q1~Q5）、auto_test 浏览器必关。
+
+### 🛠️ SDK
+
+- 新增 `destroy()` 销毁接口 + 去重表过期/上限清理（G3）；压缩路径节流失效修复（R7-G1，`maxBatchesPerWindow` 配置此前在压缩开启时实际失效）。
+
+### 📊 测试与质量
+
+- unit 1298 → **1386**（+88，含真实生产链路契约测试：指纹闭环 / XFF 伪造前缀攻击 / 安全门端到端）；SDK JS 35 → **42**（+7）；ruff 全绿，零回归。完整技术细节见 [CHANGELOG](./CHANGELOG.md) 的 0.6.9 章节。
 
 ---
 

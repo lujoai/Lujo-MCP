@@ -71,11 +71,12 @@ npm install -g @lujoai/lujo-mcp
 
 ## 当前状态（Current Status）
 
-**Lujo-MCP v0.6.8**（npm `@lujoai/lujo-mcp@0.6.8`，开箱即用）
+**Lujo-MCP v0.6.9**（npm `@lujoai/lujo-mcp@0.6.9`，开箱即用）
 
-> 版本统一：app / npm / README / CHANGELOG / MCP serverInfo / git tag 均为 `0.6.8`。
-> v0.6.3~v0.6.8 为 v0.6.x 补丁线：安全组（embedding 脱敏 / verify_loop 安全门 / 限流键 / round-6 P0+P1+P2）、可用性组（stdio 坏输入 / 超时背压 / 事件循环阻塞 / async 双池）、正确性组（SDK 传输三件套 / LLM 指纹碰撞 / 流式绕熔断 / smoke_test 死锁 / sourcemap 缓存键）逐档修复。
-> **v0.6.8（2026-08-27）**：第 6 轮全量代码审查 P0 五项（verify_loop 安全门字段错配 / 脱敏复合键缺口 / SDK 毒批循环 / XFF 限流绕过（新增 `TRUSTED_PROXY_COUNT`）/ add_log 明文入库）+ P1 十四项 + P2 安全/可靠性六项 + 发布工程四项已全部修复，测试基线 1231 → **1298**（JS 35 → **35**）。**⚠️ 反代部署升级后须配置 `TRUSTED_PROXY_COUNT`**（默认 0=不信任转发头；反代环境不配置则所有用户共享代理 IP 的限流桶）。剩余 P2（B2/B4/B5/C2/G3）与 90+ Minor 并入 v0.7.0。
+> 版本统一：app / npm / README / CHANGELOG / MCP serverInfo / git tag 均为 `0.6.9`。
+> v0.6.3~v0.6.9 为 v0.6.x 补丁线：安全组（embedding 脱敏 / verify_loop 安全门 / 限流键 / round-6 P0+P1+P2）、可用性组（stdio 坏输入 / 超时背压 / 事件循环阻塞 / async 双池）、正确性组（SDK 传输三件套 / LLM 指纹碰撞 / 流式绕熔断 / smoke_test 死锁 / sourcemap 缓存键）逐档修复。
+> **v0.6.8（2026-08-27）**：第 6 轮全量代码审查 P0 五项（verify_loop 安全门字段错配 / 脱敏复合键缺口 / SDK 毒批循环 / XFF 限流绕过（新增 `TRUSTED_PROXY_COUNT`）/ add_log 明文入库）+ P1 十四项 + P2 安全/可靠性六项 + 发布工程四项已全部修复，测试基线 1231 → **1298**（JS 35 → **35**）。**⚠️ 反代部署升级后须配置 `TRUSTED_PROXY_COUNT`**（默认 0=不信任转发头；反代环境不配置则所有用户共享代理 IP 的限流桶）。
+> **v0.6.9（2026-08-29）**：第 7 轮全量代码审查修复——P1 安全×2（XFF 反代限流绕过复活修复（off-by-one）/ 异常指纹"算好被丢"三断点修复、KB 学习闭环复活）+ Major·P2 22 项 + 第 6 轮遗留 P2 全部收口（B2/B4/B5、C2 重活改子进程隔离+超时强杀根治僵尸线程、G3 SDK 新增 `destroy()` 与去重表清理）。测试基线 1298 → **1386**（JS 35 → **42**）。**⚠️ 升级注意**：①反代部署 `TRUSTED_PROXY_COUNT` 语义不变（本版修复其 off-by-one，已配置者无需改值）；②heavy 工具改为每次调用独立子进程执行（Windows 用 spawn，冷启动略增）；③页面卸载/HMR 场景建议显式调用 `AiDebug.destroy()`。详见 [RELEASE_NOTES](docs/public/RELEASE_NOTES.md)。
 > v0.6.0 为架构重构与生产就绪里程碑：god object 拆分、Prometheus 细粒度业务指标、生产部署套件。
 > 架构冻结（Architecture Frozen）：允许 Agent → RAG；禁止 Runtime → RAG/Agent/LLM/MCP、RAG → Agent/Runtime/LLM/MCP。
 
@@ -288,7 +289,7 @@ LLM_PROVIDER=zhipu           # openai | zhipu | deepseek | custom（智谱免 VP
 
 ```bash
 curl http://localhost:8000/
-# → {"status":"ok","service":"Lujo-MCP","version":"0.6.8"}
+# → {"status":"ok","service":"Lujo-MCP","version":"0.6.9"}
 ```
 
 ## MCP Client 接入（MCP Client Setup）
@@ -388,7 +389,7 @@ python -m benchmark.runner quality        # QualityScorer 旁证评估
 | 指标      | 状态                                                                                                                                                                                                                                                                                                                             |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | MCP 工具数 | HTTP 18 / stdio 18（含 `repair_async` / `repair_result` / `resolve_stack`）                                                                                                                                                                                                                                                                   |
-| 测试基线    | 单元 `1298 passed / 6 skipped / 0 failed`（v0.6.7 基线 1231 → 1290（第 6 轮审查 P0+P1 +59）→ 1298（P2 六项 +8））+ Browser SDK JS `35 passed`；本地全量（unit+integration+e2e）**1419 tests / 1377 passed / 42 skipped / 0 failed / 0 errors**。历史演进：… → 1221 → **1231**（v0.6.7 发布）→ **1290**（P0+P1）→ **1298**（P2 六项，v0.6.8） |
+| 测试基线    | 单元 `1386 passed / 6 skipped / 0 failed`（v0.6.7 基线 1231 → 1290（第 6 轮审查 P0+P1 +59）→ 1298（P2 六项 +8）→ 1386（第 7 轮审查 +88））+ Browser SDK JS `42 passed`。历史演进：… → 1221 → **1231**（v0.6.7 发布）→ **1290**（P0+P1）→ **1298**（P2 六项，v0.6.8）→ **1386**（第 7 轮审查，v0.6.9） |
 | 存储后端    | memory 默认可用；PostgreSQL / asyncpg 需依赖外部数据库环境                                                                                                                                                                                                                                                                                    |
 | 稳定性能力   | 分区、归档、Redis L2、L3 缓存预热、熔断器、OTel、异步分析削峰队列均有真实代码，但需按环境启用并单独验证                                                                                                                                                                                                                                                                    |
 | 安全能力    | fail-closed 鉴权 + 多 key 恒定时间比较轮换 + RBAC 角色分级（admin/developer/viewer）+ LFI/SSRF 防护                                                                                                                                                                                                                                               |

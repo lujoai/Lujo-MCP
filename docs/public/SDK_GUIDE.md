@@ -1,7 +1,7 @@
 # Lujo-MCP 浏览器 SDK 使用手册
 
 > SDK 版本：v0.5.0（`browser-sdk/ai-debug.js`，UMD/CJS/ESM 三格式）
-> 文档版本：v0.6.8（2026-08-27）
+> 文档版本：v0.6.9（2026-08-27）
 > 概括：前端自动采集（异常 / 网络 / UI / 控制台 / 静默失败）并以批量、可压缩、节流、失败降级的方式上报到 Lujo-MCP 服务端，让 AI 拿到真实运行现场。
 
 ---
@@ -87,6 +87,7 @@ const AiDebug = require("./ai-debug.js");
 | 方法 | 说明 |
 |------|------|
 | `init(options)` | 初始化（自动安装采集钩子） |
+| `destroy()` | 销毁实例：摘除全部监听器、还原被包装的全局 API（onerror/fetch/XHR/console）、停止全部定时器并清空队列/去重表（幂等，可重新 init）。页面卸载 / HMR 热更新场景建议显式调用 |
 | `flush()` | 手动立即 flush 批量队列 |
 | `reportError(error, extra?)` | 手动上报异常（自动带堆栈解析） |
 | `reportNetworkError(error)` | 手动上报网络错误，自动附最近 UI/network 上下文 |

@@ -7,6 +7,67 @@
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-08-29
+
+> 第 7 轮全量代码审查修复发布：**P1 两项**（XFF 反代限流绕过复活修复 / 异常指纹"算好被丢"闭环修复）+ **Major·P2 22 项** + **第 6 轮遗留 P2 全部收口**（B2/B4/B5、C2 僵尸线程、G3 SDK 泄漏）。测试基线 unit **1298 → 1386**（+88）/ 6 skipped / 0 failed，Browser SDK JS **35 → 42**（+7），ruff 硬门禁全绿，零回归。反代部署语义不变：仍须配置 `TRUSTED_PROXY_COUNT`（本版修复其 off-by-one 解析错误）；heavy 工具改为子进程执行（见运维注意）。
+
+### 🔒 安全
+
+- **XFF 可信代理解析 off-by-one 修复，反代限流绕过复活（R7-P1-1）**：v0.6.8 引入的 `TRUSTED_PROXY_COUNT` 存在 off-by-one——候选取 `entries[-(count+1)]` 多退一格落进客户端可伪造的前缀区（count=1 标准反代下攻击者发 `X-Forwarded-For: 1.1.1.1`，nginx 追加真实 IP 后解析出的是伪造值当限流键，轮换伪造 IP 即得全新限流桶，完全绕过 `/api/debug/analyze` 10/min 与全局限流，与 A1 修复前漏洞同形）。现候选改取 `entries[-count]`、guard 改 `len(entries) >= count`，按标准 nginx `$proxy_add_x_forwarded_for` 追加语义解析（每层可信代理追加其对端地址，XFF 最右 N 条中最左一条即真实客户端）；测试 fixture 按真实代理语义重写并新增伪造前缀攻击回归（旧 fixture 把代理自身 IP 当 XFF 最右段——现实中不存在的形状掩盖了契约错误）。
+- **SecurityAgent severity 归一化 fail-open 修复（R7-S1）**：风险 severity 归一化把 `critical` / `High`（大小写变体，集合匹配大小写敏感）静默降成 `low`——verify_loop 安全门的 `("critical","high")` 分支对真实 LLM 输出不可达（与 overall_severity 非法归 `unknown` 被拒绝的安全姿态不一致）。现按 fail-safe 归一：critical→high、匹配前大小写归一、非法/缺失值保守按 `high` 交由安全门钳制（宁可多拦，不可漏放）。
+- **redaction 子串误伤 author 修复（R7-S2）**：`_SENSITIVE_SUBSTRINGS` 含裸 `"auth"`，`is_sensitive_key("author")` 命中 → git blame 的 author 归因字段在送 LLM 前被整值掩码，"这行谁改的"归因核心信息失效。现内置白名单补 `author` / `authority` 等 6 键；`authorization` 头仍按敏感键处理（不引入 CR-2 回归）。
+
+### 🏗️ 结构 / 学习闭环
+
+- **异常指纹"算好被丢"三断点修复，KB 学习闭环复活（R7-P1-2）**：异常指纹上游已算好（`errors.record` 用 `compute_fingerprint` 计算、`trace_repo.get_trace` 返回），但 context 构建侧把它丢弃——下游 KB 三级命中、向量 RAG、分析回写、verify 写回、经验召回因"指纹为空"整体短路：每次分析都打 LLM（成本/延迟）、LLM 结论永不回写（KB 永远只有种子）、verify 置信度永不累积、经验召回恒空。三断点同批修复：① `build_debug_context` 注入 exception / errors[0] / 顶层三处指纹（fallback 合成 trace 不再显式 None，error 条目指纹透传或现算）；② `save_trace` 落库持久化指纹，重启/缓冲淘汰回读路径重算兜底（旧数据无字段兼容）；③ `capture_exception` 返回结构增加指纹（`/api/debug/run` 等不经 `errors.record` 的直连路径首次产指纹）。配套真实生产链路契约测试 9 项（`/run` 端点函数真实执行、`save_trace` 真实落库、重启回读），杜绝"同形状 fixture 自证"（第 6/7 轮反复翻车的根因）。
+- **重活僵尸线程根治——线程池改子进程隔离 + 超时强杀（C2，第 6 轮遗留）**：heavy 工具（verify_ui / auto_test 等 Playwright 自动化）由 2-worker 重型线程池改为每次调用独立 spawn 子进程执行（新增 `app/mcp/protocol/heavy_process.py`）：超时 `terminate()`（钉死升级 `kill()`）强杀回收——线程无法强杀是根因，进程可杀；不再有僵尸线程打满 heavy 池致恒 TOOL_BUSY/TOOL_TIMEOUT 的无自愈状态，将来任何同步重活自动受此保护。`register_tool` 新增 `prepare_args` 钩子（verify_ui 的 spec_id 在父进程预解析——子进程读不到父进程内存态 spec_store）；HTTP 与 stdio 两个入口的同步 heavy 分支统一走子进程；auto_test 浏览器必关（异常路径也保证浏览器进程回收）。**⚠️ 运维注意：heavy 工具现在每次调用起子进程（Windows 用 spawn），冷启动开销略增。**
+
+### 🛠️ SDK 数据采集（browser-sdk）
+
+- **destroy() 销毁接口 + 去重表清理（G3，第 6 轮遗留）**：`_debounce` 去重表键含动态 className 只增不删（无限增长）；SDK 无销毁接口，Vite HMR 热更新产生监听器二次包裹 + 事件重复上报。现去重表加过期清理（TTL 1s）与尺寸上限（1000 键按时间戳淘汰最旧）；新增公开 `AiDebug.destroy()`：摘除全部监听器（UI 捕获需同参 capture=true）、还原 window.onerror / fetch / XHR 原型 / console 为安装前原始值、停止全部定时器、清空队列/缓冲/去重表、复位 `_inited`（幂等、可安全重新 init）；修复 25s beacon 心跳 setInterval 句柄未保存无法停止的问题。**升级注意：页面卸载 / HMR 场景建议显式调用 `AiDebug.destroy()`。**
+- **压缩路径节流失效修复（R7-G1，已运行时复现）**：节流时间戳只在异步压缩回调里登记，JS 单线程下同步 while 循环跑完全部分片后回调才执行 → 所有分片看到过期时间戳，`maxBatchesPerWindow:2` 时实测 4 个请求齐发（恢复积压时瞬时并发尖峰 + 限流负载放大）。现时间戳同步登记在 `_flushBatch` / `_drainPendingBatches` 的发送决策点（`_sendBatchDirect` / 压缩回调内部登记移除避免双计数）；顺带修复 pagehide 时事件队列为空但暂存批次非空被提前 return 静默丢数据的缺口。新增「压缩×节流」组合回归测试（此前 4 项节流回归全部 `enableCompression:false`，零覆盖）。
+
+### 🛠️ 正确性与可靠性（第 7 轮 Major·P2 其余）
+
+**MCP / runtime**
+
+- **槽位取消泄漏修复（R7-T1）**：等槽位期间外层请求协程被取消（如 HTTP 断连）时，`wait_for` 传播 CancelledError 不被捕获——若此刻内层 acquire 已完成则槽位取得却无人归还（与 v0.6.6 修的"超时同拍"同形），重复发生使池容量永久缩减至恒 TOOL_BUSY。现捕获 CancelledError 后按完成态归还槽位再传播取消，并补真实取消时序测试。
+- **query_pg_errors 连接池中毒修复（R7-T2）**：全仓唯一未经 `_safe_put` 保护的裸 `pool.putconn`——非 OperationalError（ProgrammingError/DataError）后连接停留 aborted 事务入池，下一借出者恒抛 InFailedSqlTransaction 直至重启。现统一走 `_safe_put` 归还（rollback 防中毒）。
+- **sys.path 误判框架帧修复（R7-T3）**：`is_framework_frame` 用整个 sys.path 前缀判定——cwd≠项目根且项目根经 PYTHONPATH 进 sys.path（容器 WORKDIR=/ + PYTHONPATH=/app 常态）时项目帧被判为框架 → 帧被折叠、`[PROJECT CODE]` 标记丢失，喂给 AI 的根因代码被隐藏。现改用 sysconfig 真实 stdlib 路径（对齐 fault_localizer 同款修复）。
+- **向量索引只增不减修复（R7-T4）**：KB LRU 驱逐与 `clear()` 均不同步删向量库，`VectorStore` ABC 无 delete 语义——被驱逐/清空条目的向量点永久残留，`_try_vector_rag` 继续召回已淘汰的历史结论直接返回用户。现 ABC 增 `delete(fingerprints)`（默认 no-op 保持后端兼容），InProcess 原地删除+重建索引、Qdrant 按 uuid5 确定性 point id 删除，KB 驱逐与 clear 调用点同步。
+- **InProcess 向量库幂等覆盖（R7-T5，B4 残留）**：Qdrant 用 uuid5 幂等覆盖而 in_process `add()` 纯 append——同指纹第 N 次分析产生第 N 份 doc，吃满 `vector_store_max_docs` FIFO 并挤掉多样化条目。现维护指纹→槽位索引原地覆盖（含驱逐/delete 后索引重建的元组解包修正，复核回归），与 Qdrant 跨后端语义一致。
+
+**存储 / 校验**
+
+- **async_pg_store 归档失败回滚（R7-V3）**：归档失败仅 warning，asyncpg 连接停留 failed transaction，紧接的 DELETE FROM traces 复用同连接必抛——每轮清理同位失败，过期清理永久停摆。现归档 except 补 ROLLBACK。
+- **async-mix fail-fast 修复（R7-V4）**：`pg_async_enabled=True` → `_raise_async_mix` 抛 RuntimeError 被 `except Exception` 捕获 → 默认 `storage_fallback_to_memory=True` 静默降级 memory（重启即丢），与"启动即抛配置错误"的 docstring 自相矛盾。现引入专用 `_AsyncMixError` 在五个 getter 中先行 re-raise，配置错误必须 fail-fast。
+- **断言引擎类型边界修复（R7-V1/V2）**：`_values_equal` 首行 `a == b` 短路使 `True == 1` 判相等（期望 True 实际 1 的 silent failure 被漏报——恰是断言引擎要检测的缺陷）；`_judge_silent_failure` 对 str status（JSON 反序列化 `"500"`）一律返回 True → 5xx 被误判静默失败误导 AI 归因。现 bool 排除前移到 `==` 之前、str/float status 先归一转数值再判 4xx/5xx。
+
+**API / 入口 / 传输**
+
+- **畸形 JSON 走错分支修复（R7-A2）**：`JSONDecodeError`/`UnicodeDecodeError` 都是 ValueError 子类，被 `/ingest/batch` 的 gzip 超限 `except ValueError` 分支吞掉——非法 JSON/非法 UTF-8 返回 413 且回显解析器内部信息。现解压超限改专用异常，JSON/UTF-8 失败归一 400 + 固定文案；gzip 炸弹仍 413。
+- **危险绑定检测子串匹配修复（R7-A1）**：`"0.0.0.0" in str(bind_host)` 漏掉 IPv6 通配 `::`（等价全网监听，SEC-03 对 IPv6 失效），且误杀含子串的合法地址（`10.0.0.0`）。现用 `ipaddress.ip_address(bind_host).is_unspecified`（IPv4/IPv6 通配均成立），主机名保留非回环 warning 路径。
+- **SSE 缺缓冲控制头修复（R7-A3）**：MCP POST 回退流 / GET /mcp 流 / analyze-stream 三处 `StreamingResponse` 无 `Cache-Control: no-cache` / `X-Accel-Buffering: no`——nginx 默认 `proxy_buffering on` 攒批延迟心跳与事件（dashboard 流有头、MCP 流没有，修复不对称）。现抽公共助手 `app/api/sse.py` 三处统一补齐。
+- **dashboard 缓存成本放大修复（R7-A4）**：E1 修复后缓存恒按 1000 条全量算，`_extract_error_summary` 对每个 error 做两次完整 `get_logs` 扫描——30s TTL 失效一次 ≈ 3000 次存储读取。现缓存按 limit 分档（100/1000，常态请求只算 100 档）+ 摘要提取合并单遍扫描，常态请求每 TTL 存储读取量约降一个数量级；各档独立缓存，E1 不截断语义保持。
+- **stdio 工具线程池退出关闭（R7-A5）**：`ThreadPoolExecutor` 非 daemon 且退出从不 shutdown——超时仍在跑的工具线程在解释器退出时被 `_python_exit` join，进程无法退出直至宿主强杀。现 `cleanup_resources` 增 `shutdown(wait=False, cancel_futures=True)`。
+
+**质量 / 评分契约（R7-Q1~Q5，CR-1 型错配同族）**
+
+- **修复链路 debug_context 形状补齐（R7-Q1）**：修复链路生产入口用 `build_context`（仅 `{request_id,flow,input,output,errors}`），而 scorer 读 `code_snippets`/`git_blame`/`recent_diffs`/`network_trace`/`ui_events`/`spec_diffs`（只由 `build_debug_context` 产出）——权重合计 0.53 恒缺失，quality_report 完整度上限 ≈0.47 进 RepairAgent prompt 与 API 输出；`_score_git_context` 声明的 repair_ctx.git_context 回退从未实现。现 assembler 用真实生产者 `build_debug_context` 富化简化形状（失败静默降级），scorer 补齐 git_context 回退。
+- **prior_analysis 形状错配修复（R7-Q2）**：`analyze_async` 返回 `{analysis:{root_cause,confidence},...}`（嵌套），scorer 读顶层 `root_cause` 恒 None → LLM_ANALYSIS 维度（0.12）恒缺失 + 丢一条高相关证据（测试 fixture 用扁平形状再次掩盖）。现 `_unwrap_prior` 兼容两形状。
+- **对象以 repr 进 prompt / MCP 响应修复（R7-Q3）**：`quality_report`(Pydantic) 与 `debug_experience`(dataclass) 经 `json.dumps(default=str)` 序列化为 Python repr 字符串——结构信息退化为语法噪音，MCP 消费方拿到不可解析字段。现 assembler 落盘前 `model_dump()` / `to_dict()`。
+- **轮预算算术矛盾修复（R7-Q4）**：`round_timeout=0 → 继承 agent_timeout=90`，而单轮内部预算 = RepairAgent 90s + 并行节点 90s = 180s——继承 90s 实为收紧一半，RepairAgent 耗时 60-90s 时并行阶段启动数秒即被 watchdog 取消，整轮返回 `{"repair_plan": None}` 存根、已成功成果丢弃。现按单轮内部预算继承（agent_timeout + 并行预算）。
+- **error_message 无截断修复（R7-Q5，B1 同类未修兄弟）**：`error_message` 原样进 test/security Agent prompt（无 `max_context_tokens` 预算截断），`/ingest/error` 对 message 无字段级长度上限（唯一上界整体 1MB）→ MB 级 prompt、超上下文、并行节点 FAILED。现两处复用同一截断纪律（~8K 字符）。
+
+### 🛠️ 第 6 轮遗留 P2 收口
+
+- **B2 / B4 / B5**（6e0b23e）：`is_agent_active` 统一门控全部入口——`AGENT_MODE=dag|verify_loop` 死配置路径激活；消除向量双写（同指纹不再双份 doc）；`_try_vector_rag` 增 `vector_store_min_score` 二次过滤（in_process/Qdrant 跨后端语义一致）。
+- **C2 / G3**：见上文「结构 / 学习闭环」与「SDK 数据采集」两节（本版根治，第 6 轮遗留 P2 全部清零）。
+
+### 📊 测试与质量
+
+> 测试基线：unit **1298 → 1386 passed / 6 skipped / 0 failed**（+88：R7 契约与回归测试、C2/G3 修复测试、指纹闭环契约测试 9 项）；Browser SDK JS **35 → 42**（+7：压缩×节流组合、destroy()、去重表清理等）；ruff 硬门禁全绿，零回归。
+
 ## [0.6.8] - 2026-08-27
 
 > round-6 审查修复发布：**P0 安全×5**（CR-1/CR-2/CR-3/A1/A2）+ **P1 十四项全量**（A3/A4、B1/B3、C1/C3/C4/C5、D1/D2/D3、E1、F3、G2）+ G1 + 测试基础设施 2 项 + **P2 安全/可靠性×6**（D4/D5/D6/E2/F1/F2）+ **发布工程×4**（F4-F7）。测试基线 **1298 passed / 6 skipped / 0 failed**（unit，v0.6.7 基线 1231 → 1290（P0+P1 +59）→ 1298（P2 六项 +8）；另 integration 新增 A2 直写脱敏 3 项 + D2 两段式安装 2 项），本地全量 **1377+ passed / 0 failed / 0 errors**，SDK JS 35/35，ruff 硬门禁全绿，零回归。
