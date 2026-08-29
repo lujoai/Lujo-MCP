@@ -5,27 +5,15 @@
 """
 
 import json
-import re
-from typing import Optional
+
+# FIX(v0.7.0 Minor): extract_json 两处重复实现合一（正本在 app/utils/json_extract，
+# 中性模块无循环导入风险）；_extract_json 保留为旧名别名，既有调用方与测试不变。
+from app.utils.json_extract import extract_json as _extract_json
 
 VALID_CONFIDENCE = {"high", "medium", "low"}
 REQUIRED_FIELDS = ("root_cause", "impact", "fix")
 MAX_FIELD_CHARS = 2000
 MAX_RAW_TRUNCATED = 500
-
-
-def _extract_json(content: str) -> Optional[str]:
-    """从 LLM 输出中提取 JSON 字符串，支持 markdown code block。"""
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        match = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-    # 尝试找最外层 {} 或 []（非贪婪匹配，取第一个）
-    match = re.search(r'(\{.*?\}|\[.*?\])', stripped, re.DOTALL)
-    if match:
-        return match.group(1)
-    return None
 
 
 def _truncate_field(value: str, max_chars: int) -> str:

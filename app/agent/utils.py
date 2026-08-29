@@ -3,21 +3,11 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Optional
 
-
-def extract_json(content: str) -> Optional[str]:
-    """从 LLM 输出中提取 JSON 字符串，支持 markdown code block。"""
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        match = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-    match = re.search(r"(\{.*?\}|\[.*?\])", stripped, re.DOTALL)
-    if match:
-        return match.group(1)
-    return None
+# FIX(v0.7.0 Minor): extract_json 两处重复实现合一，本模块改为转发公共实现
+# （对外名 extract_json 与既有调用方/测试保持不变）。
+from app.utils.json_extract import extract_json
 
 
 def truncate_field(value: str, max_chars: int) -> str:
