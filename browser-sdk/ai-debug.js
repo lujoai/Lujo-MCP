@@ -114,6 +114,57 @@
   var _pendingBatches = [];   // 待发送的批次（节流延迟时暂存）
   var _pendingTimer = null;   // 节流错开发送定时器（单实例，避免同一时刻齐发）
 
+  // ── FIX: G3 destroy/teardown 所需的模块级引用 ──
+  // 各钩子安装前的原始函数引用：destroy 时还原为真原始值，避免 HMR 重载时
+  // 「新实例把上一代包装器当原始值再包一层」的套娃问题。
+  var _origWindowOnerror = null;   // 安装前 global.onerror
+  var _origFetch = null;           // 安装前 global.fetch
+  var _origXhrOpen = null;         // 安装前 XMLHttpRequest.prototype.open
+  var _origXhrSend = null;         // 安装前 XMLHttpRequest.prototype.send
+  var _origConsoleError = null;    // 安装前 console.error
+  var _origConsoleWarn = null;     // 安装前 console.warn
+  // 具名监听器引用：destroy 时 removeEventListener 需要同一函数引用
+  var _onUnhandledRejection = null;
+  var _onVisibilityChange = null;
+  var _onPageHide = null;
+  var _uiHandlers = null;          // { click:fn, input:fn, change:fn, submit:fn }（capture=true）
+  var _uiHookEvents = ["click", "input", "change", "submit"];
+  // UI 事件去重表（FIX: G3 —— 提升到模块级以便清理/销毁；键含动态 className，
+  // 此前只增不删导致长会话无限增长）
+  var _debounce = {};
+  var _DEBOUNCE_TTL_MS = 1000;     // 去重窗口（与上报去重判断一致）
+  var _DEBOUNCE_MAX_KEYS = 1000;   // 去重表尺寸上限，超限按时间戳淘汰最旧
+  // beacon 令牌续期心跳句柄（FIX: G3 —— 此前 setInterval 未保存句柄，无法停止）
+  var _tokenRefreshTimer = null;
+  // 销毁标志：重试定时器等异步回调触发时短路，避免 destroy 后继续上报
+  var _destroyed = false;
+  // 各钩子安装标志（FIX: G3 —— destroy 仅还原/摘除确实安装过的钩子，保证幂等）
+  var _errorHookInstalled = false;
+  var _networkHookInstalled = false;
+  var _xhrHookInstalled = false;
+  var _uiHookInstalled = false;
+  var _pageHideHookInstalled = false;
+
+  // FIX: G3 —— 去重表清理：删除过期键 + 超尺寸上限时按时间戳淘汰最旧。
+  // 键含动态 className（SPA/CSS-in-JS 场景持续产生新键），只增不删会无限增长。
+  function _cleanupDebounce(now) {
+    var keys = Object.keys(_debounce);
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      if (now - _debounce[keys[i]] >= _DEBOUNCE_TTL_MS) {
+        delete _debounce[keys[i]];
+      }
+    }
+    keys = Object.keys(_debounce);
+    if (keys.length > _DEBOUNCE_MAX_KEYS) {
+      keys.sort(function (a, b) { return _debounce[a] - _debounce[b]; });
+      var excess = keys.length - _DEBOUNCE_MAX_KEYS;
+      for (i = 0; i < excess; i++) {
+        delete _debounce[keys[i]];
+      }
+    }
+  }
+
   function _pushRecent(arr, item, maxSize) {
     arr.push(item);
     while (arr.length > maxSize) {
@@ -537,6 +588,7 @@
           var retryAfterMs = _parseRetryAfter(xhr);
           var delay = _computeRetryDelay(attempt, retryAfterMs);
           setTimeout(function () {
+            if (_destroyed) return; // FIX: G3 销毁后不再重试
             _sendBatchXhr(url, body, attempt + 1);
           }, delay);
         } else if (cfg.enableLocalStorageFallback) {
@@ -549,6 +601,7 @@
       if (attempt < cfg.maxRetries) {
         var delay = _computeRetryDelay(attempt, null);
         setTimeout(function () {
+          if (_destroyed) return; // FIX: G3 销毁后不再重试
           _sendBatchXhr(url, body, attempt + 1);
         }, delay);
       } else if (cfg.enableLocalStorageFallback) {
@@ -591,6 +644,7 @@
           var retryAfterMs = _parseRetryAfter(xhr);
           var delay = _computeRetryDelay(attempt, retryAfterMs);
           setTimeout(function () {
+            if (_destroyed) return; // FIX: G3 销毁后不再重试
             _sendBatchXhrCompressed(url, compressedBody, body, attempt + 1);
           }, delay);
         } else if (cfg.enableLocalStorageFallback) {
@@ -603,6 +657,7 @@
       if (attempt < cfg.maxRetries) {
         var delay = _computeRetryDelay(attempt, null);
         setTimeout(function () {
+          if (_destroyed) return; // FIX: G3 销毁后不再重试
           _sendBatchXhrCompressed(url, compressedBody, body, attempt + 1);
         }, delay);
       } else if (cfg.enableLocalStorageFallback) {
@@ -739,15 +794,17 @@
   }
 
   function _installPageHideHook() {
-    function _onVisibilityChange() {
+    // FIX: G3 —— 具名并存模块级，destroy 时可 removeEventListener
+    _pageHideHookInstalled = true;
+    _onVisibilityChange = function () {
       if (document.hidden) {
         _flushBatch(true);
       }
-    }
+    };
 
-    function _onPageHide() {
+    _onPageHide = function () {
       _flushBatch(true);
-    }
+    };
 
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", _onVisibilityChange);
@@ -767,8 +824,10 @@
 
   // ── 全局异常捕获 ──
   function _installErrorHook() {
+    _errorHookInstalled = true;
     // window.onerror → 同步异常
-    var _onerror = global.onerror;
+    // FIX: G3 —— 原始 handler 存模块级，destroy 时还原
+    _origWindowOnerror = global.onerror;
     global.onerror = function (msg, file, line, col, error) {
       var frames = [];
       if (error && error.stack) {
@@ -789,11 +848,12 @@
           release: cfg.release || undefined,
         },
       }, true);
-      if (_onerror) _onerror.apply(this, arguments);
+      if (_origWindowOnerror) _origWindowOnerror.apply(this, arguments);
     };
 
     // unhandledrejection → Promise 未捕获
-    global.addEventListener("unhandledrejection", function (e) {
+    // FIX: G3 —— 具名并存模块级，destroy 时可 removeEventListener
+    _onUnhandledRejection = function (e) {
       var reason = e.reason;
       _send("/ingest/error", {
         exc_type: reason ? reason.name || "UnhandledRejection" : "UnhandledRejection",
@@ -807,7 +867,8 @@
           release: cfg.release || undefined,
         },
       }, true);
-    });
+    };
+    global.addEventListener("unhandledrejection", _onUnhandledRejection);
   }
 
   function _parseStack(stack) {
@@ -1126,8 +1187,10 @@
   function _installNetworkHook() {
     if (!cfg.captureNetwork) return;
 
-    var _origFetch = global.fetch;
+    // FIX: G3 —— 原始 fetch 存模块级，destroy 时还原
+    _origFetch = global.fetch;
     if (_origFetch) {
+      _networkHookInstalled = true;
       global.fetch = function () {
         var args = arguments;
         var rawUrl = args[0];
@@ -1190,8 +1253,10 @@
   function _installXhrHook() {
     if (!cfg.captureNetwork) return;
 
-    var _origXhrOpen = XMLHttpRequest.prototype.open;
-    var _origXhrSend = XMLHttpRequest.prototype.send;
+    // FIX: G3 —— 原始 XHR 方法存模块级，destroy 时还原原型
+    _origXhrOpen = XMLHttpRequest.prototype.open;
+    _origXhrSend = XMLHttpRequest.prototype.send;
+    _xhrHookInstalled = true;
 
     XMLHttpRequest.prototype.open = function () {
       var args = arguments;
@@ -1308,18 +1373,22 @@
   function _installUIHook() {
     if (!cfg.captureUI) return;
 
-    var events = ["click", "input", "change", "submit"];
-    var _debounce = {};
-
-    events.forEach(function (evt) {
-      document.addEventListener(evt, function (e) {
+    _uiHookInstalled = true;
+    // FIX: G3 —— handler 具名并存 _uiHandlers（destroy 需同一引用 + capture=true 摘除）；
+    // _debounce 用模块级并加过期/尺寸清理（键含动态 className，此前无限增长）。
+    _uiHandlers = {};
+    _uiHookEvents.forEach(function (evt) {
+      var handler = function (e) {
         // 去重：同一秒内同一元素同类事件只报一次
         var target = e.target;
         if (!target) return;
         var key = evt + ":" + (target.id || target.className || target.tagName);
         var now = Date.now();
-        if (_debounce[key] && now - _debounce[key] < 1000) return;
+        if (_debounce[key] && now - _debounce[key] < _DEBOUNCE_TTL_MS) return;
         _debounce[key] = now;
+        if (Object.keys(_debounce).length > _DEBOUNCE_MAX_KEYS) {
+          _cleanupDebounce(now);
+        }
 
         var uiEvent = {
           event_type: e.type,
@@ -1341,7 +1410,9 @@
         if (evt === "click" || evt === "submit") {
           _armUISilentFailureDetection(evt, target);
         }
-      }, true);
+      };
+      _uiHandlers[evt] = handler;
+      document.addEventListener(evt, handler, true);
     });
   }
 
@@ -1361,19 +1432,20 @@
     if (!cfg.captureConsole || _consoleHookInstalled) return;
     _consoleHookInstalled = true;
 
-    var _origError = global.console.error;
-    if (_origError) {
+    // FIX: G3 —— 原始 console 方法存模块级，destroy 时还原
+    _origConsoleError = global.console.error;
+    if (_origConsoleError) {
       global.console.error = function () {
         _sendConsole("error", Array.prototype.slice.call(arguments));
-        _origError.apply(global.console, arguments);
+        _origConsoleError.apply(global.console, arguments);
       };
     }
 
-    var _origWarn = global.console.warn;
-    if (_origWarn) {
+    _origConsoleWarn = global.console.warn;
+    if (_origConsoleWarn) {
       global.console.warn = function () {
         _sendConsole("warn", Array.prototype.slice.call(arguments));
-        _origWarn.apply(global.console, arguments);
+        _origConsoleWarn.apply(global.console, arguments);
       };
     }
   }
@@ -1411,6 +1483,11 @@
    */
   function init(opts) {
     if (_inited) return;
+    // FIX: G3 —— HMR/重复载入兜底：全局已有上一代实例时先销毁旧实例，
+    // 避免监听器/定时器/原型包装叠加导致事件重复上报。
+    if (global.__AI_DEBUG_INSTANCE__ && typeof global.__AI_DEBUG_INSTANCE__.destroy === "function") {
+      try { global.__AI_DEBUG_INSTANCE__.destroy(); } catch (e) {}
+    }
     if (opts) {
       for (var k in opts) {
         if (opts.hasOwnProperty(k) && cfg.hasOwnProperty(k)) {
@@ -1427,6 +1504,7 @@
       return;
     }
     _inited = true;
+    _destroyed = false;
     _installErrorHook();
     _installNetworkHook();
     _installXhrHook();
@@ -1437,8 +1515,120 @@
     _restorePendingBatches(); // V5 恢复暂存的批次
     // 主动换取 beacon 令牌并周期性续期（S1：sendBeacon 场景避免永久 Key 进 URL）
     _refreshBeaconToken();
-    setInterval(_refreshBeaconToken, 25000);
+    // FIX: G3 —— 保存心跳句柄，destroy 时 clearInterval（此前未保存、无法停止）
+    _tokenRefreshTimer = setInterval(_refreshBeaconToken, 25000);
+    // FIX: G3 —— 记录当前实例，供 HMR 重载时销毁旧实例
+    global.__AI_DEBUG_INSTANCE__ = api;
     console.log("[ai-debug] SDK initialized, session=" + _sessionId);
+  }
+
+  /**
+   * FIX: G3 —— 销毁 SDK：摘除全部监听器、还原被包装的全局/原型、停止全部定时器、
+   * 清空队列与去重表，并重置初始化标志（之后可安全地重新 init）。幂等，可多次调用。
+   *
+   * 典型用途：
+   * - Vite/webpack HMR 重载（init 内会经 __AI_DEBUG_INSTANCE__ 自动销毁旧实例），
+   *   避免监听器叠加与事件重复上报；
+   * - SPA 卸载 / 测试收尾，防止心跳与定时器泄漏。
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.flush=true] - 销毁前是否先把待发批次冲刷上报（best-effort）
+   */
+  function destroy(opts) {
+    var shouldFlush = !(opts && opts.flush === false);
+    _destroyed = true;
+
+    // 1) 先冲刷待发数据（钩子还原前，best-effort）
+    if (shouldFlush) {
+      try { _flushBatch(true); } catch (e) {}
+    }
+
+    // 2) 停止全部定时器
+    if (_tokenRefreshTimer) { clearInterval(_tokenRefreshTimer); _tokenRefreshTimer = null; }
+    if (_batchTimer) { clearTimeout(_batchTimer); _batchTimer = null; }
+    if (_pendingTimer) { clearTimeout(_pendingTimer); _pendingTimer = null; }
+    if (_uiSilentFailureTimer) { clearTimeout(_uiSilentFailureTimer); _uiSilentFailureTimer = null; }
+
+    // 3) 还原 window.onerror + 摘除 unhandledrejection
+    if (_errorHookInstalled) {
+      global.onerror = _origWindowOnerror;
+      _origWindowOnerror = null;
+      if (_onUnhandledRejection) {
+        try { global.removeEventListener("unhandledrejection", _onUnhandledRejection); } catch (e) {}
+      }
+      _onUnhandledRejection = null;
+      _errorHookInstalled = false;
+    }
+
+    // 4) 摘除 pagehide / visibilitychange
+    if (_pageHideHookInstalled) {
+      if (_onPageHide) {
+        try { global.removeEventListener("pagehide", _onPageHide); } catch (e) {}
+      }
+      _onPageHide = null;
+      if (_onVisibilityChange && typeof document !== "undefined") {
+        try { document.removeEventListener("visibilitychange", _onVisibilityChange); } catch (e) {}
+      }
+      _onVisibilityChange = null;
+      _pageHideHookInstalled = false;
+    }
+
+    // 5) 摘除 UI 捕获监听（注册时带 capture=true，摘除必须同参）
+    if (_uiHookInstalled && _uiHandlers && typeof document !== "undefined") {
+      for (var i = 0; i < _uiHookEvents.length; i++) {
+        var evt = _uiHookEvents[i];
+        if (_uiHandlers[evt]) {
+          try { document.removeEventListener(evt, _uiHandlers[evt], true); } catch (e) {}
+        }
+      }
+    }
+    _uiHandlers = null;
+    _uiHookInstalled = false;
+
+    // 6) 还原 fetch / XHR 原型 / console
+    if (_networkHookInstalled) {
+      global.fetch = _origFetch;
+      _origFetch = null;
+      _networkHookInstalled = false;
+    }
+    if (_xhrHookInstalled && typeof XMLHttpRequest !== "undefined") {
+      XMLHttpRequest.prototype.open = _origXhrOpen;
+      XMLHttpRequest.prototype.send = _origXhrSend;
+      _origXhrOpen = null;
+      _origXhrSend = null;
+      _xhrHookInstalled = false;
+    }
+    if (_consoleHookInstalled && global.console) {
+      if (_origConsoleError) { global.console.error = _origConsoleError; }
+      if (_origConsoleWarn) { global.console.warn = _origConsoleWarn; }
+      _origConsoleError = null;
+      _origConsoleWarn = null;
+      _consoleHookInstalled = false;
+    }
+
+    // 7) 断开 MutationObserver
+    if (_uiMutationObserver) {
+      try { _uiMutationObserver.disconnect(); } catch (e) {}
+      _uiMutationObserver = null;
+    }
+
+    // 8) 清空队列 / 缓冲 / 去重表 / 回调槽
+    _batchQueue = [];
+    _pendingBatches = [];
+    _batchTimestamps = [];
+    _recentNetwork = [];
+    _recentUI = [];
+    _debounce = {};
+    _networkThrottle = {};
+    _pendingUISilentFailure = null;
+    _onNetworkCapture = null;
+    _onSilentFailureReport = null;
+
+    // 9) 重置初始化标志 + 清除全局实例标记（允许安全重建）
+    _inited = false;
+    if (global.__AI_DEBUG_INSTANCE__ === api) {
+      try { delete global.__AI_DEBUG_INSTANCE__; } catch (e) { global.__AI_DEBUG_INSTANCE__ = undefined; }
+    }
   }
 
   /**
@@ -1584,6 +1774,7 @@
   // ── 导出 ──
   var api = {
     init: init,
+    destroy: destroy,
     flush: flush,
     reportSilentFailure: reportSilentFailure,
     reportNetworkError: reportNetworkError,
@@ -1610,6 +1801,9 @@
     _getPendingUISilentFailure: function() { return _pendingUISilentFailure; },
     _getLastDomMutationAt: function() { return _lastDomMutationAt; },
     _getUIMutationObserver: function() { return _uiMutationObserver; },
+    // FIX: G3 测试辅助：去重表当前键数（验证过期/尺寸清理生效）
+    _getDebounceSize: function() { return Object.keys(_debounce).length; },
+    _isDestroyed: function() { return _destroyed; },
     onNetworkCapture: function (callback) {
       _onNetworkCapture = callback;
     },
