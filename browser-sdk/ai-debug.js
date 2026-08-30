@@ -1228,7 +1228,12 @@
           return _origFetch.apply(this, args);
         }
 
-        var method = (args[1] && args[1].method) || "GET";
+        // FIX(v0.7.1-b7-1): fetch(new Request(url, {method:...})) 时 method 在
+        // Request 对象（args[0]）内，第二个 init 参数 args[1] 为 undefined——此前
+        // 只读 args[1].method 导致 method 恒误记 GET（POST 请求被记成 GET）。
+        var init = args[1] || {};
+        var reqObj = (rawUrl && typeof rawUrl === "object") ? rawUrl : null;
+        var method = (init.method || (reqObj && reqObj.method) || "GET");
 
         if (!_shouldSampleNetwork()) {
           return _origFetch.apply(this, args);

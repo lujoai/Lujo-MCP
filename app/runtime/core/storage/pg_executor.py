@@ -255,6 +255,11 @@ def _execute_with_retry(
 
     P3-8: 熔断器保护，当 PG 连续失败时触发熔断。
 
+    FIX(v0.7.1-b7-3): 断连重试为 **at-least-once** 语义（非幂等写可能被应用
+    多次）——若 commit 阶段连接断开且服务端实际已提交，重试会重放同一条 SQL。
+    写入路径须容忍重复（本库 traces/sessions/errors 均为 append/upsert 幂等形态，
+    无副作用放大）；如需 exactly-once 需上层幂等键，当前未实现，此处显式文档化。
+
     返回 (conn, rowcount)：
     - conn: 最新的连接对象（可能是重连后的新连接）
     - rowcount: cursor.rowcount（用于 DELETE/INSERT/UPDATE 的行数统计）

@@ -178,3 +178,38 @@ test("destroy 幂等：重复调用不抛异常", () => {
     SDK.destroy({ flush: false });
   });
 });
+
+
+test("fetch(new Request(...)) 正确记录 method（FIX v0.7.1-b7-1）", async () => {
+  SDK.destroy({ flush: false });
+
+  // init 时被捕获为 _origFetch，返回带 clone/text 的假 Response
+  win.fetch = function () {
+    return Promise.resolve({
+      status: 200,
+      clone() { return { text: () => Promise.resolve("ok body") }; },
+    });
+  };
+
+  initSdk(); // 安装 wrapped fetch（_origFetch = 上面的 mock）
+
+  MockXHR.instances = [];
+
+  // 模拟 fetch(new Request(url, {method:"POST"}))：method 在 Request 对象内，
+  // 第二个 init 参数为 undefined——此前只读 args[1].method 误记 GET
+  await win.fetch({ url: "http://example.com/api", method: "POST" }, undefined);
+
+  SDK.flush();
+
+  const bodies = MockXHR.instances
+    .filter((x) => x.body)
+    .map((x) => JSON.parse(x.body));
+  const netEvents = bodies
+    .flatMap((b) => (b.events || []).filter((e) => e.path === "/ingest/network"));
+  assert.ok(netEvents.length >= 1, "应产生 /ingest/network 记录");
+  const record = netEvents[0].payload && netEvents[0].payload.record;
+  assert.ok(record, "网络事件应含 record 负载");
+  assert.equal(record.method, "POST", `Request 对象的 method 应记为 POST，实际 ${record.method}`);
+
+  SDK.destroy({ flush: false });
+});

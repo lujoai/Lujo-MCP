@@ -10,6 +10,11 @@ API Key 放进 ``?api_key=`` 查询参数——会被反向代理 / CDN / 浏览
 - 绑定 role 与 scope 前缀（默认 ``/ingest``），超出作用域 fail-closed
 - 短 TTL（``beacon_token_ttl_seconds``），过期后失效
 
+FIX(v0.7.1-b7-4): 令牌**可重放**——TTL 内同一令牌可被复用（无单次使用跟踪），
+泄露的令牌在其剩余 TTL 内等同其 role/scope 的凭证。短 TTL（默认 60s）把重放
+窗口压到最小，且令牌仅授权受限 scope（/ingest 上报 + dashboard 只读流），
+不含管理权限；此语义为刻意设计（避免每次上报引入存储状态），显式文档化。
+
 存储：优先复用 Redis（``state_backend=redis``，多实例共享），否则进程内存（单机）。
 """
 

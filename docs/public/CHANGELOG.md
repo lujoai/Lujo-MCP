@@ -7,7 +7,16 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项）+ 批次7（SDK/npm + 文档口径 4 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次7：SDK/npm + 文档口径 4 项）
+
+- **SDK `fetch(new Request(...))` method 误记 GET**：`fetch(new Request(url, {method:"POST"}))` 时 method 在 Request 对象（args[0]）内、第二个 init 参数 args[1] 为 undefined——此前只读 `args[1].method` 导致 method 恒误记 GET（POST 请求被记成 GET）；现回退读取 `reqObj.method`（字符串 URL 路径行为不变）。
+- **npm check.js 报错文案**：版本不匹配提示此前 `@${metaV}` 拼成形似残缺 scoped 包名的 "@0.7.0"；改为完整 `@lujoai/lujo-mcp@${metaV}`。
+- **PG 断连重试 at-least-once 语义文档化**：`_execute_with_retry` docstring 补注——commit 阶段断连且服务端已提交时重试会重放同一条 SQL（at-least-once）；本库 traces/sessions/errors 为 append/upsert 形态可容忍重复，exactly-once 需上层幂等键（未实现），显式文档化。
+- **beacon 令牌可重放语义文档化**：模块 docstring 补注——TTL 内令牌可复用（无单次使用跟踪），短 TTL（默认 60s）+ 受限 scope（/ingest 上报 + dashboard 只读流，无管理权限）把重放窗口压到最小，为刻意设计。
+
+> 批次7 复审观察（非阻塞，留痕）：① `fetch(new Request(...))` 的 request_body 仍从 args[1].body 读取（Request 对象 body 在 args[0] 内），属既有局限、非本项回归；② b7-3 文档「append/upsert 幂等形态」措辞略宽，可与「无副作用放大」统一为「容忍重复」口径。
 
 ### 🔒 修复（Minor 批次6：agent/llm/quality + runtime core/storage 8 项）
 
@@ -93,8 +102,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）。
-- **验证**：`ruff check .` 全绿；unit **1461 tests / 0 failed / 6 skipped**（批次5 后 1454 + 批次6 +7）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **49/49**；check_doc_links **168 链接 0 错误**。六批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS，复审建议均已采纳或在注释留痕）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）；批次7 新增回归 1 项（`sdk-destroy` fetch(new Request) method 断言 1）。
+- **验证**：`ruff check .` 全绿；unit **1461 tests / 0 failed / 6 skipped**（批次5 后 1454 + 批次6 +7）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **50/50**（批次7 +1）；check_doc_links **168 链接 0 错误**。七批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS、批次7 4/4 PASS，复审建议均已采纳或在注释留痕）。
 
 ## [0.7.0] - 2026-08-29
 

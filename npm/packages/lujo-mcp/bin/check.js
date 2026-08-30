@@ -73,7 +73,9 @@ if (exe) {
 }
 
 if (mismatches.length) {
-  console.error(`[lujo-mcp-server] platform package '${pkg}' was found but its version does not match the meta package @${metaV}:`);
+  // FIX(v0.7.1-b7-2): 报错文案——此前 "@${metaV}" 拼成 "@0.7.0" 形似残缺的
+  // scoped 包名，误导排查；改为完整 scoped 引用 @lujoai/lujo-mcp@版本。
+  console.error(`[lujo-mcp-server] platform package '${pkg}' was found but its version does not match the meta package @lujoai/lujo-mcp@${metaV}:`);
   for (const m of mismatches) console.error(`  - ${m}`);
   console.error('');
   console.error('The install is corrupt or version-mismatched. Reinstall to fix:');
