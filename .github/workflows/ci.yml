@@ -28,7 +28,7 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       # ruff 硬门禁（v0.6.8 起）：规则集由仓库根 ruff.toml 显式锁定，
-      # requirements-dev.txt 同时锁定 ruff==0.16.4 —— 二者共同消除
+      # requirements-dev.txt 同时锁定 ruff>=0.16.4,<0.17.0 —— 二者共同消除
       # 「ruff 升级改默认规则集导致本地绿 / CI 红」的历史问题（v0.6.3 的 776 项即由此而来）。
       # 升级 ruff 时必须同步改 requirements-dev.txt 并在本地复验 ruff check . 全绿。
       - name: Lint with ruff

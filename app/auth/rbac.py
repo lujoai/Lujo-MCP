@@ -84,6 +84,12 @@ def require_role(*allowed_roles: str):
 def role_at_least(role: str, minimum: str) -> bool:
     """判断 role 是否不低于 minimum 级别（admin > developer > viewer）。
 
-    未知角色（不在 ROLES 中）视为 0，始终返回 False（fail-closed）。
+    未知 role（不在 ROLES 中）视为 0，始终返回 False（fail-closed）。
+    未知 minimum（不在 ROLES 中）同样 fail-closed 返回 False——避免调用方拼错
+    角色名（如 ``"super_admin"``）时被当作「无门槛」放行一切角色（footgun）。
     """
-    return _ROLE_HIERARCHY.get(role, 0) >= _ROLE_HIERARCHY.get(minimum, 0)
+    # FIX(v0.7.1-b5-9): minimum 未知时 fail-closed。此前 .get(minimum, 0) 使未知
+    # minimum 降为 0 级，任何已知角色都满足——拼错角色名即放行一切（fail-open）。
+    if minimum not in _ROLE_HIERARCHY:
+        return False
+    return _ROLE_HIERARCHY.get(role, 0) >= _ROLE_HIERARCHY[minimum]

@@ -4,7 +4,10 @@ services:
     environment:
       POSTGRES_DB: lujo_mcp
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须设置}
+      # FIX(v0.7.1-b5-8): 双密码变量易踩坑——postgres 用 POSTGRES_PASSWORD、app 用
+      # PG_PASSWORD，两个都得设（只设一个另一服务启动即失败）。此处加回退：二选一即可，
+      # 二者语义等价（应用只读 PG_*，POSTGRES_PASSWORD 仅用于 DB 初始化）。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-${PG_PASSWORD:?必须设置 PG_PASSWORD 或 POSTGRES_PASSWORD}}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -36,7 +39,9 @@ services:
       PG_PORT: 5432
       PG_DATABASE: lujo_mcp
       PG_USER: postgres
-      PG_PASSWORD: ${PG_PASSWORD:?必须设置}
+      # FIX(v0.7.1-b5-8): 与 postgres 服务对称回退——只设 POSTGRES_PASSWORD 也能驱动
+      # app 连接（二选一即可，消除双密码变量必须同时设置的踩坑点）。
+      PG_PASSWORD: ${PG_PASSWORD:-${POSTGRES_PASSWORD:?必须设置 PG_PASSWORD 或 POSTGRES_PASSWORD}}
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}

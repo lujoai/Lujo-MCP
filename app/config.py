@@ -437,6 +437,17 @@ class Settings(BaseSettings):
             logger.warning("API_KEY 为空，已视为未配置，鉴权关闭")
             self.api_key = None
 
+        # FIX(v0.7.1-b5-10): 显式配置非法 agent_mode 值时告警（此前静默回退布尔派生）。
+        # 只告警不 fail-fast：避免拼错 AGENT_MODE 的既有部署直接启动失败；
+        # 回退语义不变（get_agent_mode 走布尔开关派生），仅补可观测性。
+        if "agent_mode" in self.model_fields_set:
+            _raw_mode = (self.agent_mode or "").strip().lower()
+            if _raw_mode not in {m.value for m in AgentMode}:
+                logger.warning(
+                    "agent_mode=%r 不是合法枚举值 %s，已回退布尔开关派生",
+                    self.agent_mode, sorted(m.value for m in AgentMode),
+                )
+
     def get_agent_mode(self) -> AgentMode:
         """获取当前有效的 Agent 运行模式。
         

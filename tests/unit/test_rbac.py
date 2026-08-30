@@ -188,9 +188,11 @@ class TestRoleAtLeast:
         """未知角色 → 0 级，fail-closed 返回 False。"""
         assert role_at_least("unknown", "viewer") is False
 
-    def test_known_role_at_least_unknown_minimum_is_true(self):
-        """minimum 为未知角色 → 0 级，任何已知角色都满足。"""
-        assert role_at_least("viewer", "unknown") is True
+    def test_known_role_at_least_unknown_minimum_is_false(self):
+        """minimum 为未知角色 → fail-closed 返回 False（防拼错角色名放行一切）。"""
+        assert role_at_least("viewer", "unknown") is False
+        assert role_at_least("developer", "unknown") is False
+        assert role_at_least("admin", "unknown") is False
 
 
 # ---------------------------------------------------------------------------

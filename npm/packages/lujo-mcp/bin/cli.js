@@ -25,7 +25,14 @@ function binaryInDir(pkgDir, pkg, binFile) {
   // Fall back to reading the platform package's package.json bin field.
   const metaPath = path.join(pkgDir, 'package.json');
   if (fs.existsSync(metaPath)) {
-    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    // FIX(v0.7.1-b5-2): 平台包 package.json 损坏时 JSON.parse 抛异常会直接崩掉
+    // 启动器；降级为读不到 bin 字段（与文件不存在同语义），交给上层统一报错。
+    let meta;
+    try {
+      meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    } catch {
+      meta = null;
+    }
     if (meta && meta.bin) {
       const binTarget = typeof meta.bin === 'string' ? meta.bin : meta.bin['lujo-mcp-server'] || meta.bin[pkg];
       if (binTarget) {

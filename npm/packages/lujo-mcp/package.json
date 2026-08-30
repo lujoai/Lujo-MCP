@@ -1,7 +1,7 @@
 {
   "name": "@lujoai/lujo-mcp",
   "version": "0.7.0",
-  "description": "Lujo-MCP ? MCP Runtime Debugging Context Server for AI coding agents. Gives Claude, Cursor, Trae and any MCP-compatible client real runtime debugging context: browser errors, console logs, network failures, UI interaction traces and session context. Zero-config, install via npm.",
+  "description": "Lujo-MCP — MCP Runtime Debugging Context Server for AI coding agents. Gives Claude, Cursor, Trae and any MCP-compatible client real runtime debugging context: browser errors, console logs, network failures, UI interaction traces and session context. Zero-config, install via npm.",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -7,7 +7,22 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次5：SDK/npm/scripts/CI + config/auth 10 项）
+
+- **npm 元包 description 乱码 `?` 修复**：`package.json` description 中 em-dash `—` 被错误编码为 `?`，影响 npm 页面展示；改回正确字符。
+- **cli.js 启动器 `JSON.parse` 无保护**：平台包 `package.json` 损坏时 `binaryInDir` 的 `JSON.parse` 抛异常直接崩掉启动器；现 try/catch 降级为读不到 bin 字段（与文件不存在同语义，交上层统一报错）。
+- **spec `openai.AsyncOpenAI` hiddenimport 从未生效**：该条目是 class 而非子模块，PyInstaller 无法解析（仅产生 "hidden import not found" 告警）；代码 `from openai import AsyncOpenAI` 为静态导入已覆盖，删除死条目。
+- **init_db.sh `$(ls ...)` 词分割 + PG_PASSWORD 交互挂起**：`$(ls)` 对含空格文件名会拆断，改 `find | sort | while read` 安全读入；psql 补 `-w`（--no-password）使 PG_PASSWORD 为空时快速失败而非交互式提示密码挂起。
+- **check_doc_links 文档与实现不符**：docstring「链接类型」宣称 external/锚点「验证」，实现实为「未请求验证 / 未验证」；口径对齐为「仅识别，不验证」。
+- **ruff 版本注释三处口径不一**：ci.yml 注释写 `==0.16.4`、lint.sh 装 `==0.16.4` 却注释称「与 requirements-dev.txt（>=0.16.4,<0.17.0）同源」；统一为范围 `>=0.16.4,<0.17.0`（三处同源，升级时同步改）。
+- **prod compose 过时 `version: "3.8"` 键**：Compose v2 已废弃并忽略该键，删除与 dev compose（本就无 version）对齐。
+- **dev compose 双密码变量踩坑**：postgres 用 `POSTGRES_PASSWORD`、app 用 `PG_PASSWORD` 两个都得设，只设一个另一服务启动即失败；现对称加回退 `${POSTGRES_PASSWORD:-${PG_PASSWORD:?...}}` / `${PG_PASSWORD:-${POSTGRES_PASSWORD:?...}}`，二选一即可（语义等价：应用只读 PG_*，POSTGRES_PASSWORD 仅用于 DB 初始化）。
+- **rbac `role_at_least` 未知 minimum fail-open**：`.get(minimum, 0)` 使拼错的 minimum（如 `"super_admin"`）降为 0 级，任何已知角色都满足——fail-open footgun；现未知 minimum 直接 fail-closed 返回 False（该函数当前无生产调用方，属防御性修复）。
+- **`AGENT_MODE` 非法值静默回退**：显式配置非法 `agent_mode`（拼错）时此前静默回退布尔派生、无任何日志；现 `model_post_init` 补 `logger.warning` 告警（不 fail-fast，回退语义不变，仅补可观测性）。
+
+> 批次5 复审观察（非阻塞，留痕）：① dev/prod 两 compose 环境变量口径仍不一致（prod 只接受 `PG_PASSWORD`），若需彻底消除可后续将 prod 也做对称回退；② `role_at_least` 无生产调用方，修复为防御性/导出 API 语义纠正，旧 fail-open 行为本就是 footgun 不建议保留。
 
 ### 🔒 修复（Minor 批次4：MCP 协议/API/runtime 9 项）
 
@@ -65,8 +80,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）。
-- **验证**：`ruff check .` 全绿；unit **1453 tests / 0 failed / 6 skipped**（批次3 后 1447 + 批次4 +6）；integration **115 tests / 0 failed**（113 + repair 2）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（批次2-4 未触及 SDK）。四批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS，复审建议均已采纳或在注释留痕）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）。
+- **验证**：`ruff check .` 全绿；unit **1454 tests / 0 failed / 6 skipped**（批次4 后 1453 + 批次5 +1）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **49/49**；check_doc_links **168 链接 0 错误**。五批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS，复审建议均已采纳或在注释留痕）。
 
 ## [0.7.0] - 2026-08-29
 

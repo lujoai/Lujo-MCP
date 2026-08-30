@@ -66,7 +66,6 @@ a = Analysis(
         "httpx._client",
         "openai",
         "openai.resources",
-        "openai.AsyncOpenAI",
         "dotenv",
         "psutil",
         "asyncpg",

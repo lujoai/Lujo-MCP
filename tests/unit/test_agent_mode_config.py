@@ -82,3 +82,15 @@ def test_explicit_agent_mode_overrides_boolean_flags():
         agent_verify_loop_enabled=True,
     )
     assert s.get_agent_mode() == AgentMode.SINGLE
+
+
+def test_agent_mode_invalid_value_warns_and_falls_back(caplog):
+    # 显式配置非法 agent_mode（如拼错 "bogus"）→ 告警 + 回退布尔开关派生，
+    # 不再静默（此前无任何日志提示，排障无从下手）。
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        s = Settings(_env_file=None, agent_mode="bogus", agent_enabled=True)
+
+    assert s.get_agent_mode() == AgentMode.SINGLE
+    assert any("agent_mode" in r.message and "bogus" in r.message for r in caplog.records)
