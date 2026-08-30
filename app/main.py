@@ -84,14 +84,16 @@ async def lifespan(app: FastAPI):
         f"服务启动 | {settings.service_name} v{__version__} | "
         f"storage={settings.storage_backend} | "
         f"llm={settings.llm_model} | "
-        f"auth={'on' if settings.api_key else 'off'} | "
+        f"auth={'on' if auth_enabled() else 'off'} | "
         f"rate_limit={settings.rate_limit_per_minute}/min"
     )
 
-    if not settings.api_key:
+    # FIX(v0.7.1-b6-6): 鉴权判定用 auth_enabled()（覆盖 API_KEY + API_KEYS 多 key），
+    # 此前只查 settings.api_key——仅配 API_KEYS 的合法部署被误报「免鉴权」。
+    if not auth_enabled():
         logger.warning(
-            "未配置 API_KEY，服务以【免鉴权】模式运行。"
-            "生产环境请通过环境变量 API_KEY 设置访问令牌，避免未授权访问。"
+            "未配置 API_KEY/API_KEYS，服务以【免鉴权】模式运行。"
+            "生产环境请通过环境变量 API_KEY 或 API_KEYS 设置访问令牌，避免未授权访问。"
         )
 
     # SEC-03：启动期强制安全校验，覆盖所有启动方式

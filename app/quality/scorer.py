@@ -65,7 +65,7 @@ def evaluate(agent_context: dict[str, Any]) -> QualityReport:
 
         completeness = _score_completeness(debug_ctx, repair_ctx)
         evidence_items = _extract_evidence(debug_ctx, repair_ctx)
-        confidence = _score_confidence(evidence_items, completeness)
+        confidence = _score_confidence(evidence_items)
         overall = round(completeness.overall_score * confidence.overall_score, 4)
         suggestions = _generate_suggestions(completeness, confidence)
 
@@ -498,15 +498,15 @@ def _extract_evidence(
 
 def _score_confidence(
     evidence_items: list[EvidenceItem],
-    completeness: ContextCompleteness,
 ) -> AnalysisConfidence:
-    """基于证据质量 + 上下文完整度，综合评定分析可信度。
+    """基于证据质量综合评定分析可信度。
 
-    评分逻辑：
+    FIX(v0.7.1-b6-1): 移除未使用的 completeness 参数——此前 docstring 宣称
+    「完整度加成」却无任何实现（完整度已由调用方 overall = completeness ×
+    confidence 参与总评分，不必在此重复加成）。评分逻辑：
     - 基础分：证据数量（0-5 条=0.0-0.5，5+ 条=0.5-1.0）
     - 质量加成：高相关度证据占比越高，加成越大
     - 覆盖度加成：已覆盖维度越多，加成越大
-    - 完整度加成：上下文越完整，可信度越高（底数高）
     """
     total = len(evidence_items)
     high_count = sum(1 for e in evidence_items if e.relevance == RelevanceLevel.HIGH)

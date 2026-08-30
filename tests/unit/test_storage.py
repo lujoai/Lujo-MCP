@@ -879,3 +879,84 @@ class TestArchiveMock:
         assert results[2999] is True
         # True 的总数应为 3
         assert sum(1 for r in results if r) == 3
+
+
+# ════════════════════════════════════════════
+#  批次6 Minor 修复回归（无需真实 PG，纯 mock / 纯函数）
+# ════════════════════════════════════════════
+
+class TestPGSessionStoreGuards:
+    """FIX b6-3/b6-4：save 不突变输入 + metadata 非法 JSON 降级。"""
+
+    def test_save_does_not_mutate_input_dict(self, monkeypatch):
+        from app.runtime.core.storage import pg_session_store as mod
+        from app.runtime.core.storage.pg_session_store import PGSessionStore
+
+        class _FakeConn:
+            closed = False
+
+            def rollback(self):
+                pass
+
+        class _FakePool:
+            def putconn(self, conn):
+                pass
+
+        captured = {}
+
+        def _fake_execute(conn, sql, params=None, **kw):
+            captured["params"] = params
+            return conn, 1
+
+        monkeypatch.setattr(mod, "_get_conn", lambda: _FakeConn())
+        monkeypatch.setattr(mod, "_get_pool", lambda: _FakePool())
+        monkeypatch.setattr(mod, "_execute_with_retry", _fake_execute)
+
+        store = PGSessionStore.__new__(PGSessionStore)
+        data = {"session_id": "s1", "created_at": 123.0, "metadata": {"role": "test"}}
+        store.save("s1", data)
+
+        # 输入 dict 未被突变（此前 data["last_active"] 会泄漏副作用）
+        assert "last_active" not in data
+        assert data == {"session_id": "s1", "created_at": 123.0, "metadata": {"role": "test"}}
+
+    def test_safe_json_loads_valid_json(self):
+        from app.runtime.core.storage.pg_session_store import _safe_json_loads
+        assert _safe_json_loads('{"role": "test"}') == {"role": "test"}
+
+    def test_safe_json_loads_invalid_json_degrades_to_empty_dict(self):
+        from app.runtime.core.storage.pg_session_store import _safe_json_loads
+        assert _safe_json_loads("{not valid json") == {}
+
+    def test_safe_json_loads_non_string(self):
+        from app.runtime.core.storage.pg_session_store import _safe_json_loads
+        assert _safe_json_loads({"already": "dict"}) == {"already": "dict"}
+        assert _safe_json_loads(None) == {}
+
+
+class TestClosePoolResetsInitialized:
+    """FIX b6-5：close_pool 重置 _initialized。"""
+
+    def test_close_pool_resets_initialized(self, monkeypatch):
+        import app.runtime.core.storage.pg_executor as mod
+
+        class _FakePool:
+            def closeall(self):
+                pass
+
+        monkeypatch.setattr(mod, "_pool", _FakePool())
+        monkeypatch.setattr(mod, "_initialized", True)
+
+        mod.close_pool()
+
+        assert mod._initialized is False
+
+    def test_close_pool_no_pool_still_resets(self, monkeypatch):
+        import app.runtime.core.storage.pg_executor as mod
+
+        monkeypatch.setattr(mod, "_pool", None)
+        monkeypatch.setattr(mod, "_initialized", True)
+
+        mod.close_pool()
+
+        assert mod._initialized is False

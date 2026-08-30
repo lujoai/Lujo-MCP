@@ -114,7 +114,7 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 def close_pool() -> None:
     """优雅关闭连接池（在 lifespan shutdown 中调用）"""
-    global _pool
+    global _pool, _initialized
     with _pool_lock:
         if _pool is not None:
             try:
@@ -123,6 +123,10 @@ def close_pool() -> None:
             except Exception as e:
                 logger.warning(f"关闭 PG 连接池时出错: {e}")
             _pool = None
+        # FIX(v0.7.1-b6-5): 重置 _initialized——此前关闭池后仍标记为已初始化，
+        # 若进程不退出（如测试重连、热重载）后续 _ensure_init() 会被短路，
+        # 新池的 DDL 保障失效；池已关闭理应与「未初始化」状态一致。
+        _initialized = False
 
 
 def _get_conn(timeout: float = 5.0):

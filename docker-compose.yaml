@@ -53,7 +53,9 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-}
       API_KEY: ${API_KEY:?必须设置}
     ports:
-      - "8000:8000"
+      # FIX(v0.7.1-b6-8): 仅绑定回环 127.0.0.1（对齐 prod compose），不再向
+      # 局域网/公网暴露 app 端口——开发环境也避免 API Key 明文 HTTP 意外外泄。
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s

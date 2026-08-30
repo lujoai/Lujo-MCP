@@ -581,40 +581,22 @@ class TestAnalysisConfidence:
     """_score_confidence：证据质量评分算法。"""
 
     def test_no_evidence_returns_zero(self):
-        completeness = ContextCompleteness(
-            overall_score=0.0,
-            dimensions={},
-            missing_count=9,
-            total_dimensions=9,
-        )
-        conf = _score_confidence([], completeness)
+        conf = _score_confidence([])
         assert conf.overall_score == 0.0
         assert conf.evidence_count == 0
 
     def test_basic_scoring(self):
-        completeness = ContextCompleteness(
-            overall_score=0.5,
-            dimensions={},
-            missing_count=4,
-            total_dimensions=9,
-        )
         items = [
             EvidenceItem(type=EvidenceType.STACK_TRACE, description="t", source="s", relevance=RelevanceLevel.HIGH),
             EvidenceItem(type=EvidenceType.CODE_SNIPPET, description="c", source="s", relevance=RelevanceLevel.HIGH),
             EvidenceItem(type=EvidenceType.RUNTIME_STATE, description="r", source="s", relevance=RelevanceLevel.LOW),
         ]
-        conf = _score_confidence(items, completeness)
+        conf = _score_confidence(items)
         assert conf.evidence_count == 3
         assert conf.high_relevance_count == 2
         assert conf.overall_score > 0.0
 
     def test_five_evidence_max_base_score(self):
-        completeness = ContextCompleteness(
-            overall_score=0.5,
-            dimensions={},
-            missing_count=4,
-            total_dimensions=9,
-        )
         items = [
             EvidenceItem(type=EvidenceType.STACK_TRACE, description="x", source="s", relevance=RelevanceLevel.HIGH),
             EvidenceItem(type=EvidenceType.CODE_SNIPPET, description="x", source="s", relevance=RelevanceLevel.HIGH),
@@ -622,22 +604,16 @@ class TestAnalysisConfidence:
             EvidenceItem(type=EvidenceType.GIT_BLAME, description="x", source="s", relevance=RelevanceLevel.MEDIUM),
             EvidenceItem(type=EvidenceType.GIT_DIFF, description="x", source="s", relevance=RelevanceLevel.MEDIUM),
         ]
-        conf = _score_confidence(items, completeness)
+        conf = _score_confidence(items)
         # 基础分 0.5（5+ 条 = 满分）+ 质量加成 + 覆盖度加成
         assert conf.overall_score >= 0.5
 
     def test_coverage_aspects_and_missing_aspects(self):
-        completeness = ContextCompleteness(
-            overall_score=0.5,
-            dimensions={},
-            missing_count=4,
-            total_dimensions=9,
-        )
         items = [
             EvidenceItem(type=EvidenceType.STACK_TRACE, description="x", source="s", relevance=RelevanceLevel.HIGH),
             EvidenceItem(type=EvidenceType.CODE_SNIPPET, description="x", source="s", relevance=RelevanceLevel.HIGH),
         ]
-        conf = _score_confidence(items, completeness)
+        conf = _score_confidence(items)
         assert "stack_trace" in conf.coverage_aspects
         assert "code_snippet" in conf.coverage_aspects
         assert len(conf.missing_aspects) > 0

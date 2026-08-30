@@ -7,7 +7,20 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次6：agent/llm/quality + runtime core/storage 8 项）
+
+- **`_score_confidence` 移除未使用的 completeness 参数**：此前 docstring 宣称「完整度加成」却无任何实现（完整度已由调用方 `overall = completeness × confidence` 参与总评分，不必重复加成）；移除死参数并同步更新 4 个测试调用点。
+- **RedisStateStore 统一 fail-closed**：此前 `allow()` 捕获 Redis 异常返回 False，但 `incr/incr_float/get/keys` 裸抛——Redis 短暂不可达会穿透异常到调用方；现全部捕获并返回安全默认值（0 / 0.0 / []），与 `allow()` 口径一致。
+- **pg_session_store `save()` 不突变调用方 dict**：此前 `data["last_active"] = time.time()` 会改掉调用方传入的 dict（副作用泄漏）；改局部变量。
+- **pg_session_store metadata 非法 JSON 降级**：`get()/list_active()` 此前 `json.loads` 单条脏 metadata 即抛 JSONDecodeError 穿透；新增 `_safe_json_loads` 降级为 `{}`（会话仍可用，仅元数据丢失）。
+- **close_pool 重置 `_initialized`**：此前关闭池后仍标记已初始化，进程不退出（测试重连/热重载）时后续 `_ensure_init()` 被短路、新池 DDL 保障失效；现 `_initialized = False`。
+- **启动日志鉴权判定改用 `auth_enabled()`**：此前只查 `settings.api_key`，仅配 API_KEYS 多 key 的合法部署被误报「免鉴权」；改 `auth_enabled()`（覆盖 API_KEY + API_KEYS），告警文案同步。
+- **fault_localizer 权重口径修正**：`sort_explanation` 写「栈位置(30)」，实际常量 `_W_STACK_POSITION = 20`；对齐为 20。
+- **dev compose 端口绑定回环**：app 端口从 `8000:8000` 改为 `127.0.0.1:8000:8000`（对齐 prod compose，避免开发环境 API Key 明文 HTTP 意外向局域网外泄）。
+
+> 批次6 复审观察（非阻塞，留痕）：① metadata 列为 JSONB，psycopg2 读时已返回 Python 对象，非法 JSON 场景多为理论性——但 `_safe_json_loads` 更防御且把 NULL/非 dict 收紧为 `{}`（消费方 `s.get("metadata", {})` 此前遇 None 会返回 None，现正确返回 `{}`）；② RedisStateStore 4 方法当前无生产调用点，属防御性/接口语义统一。
 
 ### 🔒 修复（Minor 批次5：SDK/npm/scripts/CI + config/auth 10 项）
 
@@ -80,8 +93,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）。
-- **验证**：`ruff check .` 全绿；unit **1454 tests / 0 failed / 6 skipped**（批次4 后 1453 + 批次5 +1）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **49/49**；check_doc_links **168 链接 0 错误**。五批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS，复审建议均已采纳或在注释留痕）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）。
+- **验证**：`ruff check .` 全绿；unit **1461 tests / 0 failed / 6 skipped**（批次5 后 1454 + 批次6 +7）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **49/49**；check_doc_links **168 链接 0 错误**。六批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS，复审建议均已采纳或在注释留痕）。
 
 ## [0.7.0] - 2026-08-29
 

@@ -106,7 +106,12 @@ class MemoryStateStore(StateStore):
 
 
 class RedisStateStore(StateStore):
-    """Redis 实现（多实例共享）"""
+    """Redis 实现（多实例共享）
+
+    FIX(v0.7.1-b6-2): 统一 fail-closed——此前 allow() 捕获 Redis 异常返回 False，
+    但 incr/incr_float/get/keys 裸抛，Redis 短暂不可达会穿透异常到调用方。
+    现全部方法捕获异常并返回安全默认值（0 / 0.0 / []），与 allow() 一致。
+    """
 
     # Lua script for atomic sliding-window rate limiting using ZSET.
     # 与 MemoryStateStore.allow 语义一致：滑动窗口内记录每个请求时间戳，
@@ -154,17 +159,33 @@ return 1
             return False
 
     def incr(self, key: str, by: int = 1) -> int:
-        return int(self._r.incr(key, by))
+        try:
+            return int(self._r.incr(key, by))
+        except Exception:
+            logger.error("Redis state store error", exc_info=True)
+            return 0
 
     def incr_float(self, key: str, by: float) -> float:
-        return float(self._r.incrbyfloat(key, by))
+        try:
+            return float(self._r.incrbyfloat(key, by))
+        except Exception:
+            logger.error("Redis state store error", exc_info=True)
+            return 0.0
 
     def get(self, key: str) -> float:
-        val = self._r.get(key)
-        return float(val) if val is not None else 0.0
+        try:
+            val = self._r.get(key)
+            return float(val) if val is not None else 0.0
+        except Exception:
+            logger.error("Redis state store error", exc_info=True)
+            return 0.0
 
     def keys(self, prefix: str) -> List[str]:
-        return list(self._r.scan_iter(match=f"{prefix}*"))
+        try:
+            return list(self._r.scan_iter(match=f"{prefix}*"))
+        except Exception:
+            logger.error("Redis state store error", exc_info=True)
+            return []
 
     def close(self) -> None:
         try:

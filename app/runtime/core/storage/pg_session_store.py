@@ -21,6 +21,20 @@ from app.runtime.core.storage.pg_executor import (
 logger = logging.getLogger("lujo-mcp.storage.pg")
 
 
+def _safe_json_loads(value) -> dict:
+    """解析 metadata JSON 字段；非法 JSON（历史脏数据）降级为 {}，不抛异常穿透。
+
+    FIX(v0.7.1-b6-4): 此前 get()/list_active() 直接 json.loads，单条脏 metadata
+    即让整个会话读取抛 JSONDecodeError；现降级为 {}（会话仍可用，仅元数据丢失）。
+    """
+    if not isinstance(value, str):
+        return value if isinstance(value, dict) else {}
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
 class PGSessionStore(SessionStorage):
     def __init__(self):
         _ensure_init()
@@ -41,7 +55,9 @@ class PGSessionStore(SessionStorage):
     def save(self, session_id: str, data: dict) -> None:
         conn = self._conn()
         try:
-            data["last_active"] = time.time()
+            # FIX(v0.7.1-b6-3): 不突变调用方 dict——last_active 用局部变量，
+            # 此前 data["last_active"]=... 会把调用方传入的 dict 改掉（副作用泄漏）。
+            last_active = time.time()
             conn, _ = _execute_with_retry(
                 conn,
                 "INSERT INTO sessions (session_id, created_at, last_active, metadata) "
@@ -52,7 +68,7 @@ class PGSessionStore(SessionStorage):
                 (
                     session_id,
                     data.get("created_at", time.time()),
-                    data["last_active"],
+                    last_active,
                     json.dumps(data.get("metadata", {})),
                 ),
             )
@@ -79,7 +95,7 @@ class PGSessionStore(SessionStorage):
                 "session_id": row[0],
                 "created_at": row[1],
                 "last_active": row[2],
-                "metadata": json.loads(row[3]) if isinstance(row[3], str) else row[3],
+                "metadata": _safe_json_loads(row[3]),
             }
         finally:
             self._put(conn)
@@ -109,7 +125,7 @@ class PGSessionStore(SessionStorage):
                     "session_id": r[0],
                     "created_at": r[1],
                     "last_active": r[2],
-                    "metadata": json.loads(r[3]) if isinstance(r[3], str) else r[3],
+                    "metadata": _safe_json_loads(r[3]),
                 }
                 for r in rows
             ]
