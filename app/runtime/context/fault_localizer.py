@@ -85,9 +85,12 @@ class FaultLocalizationResult:
     likely_cause_candidate: Optional[str] = None  # 一句话最值得优先检查的位置
     method: str = "heuristic_stack_score"
     # 排序规则说明，供 AI 解释
+    # FIX(v0.7.1-b2-7): 调用链汇聚分保留但当前不触发（真实的静态调用链追溯
+    # 尚未落地，此前由帧函数名列表伪造填充——已删除），说明文本同步。
     sort_explanation: str = (
         "按启发式规则加权打分降序：栈位置(30) + 可疑输入(25) + 复杂度(20) + "
-        "项目代码(15) + 调用链汇聚(10)。分数越高越值得优先检查，不代表绝对根因。"
+        "项目代码(15)（调用链汇聚(10) 规则保留、待静态调用链追溯落地后启用）。"
+        "分数越高越值得优先检查，不代表绝对根因。"
     )
 
 
@@ -224,7 +227,14 @@ def localize(
 
     for idx, frame in enumerate(frames):
         file_path = str(frame.get("file") or "")
-        line = int(frame.get("line") or 0)
+        # FIX(v0.7.1-b2-5): 行号安全转换——非数值行号（"12a"/None/对象等）
+        # 此前 int() 直接抛 ValueError 且帧循环无 try，单帧畸形即炸掉整个
+        # localize()（builder 兜底后整条 trace 的 fault_localization 置 None）。
+        raw_line = frame.get("line")
+        try:
+            line = int(raw_line or 0)
+        except (TypeError, ValueError):
+            line = 0
         function = str(frame.get("function") or "<unknown>")
 
         fault = static_by_index.get(idx)

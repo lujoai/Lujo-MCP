@@ -7,7 +7,20 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项，全部来自第 6/7 轮审查 Minor 索引）。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次2：runtime collectors/context 10 项）
+
+- **builder `spec_diffs` 单条畸形吞掉全部结果**：verify 条目此前 `e["data"]` 直索引，单条缺 `data` 键抛 KeyError 被 except 吞掉后 `spec_diffs` 整体置 None——全部 verify 结果丢失；现逐条 `.get` 跳过缺键/None，正常条目保留。
+- **builder fallback 合成 trace 时间戳类型防御**：entries 含非数值 timestamp（字符串/None）时 `min/max` 直抛 TypeError，且合成块不在任何 try/except 内，单条畸形即炸掉整个 `build_debug_context`（下游 /analyze 全链路 500）；现安全归一为 0.0。
+- **复发信号与调用链线索透传**：`occurrence_count` / `first_seen` / `last_seen` / `caller_trace_id` 不再在 context 构建侧丢弃（trace_repo 已聚合好，与指纹同型），注入 DebugContext（extra=allow，25 字段，旧消费方零影响）。
+- **同一 trace 网络记录二次读存储**：`_extract_request_target` 的 handler 反查与 network_trace 注入各读一次存储；现读取一次后透传复用（空列表与 None 区分，空记录场景不退化二次读）。
+- **fault_localizer 单帧畸形行号炸掉整条 trace 定位**：帧循环内 `int(frame.get("line"))` 无保护，`"12x"` 等非数值行号抛 ValueError 使整个 `localize()` 失败（builder 兜底后 fault_localization 置 None，全部候选丢失）；现安全降级为 0。
+- **code_locator 单帧畸形丢整批源码片段**：`f["line"]` 直索引——单帧缺 line 抛 KeyError、line=None 抛 TypeError、非数值抛 ValueError，被 builder 兜底吞掉后整批 code_snippets 丢失；现逐帧跳过畸形 line（缺失/None/bool/非数值），数字字符串行号仍接受，单帧读取异常只丢该帧。
+- **static_analyzer 虚构调用链证据**：`_trace_call_chains` 把"全部帧的函数名列表"塞给 `results[0].call_chain`（非静态追溯的调用链），下游 fault_localizer 据此给首帧恒加 +10"call chain hub"虚构证据；删除伪造填充（评分规则与字段保留，待真实静态调用链追溯落地后启用），同步删除从未实现的 `_MAX_CALL_DEPTH=5` 死常量与过时的评分说明文本。
+- **static_analyzer 源码读取无大小上限**：MB 级文件读入后 `ast.parse` 必失败且白耗内存/CPU；读取前检查大小（1MB 上限，与 spec.py 同值），超限跳过该帧。
+- **url_resolver 路径模板元字符未转义**：模板字面段的正则元字符（如版本号 `/v1.2/` 的 `.`）匹配任意字符，`/v1x2/` 等不相关路径被误命中反查到错误 handler；字面段 `re.escape`（参数段语义不变）。
+- **spec `_find_project_root` home 边界字符串前缀**：`str(parent).startswith(str(home))` 在 `/home/us` 与 `/home/user2` 等前缀相似目录间误放行，越过用户主目录边界向上扫描；改路径对象祖先判定。
 
 ### 🔒 修复（Minor 批次1：正确性/健壮性 10 项）
 
@@ -24,9 +37,9 @@
 
 ### 🛠️ 工程与测试
 
-- **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记本批新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：新增回归 13 项（unit 11：阈值校验 3 + 超时存根形状 1 + parse_llm_json 1 + MCP 日志口径/async wait 指标 2 + DELETE 400 1 + stream 异常保护 1 + first_seen 2 + 阈值用例对 .env 免疫加固；SDK JS 2：XHR 复用防叠加 + onerror 返回值透传）。
-- **验证**：`ruff check .` 全绿；unit **1420 tests / 0 failed / 6 skipped**（1409 基线 + 11）；integration **113 tests / 0 failed**（与 v0.7.0 首绿基线持平）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（47 + 2）。
+- **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项（unit：builder 3 + static_analyzer 2 + fault_localizer 1 + code_locator 2 + url_resolver 1 + spec 2）+ 更新 2 个固化旧行为的契约测试（call_chain 断言反转、DebugContext 字段集 21→25）。
+- **验证**：`ruff check .` 全绿；unit **1431 tests / 0 failed / 6 skipped**（批次1 后 1420 + 批次2 +11）；integration **113 tests / 0 failed**（与 v0.7.0 首绿基线持平）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（47 + 批次1 +2；批次2 未触及 SDK）。两批次均经子代理独立复审（批次1 10/10 PASS、批次2 10/10 PASS，复审建议均已采纳）。
 
 ## [0.7.0] - 2026-08-29
 

@@ -25,8 +25,14 @@ _PATH_PARAM_RE = re.compile(r"\{[^}]*\}")
 
 
 def _path_to_regex(template: str) -> re.Pattern:
-    """把 FastAPI 路径模板（含 {param}）编译为匹配具体路径的正则。"""
-    pattern = _PATH_PARAM_RE.sub(r"[^/]+", template)
+    """把 FastAPI 路径模板（含 {param}）编译为匹配具体路径的正则。
+
+    FIX(v0.7.1-b2-9): 模板字面段必须 re.escape——此前未转义时模板中的
+    正则元字符（如版本号路径 /v1.2/ 的 ``.``）会匹配任意字符，
+    /v1x2/ 之类的不相关路径被误命中。
+    """
+    literal_parts = _PATH_PARAM_RE.split(template)
+    pattern = "[^/]+".join(re.escape(part) for part in literal_parts)
     return re.compile(rf"^{pattern}/?$")
 
 

@@ -99,3 +99,47 @@ def test_tool_wrapper():
     assert res["found"] is False
     assert res["count"] == 0
     assert res["specs"] == []
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b2-10): _find_project_root 的 home 边界改路径对象判定
+# ---------------------------------------------------------------------------
+
+
+def test_find_project_root_stops_at_home_boundary(tmp_path, monkeypatch):
+    """home 前缀相似目录不再越过用户主目录边界（/home/us 不命中 /home/user2）。
+
+    场景：文件位于 sibling（与 fake_home 字符串前缀相似）下、.git 在
+    sibling 层。旧实现 ``str(parent).startswith(str(home))`` 前缀比较
+    放行 sibling → 误把 sibling 当项目根；新实现按路径对象判定
+    fake_home 非 ancestor 即停 → 返回文件所在目录。
+    """
+    from pathlib import Path
+
+    fake_home = tmp_path / "home" / "us"
+    fake_home.mkdir(parents=True)
+    sibling = tmp_path / "home" / "us2"  # 与 fake_home 字符串前缀相似
+    (sibling / ".git").mkdir(parents=True)
+    project = sibling / "proj"  # 无 .git 标记
+    project.mkdir(parents=True)
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    root = spec_collector._find_project_root(str(project / "a.py"))
+    # fake_home 不是 project 的祖先：不得越过边界把 sibling 下的 .git 当项目根
+    assert root == project
+
+
+def test_find_project_root_within_home(tmp_path, monkeypatch):
+    """正常场景：文件在 home 内时仍向上找到项目根（含 .git）。"""
+    from pathlib import Path
+
+    fake_home = tmp_path / "home" / "us"
+    project = fake_home / "proj"
+    project.mkdir(parents=True)
+    (project / ".git").mkdir()
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    root = spec_collector._find_project_root(str(project / "src" / "a.py"))
+    assert root == project

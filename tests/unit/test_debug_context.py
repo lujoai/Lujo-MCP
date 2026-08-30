@@ -164,3 +164,86 @@ def test_build_debug_context_fault_localizer_error_degrades(monkeypatch):
     assert hasattr(ctx, "runtime")
     assert hasattr(ctx, "code_snippets")
     assert ctx.fault_localization is None
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b2-1): 单条畸形 verify 条目不再吞掉全部 spec_diffs
+# ---------------------------------------------------------------------------
+
+
+def test_build_debug_context_spec_diffs_skip_malformed_verify_entries(monkeypatch):
+    """缺 data 键 / data=None 的 verify 条目被逐条跳过，正常条目保留。
+
+    旧实现 e["data"] 直索引，单条缺键抛 KeyError 被 except 吞掉后
+    spec_diffs 整体置 None——全部 verify 结果丢失。
+    """
+    good = {"step": "verify", "data": {"matched": False, "silent_failure": True}}
+    bad_no_data = {"step": "verify"}               # 缺 data 键（原 KeyError 路径）
+    bad_none_data = {"step": "verify", "data": None}
+    unrelated = {"step": "request_start", "data": {"method": "GET"}}
+
+    monkeypatch.setattr(
+        "app.runtime.core.logs.get_logs",
+        lambda rid: [good, bad_no_data, bad_none_data, unrelated],
+    )
+    tid = trace_repo.save_trace("E", "m", [])
+    ctx = build_debug_context(tid)
+
+    assert ctx is not None
+    assert ctx.spec_diffs is not None
+    assert len(ctx.spec_diffs) == 1
+    assert ctx.spec_diffs[0]["matched"] is False
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b2-2): fallback 合成 trace 对非数值 timestamp 免疫
+# ---------------------------------------------------------------------------
+
+
+def test_build_debug_context_fallback_survives_malformed_timestamp(monkeypatch):
+    """entries 含字符串/None timestamp 时 min/max 不抛 TypeError。
+
+    旧实现单条畸形 timestamp 即炸掉整个 build_debug_context（合成块不在
+    任何 try/except 内），下游 /analyze 全链路 500。
+    """
+    entries = [
+        {"step": "request_start", "data": {"method": "GET", "url": "/a"},
+         "timestamp": "not-a-number"},  # 畸形：字符串时间戳
+        {"step": "error",
+         "data": {"type": "ValueError", "message": "boom", "frames": []},
+         "timestamp": 100.0},
+        {"step": "log", "data": "mid", "timestamp": None},  # 畸形：None
+    ]
+    monkeypatch.setattr("app.runtime.core.trace_repo.get_trace", lambda *a, **k: None)
+    monkeypatch.setattr("app.runtime.core.logs.get_logs", lambda rid: list(entries))
+
+    ctx = build_debug_context("fallback-bad-ts")
+
+    assert ctx is not None  # 不再整体炸掉
+    assert ctx.exception["type"] == "ValueError"
+    assert ctx.request_id == "fallback-bad-ts"
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b2-3): 复发信号与调用链线索透传（不再在 context 构建侧丢弃）
+# ---------------------------------------------------------------------------
+
+
+def test_build_debug_context_propagates_recurrence_fields():
+    """occurrence_count / first_seen / last_seen / caller_trace_id 注入 context。
+
+    旧实现 trace_repo 已聚合好的复发信号在构建侧被丢弃（与指纹同型），
+    下游无从判断"这是第 N 次复发"。
+    """
+    frames = [{"file": "a.py", "line": 10, "function": "f"}]
+    tid = trace_repo.save_trace("ValueError", "m", frames, source="t")
+    trace_repo.save_trace("ValueError", "m2", frames, source="t")  # 同指纹 → 聚合
+
+    ctx = build_debug_context(tid)
+
+    assert ctx is not None
+    assert ctx.occurrence_count == 2
+    assert ctx.first_seen is not None
+    assert ctx.last_seen is not None and ctx.last_seen >= ctx.first_seen
+    # caller_trace_id 无关联时为 None（字段存在即契约）
+    assert getattr(ctx, "caller_trace_id", None) is None

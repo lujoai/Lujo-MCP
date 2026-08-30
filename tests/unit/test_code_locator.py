@@ -56,3 +56,50 @@ def test_get_code_snippet_rejects_mapped_path_outside_whitelist(tmp_path, monkey
     assert snippet.found is False
     assert snippet.snippet == ""
     assert snippet.link is None
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b2-6): 畸形帧逐帧跳过——单帧 line 缺失/None/非数值不再丢整批
+# ---------------------------------------------------------------------------
+
+
+def test_get_snippets_for_frames_skips_malformed_line_frames(tmp_path, monkeypatch):
+    """畸形 line 帧（缺失/None/非数值/bool）被逐帧跳过，其余帧片段正常返回。
+
+    旧实现 f["line"] 直索引：单帧缺 line 抛 KeyError、line=None 在
+    start = max(1, line_no - context_lines) 抛 TypeError，builder 兜底
+    吞掉后整批 code_snippets 全部丢失。
+    """
+    from app.runtime.collectors.code_locator import get_snippets_for_frames
+
+    monkeypatch.setattr(settings, "whitelist_path_prefix", str(tmp_path))
+    good_file = tmp_path / "good.py"
+    good_file.write_text("line1\ndef boom():\n    raise\nline4\n", encoding="utf-8")
+
+    frames = [
+        {"file": str(good_file), "line": 3, "function": "boom"},   # 正常帧
+        {"file": str(good_file), "function": "no_line"},            # 缺 line 键（原 KeyError）
+        {"file": str(good_file), "line": None, "function": "n"},    # line=None（原 TypeError）
+        {"file": str(good_file), "line": "3x", "function": "s"},    # 非数值（原 ValueError）
+        {"file": str(good_file), "line": True, "function": "b"},    # bool（int 子类，须排除）
+    ]
+    snippets = get_snippets_for_frames(frames)
+
+    assert len(snippets) == 1  # 只有正常帧产出片段，其余逐帧跳过
+    assert snippets[0].found is True
+    assert "raise" in snippets[0].snippet
+
+
+def test_get_snippets_for_frames_string_numeric_line_accepted(tmp_path, monkeypatch):
+    """数字字符串行号（SDK/浏览器帧常见形态）可正常转换，不误杀。"""
+    from app.runtime.collectors.code_locator import get_snippets_for_frames
+
+    monkeypatch.setattr(settings, "whitelist_path_prefix", str(tmp_path))
+    good_file = tmp_path / "good.py"
+    good_file.write_text("line1\ndef boom():\n    raise\nline4\n", encoding="utf-8")
+
+    snippets = get_snippets_for_frames(
+        [{"file": str(good_file), "line": "3", "function": "boom"}]
+    )
+    assert len(snippets) == 1
+    assert snippets[0].found is True

@@ -223,6 +223,26 @@ class TestDegradation:
         result = localize(frames)
         assert result.suspicious_frames  # 至少正常降级出候选
 
+    def test_non_numeric_line_degrades_to_zero(self):
+        """FIX(v0.7.1-b2-5) 回归：非数值行号帧行号置 0，不炸整个 localize。
+
+        旧实现 int("12x") 抛 ValueError 且帧循环无 try，单帧畸形即让
+        localize 整体失败（builder 兜底后整条 trace 的 fault_localization
+        置 None，全部候选丢失）。
+        """
+        frames = [
+            {"file": "app/x.py", "line": "12x", "function": "bad"},
+            {"file": "app/y.py", "line": 8, "function": "good"},
+        ]
+        with patch(
+            "app.runtime.collectors.static_analyzer.analyze", return_value=[]
+        ):
+            result = localize(frames)
+        assert len(result.suspicious_frames) == 2  # 两帧都完成评分
+        by_fn = {f.function: f for f in result.suspicious_frames}
+        assert by_fn["bad"].line == 0  # 畸形行号降级为 0
+        assert by_fn["good"].line == 8  # 正常帧不受影响
+
     def test_static_analyzer_failure_degrades_to_position_only(self):
         """静态分析抛异常 → 降级为仅栈位置评分。"""
         frames = [

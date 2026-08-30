@@ -1,8 +1,8 @@
 """M3 StaticAnalyzer 静态分析单元测试。
 
 覆盖 `analyze()` 堆栈帧分析入口：
-- 空帧 / 单帧 / 多帧调用链
-- 行号匹配 / 无效帧跳过 / 缺失文件降级
+- 空帧 / 单帧 / 多帧（不再伪造调用链，v0.7.1-b2-7）
+- 行号匹配 / 无效帧跳过 / 缺失文件降级 / 超大文件跳过（v0.7.1-b2-8）
 - 函数签名、内部调用、可疑输入推断
 
 说明：无堆栈场景的 `analyze_handler()` 入口测试见 `test_url_resolver.py`。
@@ -73,7 +73,7 @@ def test_analyze_frame_line_hit_returns_fault_location(tmp_path):
     assert loc.function_info.name == "get_user"
 
 
-def test_analyze_multiple_frames_builds_call_chain(tmp_path):
+def test_analyze_multiple_frames_no_fabricated_call_chain(tmp_path):
     path = _write_source(tmp_path, _SOURCE)
     frames = [
         {"file": path, "function": "process", "line": 9},
@@ -81,7 +81,36 @@ def test_analyze_multiple_frames_builds_call_chain(tmp_path):
     ]
     results = analyze(frames)
     assert len(results) == 2
-    assert results[0].call_chain == ["process", "get_user"]
+    # FIX(v0.7.1-b2-7): 旧实现把全部帧函数名列表塞给 results[0].call_chain
+    # （"帧函数名序列"≠静态追溯的调用链），下游 fault_localizer 据此给首帧
+    # 恒加 +10"call chain hub"虚构证据。现不再伪造填充。
+    assert all(loc.call_chain == [] for loc in results)
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b2-8): _read_source 大小上限——MB 级文件读入后 ast.parse 必失败
+# ---------------------------------------------------------------------------
+
+
+def test_read_source_skips_oversized_file(tmp_path, monkeypatch):
+    from app.runtime.collectors import static_analyzer as sa
+
+    path = _write_source(tmp_path, _SOURCE)
+    monkeypatch.setattr(sa, "_MAX_SOURCE_BYTES", 10)  # 源码远超 10 字节
+
+    assert sa._read_source(path) is None  # 超限直接跳过，不读入
+
+    frames = [{"file": path, "function": "get_user", "line": 6}]
+    assert analyze(frames) == []  # 帧被跳过而非报错
+
+
+def test_read_source_reads_within_limit(tmp_path):
+    from app.runtime.collectors.static_analyzer import _read_source
+
+    path = _write_source(tmp_path, _SOURCE)
+    content = _read_source(path)
+    assert content is not None
+    assert "def get_user" in content
 
 
 def test_analyze_frame_skips_invalid_frame(tmp_path):

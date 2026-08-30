@@ -68,8 +68,17 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         if not entries:
             return None
         # 从 entries 提取最早时间戳和摘要
-        first_ts = min(e.get("timestamp", 0) for e in entries)
-        last_ts = max(e.get("timestamp", 0) for e in entries)
+        # FIX(v0.7.1-b2-2): timestamp 类型防御——非数值时间戳（字符串/None 等）
+        # 此前会让 min/max 抛 TypeError，且合成块不在任何 try/except 内，
+        # 单条畸形 entry 即炸掉整个 build_debug_context（下游全链路 500）。
+        def _safe_ts(e: dict) -> float:
+            ts = e.get("timestamp", 0)
+            if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+                return 0.0
+            return float(ts)
+
+        first_ts = min(_safe_ts(e) for e in entries)
+        last_ts = max(_safe_ts(e) for e in entries)
         message = ""
         exc_type = "unknown"
         trace_kind = "debug"
@@ -162,11 +171,22 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         except Exception:
             logger.warning("code_snippets 构建失败 (trace_id=%s)", tid)
 
+    # 网络链 / UI 事件（仅当存在）
+    # FIX(v0.7.1-b2-4): 网络记录读取上移到静态分析之前——_extract_request_target
+    # 的 handler 反查也读同一 trace 的网络记录，此前同一次构建读存储两次；
+    # 现读取一次后透传复用。注意传原始结果（含空列表）而非 or None 折叠值，
+    # 空记录场景用 `is None` 判定才不会退化成二次读存储。
+    try:
+        network_records_raw = trace_repo.get_network_records(tid) or []
+    except Exception:
+        network_records_raw = []
+    network_trace = network_records_raw or None
+
     # 无堆栈静态分析（M3）：静默失败无异常堆栈时，基于网络请求反查 handler
     static_analysis = None
     if not frames:
         try:
-            method, path = _extract_request_target(trace)
+            method, path = _extract_request_target(trace, network_records_raw)
             if method and path:
                 from app.runtime.collectors.static_analyzer import analyze_handler
 
@@ -201,11 +221,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         except Exception:
             pass
 
-    # 网络链 / UI 事件（仅当存在）
-    try:
-        network_trace = trace_repo.get_network_records(tid) or None
-    except Exception:
-        network_trace = None
+    # UI 事件（仅当存在）
     try:
         ui_events = trace_repo.get_ui_events(tid) or None
     except Exception:
@@ -214,7 +230,14 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     # verify 断言结果（spec_diffs，V5 闭环）
     try:
         from app.runtime.core.logs import get_logs
-        spec_diffs = [e["data"] for e in get_logs(tid) if e.get("step") == "verify"] or None
+        # FIX(v0.7.1-b2-1): 逐条取 data 并跳过缺键/None 的 verify 条目——
+        # 此前 e["data"] 直索引，单条畸形 verify 条目抛 KeyError 被 except
+        # 吞掉后 spec_diffs 整体置 None，全部 verify 结果丢失。
+        spec_diffs = [
+            d
+            for e in get_logs(tid)
+            if e.get("step") == "verify" and (d := e.get("data")) is not None
+        ] or None
     except Exception:
         spec_diffs = None
 
@@ -272,6 +295,13 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "flow": trace.get("flow") or ["error"],
         "input": trace.get("input"),
         "output": trace.get("output"),
+        # FIX(v0.7.1-b2-3): 复发信号与调用链线索不再在 context 构建侧丢弃
+        # （与指纹同型：trace_repo 已聚合好，透传给下游消费——DebugContext
+        # extra="allow" 直接放行，旧消费方零影响）。
+        "occurrence_count": trace.get("occurrence_count", 1),
+        "first_seen": trace.get("first_seen"),
+        "last_seen": trace.get("last_seen"),
+        "caller_trace_id": trace.get("caller_trace_id"),
         "errors": [{"type": exc_type, "message": message, "fingerprint": fingerprint}],
         "exception": {
             "type": exc_type,
@@ -298,16 +328,25 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     return DebugContext(**result)
 
 
-def _extract_request_target(trace: dict) -> tuple[str | None, str | None]:
+def _extract_request_target(
+    trace: dict, network_records: list | None = None
+) -> tuple[str | None, str | None]:
     """从静默失败 trace 中提取 (method, path)，供 handler 反查定位。
 
     优先从 network_records 解析（含 method + url），其次从 extra 透传字段兜底。
+    FIX(v0.7.1-b2-4): network_records 由调用方传入已读取的结果（同一 trace
+    只读一次存储）；未传（None）时自行读取兜底，兼容旧调用方。
     无法解析时返回 (None, None)，静默降级。
     """
-    try:
-        from app.runtime.core import trace_repo
+    if network_records is None:
+        try:
+            from app.runtime.core import trace_repo
 
-        records = trace_repo.get_network_records(trace.get("trace_id", "")) or []
+            network_records = trace_repo.get_network_records(trace.get("trace_id", "")) or []
+        except Exception:
+            network_records = []
+    try:
+        records = network_records or []
         for rec in records:
             method = rec.get("method")
             url = rec.get("url") or rec.get("path")

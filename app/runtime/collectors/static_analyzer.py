@@ -3,7 +3,6 @@
 给定堆栈帧列表，对每个帧所在的源文件进行静态分析，提取：
 - 函数签名（参数名、类型注解、返回值类型、装饰器）
 - 文档字符串
-- 内部调用关系（调用链追溯，最多 5 层深度）
 - 复杂度提示（if/for/while/try 嵌套深度、函数行数）
 - 可疑输入推断（None 解引用、未检查的索引、硬编码常量等）
 
@@ -23,12 +22,15 @@ from typing import Any, Optional
 
 logger = logging.getLogger("lujo-mcp.mcp.collectors.static_analyzer")
 
-# 调用链最大追溯深度
-_MAX_CALL_DEPTH = 5
+# FIX(v0.7.1-b2-7): 删除 _MAX_CALL_DEPTH=5 死常量——宣称的"调用链最多 5 层追溯"
+# 从未实现（无任何消费方），与 _trace_call_chains 一并清理（见下）。
 # 函数行数超过此阈值标记为"高复杂度"
 _HIGH_COMPLEXITY_LINES = 50
 # 嵌套深度超过此阈值标记为"高复杂度"
 _HIGH_COMPLEXITY_NESTING = 4
+# FIX(v0.7.1-b2-8): 单文件源码读取上限（字节）。MB 级文件读入后 ast.parse
+# 必失败且白白耗费内存/CPU，超限直接跳过（与 spec.py _MAX_FILE_BYTES 同值）。
+_MAX_SOURCE_BYTES = 1024 * 1024
 
 
 # ── 数据模型 ──
@@ -100,13 +102,11 @@ def analyze(stacktrace_frames: list[dict[str, Any]]) -> list[FaultLocation]:
                 exc_info=True,
             )
 
-    # 补充调用链追溯
-    if results:
-        try:
-            _trace_call_chains(results)
-        except Exception:
-            logger.warning("StaticAnalyzer: 调用链追溯失败", exc_info=True)
-
+    # FIX(v0.7.1-b2-7): 删除 _trace_call_chains 调用——旧实现把"全部帧的函数名
+    # 列表"塞给 results[0].call_chain，并非静态分析追溯出的调用链；下游
+    # fault_localizer 据此给首帧恒加 +10"call chain hub"虚构证据。
+    # call_chain 字段与 fault_localizer._call_chain_score 评分规则保留，
+    # 待真实的静态调用链追溯落地后再填充。
     return results
 
 
@@ -232,8 +232,14 @@ def _resolve_path(file_path: str) -> Optional[str]:
 
 
 def _read_source(file_path: str) -> Optional[str]:
-    """读取源文件内容，失败返回 None。"""
+    """读取源文件内容，失败返回 None。
+
+    FIX(v0.7.1-b2-8): 读取前检查文件大小，超过 _MAX_SOURCE_BYTES 直接跳过
+    （ast.parse 对 MB 级文件必失败，读入纯属浪费）。
+    """
     try:
+        if os.path.getsize(file_path) > _MAX_SOURCE_BYTES:
+            return None
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
     except (OSError, UnicodeDecodeError):
@@ -427,17 +433,9 @@ def _extract_function_info(
 
 # ── 调用链追溯 ──
 
-
-def _trace_call_chains(results: list[FaultLocation]) -> None:
-    """追溯调用链（仅对第一个结果，即异常发生点）。"""
-    if not results:
-        return
-
-    # 从第一个帧的函数开始追溯
-    chain = []
-    for loc in results:
-        chain.append(loc.function)
-    results[0].call_chain = chain
+# FIX(v0.7.1-b2-7): _trace_call_chains 已删除——旧实现仅把全部帧的函数名
+# 列表塞给 results[0].call_chain（非静态追溯的调用链），属虚构证据。
+# 真实的调用链追溯（沿 internal_calls 反查调用方）待后续落地后在此重建。
 
 
 # ── 可疑输入推断 ──

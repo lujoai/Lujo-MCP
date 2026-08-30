@@ -116,9 +116,28 @@ def get_code_snippet(file_path: str, line_no: int, context_lines: int | None = N
 
 
 def get_snippets_for_frames(frames: list[dict], context_lines: int | None = None) -> list[CodeSnippet]:
-    """批量获取调用栈中每一帧的源码片段，自动过滤折叠帧与虚拟文件。"""
+    """批量获取调用栈中每一帧的源码片段，自动过滤折叠帧与虚拟文件。
+
+    FIX(v0.7.1-b2-6): 畸形帧（line 缺失/None/非可转整数）逐帧跳过——
+    此前 f["line"] 直索引 + 后续算术，单帧缺 line 抛 KeyError、line=None
+    抛 TypeError，被 builder 兜底吞掉后整批 code_snippets 全部丢失。
+    单帧读取异常也只丢该帧，不再污染整批。
+    """
     valid_frames = [
         f for f in frames
         if f and not f.get("is_folded") and f.get("file") and not str(f.get("file")).startswith("<")
     ]
-    return [get_code_snippet(f["file"], f["line"], context_lines) for f in valid_frames]
+    snippets: list[CodeSnippet] = []
+    for f in valid_frames:
+        raw_line = f.get("line")
+        if raw_line is None or isinstance(raw_line, bool):
+            continue
+        try:
+            line_no = int(raw_line)
+        except (TypeError, ValueError):
+            continue
+        try:
+            snippets.append(get_code_snippet(f["file"], line_no, context_lines))
+        except Exception:
+            continue
+    return snippets

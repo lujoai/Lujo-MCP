@@ -41,6 +41,22 @@ class TestPathToRegex:
         assert pat.match("/a/1/b/2") is not None
         assert pat.match("/a/1/b/2/c") is None
 
+    def test_literal_regex_metachars_escaped(self):
+        """FIX(v0.7.1-b2-9) 回归：模板字面段的正则元字符必须转义。
+
+        旧实现 /v1.2/ 的 ``.`` 匹配任意字符，/v1x2/ 等不相关路径被误命中。
+        """
+        from app.runtime.collectors.url_resolver import _path_to_regex
+
+        pat = _path_to_regex("/api/v1.2/items")
+        assert pat.match("/api/v1.2/items") is not None  # 正确路径命中
+        assert pat.match("/api/v1x2/items") is None  # 元字符不再泛匹配
+
+        # 带路径参数 + 元字符混合
+        pat2 = _path_to_regex("/v1.0/{item_id}")
+        assert pat2.match("/v1.0/abc") is not None
+        assert pat2.match("/v1x0/abc") is None
+
 
 class TestAnalyzeHandler:
     def test_analyze_handler_locates_function(self):

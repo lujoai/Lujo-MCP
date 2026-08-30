@@ -66,13 +66,18 @@ _spec_cache: dict = {"project_root": None, "specs": [], "mtime": 0, "checked_at"
 
 
 def _find_project_root(file_path: str | Path) -> Path:
-    """从文件路径向上查找项目根（含 .git/pyproject.toml/package.json），不超过用户主目录。"""
+    """从文件路径向上查找项目根（含 .git/pyproject.toml/package.json），不超过用户主目录。
+
+    FIX(v0.7.1-b2-10): home 边界改用路径对象判定——此前 ``str(parent).startswith(str(home))``
+    字符串前缀比较，home=/home/us 时会误命中 /home/user2（越过用户主目录
+    边界继续向上扫描，把别人的目录当项目根）。
+    """
     path = Path(file_path).resolve()
     file_parent = path.parent if (path.is_file() or path.suffix) else path
 
     home = Path.home()
     for parent in [file_parent, *file_parent.parents]:
-        if not str(parent).startswith(str(home)):
+        if parent != home and home not in parent.parents:
             break
         if (parent / ".git").exists() or (parent / "pyproject.toml").exists() or (parent / "package.json").exists():
             return parent
