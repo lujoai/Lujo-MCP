@@ -316,3 +316,55 @@ def test_prewarm_once_with_timeout_normal_path():
     assert stats["scanned"] == 1
     assert stats["prewarmed"] == 1
     assert "timeout" not in stats
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b3-8): L2 Redis 初始化失败按 TTL 重试（不再永久缓存失败态）
+# ---------------------------------------------------------------------------
+
+
+def test_l2_redis_retries_after_failure_ttl(monkeypatch):
+    """首次连 Redis 失败 → TTL 内短路返回 None；超 TTL 自动重试并重建连。
+
+    旧实现失败即置 initialized=True、client=None，此后永久缓存失败态
+    （Redis 恢复也不重连，预热永久空转）。用 sys.modules 预置假 redis
+    模块（函数内 `import redis` 命中模块缓存）模拟
+    "连接失败 → TTL 后成功" 验证重试路径。
+    """
+    import sys
+
+    fake_client = MagicMock()
+    state = {"n": 0}
+
+    class FakeRedisClient:
+        @classmethod
+        def from_url(cls, *a, **kw):  # redis.Redis.from_url
+            state["n"] += 1
+            if state["n"] == 1:
+                raise RuntimeError("connection refused")
+            return fake_client
+
+    class FakeRedisModule:
+        Redis = FakeRedisClient
+
+    monkeypatch.setitem(sys.modules, "redis", FakeRedisModule)
+    monkeypatch.setattr(cache_module, "_REDIS_RETRY_TTL", 1.0)
+    cache_module._redis_cache_client = None
+    cache_module._redis_cache_initialized = False
+    cache_module._redis_cache_last_try = time.time()
+
+    # 第一次调用：连接失败 → None，失败态被记录
+    assert cache_module._get_redis_cache() is None
+    assert cache_module._redis_cache_initialized is True
+    assert cache_module._redis_cache_client is None
+
+    # 未到 TTL：短路直接返回 None，不再重试（Redis 构造只调了一次）
+    assert cache_module._get_redis_cache() is None
+    assert state["n"] == 1
+
+    # 快进到 TTL 之后：重置标志并重试成功
+    monkeypatch.setattr(
+        cache_module.time, "time", lambda: cache_module._redis_cache_last_try + 2
+    )
+    assert cache_module._get_redis_cache() is fake_client
+    assert state["n"] == 2

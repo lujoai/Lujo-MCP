@@ -1,4 +1,4 @@
-﻿"""sourcemap_store 单元测试 —— 上传存储 TTL/LRU、自动选路（上传/磁盘/关闭）、端点行为。"""
+"""sourcemap_store 单元测试 —— 上传存储 TTL/LRU、自动选路（上传/磁盘/关闭）、端点行为。"""
 
 from __future__ import annotations
 
@@ -120,6 +120,27 @@ class TestUpload:
         assert get_uploaded_map("b.js") is None
         assert get_uploaded_map("a.js") is not None
         assert get_uploaded_map("c.js") is not None
+
+    def test_size_limit_counts_utf8_bytes(self, monkeypatch):
+        """FIX(v0.7.1-b3-1) 回归：大小上限按 UTF-8 字节数口径计算。
+
+        语义更正：字段含义为"字节"，len(str) 按字符数计；json.dumps 默认
+        ensure_ascii=True 时两者恰好相等（中文转义为 \\uXXXX），但序列化
+        切到 ensure_ascii=False 后字符数会低估 ~3 倍——统一按字节数计防错。
+        此用例验证字节计算路径生效且上限逻辑不误伤正常 map。
+        """
+        tiny_map = {"version": 3, "sources": [], "names": [], "mappings": "AAAA"}
+
+        # 上限压到极小 → 无论口径都按字节路径拒绝
+        monkeypatch.setattr(settings, "sourcemap_max_upload_bytes", 1)
+        with pytest.raises(ValueError, match="过大"):
+            upload_sourcemap("tiny.js", tiny_map)
+        assert get_uploaded_map("tiny.js") is None
+
+        # 上限充足 → 正常入库（字节口径不误伤）
+        monkeypatch.setattr(settings, "sourcemap_max_upload_bytes", 1024 * 1024)
+        upload_sourcemap("tiny.js", tiny_map)
+        assert get_uploaded_map("tiny.js") is not None
 
 
 class TestGetUploadedParser:

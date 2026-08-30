@@ -10,6 +10,9 @@ import logging
 logger = logging.getLogger("lujo-mcp.collectors.network")
 
 _MAX_BODY_CHARS = 10 * 1024  # 10KB，与浏览器 SDK 截断阈值一致
+# FIX(v0.7.1-b3-7): url 截断上限（2048 字符）——超长 url 此前原样入库/
+# 进 context/发 LLM，纯浪费；与浏览器 SDK 的 fetch hook 截断语义对齐。
+_MAX_URL_CHARS = 2048
 
 
 def _truncate_body(text):
@@ -21,6 +24,15 @@ def _truncate_body(text):
     return text
 
 
+def _truncate_url(url):
+    """超长 url 截断，None/非字符串原样返回。"""
+    if not isinstance(url, str):
+        return url
+    if len(url) > _MAX_URL_CHARS:
+        return url[:_MAX_URL_CHARS] + "...（已截断）"
+    return url
+
+
 def parse_network_record(raw: dict) -> dict:
     """把原始 dict 规范化为 network 记录。非法输入抛 ValueError。"""
     if not isinstance(raw, dict):
@@ -28,13 +40,19 @@ def parse_network_record(raw: dict) -> dict:
 
     status_code = raw.get("status_code")
     duration_ms = raw.get("duration_ms")
+    # FIX(v0.7.1-b3-7): timestamp 类型归一——非数值（字符串/None/bool）此前
+    # 原样透传，下游排序/区间筛选/JSON 契约全部置信它；现仅 int/float 生效，
+    # 其余回退当前时间（与旧 `or time.time()` 对 falsy 的兜底语义一致，但
+    # 不再让字符串时间戳混入数值字段）。
+    raw_ts = raw.get("timestamp")
+    ts = raw_ts if isinstance(raw_ts, (int, float)) and not isinstance(raw_ts, bool) else time.time()
 
     return {
         "record_id": raw.get("record_id"),
-        "timestamp": raw.get("timestamp") or time.time(),
+        "timestamp": ts,
         "direction": raw.get("direction") or "outbound",
         "method": (raw.get("method") or "GET").upper(),
-        "url": raw.get("url"),
+        "url": _truncate_url(raw.get("url")),
         "status_code": int(status_code) if status_code is not None else None,
         "request_body": _truncate_body(raw.get("request_body")),
         "response_body": _truncate_body(raw.get("response_body")),

@@ -28,6 +28,14 @@ def _get_error_signal(context: dict) -> tuple[str, str, "str | None"]:
 
     for error in context.get("errors", []) or []:
         if isinstance(error, dict):
+            # FIX(v0.7.1-b3-4): 空 dict 条目（无 type/message/fingerprint 任一）
+            # 跳过继续找——此前遇到第一个 dict 即返回，空条目让错误信号
+            # 退化为 ("", "", None)，KB 命中/指纹计算全链路失效。
+            if not any(
+                error.get(k)
+                for k in ("type", "exception_type", "message", "msg", "fingerprint")
+            ):
+                continue
             return (
                 str(error.get("type") or error.get("exception_type") or ""),
                 str(error.get("message") or error.get("msg") or ""),

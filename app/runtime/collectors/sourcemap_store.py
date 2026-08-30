@@ -75,7 +75,9 @@ def upload_sourcemap(artifact: str, map_obj: object, ttl_seconds: int | None = N
     _validate_map(map_obj)
     # FIX: P2-D6 —— 单份 map 序列化大小上限（sourcesContent 可内嵌整份源码，
     # 几十 MB 的 map 会让进程直接 OOM）。超限拒绝并记录告警，避免被超大 payload 填充。
-    encoded_size = len(json.dumps(map_obj))
+    # FIX(v0.7.1-b3-1): 按 UTF-8 字节数计（此前 len(str) 按字符数，中文等
+    # 多字节内容会低估 ~3 倍实际字节数，超限 map 被放行入库）。
+    encoded_size = len(json.dumps(map_obj).encode("utf-8"))
     if encoded_size > settings.sourcemap_max_upload_bytes:
         logger.warning(
             "source map 超过单份大小上限 %d 字节（实际 %d），拒绝上传 artifact=%s",

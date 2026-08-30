@@ -381,7 +381,9 @@ class Settings(BaseSettings):
     agent_verify_loop_enabled: bool = False
     # Verify Loop 最大迭代轮数
     agent_verify_loop_max_iterations: int = 3
-    # 单轮 DAG 执行超时（秒，R4）：0 表示不设单轮超时（向后兼容）。
+    # 单轮 DAG 执行超时（秒，R4）：0 表示按单轮内部预算继承——
+    # agent_timeout + 并行预算（R7-Q4，与 verify_loop.py 实现一致，
+    # 不再"不设超时"：无单轮超时最差 ≈ 轮数 × (repair 90s + 并行 90s) 卡死）。
     # 设值后每轮迭代用 asyncio.wait_for 包裹，避免单轮卡死消耗 agent_timeout × N。
     agent_verify_loop_round_timeout: float = 0
     # 判定通过阈值：综合验证分 >= 该值 → passed

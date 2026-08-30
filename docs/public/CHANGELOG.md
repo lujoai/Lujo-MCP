@@ -7,7 +7,20 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次3：runtime/llm/协议 10 项）
+
+- **sourcemap 大小上限按 UTF-8 字节数计**：`len(str)` 按字符数；`json.dumps` 默认 ensure_ascii=True 时二者恰好相等，但 serialize 切 ensure_ascii=False 后字符数低估 ~3 倍——统一按字节数口径（语义加固，零行为回归）。
+- **runtime 采集器 proc.* 裸调用降级**：zombie 窗口（进程退出未回收）或权限受限时 `name()/cmdline()/num_threads()/create_time()/status()` 抛 ZombieProcess/AccessDenied 使整段 process 节丢失；现逐字段 `_safe_get` 降级。
+- **runtime cmdline 敏感参数脱敏**：cmdline 可能含 `--password=xxx` 等，采集后入库前统一经 `redact_nested` 脱敏（键保留、值掩码）。
+- **spec 规范缓存加锁**：`_spec_cache` 单槽无锁——并发调用方互相覆盖（跨项目互踢）+ 刷新检查全项目 os.walk 惊群；现「读-判-刷-写」锁内原子化。
+- **`_get_error_signal` 空 dict 条目跳过**：errors 首条为空 dict（无 type/message/fingerprint）即返回退化信号（`""`,`""`,None），KB 命中/指纹计算全链路失效；现跳过空条目取后续有内容者。
+- **embedding 客户端失败态缓存**：缺 API Key/缺包/初始化失败后每次分析重试并刷 2-3 条 warning；现失败态缓存（`_embedding_unavailable`），语义同注释「配置后重启生效」（设计取舍：与 redis 不同不做 TTL 热恢复，避免过度设计）。
+- **jsonrpc 版本字段校验**：`jsonrpc` 声明非 `"2.0"`（含 `"1.0"`/`2`）原样透传按 2.0 语义处理不兼容协议；现 -32600 拒绝，缺省默认 `"2.0"` 不变。
+- **network 采集 url 截断 + timestamp 归一**：超长 url 原样入库/进 context/发 LLM（纯浪费）；`timestamp` 字符串/None/bool 原样透传污染数值契约；现 url 截断 2048、非数值时间戳回退当前时间。
+- **L2 Redis 初始化失败 TTL 重试**：首连失败即置 initialized=True 永久缓存失败态（Redis 恢复也不重连，预热永久空转）；现按 60s TTL 自动重试。
+- **verify_loop round_timeout=0 文档口径修正**：config 注释从「0=不设单轮超时（向后兼容）」同步为「0=按单轮内部预算继承（agent_timeout+并行预算）」（R7-Q4 实现已落地，注释滞后）。
 
 ### 🔒 修复（Minor 批次2：runtime collectors/context 10 项）
 
@@ -38,8 +51,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项（unit：builder 3 + static_analyzer 2 + fault_localizer 1 + code_locator 2 + url_resolver 1 + spec 2）+ 更新 2 个固化旧行为的契约测试（call_chain 断言反转、DebugContext 字段集 21→25）。
-- **验证**：`ruff check .` 全绿；unit **1431 tests / 0 failed / 6 skipped**（批次1 后 1420 + 批次2 +11）；integration **113 tests / 0 failed**（与 v0.7.0 首绿基线持平）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（47 + 批次1 +2；批次2 未触及 SDK）。两批次均经子代理独立复审（批次1 10/10 PASS、批次2 10/10 PASS，复审建议均已采纳）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项（builder 3 + static_analyzer 2 + fault_localizer 1 + code_locator 2 + url_resolver 1 + spec 2）+ 更新 2 个固化旧行为的契约测试；批次3 新增回归 16 项（runtime 4 + network 2 + sourcemap 1 + spec 1 + cache 1 + jsonrpc 2 + analyzer 3 + qdrant 2，新建 `test_runtime_collector.py`）。
+- **验证**：`ruff check .` 全绿；unit **1447 tests / 0 failed / 6 skipped**（批次2 后 1431 + 批次3 +16）；integration **113 tests / 0 failed**（与 v0.7.0 首绿基线持平）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（批次2/3 未触及 SDK）。三批次均经子代理独立复审（批次1 10/10、批次2 10/10、批次3 10/10 PASS，复审建议均已采纳或在注释明示）。
 
 ## [0.7.0] - 2026-08-29
 

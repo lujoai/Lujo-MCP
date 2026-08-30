@@ -7,6 +7,7 @@
 import os
 import time
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -63,6 +64,10 @@ _SPEC_REFRESH_INTERVAL = 30
 
 # 进程内缓存（按 project_root）
 _spec_cache: dict = {"project_root": None, "specs": [], "mtime": 0, "checked_at": 0}
+# FIX(v0.7.1-b3-3): 缓存访问统一加锁——此前单槽无锁：并发调用方互相
+# 覆盖缓存（跨项目互踢：A 项目加载中 B 项目写回令 A 的加载结果作废），
+# 且刷新检查的全项目 os.walk 并发惊群。锁内做「读-判-刷-写」原子操作。
+_spec_lock = threading.Lock()
 
 
 def _find_project_root(file_path: str | Path) -> Path:
@@ -210,19 +215,20 @@ def _cache_needs_refresh(project_root: Path) -> bool:
 
 
 def get_project_specs(project_root: Optional[str | Path] = None) -> list[dict]:
-    """获取项目规范列表，带缓存。"""
+    """获取项目规范列表，带缓存（读-判-刷-写 锁内原子化，防并发惊群/互踢）。"""
     global _spec_cache
     root = Path(project_root) if project_root else Path.cwd()
     if not root.exists():
         return []
-    if _cache_needs_refresh(root):
-        _spec_cache = {
-            "project_root": str(root),
-            "specs": _load_specs(root),
-            "mtime": time.time(),
-            "checked_at": time.time(),
-        }
-    return _spec_cache["specs"]
+    with _spec_lock:
+        if _cache_needs_refresh(root):
+            _spec_cache = {
+                "project_root": str(root),
+                "specs": _load_specs(root),
+                "mtime": time.time(),
+                "checked_at": time.time(),
+            }
+        return _spec_cache["specs"]
 
 
 def reload_specs(project_root: Optional[str | Path] = None) -> list[dict]:

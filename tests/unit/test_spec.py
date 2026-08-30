@@ -143,3 +143,32 @@ def test_find_project_root_within_home(tmp_path, monkeypatch):
 
     root = spec_collector._find_project_root(str(project / "src" / "a.py"))
     assert root == project
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b3-3): _spec_cache 加锁——并发调用不崩、不互踢
+# ---------------------------------------------------------------------------
+
+
+def test_get_project_specs_concurrent_calls_no_crash(tmp_path):
+    """并发调用：加锁后不崩、结果一致（轻量回归防惊群/互踢）。"""
+    import threading
+
+    _write(tmp_path / "API_SPEC.md", "# API 规范\n\n## 响应\n返回 code,msg,data\n")
+    results = []
+    errors = []
+
+    def _call():
+        try:
+            results.append(len(spec_collector.get_project_specs(tmp_path)))
+        except Exception as e:  # pragma: no cover - 失败时记录
+            errors.append(e)
+
+    threads = [threading.Thread(target=_call) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert results == [1] * 8  # 同一项目在同一次刷新窗口内返回一致结果

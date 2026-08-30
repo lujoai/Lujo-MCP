@@ -85,6 +85,21 @@ class TestJSONRPC:
         with pytest.raises(InvalidRequestError, match="method"):
             parse_request('{"jsonrpc":"2.0","id":1}')
 
+    def test_parse_non_2_0_version_rejected(self):
+        """FIX(v0.7.1-b3-6) 回归：jsonrpc 声明非 "2.0" → -32600（此前原样透传）。
+
+        覆盖字符串 "1.0" 与非字符串数字 2（两类都不得透传）。
+        """
+        with pytest.raises(InvalidRequestError, match="jsonrpc"):
+            parse_request('{"jsonrpc":"1.0","id":1,"method":"ping","params":{}}')
+        with pytest.raises(InvalidRequestError, match="jsonrpc"):
+            parse_request('{"jsonrpc":2,"id":1,"method":"ping","params":{}}')
+
+    def test_parse_missing_version_defaults_to_2_0(self):
+        """缺 jsonrpc 字段（纯 JSON 客户端）→ 宽容默认 "2.0"（保持旧行为）。"""
+        req = parse_request('{"id":1,"method":"ping","params":{}}')
+        assert req.jsonrpc == "2.0"
+
 
 class TestMCPServerDispatch:
 

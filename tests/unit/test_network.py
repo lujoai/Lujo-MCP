@@ -34,6 +34,35 @@ def test_parse_truncates_long_body():
     assert "已截断" in rec["response_body"]
 
 
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b3-7): url 截断 + timestamp 类型归一
+# ---------------------------------------------------------------------------
+
+
+def test_parse_truncates_long_url():
+    long_url = "http://example.com/" + "a" * (net_collector._MAX_URL_CHARS + 500)
+    rec = net_collector.parse_network_record({"url": long_url})
+    assert len(rec["url"]) == net_collector._MAX_URL_CHARS + len("...（已截断）")
+    assert "已截断" in rec["url"]
+
+
+def test_parse_timestamp_normalized_to_numeric():
+    """字符串/None/bool 时间戳此前原样透传，现归一为数值（回退当前时间）。"""
+    import time as _time
+
+    rec = net_collector.parse_network_record({"timestamp": 123456.0})
+    assert rec["timestamp"] == 123456.0  # 合法数值原样保留
+    assert isinstance(rec["timestamp"], float)
+
+    for bad in ("now", None, True):
+        parsed = net_collector.parse_network_record({"timestamp": bad})
+        assert isinstance(parsed["timestamp"], float), (
+            f"非数值时间戳 {bad!r} 必须归一为数值，实际 {type(parsed['timestamp'])}"
+        )
+        # 回退当前时间（与调用时刻近似）
+        assert 0 < parsed["timestamp"] <= _time.time() + 5
+
+
 def test_parse_rejects_non_dict():
     with pytest.raises(ValueError):
         net_collector.parse_network_record("not a dict")  # type: ignore

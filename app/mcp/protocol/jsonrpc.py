@@ -91,6 +91,13 @@ def parse_request(raw: str | bytes) -> JSONRPCRequest:
     if not isinstance(data["method"], str):
         raise InvalidRequestError("method 必须为字符串")
 
+    # FIX(v0.7.1-b3-6): jsonrpc 字段值必须为 "2.0"（协议版本号）——
+    # 此前非 "2.0"/非字符串值原样透传（model_construct 跳过校验），
+    # 下游按 2.0 语义处理不兼容协议声明。仅版本字段值不一致按 -32600
+    # 拒绝；缺省时与旧行为一致默认 "2.0"（宽容无版本号的纯 JSON 客户端）。
+    if data.get("jsonrpc", "2.0") != "2.0":
+        raise InvalidRequestError("jsonrpc 必须为 '2.0'")
+
     # FIX: v0.6.6 错误 id —— id 必须为 String/Number/NULL；dict/list/bool 会被
     # model_construct 原样透传并回显到响应，NaN/Infinity 更会产出非法 JSON
     # （{"id": NaN}）。此处前置校验，坏 id 按 -32600 返回且响应 id 为 null。

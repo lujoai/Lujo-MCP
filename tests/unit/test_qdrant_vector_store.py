@@ -385,3 +385,56 @@ class TestDelete:
         mock_qdrant.delete.side_effect = RuntimeError("qdrant down")
         monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: mock_qdrant)
         QdrantVectorStore().delete(["fp-a"])  # 静默降级，不抛异常
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b3-5): embedding 客户端失败态缓存——不重复刷 warning
+# ---------------------------------------------------------------------------
+
+
+def test_embedding_client_failure_cached_once(monkeypatch, caplog):
+    """缺 API Key 首次记录 warning 后置失败态，后续调用直接 None 不再重试刷屏。
+
+    autouse fixture 已重置 _embedding_unavailable；此用例验证失败态短路。
+    """
+    import logging
+
+    monkeypatch.setattr(qdrant_module.settings, "openai_api_key", "")
+
+    with caplog.at_level(logging.WARNING, logger="lujo-mcp.rag"):
+        assert qdrant_module._get_embedding_client() is None
+        first_warn = len([
+            r for r in caplog.records if "OPENAI_API_KEY" in r.getMessage()
+        ])
+        assert first_warn >= 1  # 首次必须告警
+        assert qdrant_module._embedding_unavailable is True
+
+        # 第二次调用：失败态短路，不新增告警
+        assert qdrant_module._get_embedding_client() is None
+        second_warn = len([
+            r for r in caplog.records if "OPENAI_API_KEY" in r.getMessage()
+        ])
+        assert second_warn == first_warn, "失败态缓存后不得重复告警"
+
+
+def test_embedding_client_success_not_cached_as_failed(monkeypatch):
+    """成功初始化后 _embedding_unavailable 保持 False、client 被缓存。
+
+    注意：_get_embedding_client 内 `from openai import OpenAI` 命中模块缓存，
+    用 sys.modules 预置假 openai 模块（与 b3-8 redis 测试同手法）。
+    """
+    import sys
+    from unittest.mock import MagicMock
+
+    fake_client = MagicMock()
+    monkeypatch.setattr(qdrant_module.settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(qdrant_module, "_resolve_embedding_base_url", lambda: "")
+
+    class FakeOpenAIModule:
+        OpenAI = lambda **kw: fake_client  # noqa: E731
+
+    monkeypatch.setitem(sys.modules, "openai", FakeOpenAIModule)
+
+    assert qdrant_module._get_embedding_client() is fake_client
+    assert qdrant_module._embedding_unavailable is False
+    assert qdrant_module._get_embedding_client() is fake_client  # 命中缓存不重建

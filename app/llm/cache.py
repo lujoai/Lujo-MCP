@@ -25,6 +25,11 @@ logger = logging.getLogger("lujo-mcp.llm")
 _redis_cache_client: Optional[object] = None
 _redis_cache_initialized: bool = False
 _redis_cache_lock = threading.Lock()
+# FIX(v0.7.1-b3-8): 初始化失败后 TTL 重试——原实现失败即置 initialized=True
+# 且 client=None，此后永久缓存失败态（Redis 恢复也不重连，预热永久空转）。
+# 失败时记录尝试时间，超 _REDIS_RETRY_TTL 后自动重置重试。
+_redis_cache_last_try: float = 0.0
+_REDIS_RETRY_TTL: float = 60.0
 
 # ── LLM 分析结果缓存（P1-2）──
 # 按 fingerprint 缓存 LLM 分析结果，避免相同上下文重复调用
@@ -194,10 +199,22 @@ def _get_redis_cache():
 
     Redis 不可用时静默降级为仅 L1 内存缓存，不影响功能。
     采用双重检查 + threading.Lock 保证线程安全。
+    FIX(v0.7.1-b3-8): 初始化失败按 TTL 重试（60s）——Redis 恢复后自动重连，
+    预热不再永久空转；重试间隔内短路不刷 warning。
     """
-    global _redis_cache_client, _redis_cache_initialized
+    global _redis_cache_client, _redis_cache_initialized, _redis_cache_last_try
     if _redis_cache_initialized:
-        return _redis_cache_client
+        client = _redis_cache_client
+        if client is not None:
+            return client
+        # 失败态：未到重试间隔则直接返回 None；超间隔重置标志触发重试
+        if time.time() - _redis_cache_last_try < _REDIS_RETRY_TTL:
+            return None
+        with _redis_cache_lock:
+            if _redis_cache_initialized and (_redis_cache_client is None) and (
+                time.time() - _redis_cache_last_try >= _REDIS_RETRY_TTL
+            ):
+                _redis_cache_initialized = False
     with _redis_cache_lock:
         if not _redis_cache_initialized:
             try:
@@ -213,6 +230,7 @@ def _get_redis_cache():
             except Exception:
                 logger.warning("Redis L2 缓存不可用，降级为仅 L1 内存缓存")
                 _redis_cache_client = None
+                _redis_cache_last_try = time.time()
             finally:
                 _redis_cache_initialized = True
     return _redis_cache_client

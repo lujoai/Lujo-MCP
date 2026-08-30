@@ -90,6 +90,10 @@ _qdrant_lock = threading.Lock()
 
 _embedding_client: Optional[Any] = None  # OpenAI | None
 _embedding_client_lock = threading.Lock()
+# FIX(v0.7.1-b3-5): 失败态缓存标志——缺 API Key / 缺 openai 包 / 初始化失败
+# 后置 True，后续调用直接返回 None 不再刷 2-3 条 warning（原实现失败不缓存，
+# 每次分析都重试并刷屏；语义不变：改配置后重启才重新尝试）。
+_embedding_unavailable: bool = False
 
 
 def _resolve_embedding_base_url() -> str:
@@ -189,17 +193,25 @@ def _get_embedding_client() -> Optional[Any]:
     独立于 ``analyzer._get_client``：
     - 解耦：未来 LLM 与 embedding 可拆不同 provider
     - 错误语义不同：analyzer 缺 API Key 直接 raise，本模块须静默降级
+    - FIX(v0.7.1-b3-5): 失败态缓存（_embedding_unavailable）——缺 Key/缺包/
+      初始化失败后不再每次调用重试刷 warning；语义同注释「配置后重启生效」，
+      改配置后重启才重新尝试。
     """
-    global _embedding_client
+    global _embedding_client, _embedding_unavailable
+    if _embedding_unavailable:
+        return None
     if _embedding_client is not None:
         return _embedding_client
     with _embedding_client_lock:
+        if _embedding_unavailable:
+            return None
         if _embedding_client is not None:
             return _embedding_client
         try:
             from openai import OpenAI
         except ImportError:
             logger.warning("openai 未安装，embedding 不可用")
+            _embedding_unavailable = True
             return None
 
         api_key = settings.openai_api_key
@@ -208,6 +220,7 @@ def _get_embedding_client() -> Optional[Any]:
                 "OPENAI_API_KEY 未配置，Qdrant embedding 降级为 no-op；"
                 "配置后重启生效"
             )
+            _embedding_unavailable = True
             return None
 
         base_url = _resolve_embedding_base_url()
@@ -222,6 +235,7 @@ def _get_embedding_client() -> Optional[Any]:
             _embedding_client = OpenAI(**kwargs)
         except Exception:
             logger.warning("OpenAI embedding 客户端初始化失败", exc_info=True)
+            _embedding_unavailable = True
             return None
     return _embedding_client
 
@@ -389,9 +403,10 @@ class QdrantVectorStore(VectorStore):
 
 def _reset_qdrant_state() -> None:
     """测试辅助：重置模块级单例（仅供单测使用，生产代码不应调用）。"""
-    global _qdrant_client, _qdrant_collection_ready, _embedding_client
+    global _qdrant_client, _qdrant_collection_ready, _embedding_client, _embedding_unavailable
     with _qdrant_lock:
         _qdrant_client = None
         _qdrant_collection_ready = False
     with _embedding_client_lock:
         _embedding_client = None
+        _embedding_unavailable = False

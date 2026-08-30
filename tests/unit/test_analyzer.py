@@ -983,3 +983,45 @@ class TestVectorRagFallback:
         assert result["analysis"]["root_cause"] == "实时根因"
         mock_get_client.assert_called_once()
         mock_retrieve_similar_with_scores.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b3-4): _get_error_signal 空 dict 条目跳过
+# ---------------------------------------------------------------------------
+
+
+def test_get_error_signal_skips_empty_error_dicts():
+    """errors 首条是空 dict 时必须跳过，取后续有内容的条目。
+
+    旧实现遇到第一个 dict 即返回，空条目让错误信号退化为 (\"\", \"\", None)，
+    KB 命中/指纹计算全链路失效。
+    """
+    from app.llm.context_prep import _get_error_signal
+
+    ctx = {
+        "errors": [
+            {},  # 空 dict：旧实现返回 ("", "", None)
+            {"type": "ValueError", "message": "boom", "fingerprint": "fp-1"},
+        ]
+    }
+    exc_type, message, fp = _get_error_signal(ctx)
+    assert exc_type == "ValueError"
+    assert message == "boom"
+    assert fp == "fp-1"
+
+
+def test_get_error_signal_all_empty_returns_empty():
+    """全部条目为空 → 保持 (\"\", \"\", None)（与旧行为一致）。"""
+    from app.llm.context_prep import _get_error_signal
+
+    ctx = {"errors": [{}, {"message": ""}]}
+    assert _get_error_signal(ctx) == ("", "", None)
+
+
+def test_get_error_signal_fingerprint_only_entry_counts():
+    """仅 fingerprint 的条目（无 type/message）仍视为有效（指纹是主键）。"""
+    from app.llm.context_prep import _get_error_signal
+
+    ctx = {"errors": [{}, {"fingerprint": "fp-only"}]}
+    exc_type, message, fp = _get_error_signal(ctx)
+    assert fp == "fp-only"
