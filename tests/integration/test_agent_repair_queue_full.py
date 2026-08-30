@@ -86,3 +86,59 @@ class TestRepairQueueFullBackpressure:
         body = r2.json()
         assert body["error"] == "queue_full"
         assert "queue_size" in body
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b4-4): MCP repair_async_handler 精确捕获 QueueFullError——
+# 仅真满报 queue_full，其他异常报 internal error（不再一律误标 queue_full）
+# ---------------------------------------------------------------------------
+
+
+class TestRepairAsyncMCPErrorClassification:
+    """b4-4: MCP repair_async_handler 精确捕获 QueueFullError vs 其余异常。
+
+    前置（get_logs / build_context / collect_runtime_snapshot）全部 mock，
+    仅验证「入队异常 → 错误分类」这一目标，不与真实存储/运行时耦合。
+    """
+
+    @staticmethod
+    def _stub_preconditions(monkeypatch):
+        from app.mcp.tools import repair_api
+
+        # is_agent_active 是 Settings 只读 property，改底层可写 agent_enabled
+        #（与同文件 test_api_returns_429_on_queue_full 先例一致）
+        monkeypatch.setattr(repair_api.settings, "agent_enabled", True)
+        monkeypatch.setattr(
+            repair_api, "get_logs", lambda rid: [{"step": "error", "data": {"type": "E"}}]
+        )
+        monkeypatch.setattr(repair_api, "build_context", lambda rid, logs: {"errors": []})
+        monkeypatch.setattr(repair_api, "collect_runtime_snapshot", dict)
+
+    @pytest.mark.asyncio
+    async def test_queue_full_reports_queue_full(self, monkeypatch):
+        from app.mcp.tools import repair_api
+        from unittest.mock import AsyncMock, MagicMock
+
+        self._stub_preconditions(monkeypatch)
+        # MagicMock（queue_size 是同步方法）+ 仅 enqueue 用 AsyncMock 模拟 await
+        fake_q = MagicMock()
+        fake_q.enqueue = AsyncMock(side_effect=QueueFullError("job"))
+        fake_q.queue_size.return_value = 3
+        monkeypatch.setattr(repair_api, "get_repair_queue", lambda: fake_q)
+
+        result = await repair_api.repair_async_handler({"request_id": "r1"})
+        assert result["error"] == "queue_full"
+        assert result["queue_size"] == 3
+
+    @pytest.mark.asyncio
+    async def test_other_error_reports_internal_error(self, monkeypatch):
+        from app.mcp.tools import repair_api
+        from unittest.mock import AsyncMock, MagicMock
+
+        self._stub_preconditions(monkeypatch)
+        fake_q = MagicMock()
+        fake_q.enqueue = AsyncMock(side_effect=RuntimeError("boom"))
+        monkeypatch.setattr(repair_api, "get_repair_queue", lambda: fake_q)
+
+        result = await repair_api.repair_async_handler({"request_id": "r2"})
+        assert result["error"] == "internal error"

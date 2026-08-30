@@ -73,7 +73,12 @@ def parse_request(raw: str | bytes) -> JSONRPCRequest:
     JSON-RPC 2.0 规范允许 id 为 String、Number 或 NULL。
     """
     if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
+        # FIX(v0.7.1-b4-2): 非法 UTF-8 字节此前抛 UnicodeDecodeError（非
+        # -32700 语义）；HTTP 等调用方依赖 JSONParseError 归一到 PARSE_ERROR。
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise JSONParseError(f"Invalid UTF-8: {e}") from e
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

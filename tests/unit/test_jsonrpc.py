@@ -203,14 +203,26 @@ class TestDispatchRawErrorCodes:
         assert "error" in resp
         assert resp["error"]["code"] == METHOD_NOT_FOUND
 
-    def test_parse_request_invalid_utf8_bytes_raises_unicode_decode_error(self):
-        """FIX: P1-9h 畸形字节（非法 UTF-8，等价孤立代理项）抛 UnicodeDecodeError。
+    def test_parse_request_invalid_utf8_bytes_raises_json_parse_error(self):
+        """FIX(v0.7.1-b4-2): 非法 UTF-8 字节归一到 JSONParseError（-32700 语义）。
 
-        stdio 传输层 except 已捕获该异常并返回 PARSE_ERROR，测试保证解析层
-        以可识别异常暴露，而非让畸形输入逃逸杀进程。
+        此前抛 UnicodeDecodeError（非 -32700 语义）；现解析层即归一，HTTP
+        等调用方统一按 PARSE_ERROR 处理。stdio 传输层对 UnicodeDecodeError
+        的旧兜底保留（保守防御）。
         """
-        with pytest.raises(UnicodeDecodeError):
+        with pytest.raises(JSONParseError):
             parse_request(b"\xff\xfe\x80 invalid utf-8")
+
+    def test_dispatch_initialize_non_dict_params_returns_32600(self):
+        """FIX(v0.7.1-b4-1): initialize params 为数组时给 -32600（此前 AttributeError→500）。"""
+        from app.mcp.protocol.server import dispatch
+
+        req = JSONRPCRequest.model_construct(
+            jsonrpc="2.0", id=1, method="initialize", params=[]  # type: ignore
+        )
+        resp = asyncio.run(dispatch(req))
+        assert "error" in resp
+        assert resp["error"]["code"] == INVALID_REQUEST
 
     def test_dispatch_tools_call_non_dict_params_returns_32602(self):
         """FIX: P1-9i params 非 dict（list/str/null）→ -32602 Invalid Params。

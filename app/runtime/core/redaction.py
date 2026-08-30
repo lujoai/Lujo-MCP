@@ -95,17 +95,35 @@ def redact(text: Optional[str]) -> Optional[str]:
 
     - None / 非字符串 / 空串：原样返回。
     - settings.redaction_enabled=False：原样返回。
+    FIX(v0.7.1-b4-6): 脱敏关闭时仅首次告警——此前每次调用都 warning，
+    高频上下文构建路径下日志刷屏。
     """
     if not isinstance(text, str) or not text:
         return text
     if not settings.redaction_enabled:
-        logger.warning("redaction is disabled — sensitive data will NOT be masked")
+        _warn_redaction_disabled_once()
         return text
     for pattern, repl in _DEFAULT_RULES:
         text = pattern.sub(repl, text)
     for pattern, repl in _load_extra_rules():
         text = pattern.sub(repl, text)
     return text
+
+
+# FIX(v0.7.1-b4-6): 脱敏关闭告警节流——模块级标志 + 锁只告警一次。
+_redaction_disabled_warned = False
+_redaction_disabled_lock = threading.Lock()
+
+
+def _warn_redaction_disabled_once() -> None:
+    global _redaction_disabled_warned
+    if _redaction_disabled_warned:
+        return
+    with _redaction_disabled_lock:
+        if _redaction_disabled_warned:
+            return
+        logger.warning("redaction is disabled — sensitive data will NOT be masked")
+        _redaction_disabled_warned = True
 
 
 # ── 结构化数据脱敏（dict/list 递归 + 键名白名单）────────────────────────────

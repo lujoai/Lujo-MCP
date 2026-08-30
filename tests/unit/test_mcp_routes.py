@@ -59,6 +59,23 @@ def test_delete_without_session_header_returns_400():
     assert "Mcp-Session-Id" in resp.json()["detail"]
 
 
+def test_post_oversized_body_returns_413(monkeypatch):
+    """FIX(v0.7.1-b4-5)：超限请求体被拒（413），不再无界读入内存。"""
+    from app.api import mcp_routes
+
+    monkeypatch.setattr(mcp_routes, "_MCP_MAX_BODY_BYTES", 100)
+    client = _client()
+
+    # 构造超 Content-Length 的请求（原始 body 超过 100 字节）
+    resp = client.request(
+        "POST",
+        "/mcp",
+        headers={"Content-Type": "application/json"},
+        content=b'{"jsonrpc":"2.0","id":1,"method":"' + b"x" * 200 + b'"}',
+    )
+    assert resp.status_code == 413
+
+
 @pytest.mark.asyncio
 async def test_initialized_notification_publishes_ready_event():
     client = _client()

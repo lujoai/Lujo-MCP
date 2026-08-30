@@ -113,6 +113,42 @@ def test_read_source_reads_within_limit(tmp_path):
     assert "def get_user" in content
 
 
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b4-8): 同文件多帧复用 ast 解析（不再每帧重复 parse）
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_same_file_multi_frame_parses_once(tmp_path, monkeypatch):
+    """调用栈多帧同属一文件时，ast.parse 只执行一次。
+
+    旧实现每帧 _read_source + ast.parse 一次；新实现按 resolved 路径缓存
+    (source, tree)。用 monkeypatch 计数 ast.parse 调用验证。
+    """
+    import ast as ast_module
+
+    from app.runtime.collectors import static_analyzer as sa
+
+    path = _write_source(tmp_path, _SOURCE)
+    count = {"n": 0}
+    real_parse = ast_module.parse
+
+    def _counting_parse(source, *a, **k):
+        count["n"] += 1
+        return real_parse(source, *a, **k)
+
+    monkeypatch.setattr(sa.ast, "parse", _counting_parse)
+
+    frames = [
+        {"file": path, "function": "process", "line": 9},
+        {"file": path, "function": "get_user", "line": 6},
+        {"file": path, "function": "helper", "line": 3},  # 同文件第三帧
+    ]
+    results = sa.analyze(frames)
+
+    assert len(results) == 3  # 三帧都分析成功
+    assert count["n"] == 1, f"同文件 3 帧应只 parse 1 次，实际 {count['n']}"
+
+
 def test_analyze_frame_skips_invalid_frame(tmp_path):
     path = _write_source(tmp_path, _SOURCE)
     frames = [

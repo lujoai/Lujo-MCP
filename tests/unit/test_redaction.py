@@ -43,6 +43,31 @@ def test_disabled_returns_original():
     assert redact(raw) == raw
 
 
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b4-6): 脱敏关闭时仅首次告警（此前每次调用刷屏）
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_warns_only_once(caplog):
+    import logging
+
+    from app.runtime.core import redaction as redaction_module
+
+    redaction_module._redaction_disabled_warned = False  # 重置节流标志
+    saved = settings.redaction_enabled
+    settings.redaction_enabled = False
+    try:
+        with caplog.at_level(logging.WARNING, logger="lujo-mcp.redaction"):
+            redact('password = "a"')
+            redact('token = "b"')
+            redact('secret = "c"')
+        warns = [r for r in caplog.records if "redaction is disabled" in r.getMessage()]
+        assert len(warns) == 1, f"脱敏关闭应只告警 1 次，实际 {len(warns)}"
+    finally:
+        settings.redaction_enabled = saved
+        redaction_module._redaction_disabled_warned = False
+
+
 def test_none_and_non_string_passthrough():
     assert redact(None) is None
     assert redact("") == ""

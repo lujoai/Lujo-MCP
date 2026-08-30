@@ -52,9 +52,12 @@ server = Server("lujo-mcp", version=__version__)
 # asyncio.to_thread 用默认线程池，工具超时后 handler 线程仍在池内继续跑，
 # 反复超时会占满默认池 worker 并拖累其它 to_thread 任务。改用本专用池：
 # - 超时后线程仍运行，但不占用默认池；
-# - 池有界（8）不会因反复超时无限增长。
+# - 池有界不会因反复超时无限增长。
 # ThreadPoolExecutor 线程懒创建（首次 submit 才起线程），import 时创建无副作用。
-_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8)
+# FIX(v0.7.1-b4-9): 池大小改由配置驱动（此前硬编码 8，与 protocol/server.py
+# 的 _LIGHT_TOOL_EXECUTOR 用 settings.tool_executor_workers 的口径不一致，
+# 配置无法调优 HTTP 侧并发）。
+_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_executor_workers)
 
 # ── stdio 生命周期资源回收 ──
 # 由 finally / atexit / signal handler 触发，幂等。

@@ -7,7 +7,21 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次4：MCP 协议/API/runtime 9 项）
+
+- **initialize params 数组崩溃**：`initialize` 的 params 为数组/字符串时此前 `params.get` 抛 AttributeError 成 500/-32603；现 -32600 语义化拒绝（**加固留痕**：params 缺失/显式 null 此前依法宽容回退默认协议版本，现按畸形输入拒绝——标准 MCP initialize 必带对象 params，属加固；与 tools/call 用 -32602 的「参数值」校验层级不同，此处 -32600 针对「请求结构」）。
+- **parse_request 非法 UTF-8 归一到 JSONParseError**：bytes 输入解码失败此前抛 UnicodeDecodeError（非 -32700 语义）；现解析层即归一，HTTP/传输层统一按 PARSE_ERROR，stdio 旧兜底保守保留。
+- **git blame 补 `--` 路径分隔符**：`git blame ... --porcelain <path>` 缺 `--`，路径以 `-` 开头会被 git 当选项；对齐 diff 的防御写法。
+- **repair_async 入队异常精确分类**：队列满才报 `queue_full`，其余异常归 `internal error`（此前 `except Exception` 一律误标 queue_full 误导排障，对齐 /api/debug/repair/async 精确捕获语义）。
+- **MCP POST 请求体大小上限 1MB**：超大 payload 此前被 `request.body()` 无界读入内存；现 Content-Length 预检 + 读后校验双拒绝 413（**固有局限留痕**：chunked/无 Content-Length 传输仍先整读 body 再判长，严格防护需流式限额——留后续项）。
+- **脱敏关闭仅首次告警**：`redaction_enabled=False` 时每次调用刷 warning；现模块级节流只告警 1 次。
+- **MCP 403 不泄露 RBAC 角色配置**：此前回显"需要 {角色} 角色，当前为 {role}"辅助角色枚举；现泛化为"权限不足，无法调用该工具"。
+- **static_analyzer 同文件多帧复用 ast 解析**：调用栈 N 帧同属一文件时每帧 `_read_source`+`ast.parse` 重复 N 次；现按 resolved 路径缓存 (source, tree)，同文件多帧只解析一次（AST 复用安全：NodeVisitor 只读不改树）。
+- **mcp_server 线程池大小配置驱动**：HTTP 侧 `_TOOL_EXECUTOR` 硬编码 8（与 protocol/server.py 用 settings.tool_executor_workers 的口径不一致、配置无法调优）；改配置驱动。
+
+> 批次4 其余核实项（无实际危害/已解决/设计取舍，未改）：通知 METHOD_NOT_FOUND 已被传输层按 id=None 丢弃；事件循环内"两次 json.dumps"（size 计算 + 文本构造确有必要）；stdio FIFO 串行取消语义（MCP 规范预期行为）；"缺 line 键帧 KeyError"（批次2 已修复 code_locator 路径）。
 
 ### 🔒 修复（Minor 批次3：runtime/llm/协议 10 项）
 
@@ -51,8 +65,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项（builder 3 + static_analyzer 2 + fault_localizer 1 + code_locator 2 + url_resolver 1 + spec 2）+ 更新 2 个固化旧行为的契约测试；批次3 新增回归 16 项（runtime 4 + network 2 + sourcemap 1 + spec 1 + cache 1 + jsonrpc 2 + analyzer 3 + qdrant 2，新建 `test_runtime_collector.py`）。
-- **验证**：`ruff check .` 全绿；unit **1447 tests / 0 failed / 6 skipped**（批次2 后 1431 + 批次3 +16）；integration **113 tests / 0 failed**（与 v0.7.0 首绿基线持平）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（批次2/3 未触及 SDK）。三批次均经子代理独立复审（批次1 10/10、批次2 10/10、批次3 10/10 PASS，复审建议均已采纳或在注释明示）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）。
+- **验证**：`ruff check .` 全绿；unit **1453 tests / 0 failed / 6 skipped**（批次3 后 1447 + 批次4 +6）；integration **115 tests / 0 failed**（113 + repair 2）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（批次2-4 未触及 SDK）。四批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS，复审建议均已采纳或在注释留痕）。
 
 ## [0.7.0] - 2026-08-29
 

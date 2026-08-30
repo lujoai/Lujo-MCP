@@ -13,7 +13,7 @@ import asyncio
 import logging
 from typing import Any
 
-from app.agent.repair_queue import get_repair_queue
+from app.agent.repair_queue import get_repair_queue, QueueFullError
 from app.config import settings
 from app.runtime.context.builder import build_context
 from app.runtime.collectors.runtime import collect_runtime_snapshot
@@ -113,11 +113,17 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
 
     try:
         job_id = await get_repair_queue().enqueue(context, model=None)
-    except Exception:
+    except QueueFullError:
+        # FIX(v0.7.1-b4-4): 仅队列真满才报 queue_full——此前 except Exception
+        # 把任何入队异常都误标 queue_full，掩盖内部错误误导排障（对齐
+        # /api/debug/repair/async 的精确捕获语义）。
         return {
             "error": "queue_full",
             "queue_size": get_repair_queue().queue_size(),
         }
+    except Exception:
+        logger.error("repair_async 入队失败", exc_info=True)
+        return {"error": "internal error"}
 
     return {"job_id": job_id, "status": "queued"}
 

@@ -28,6 +28,9 @@ router = APIRouter(prefix="/mcp", tags=["mcp"])
 # FIX: P1-C4 —— SSE 心跳间隔（秒），与 dashboard_stream 的 15s 心跳对齐。
 # 模块级常量便于测试缩短（真实流式响应测试不宜等待真实 15s）。
 _SSE_HEARTBEAT_SECONDS = 15.0
+# FIX(v0.7.1-b4-5): MCP POST 请求体大小上限（字节）——超大 payload 此前被
+# await request.body() 完整读入内存，无上限可被无界填充。
+_MCP_MAX_BODY_BYTES = 1024 * 1024  # 1MB
 
 
 def _health_payload() -> dict:
@@ -46,7 +49,24 @@ def _accepted_sse(request: Request) -> bool:
 
 @router.post("")
 async def mcp_post(request: Request):
+    # FIX(v0.7.1-b4-5): 读 body 前先按 Content-Length 预检超限（分块传输时
+    # 该头可能缺失，回退到读后校验），超限 413 拒绝，避免超大 payload 无界读入。
+    declared_length = request.headers.get("Content-Length")
+    if declared_length is not None:
+        try:
+            if int(declared_length) > _MCP_MAX_BODY_BYTES:
+                return JSONResponse(
+                    make_error(None, INVALID_REQUEST, "请求体过大"),
+                    status_code=413,
+                )
+        except ValueError:
+            pass  # 非法 Content-Length，忽略预检走读后校验
     raw = await request.body()
+    if len(raw) > _MCP_MAX_BODY_BYTES:
+        return JSONResponse(
+            make_error(None, INVALID_REQUEST, "请求体过大"),
+            status_code=413,
+        )
     if not raw:
         return Response(status_code=202)
 
@@ -130,9 +150,11 @@ async def mcp_post(request: Request):
         if role is None:
             role = "admin" if not settings.rbac_enabled else "viewer"
         if role not in required_roles:
+            # FIX(v0.7.1-b4-7): 403 不泄露内部 RBAC 角色配置——此前回显
+            # "需要 {required_roles} 角色，当前为 {role}" 把角色名枚举暴露给
+            # 未授权调用者（辅助角色枚举）。改为泛化文案，仅区分「未鉴权」。
             return JSONResponse(
-                make_error(req_id, INVALID_REQUEST,
-                           f"权限不足：工具 '{tool_name}' 需要 {required_roles} 角色，当前为 '{role}'"),
+                make_error(req_id, INVALID_REQUEST, "权限不足，无法调用该工具"),
                 status_code=403,
             )
 

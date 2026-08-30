@@ -87,9 +87,13 @@ def analyze(stacktrace_frames: list[dict[str, Any]]) -> list[FaultLocation]:
         return []
 
     results: list[FaultLocation] = []
+    # FIX(v0.7.1-b4-8): 同文件多帧复用 ast 解析——此前每帧 _read_source +
+    # ast.parse 一次，调用栈中 N 帧属同一文件时重复解析 N 次（文件 IO+语法
+    # 树构建是全模块最重开销）。按 resolved 路径缓存 (source, tree)。
+    _parse_cache: dict[str, tuple[str, Any]] = {}
     for i, frame in enumerate(stacktrace_frames):
         try:
-            loc = _analyze_frame(frame)
+            loc = _analyze_frame(frame, _parse_cache)
             if loc is not None:
                 # FIX: P1-9a 记录原始下标，供调用方正确关联（结果可能少于输入帧数）
                 loc.frame_index = i
@@ -148,8 +152,13 @@ def analyze_handler(method: str, path: str) -> Optional[FaultLocation]:
 # ── 帧分析 ──
 
 
-def _analyze_frame(frame: dict[str, Any]) -> Optional[FaultLocation]:
-    """分析单个堆栈帧，返回 FaultLocation 或 None。"""
+def _analyze_frame(frame: dict[str, Any], _parse_cache: dict | None = None) -> Optional[FaultLocation]:
+    """分析单个堆栈帧，返回 FaultLocation 或 None。
+
+    FIX(v0.7.1-b4-8): _parse_cache 由 analyze() 传入，按 resolved 路径复用
+    (source, tree)，避免同文件多帧重复 ast.parse。单帧调用（analyze_handler）
+    不传缓存，行为不变。
+    """
     file_path = frame.get("file", "")
     line_number = frame.get("line", 0)
     function_name = frame.get("function", "")
@@ -162,17 +171,21 @@ def _analyze_frame(frame: dict[str, Any]) -> Optional[FaultLocation]:
     if not resolved_path:
         return None
 
-    # 读取源文件
-    source = _read_source(resolved_path)
-    if source is None:
-        return None
-
-    # 解析 AST
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        logger.warning("StaticAnalyzer: 语法错误，跳过 %s", resolved_path)
-        return None
+    # 读取源文件（缓存命中时复用已验证的 source + AST，省文件 IO 与再解析）
+    if _parse_cache is not None and resolved_path in _parse_cache:
+        source, tree = _parse_cache[resolved_path]
+    else:
+        source = _read_source(resolved_path)
+        if source is None:
+            return None
+        # 解析 AST
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            logger.warning("StaticAnalyzer: 语法错误，跳过 %s", resolved_path)
+            return None
+        if _parse_cache is not None:
+            _parse_cache[resolved_path] = (source, tree)
 
     # 查找目标函数
     func_info = _extract_function_info(tree, function_name, line_number, source)

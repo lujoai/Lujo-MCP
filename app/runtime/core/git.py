@@ -111,7 +111,7 @@ def get_blame_for_frame(file_path: str, line_no: int) -> Optional[dict]:
     if not path.exists():
         return None
 
-    out = _git_cmd(["blame", "-L", f"{line_no},{line_no}", "--porcelain", str(path)], path.parent)
+    out = _git_cmd(["blame", "-L", f"{line_no},{line_no}", "--porcelain", "--", str(path)], path.parent)
     if not out:
         return None
 

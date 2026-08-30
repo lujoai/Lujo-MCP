@@ -167,7 +167,12 @@ def _handle_initialize(req: JSONRPCRequest) -> dict:
     - 若在 SUPPORTED_PROTOCOL_VERSIONS 中则回显该版本
     - 未知/缺失版本回退到 PROTOCOL_VERSION 并记录 warning
     """
-    params = req.params or {}
+    params = req.params
+    # FIX(v0.7.1-b4-1): params 非 dict（数组/字符串/null）时防御——
+    # 此前 `req.params or {}` 对 list 不生效，params.get 抛 AttributeError
+    # 被 dispatch 兜底成 500/-32603（初始化握手应给 -32600 语义化拒绝）。
+    if not isinstance(params, dict):
+        return make_error(req.id, INVALID_REQUEST, "initialize params 必须为对象")
     client_version = params.get("protocolVersion")
 
     if client_version and client_version in SUPPORTED_PROTOCOL_VERSIONS:
