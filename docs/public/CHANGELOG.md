@@ -7,6 +7,27 @@
 
 ## [Unreleased]
 
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项，全部来自第 6/7 轮审查 Minor 索引）。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次1：正确性/健壮性 10 项）
+
+- **verify_loop 阈值跨字段校验（fail-fast）**：误配 `agent_verify_loop_partial_threshold >= pass_threshold` 时，安全门钳制（未过安全门的分数压到 partial 阈值）后仍 >= pass 阈值——安全门反向失效，含 high 风险的方案照样 PASSED；`pass > high_confidence` 时高置信档永不可达。新增 pydantic `model_validator` 校验 `partial < pass <= high_confidence`，启动即拒绝非法配置。
+- **verify_loop 超时存根形状对齐**：单轮超时降级存根此前仅 `{"repair_plan": None}`（真实 DAG 聚合结果有 10 个键），下游消费方读 `test_plan`/`security_review` 等键从「超时缺省」突变为 KeyError；存根补齐 `Coordinator._run_dag` 聚合的完整键集（超时轮无产出，其余键按失败降级语义置空）。
+- **`parse_llm_json` 非字符串输入防御**：`parse_llm_json(None)` 此前经 `extract_json(None).strip()` 抛 AttributeError 逃逸出契约；非字符串一律返回 `(None, False)` 按解析失败处理。
+- **MCP 同步池拒绝日志口径**：槽位打满拒绝日志此前误打配置超时 `busy_timeout`，与 async 分支（打实际等待时长）口径不一致、误导排障；统一为实际等待 `wait_sec`。
+- **MCP async 工具排队耗时指标盲区**：async 工具成功取得槽位后补记 `record_mcp_tool_wait`，与同步分支口径一致（此前 async 排队耗时无指标）。
+- **DELETE /mcp 缺 `Mcp-Session-Id` 返回 400**：此前静默 204，调用方无法区分「无会话可删」与「删除成功」；按 MCP 传输规范补语义化拒绝。
+- **`/analyze/stream` build_context 异常保护**：与兄弟端点 `/analyze` 同构包 try/except，畸形 trace 转语义化 500（此前异常裸抛）。
+- **trace_api `first_seen` 0 哨兵退化**：条目时间戳含真实 0 时 `first_seen == 0` 恒成立，后续任意 ts 都会覆盖，first_seen 退化为「最后一条时间」；改用 None 哨兵保证取最小值。
+- **SDK XHR 对象复用监听器累积**：同一 XHR 对象复用（open+send 多轮）时每轮 send 叠加 4 个监听器且从不摘除——第 3 次复用后单个请求被记录 3 次（已复现）；挂新监听前先摘除上一轮的 + 终态 handler 触发时自摘除（once 语义），同时消除旧轮次闭包（旧 url/method）误报新请求。
+- **SDK `window.onerror` 透传原 handler 返回值**：原 handler 返回 true 可抑制浏览器默认错误上报，包装器此前丢弃返回值导致宿主页面抑制语义失效。
+
+### 🛠️ 工程与测试
+
+- **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记本批新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
+- **测试**：新增回归 13 项（unit 11：阈值校验 3 + 超时存根形状 1 + parse_llm_json 1 + MCP 日志口径/async wait 指标 2 + DELETE 400 1 + stream 异常保护 1 + first_seen 2 + 阈值用例对 .env 免疫加固；SDK JS 2：XHR 复用防叠加 + onerror 返回值透传）。
+- **验证**：`ruff check .` 全绿；unit **1420 tests / 0 failed / 6 skipped**（1409 基线 + 11）；integration **113 tests / 0 failed**（与 v0.7.0 首绿基线持平）；e2e **9 passed / 1 skipped**（持平）；Browser SDK JS **49/49**（47 + 2）。
+
 ## [0.7.0] - 2026-08-29
 
 > 主题「稳定 + 可观测 + 债务清理」。v0.7.0 不含 P0/P1 缺陷修复——全部缺陷治理已在 v0.6.x 收口；本版交付 **KB 学习闭环可观测性**（唯一面向用户的新能力）+ **Minor 大扫除两批 20 项**（安全/健壮性 10 项 + 死代码/文档口径 10 项）+ **工程卫生**，并首次达成 **integration 套件全绿**。测试基线：unit **1409 tests / 0 failed / 6 skipped**（junit 权威计数，v0.6.9 基线 1409 同口径持平——本版以加固与清理为主，新增 KB 可观测性测试对冲了死代码删除）、integration **113 tests / 0 failed**（96 passed / 17 skipped）、Browser SDK JS **47/47**、e2e **9 passed / 1 skipped**、ruff 硬门禁全绿。**无 Breaking Change，配置全部向后兼容**（升级注意见下）。

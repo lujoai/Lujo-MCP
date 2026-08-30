@@ -140,7 +140,14 @@ async def debug_analyze_stream(req: AnalyzeRequest):
     if not trace:
         raise HTTPException(status_code=404, detail=f"找不到请求 {req.request_id}")
 
-    context = build_context(req.request_id, trace)
+    # FIX(v0.7.1-b1-7): build_context 包异常保护（与兄弟端点 /analyze 形状一致），
+    # 此前畸形 trace 会让异常裸抛成未处理 500，而非语义化错误响应。
+    try:
+        context = build_context(req.request_id, trace)
+    except Exception as e:
+        logger.error(str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
     try:
         context["runtime"] = collect_runtime_snapshot()
     except Exception:

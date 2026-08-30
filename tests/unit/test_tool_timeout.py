@@ -436,6 +436,73 @@ async def test_busy_queue_timeout_positive_logs_wait_duration(monkeypatch, caplo
 
 
 @pytest.mark.asyncio
+async def test_sync_busy_log_prints_actual_wait_not_config(monkeypatch, caplog):
+    """FIX(v0.7.1-b1-4) 回归：同步池拒绝日志打印实际等待时长。
+
+    此前误打配置超时 busy_timeout：monkeypatch 槽位获取立即失败
+    （实际等待 ≈ 0s），busy_timeout=5.0 时旧实现日志「等待 5.000s 超时」
+    与事实不符，误导排障。
+    """
+
+    async def _fail_immediately(slots, busy_timeout):
+        return False
+
+    monkeypatch.setattr(server_module, "_acquire_slot_or_fastfail", _fail_immediately)
+    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 5.0)
+    monkeypatch.setattr(settings, "tool_timeout_seconds", 10.0)
+
+    def _handler(args):
+        return {"sync": "done"}
+
+    register_tool("sync_busy_log_actual", "Sync tool for actual wait log", _handler)
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="lujo-mcp.protocol"):
+        resp = await _handle_tools_call(
+            JSONRPCRequest(id=601, method="tools/call", params={"name": "sync_busy_log_actual", "arguments": {}})
+        )
+
+    assert resp["result"]["error_code"] == "TOOL_BUSY"
+
+    wait_logs = [
+        r.getMessage() for r in caplog.records
+        if "等待" in r.message and "超时" in r.message
+    ]
+    assert wait_logs, "必须打出「等待 …s 超时」拒绝日志"
+    assert "5.000s" not in wait_logs[0], (
+        f"日志不得打印配置超时 5.000s（应为实际等待 ≈0s）：{wait_logs[0]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_tool_records_wait_metric(monkeypatch):
+    """FIX(v0.7.1-b1-5) 回归：async 工具取得槽位后必须补记 record_mcp_tool_wait。"""
+
+    async def _fast_async(args):
+        return {"async": "ok"}
+
+    register_tool("async_wait_metric", "Async tool for wait metric", _fast_async, inputSchema={"type": "object"})
+
+    recorded = []
+    monkeypatch.setattr(
+        server_module, "record_mcp_tool_wait",
+        lambda name, pool, sec: recorded.append((name, pool, sec)),
+    )
+
+    resp = await _handle_tools_call(
+        JSONRPCRequest(id=602, method="tools/call", params={"name": "async_wait_metric", "arguments": {}})
+    )
+
+    assert resp["result"].get("isError") is not True
+    assert recorded, "async 工具成功取得槽位后必须记录 wait 指标（与同步分支口径一致）"
+    name, pool, sec = recorded[0]
+    assert name == "async_wait_metric"
+    assert pool in ("light", "heavy")
+    assert sec >= 0
+
+
+@pytest.mark.asyncio
 async def test_heavy_tool_saturation_does_not_block_light_tools(monkeypatch):
     """测试重型工具池打满时，轻量级工具依然享有独立槽位并立即执行（不被饿死）。"""
     monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(1))

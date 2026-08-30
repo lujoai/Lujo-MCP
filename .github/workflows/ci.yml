@@ -90,6 +90,8 @@ jobs:
       # 显式列出全部 SDK 测试文件（不用目录形式：node --test <dir> 在部分
       # Node 版本下按模块解析导致 MODULE_NOT_FOUND）。新增测试文件需在此登记，
       # 否则不受 CI 守护 —— v0.6.7 的传输修复测试曾因此漏出门禁。
+      # FIX(v0.7.1-b1): 补登记 v0.6.9 漏掉的 sdk-destroy.test.js + 本批新增
+      # sdk-minor-reuse.test.js，CI 与 npm test 文件清单保持一致。
       - name: Run SDK core contract tests
         run: >-
           node --test
@@ -98,4 +100,6 @@ jobs:
           browser-sdk/test/sdk-transport.test.js
           browser-sdk/test/sdk-transport-fixes.test.js
           browser-sdk/test/sdk-batch-limit.test.js
+          browser-sdk/test/sdk-destroy.test.js
+          browser-sdk/test/sdk-minor-reuse.test.js
 

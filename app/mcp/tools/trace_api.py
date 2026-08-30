@@ -52,7 +52,10 @@ def _extract_trace_summary(request_id: str) -> dict | None:
         "message": "",
         "source": "storage",
         "occurrence_count": 1,
-        "first_seen": 0,
+        # FIX(v0.7.1-b1-8): first_seen 用 None 做哨兵：此前用 0 哨兵，遇到真实的
+        # 0 时间戳条目后 `first_seen == 0` 恒成立，后续任意 ts（含更大值）都会
+        # 覆盖，first_seen 退化为「最后一条时间」。entries 非空保证循环后必为数值。
+        "first_seen": None,
         "last_seen": 0,
         "timestamp": 0,
         "top_frame": None,
@@ -63,7 +66,7 @@ def _extract_trace_summary(request_id: str) -> dict | None:
         if ts > summary["timestamp"]:
             summary["timestamp"] = ts
             summary["last_seen"] = ts
-        if summary["first_seen"] == 0 or ts < summary["first_seen"]:
+        if summary["first_seen"] is None or ts < summary["first_seen"]:
             summary["first_seen"] = ts
 
         step = entry.get("step", "")

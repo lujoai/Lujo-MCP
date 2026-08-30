@@ -181,7 +181,23 @@ async def run_verify_loop(
                     i,
                     round_timeout,
                 )
-                result = {"repair_plan": None}
+                # FIX(v0.7.1-b1-2): 超时存根对齐 Coordinator._run_dag 聚合结果的
+                # 完整键集（此前仅 {"repair_plan": None}，形状漂移：下游消费方
+                # 读 test_plan/security_review 等键从「超时缺省」变成 KeyError）。
+                # 超时轮无任何 Agent 产出，其余键按失败降级语义置空。
+                repair_ctx = ctx.repair_context or {}
+                result = {
+                    "repair_plan": None,
+                    "sources": sources,
+                    "agent_trace": [],
+                    "git_attribution": None,
+                    "test_plan": None,
+                    "security_review": None,
+                    "quality_report": repair_ctx.get("quality_report"),
+                    "debug_experience": repair_ctx.get("debug_experience"),
+                    "multi_agent_mode": True,
+                    "dag_degraded": True,
+                }
         else:
             result = await iteration_fn(ctx, sources)
         final_result = result

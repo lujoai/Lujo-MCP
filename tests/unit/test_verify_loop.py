@@ -384,3 +384,91 @@ def test_loop_round_timeout_inherits_full_round_budget(monkeypatch):
         "单轮耗时 1.5s < 单轮预算 2s，不得被 watchdog 丢弃（旧实现按 agent_timeout=1s 判超时）"
     )
     assert result["verify_loop"]["final_verdict"] in ("passed", "high_confidence")
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b1-1): verify_loop 阈值跨字段校验（fail-fast，R7 Minor）
+# ---------------------------------------------------------------------------
+
+
+class TestThresholdConfigValidation:
+    """误配 partial >= pass 会让安全门钳制反向失效，必须在配置期拒绝。
+
+    显式传全三个阈值（不用 .env 隐式值），保证用例对本地 .env 配置免疫。
+    """
+
+    def test_partial_ge_pass_rejected(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from app.config import Settings
+
+        with pytest.raises(ValidationError):
+            Settings(
+                agent_verify_loop_partial_threshold=0.7,
+                agent_verify_loop_pass_threshold=0.7,
+                agent_verify_loop_high_confidence_pass_threshold=0.85,
+            )
+
+    def test_pass_gt_high_confidence_rejected(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from app.config import Settings
+
+        with pytest.raises(ValidationError):
+            Settings(
+                agent_verify_loop_partial_threshold=0.5,
+                agent_verify_loop_pass_threshold=0.9,
+                agent_verify_loop_high_confidence_pass_threshold=0.85,
+            )
+
+    def test_defaults_satisfy_ordering(self):
+        from app.config import Settings
+
+        s = Settings(_env_file=None)
+        assert (
+            s.agent_verify_loop_partial_threshold
+            < s.agent_verify_loop_pass_threshold
+            <= s.agent_verify_loop_high_confidence_pass_threshold
+        )
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b1-2): 超时存根对齐 _run_dag 聚合形状（R7 Minor）
+# ---------------------------------------------------------------------------
+
+
+def test_loop_round_timeout_stub_preserves_dag_shape(monkeypatch):
+    """超时存根必须含 _run_dag 聚合结果的全部键，不得形状漂移。"""
+    import asyncio
+
+    from app.agent.verify_loop import run_verify_loop
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_verify_loop_round_timeout", 0.05)
+    monkeypatch.setattr(settings, "agent_verify_loop_max_iterations", 1)
+
+    async def stalled_iteration(ctx, sources):
+        await asyncio.sleep(1)  # 远超单轮超时
+        return {"repair_plan": {"fix": "x"}}
+
+    class Ctx:
+        def __init__(self):
+            self.repair_context = {"quality_report": {"q": 1}}
+
+    result = asyncio.run(run_verify_loop(stalled_iteration, Ctx(), {"s": 1}))
+
+    expected_keys = {
+        "repair_plan", "sources", "agent_trace", "git_attribution",
+        "test_plan", "security_review", "quality_report",
+        "debug_experience", "multi_agent_mode", "dag_degraded",
+    }
+    assert expected_keys <= set(result.keys()), (
+        f"超时存根缺键：{expected_keys - set(result.keys())}"
+    )
+    assert result["repair_plan"] is None
+    assert result["dag_degraded"] is True
+    assert result["quality_report"] == {"q": 1}
+    assert result["sources"] == {"s": 1}
+    assert result["verify_loop"]["final_verdict"] == "failed"

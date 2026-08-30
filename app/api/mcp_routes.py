@@ -219,9 +219,12 @@ async def mcp_get(request: Request):
 @router.delete("")
 async def mcp_delete(request: Request):
     session_id = request.headers.get("Mcp-Session-Id")
-    if session_id:
-        if not registry.get(session_id):
-            return JSONResponse({"detail": "MCP session not found, please re-initialize"}, status_code=404)
-        registry.delete(session_id)
-        hub.close_session(session_id)
+    # FIX(v0.7.1-b1-6): 缺 Mcp-Session-Id 时此前静默 204（调用方无法区分
+    # 「删了个寂寞」与「删除成功」）。按 MCP 传输规范补 400 语义化拒绝。
+    if not session_id:
+        return JSONResponse({"detail": "Missing Mcp-Session-Id header"}, status_code=400)
+    if not registry.get(session_id):
+        return JSONResponse({"detail": "MCP session not found, please re-initialize"}, status_code=404)
+    registry.delete(session_id)
+    hub.close_session(session_id)
     return Response(status_code=204)

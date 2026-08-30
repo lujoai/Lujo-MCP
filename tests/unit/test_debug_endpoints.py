@@ -68,3 +68,34 @@ def test_analyze_stream_has_buffer_control_headers():
     assert "text/event-stream" in resp.headers["content-type"]
     assert resp.headers["Cache-Control"] == "no-cache"
     assert resp.headers["X-Accel-Buffering"] == "no"
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b1-7): /analyze/stream build_context 包异常保护（R7 Minor）
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_stream_build_context_error_returns_500():
+    """build_context 抛错必须转 500 语义化响应（与兄弟端点 /analyze 一致）。
+
+    修复前畸形 trace 会让异常裸抛成未处理 500（FastAPI 默认 500 但无日志/
+    形状不齐），此处验证端点自身兜底路径可达。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.debug import router
+    from app.runtime.core.logs import add_log, create_request_id
+
+    rid = create_request_id()
+    add_log(rid, "request_start", {"method": "POST", "url": "/x"})
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch("app.api.debug.build_context", side_effect=RuntimeError("boom")):
+        resp = client.post("/api/debug/analyze/stream", json={"request_id": rid})
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "Internal server error"

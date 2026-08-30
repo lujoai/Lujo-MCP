@@ -30,3 +30,19 @@ def test_behavior_contract_nested_text_and_none():
     assert extract_json('前置说明 {"key": "value"} 后缀') == '{"key": "value"}'
     assert extract_json("nothing here") is None
     assert extract_json("") is None
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b1-3): parse_llm_json 非字符串输入防御（R7 Minor）
+# ---------------------------------------------------------------------------
+
+
+def test_parse_llm_json_non_string_input_returns_failure():
+    """parse_llm_json(None) 此前经 extract_json(None).strip() 抛 AttributeError。"""
+    from app.agent.utils import parse_llm_json
+
+    assert parse_llm_json(None) == (None, False)
+    assert parse_llm_json(123) == (None, False)
+    # 正常路径不受影响
+    assert parse_llm_json('{"a": 1}') == ({"a": 1}, True)
+    assert parse_llm_json('noise {"b": 2} tail') == ({"b": 2}, True)

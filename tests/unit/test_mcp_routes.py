@@ -51,6 +51,14 @@ def test_delete_unknown_session_returns_404():
     assert resp.status_code == 404
 
 
+def test_delete_without_session_header_returns_400():
+    """FIX(v0.7.1-b1-6) 回归：缺 Mcp-Session-Id 的 DELETE 返回 400（此前静默 204）。"""
+    client = _client()
+    resp = client.request("DELETE", "/mcp")
+    assert resp.status_code == 400
+    assert "Mcp-Session-Id" in resp.json()["detail"]
+
+
 @pytest.mark.asyncio
 async def test_initialized_notification_publishes_ready_event():
     client = _client()

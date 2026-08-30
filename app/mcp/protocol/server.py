@@ -318,6 +318,9 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": "TOOL_BUSY",
                 "_busy": True,
             })
+        # FIX(v0.7.1-b1-5): async 工具取得槽位后补记 record_mcp_tool_wait，
+        # 与同步分支口径一致（此前 async 排队耗时是指标盲区）。
+        record_mcp_tool_wait(tool_name, pool_type, time.perf_counter() - wait_start)
         try:
             try:
                 result = await asyncio.wait_for(
@@ -366,7 +369,9 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
             if busy_timeout <= 0:
                 logger.warning("工具 %s (%s池) 执行队列已满（不等待，立即拒绝），已拒绝执行", tool_name, pool_type)
             else:
-                logger.warning("工具 %s (%s池) 执行队列已满（等待 %.3fs 超时），已拒绝执行", tool_name, pool_type, busy_timeout)
+                # FIX(v0.7.1-b1-4): 打印实际等待时长（与 async 分支口径一致），
+                # 此前误打配置超时 busy_timeout，误导排障。
+                logger.warning("工具 %s (%s池) 执行队列已满（等待 %.3fs 超时），已拒绝执行", tool_name, pool_type, wait_sec)
             return make_response(req.id, {
                 "content": [
                     {

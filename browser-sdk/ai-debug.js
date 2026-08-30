@@ -869,7 +869,9 @@
           release: cfg.release || undefined,
         },
       }, true);
-      if (_origWindowOnerror) _origWindowOnerror.apply(this, arguments);
+      // FIX(v0.7.1-b1-10): 透传原 handler 返回值：window.onerror 返回 true 可抑制
+      // 浏览器默认错误上报，此前丢弃返回值导致宿主页面的抑制语义失效。
+      if (_origWindowOnerror) return _origWindowOnerror.apply(this, arguments);
     };
 
     // unhandledrejection → Promise 未捕获
@@ -1271,6 +1273,24 @@
   }
 
   // ── XMLHttpRequest 拦截 ──
+  // FIX(v0.7.1-b1-9): XHR 对象复用（open+send 多轮）时每轮 send 叠加 4 个监听器
+  // 且从不摘除：第 3 次复用后单个请求被记录 3 次（已复现）。挂新监听前先摘除
+  // 上一轮的，且每个终态 handler 触发时自摘除（once 语义），杜绝跨轮累积与
+  // 旧轮次闭包（旧 url/method/start）误报新请求。
+  function _detachNetListeners(xhr) {
+    if (xhr._aiDebugNet) {
+      var h = xhr._aiDebugNet;
+      try {
+        xhr.removeEventListener("load", h.load);
+        xhr.removeEventListener("error", h.error);
+        xhr.removeEventListener("abort", h.abort);
+        xhr.removeEventListener("timeout", h.timeout);
+      } catch (e) {
+      }
+      xhr._aiDebugNet = null;
+    }
+  }
+
   function _installXhrHook() {
     if (!cfg.captureNetwork) return;
 
@@ -1311,6 +1331,7 @@
 
       function _onLoad() {
         try {
+          _detachNetListeners(xhr);
           var responseText = "";
           try {
             responseText = xhr.responseText ? xhr.responseText.slice(0, 2000) : "";
@@ -1332,6 +1353,7 @@
 
       function _onError() {
         try {
+          _detachNetListeners(xhr);
           var record = {
             url: url,
             method: method.toUpperCase(),
@@ -1348,6 +1370,7 @@
 
       function _onAbort() {
         try {
+          _detachNetListeners(xhr);
           var record = {
             url: url,
             method: method.toUpperCase(),
@@ -1364,6 +1387,7 @@
 
       function _onTimeout() {
         try {
+          _detachNetListeners(xhr);
           var record = {
             url: url,
             method: method.toUpperCase(),
@@ -1379,6 +1403,8 @@
       }
 
       try {
+        _detachNetListeners(xhr);
+        xhr._aiDebugNet = { load: _onLoad, error: _onError, abort: _onAbort, timeout: _onTimeout };
         xhr.addEventListener("load", _onLoad);
         xhr.addEventListener("error", _onError);
         xhr.addEventListener("abort", _onAbort);

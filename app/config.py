@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 from pydantic_settings import BaseSettings
 
 # 项目根目录（app/ 的上一级）
@@ -392,6 +392,27 @@ class Settings(BaseSettings):
     agent_verify_loop_partial_threshold: float = 0.5
     # 验证通过后是否写回 KB（递增 verify_count / case_confidence）
     agent_verify_loop_kb_writeback_enabled: bool = True
+
+    @model_validator(mode="after")
+    def _validate_verify_loop_thresholds(self) -> "Settings":
+        """FIX(v0.7.1-b1-1): verify_loop 阈值跨字段校验（fail-fast，R7 Minor）。
+
+        误配 partial >= pass 时，安全门钳制（compute_verify_score 将未过安全门
+        的分数压到 partial_threshold）后仍 >= pass_threshold，安全门反向失效，
+        含 high 风险的方案照样 PASSED；pass > high_confidence 时高置信档
+        永不可达。启动即拒绝非法配置，不静默运行在失效语义下。
+        """
+        partial = self.agent_verify_loop_partial_threshold
+        pass_t = self.agent_verify_loop_pass_threshold
+        high = self.agent_verify_loop_high_confidence_pass_threshold
+        if not (partial < pass_t <= high):
+            raise ValueError(
+                "verify_loop 阈值配置非法：需满足 "
+                "agent_verify_loop_partial_threshold < agent_verify_loop_pass_threshold "
+                "<= agent_verify_loop_high_confidence_pass_threshold"
+                f"（当前 {partial} / {pass_t} / {high}）"
+            )
+        return self
 
     # ── 服务 ──
     host: str = "0.0.0.0"

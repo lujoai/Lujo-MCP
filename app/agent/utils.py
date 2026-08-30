@@ -22,6 +22,11 @@ def parse_llm_json(raw_output: str) -> tuple[Optional[dict[str, Any]], bool]:
 
     返回 (parsed_dict, parse_succeeded)。parsed_dict 保证为 dict 或 None。
     """
+    # FIX(v0.7.1-b1-3): 非字符串输入（None / 上游缺字段）防御：此前 json.loads(None)
+    # 抛 TypeError 被捕获后进入 extract_json(None)，其内部 content.strip() 抛
+    # AttributeError 逃逸出本函数契约。非字符串一律按解析失败处理。
+    if not isinstance(raw_output, str):
+        return None, False
     parsed: Optional[dict[str, Any]] = None
     parse_succeeded = False
     try:
