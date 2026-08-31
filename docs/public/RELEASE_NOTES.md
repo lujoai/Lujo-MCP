@@ -1,12 +1,22 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.7.0（2026-08-29）**。主题「稳定 + 可观测 + 债务清理」：新增 KB 学习闭环可观测性（Prometheus 指标 + dashboard 端点与面板）+ Minor 大扫除两批 20 项（安全/健壮性与死代码清理）+ 工程卫生；integration 套件首次全绿。测试基线 unit **1409 tests / 0 failed**、integration **113 tests / 0 failed**、Browser SDK JS 47。含升级注意事项（见「v0.7.0」章节）。npm `latest` → `@lujoai/lujo-mcp@0.7.0`。
+> 最新版本：**v0.7.1（2026-08-31）**。主题「Minor 债务批量清理」：第 6/7 轮审查 Minor 索引分 15 个批次全部清零——78 项真 bug 修复 + 剩余项逐条留痕关闭。测试基线 unit **1479 tests / 0 failed / 6 skipped**、integration **115 tests / 0 failed**、Browser SDK JS **50/50**、e2e **10/0/1**。无 Breaking Change，无需迁移。详见 CHANGELOG.md [0.7.1] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.1`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.0  
-**Release Date / 发布日期**: 2026-08-29  
-**Codename / 代号**: 稳定可观测 ｜ Stable & Observable
+**Version / 版本**: v0.7.1  
+**Release Date / 发布日期**: 2026-08-31  
+**Codename / 代号**: 债务清零 ｜ Minor Debt Free
+
+---
+
+## v0.7.1（2026-08-31）
+
+> 主题「Minor 债务批量清理」。第 6/7 轮代码审查挂账的 Minor 问题分 15 个批次全部清零（78 项真 bug 修复，含外部独立复核验证闭环）。**零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径；无 Breaking Change、无新增配置**。测试基线：unit **1479 / 0 failed / 6 skipped**（junit 权威计数）、integration **115 / 0 failed**、e2e **10 / 0 / 1**、Browser SDK JS **50/50**、ruff 硬门禁全绿。
+
+### ⚠️ 升级注意
+
+- **无 Breaking Change**：纯修复与防御性加固，零配置变更，直接升级即可。
 
 ---
 

@@ -7,7 +7,15 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项）+ 批次7（SDK/npm + 文档口径 4 项）+ 批次8（runtime collectors + storage + rag 5 项）+ 批次9（runtime storage + rag + mcp 4 项）+ 批次10（rag 1 项）+ 批次11（agent + runtime storage 3 项）+ 批次12（runtime verifier 1 项）+ 批次13（api 1 项）+ 批次14（外部复核验证 1 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+- 无（v0.7.1 已发布；后续变更在此追加）。
+
+## [0.7.1] - 2026-08-31
+
+> 主题「Minor 债务批量清理」：第 6/7 轮审查 Minor 索引（~111 项）分 15 个批次全部清零——**78 项真 bug 修复** + 其余逐条核实为设计取舍/低风险留痕关闭（含一轮外部 agent 复核验证，其标记的 9 项「误判」经代码核实仅 1 项属实）。**零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径；无 Breaking Change、无新增配置**。测试基线：unit **1479 / 0 failed / 6 skipped**（junit 权威）、integration **115 / 0**、e2e **10 / 0 / 1**、Browser SDK JS **50/50**、ruff 硬门禁全绿；15 批次均经子代理独立复审。
+
+### 📖 文档（批次15：SDK destroy() 已知限制文档化）
+
+- **SDK `destroy()` 已知限制注明**：destroy 只还原到「SDK 安装前」的状态——若第三方脚本在 SDK 之后包装了 fetch/XHR/console，SDK 无法感知/还原它们的包装（与业界 destroy 语义一致）；已在 `SDK_GUIDE.md` destroy() 条目与 `ai-debug.js` destroy() 头注释注明该限制与应对建议（对包装顺序有要求的集成方自行保存/恢复原始引用）。
 
 ### 🔒 修复（Minor 批次14：外部复核验证 1 项）
 
@@ -151,8 +159,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）；批次7 新增回归 1 项（`sdk-destroy` fetch(new Request) method 断言 1）；批次8 新增回归 6 项（`test_code_locator` `_split_remote_local`×2 + vscode URL 转义 1、`test_rag_retriever` 边界等值 1、`test_storage` memory entry 上限×2）；批次9 新增回归 3 项（`test_qdrant_vector_store` TTL 冷却短路 + TTL 后重试 + 连接异常时间戳记录、`test_storage` asyncpg KB 表）；批次10 新增回归 2 项（`test_qdrant_vector_store` redaction_extra 生效 + 无效正则跳过）；批次11 新增回归 1 项（`test_storage` asyncpg close_pool 重置 _initialized）+ 更新 1 个既有契约测试（`test_dag_coordinator` duration_s 断言）；批次12 新增回归 2 项（`test_ui_runner` SSRF 放行 data/blob/about + 内网 http 仍拦截）；批次13 新增回归 2 项（`test_dashboard` 失效递增 generation + 计算期失效丢弃旧快照写回）；批次14 新增回归 1 项（`test_spec_store` PG 删除失败 warning 断言）。
-- **验证**：`ruff check .` 全绿；unit **1479 tests / 0 failed / 6 skipped**（批次13 后 1478 + 批次14 +1）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **50/50**；check_doc_links **168 链接 0 错误**。十四批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS、批次7 4/4 PASS、批次8 5/5 PASS、批次9 4/4 PASS、批次10 2/2 PASS、批次11 3/3 PASS、批次12 1/1 PASS、批次13 1/1 PASS、批次14 1/1 PASS + 5 条反驳全部核实成立，复审建议均已采纳或在注释留痕）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）；批次7 新增回归 1 项（`sdk-destroy` fetch(new Request) method 断言 1）；批次8 新增回归 6 项（`test_code_locator` `_split_remote_local`×2 + vscode URL 转义 1、`test_rag_retriever` 边界等值 1、`test_storage` memory entry 上限×2）；批次9 新增回归 3 项（`test_qdrant_vector_store` TTL 冷却短路 + TTL 后重试 + 连接异常时间戳记录、`test_storage` asyncpg KB 表）；批次10 新增回归 2 项（`test_qdrant_vector_store` redaction_extra 生效 + 无效正则跳过）；批次11 新增回归 1 项（`test_storage` asyncpg close_pool 重置 _initialized）+ 更新 1 个既有契约测试（`test_dag_coordinator` duration_s 断言）；批次12 新增回归 2 项（`test_ui_runner` SSRF 放行 data/blob/about + 内网 http 仍拦截）；批次13 新增回归 2 项（`test_dashboard` 失效递增 generation + 计算期失效丢弃旧快照写回）；批次14 新增回归 1 项（`test_spec_store` PG 删除失败 warning 断言）；批次15 为纯文档化（SDK destroy() 已知限制），无代码行为变更、无需新增测试。
+- **验证**：`ruff check .` 全绿；unit **1479 tests / 0 failed / 6 skipped**（批次13 后 1478 + 批次14 +1）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **50/50**；check_doc_links **168 链接 0 错误**。批次1-14 均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS、批次7 4/4 PASS、批次8 5/5 PASS、批次9 4/4 PASS、批次10 2/2 PASS、批次11 3/3 PASS、批次12 1/1 PASS、批次13 1/1 PASS、批次14 1/1 PASS + 5 条反驳全部核实成立；批次15 纯文档无复审必要，复审建议均已采纳或在注释留痕）。
 
 ## [0.7.0] - 2026-08-29
 

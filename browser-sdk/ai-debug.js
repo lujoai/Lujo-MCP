@@ -1586,6 +1586,9 @@
    * @param {object} [opts]
    * @param {boolean} [opts.flush=true] - 销毁前是否先把待发批次冲刷上报（best-effort）
    */
+  // FIX(v0.7.1-b15-1): 已知限制文档化——destroy 只还原到「SDK 安装前」的状态；
+  // 若第三方脚本在 SDK 之后包装了 fetch/XHR/console，SDK 无法感知/还原它们的
+  // 包装（与业界 destroy 语义一致）。详见 docs/public/SDK_GUIDE.md destroy() 条目。
   function destroy(opts) {
     var shouldFlush = !(opts && opts.flush === false);
     _destroyed = true;
