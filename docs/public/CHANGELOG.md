@@ -7,7 +7,17 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项）+ 批次7（SDK/npm + 文档口径 4 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项）+ 批次7（SDK/npm + 文档口径 4 项）+ 批次8（runtime collectors + storage + rag 5 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次8：runtime collectors + storage + rag 5 项）
+
+- **vscode:// URL Windows 反斜杠转义**：`make_ide_link` 的 `vscode://file/{path}` 中 Windows 反斜杠在 URL 里非法（`\U`/`\A` 被当转义序列，客户端无法解析）；现统一转正斜杠（vscode 协议兼容正斜杠路径）。
+- **SOURCE_PATH_MAP Windows 盘符冲突**：`pair.split(":", 1)` 在 Windows 上把盘符冒号当分隔符（`C:\app:C:\local` 被拆成 remote=`C`、local=`\app:C:\local`），映射失效；新增 `_split_remote_local` 盘符感知拆分（code_locator 与 static_analyzer 同口径复用）。
+- **memory_store 单 request_id 条目无上限**：此前仅 request_id 数量有上限（`_max_entries`），单个 request_id 的 entry 列表无界（长 trace/恶意刷单条可无界涨内存）；现按「保留最新 5000 条、丢最旧」截断。
+- **cleanup_expired 返回语义契约文档化**：memory 返回 request_id 数、PG 返回删除行数（同一 request_id 多行时两者不等），base.py docstring 补注——当前无消费方依赖该数值，仅作日志/诊断。
+- **vector_store_min_score 边界统一**：retriever 向量召回此前用 `<=` 等值丢弃，与 kb_integration（`<` 等值保留）及 qdrant 后端（`>=` 保留）不一致，score 恰等于阈值的召回被漏掉；统一为 `<`（等值保留）。
+
+> 批次8 复审观察（非阻塞，留痕）：① `file://` 分支（ide_scheme=file）在 Windows 仍残留反斜杠，属同类隐患、留后续；② `_split_remote_local` 对「单字母+冒号」前缀按盘符处理，但 SOURCE_PATH_MAP 的 remote 实际总是绝对路径，不会误触发。
 
 ### 🔒 修复（Minor 批次7：SDK/npm + 文档口径 4 项）
 
@@ -102,8 +112,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）；批次7 新增回归 1 项（`sdk-destroy` fetch(new Request) method 断言 1）。
-- **验证**：`ruff check .` 全绿；unit **1461 tests / 0 failed / 6 skipped**（批次5 后 1454 + 批次6 +7）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **50/50**（批次7 +1）；check_doc_links **168 链接 0 错误**。七批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS、批次7 4/4 PASS，复审建议均已采纳或在注释留痕）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）；批次7 新增回归 1 项（`sdk-destroy` fetch(new Request) method 断言 1）；批次8 新增回归 6 项（`test_code_locator` `_split_remote_local`×2 + vscode URL 转义 1、`test_rag_retriever` 边界等值 1、`test_storage` memory entry 上限×2）。
+- **验证**：`ruff check .` 全绿；unit **1467 tests / 0 failed / 6 skipped**（批次7 后 1461 + 批次8 +6）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **50/50**；check_doc_links **168 链接 0 错误**。八批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS、批次7 4/4 PASS、批次8 5/5 PASS，复审建议均已采纳或在注释留痕）。
 
 ## [0.7.0] - 2026-08-29
 

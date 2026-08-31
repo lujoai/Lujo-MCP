@@ -103,3 +103,44 @@ def test_get_snippets_for_frames_string_numeric_line_accepted(tmp_path, monkeypa
     )
     assert len(snippets) == 1
     assert snippets[0].found is True
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b8-1): vscode:// URL Windows 反斜杠转正斜杠
+# FIX(v0.7.1-b8-5): SOURCE_PATH_MAP 盘符感知拆分（Windows 盘符冒号不再当分隔符）
+# ---------------------------------------------------------------------------
+
+
+def test_split_remote_local_windows_drive_letter():
+    """Windows 盘符冒号不作为 remote/local 分隔符。"""
+    from app.runtime.collectors.code_locator import _split_remote_local
+
+    # Windows remote + Windows local：第二个冒号才是分隔符
+    assert _split_remote_local("C:\\app:C:\\local") == ("C:\\app", "C:\\local")
+    # Unix remote + Windows local：首个冒号是分隔符
+    assert _split_remote_local("/app:C:\\local") == ("/app", "C:\\local")
+    # Windows remote + Unix local
+    assert _split_remote_local("C:\\app:/Users/me") == ("C:\\app", "/Users/me")
+
+
+def test_split_remote_local_unix():
+    """纯 Unix 路径：首个冒号是分隔符。"""
+    from app.runtime.collectors.code_locator import _split_remote_local
+
+    assert _split_remote_local("/app:/Users/me") == ("/app", "/Users/me")
+    assert _split_remote_local("no-colon") == ("", "")
+
+
+def test_make_ide_link_escapes_backslashes(monkeypatch):
+    """vscode:// URL 中不得残留反斜杠（Windows 路径）。"""
+    from app.runtime.collectors import code_locator
+
+    monkeypatch.setattr(code_locator, "_remap_path", lambda p: "C:\\project\\app.py")
+    monkeypatch.setattr(code_locator, "_is_allowed", lambda p: True)
+
+    link = code_locator.make_ide_link("C:\\project\\app.py", 42)
+
+    assert link is not None
+    assert link.startswith("vscode://file/")
+    assert "\\" not in link
+    assert ":42" in link

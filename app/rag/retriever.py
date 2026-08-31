@@ -170,7 +170,10 @@ def _vector_hits(
     pairs = get_vector_store().search(query, top_k)
     for doc, score in pairs:
         # 向量召回使用专属 vector_store_min_score（与 Jaccard 相似度阈值解耦）
-        if score <= settings.vector_store_min_score:
+        # FIX(v0.7.1-b8-2): 边界统一为「等值保留」（score >= min 保留）——此前用
+        # `<=` 等值丢弃，与 kb_integration.py（`<` 等值保留）及 qdrant 后端
+        # score_threshold（>= 保留）不一致，score 恰等于阈值的召回被漏掉。
+        if score < settings.vector_store_min_score:
             continue
         rec = DebugExperienceRecord.from_kb_entry(doc)
         rec.source = "vector"

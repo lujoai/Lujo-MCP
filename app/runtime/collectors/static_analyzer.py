@@ -218,15 +218,14 @@ def _resolve_path(file_path: str) -> Optional[str]:
     """
     # FIX: P0-2 复用 code_locator 的白名单校验，消除任意文件读取
     from app.config import settings
-    from app.runtime.collectors.code_locator import _is_allowed
+    from app.runtime.collectors.code_locator import _is_allowed, _split_remote_local
 
     raw = (settings.source_path_map or "").strip()
     if raw:
         for pair in raw.split(","):
-            if ":" not in pair:
-                continue
-            remote, local = pair.split(":", 1)
-            remote, local = remote.strip(), local.strip()
+            # FIX(v0.7.1-b8-5): 复用 code_locator 的盘符感知拆分（Windows 盘符
+            # 冒号不再被误当 remote/local 分隔符），与 _remap_path 保持同口径。
+            remote, local = _split_remote_local(pair)
             if remote and file_path.startswith(remote):
                 candidate = os.path.realpath(local + file_path[len(remote):])
                 return candidate if _is_allowed(candidate) else None

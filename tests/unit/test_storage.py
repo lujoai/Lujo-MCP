@@ -47,6 +47,28 @@ class TestMemoryTraceStore:
 
         assert self.store.list_request_ids(limit=10) == ["rid-old", "rid-new"]
 
+    def test_entries_per_request_capped(self, monkeypatch):
+        """FIX b8-4: 单 request_id 条目数受上限约束（此前仅 request_id 数量有上限）。"""
+        monkeypatch.setattr(MemoryTraceStore, "_MAX_ENTRIES_PER_REQUEST", 5)
+        store = MemoryTraceStore()
+        for i in range(10):
+            store.save_entry("rid-capped", {"timestamp": float(i), "step": str(i), "data": None})
+
+        entries = store.get_entries("rid-capped")
+        # 保留最新 5 条（丢最旧），有界
+        assert len(entries) == 5
+        assert [e["step"] for e in entries] == ["5", "6", "7", "8", "9"]
+
+    def test_batch_entries_per_request_capped(self, monkeypatch):
+        """FIX b8-4: 批量写入同样受单 request_id 上限约束。"""
+        monkeypatch.setattr(MemoryTraceStore, "_MAX_ENTRIES_PER_REQUEST", 5)
+        store = MemoryTraceStore()
+        store.save_entries("rid-batch", [{"timestamp": float(i), "step": str(i), "data": None} for i in range(8)])
+
+        entries = store.get_entries("rid-batch")
+        assert len(entries) == 5
+        assert [e["step"] for e in entries] == ["3", "4", "5", "6", "7"]
+
 
 class TestMemorySessionStore:
 

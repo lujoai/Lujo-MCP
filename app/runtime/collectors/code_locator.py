@@ -15,16 +15,33 @@ from app.config import settings
 from app.schemas.context import CodeSnippet
 
 
+def _split_remote_local(pair: str) -> tuple[str, str]:
+    """按 remote:local 拆分 SOURCE_PATH_MAP 的单个映射对，兼容 Windows 盘符。
+
+    FIX(v0.7.1-b8-5): 此前 ``pair.split(":", 1)`` 在 Windows 上把盘符冒号当分隔符
+    （"C:\\app:C:\\local" 被拆成 remote="C"、local="\\app:C:\\local"），映射失效。
+    规则：若对以「字母+冒号」（Windows 盘符）开头，则跳过首个冒号、取第二个冒号作
+    分隔符；否则取首个冒号。返回 (remote, local)，均已 strip。
+    """
+    pair = pair.strip()
+    if len(pair) >= 2 and pair[1] == ":" and pair[0].isalpha():
+        rest = pair[2:]
+        idx = rest.find(":")
+        if idx >= 0:
+            return pair[: idx + 2].strip(), rest[idx + 1 :].strip()
+    if ":" in pair:
+        remote, local = pair.split(":", 1)
+        return remote.strip(), local.strip()
+    return "", ""
+
+
 def _remap_path(file_path: str) -> str:
     """按 SOURCE_PATH_MAP 把远程/容器路径映射为本地路径。"""
     raw = (settings.source_path_map or "").strip()
     if not raw:
         return file_path
     for pair in raw.split(","):
-        if ":" not in pair:
-            continue
-        remote, local = pair.split(":", 1)
-        remote, local = remote.strip(), local.strip()
+        remote, local = _split_remote_local(pair)
         if remote and file_path.startswith(remote):
             return local + file_path[len(remote):]
     return file_path
@@ -60,7 +77,9 @@ def make_ide_link(file_path: str, line_no: int) -> Optional[str]:
         return None
     scheme = (settings.ide_scheme or "vscode").lower()
     if scheme == "vscode":
-        return f"vscode://file/{abs_path}:{line_no}"
+        # FIX(v0.7.1-b8-1): Windows 路径反斜杠在 URL 中非法（\U/\A 等被当转义序列，
+        # vscode:// 客户端无法解析）；统一转正斜杠（vscode 协议兼容正斜杠路径）。
+        return f"vscode://file/{abs_path.replace('\\', '/')}:{line_no}"
     return f"file://{abs_path}"
 
 

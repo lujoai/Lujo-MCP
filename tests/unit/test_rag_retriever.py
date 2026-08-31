@@ -177,3 +177,24 @@ def test_vector_store_min_score_decoupled_from_jaccard(monkeypatch):
     # vec-2 score (0.2) <= vector_store_min_score (0.3) -> 过滤
     assert any(r.fingerprint == "vec-1" and r.source == "vector" for r in recs)
     assert not any(r.fingerprint == "vec-2" for r in recs)
+
+
+def test_vector_store_min_score_boundary_inclusive(monkeypatch):
+    """FIX b8-2: score 恰等于阈值时应等值保留（与 kb_integration `<` 口径一致）。
+
+    此前 retriever 用 `<=` 等值丢弃，score == min_score 的召回被漏掉；后端
+    qdrant score_threshold 与 kb_integration 均为 `>=` 保留语义。
+    """
+    monkeypatch.setattr(settings, "vector_store_enabled", True)
+    monkeypatch.setattr(settings, "vector_store_min_score", 0.3)
+
+    class FakeVectorStore:
+        def search(self, text, top_k=3):
+            return [
+                ({"fingerprint": "vec-boundary", "analysis": {"exception_type": "ValueError", "message": "boundary"}, "fix_suggestion": "fix"}, 0.3),
+            ]
+
+    monkeypatch.setattr("app.rag.retriever.get_vector_store", lambda: FakeVectorStore())
+
+    recs = retrieve_debug_experience(exc_type="ValueError", message="unrelated", fingerprint="no-match")
+    assert any(r.fingerprint == "vec-boundary" and r.source == "vector" for r in recs)

@@ -9,11 +9,22 @@ from app.runtime.core.storage.base import TraceStorage, SessionStorage
 
 
 class MemoryTraceStore(TraceStorage):
+    # FIX(v0.7.1-b8-4): 单 request_id 条目数上限——此前只有 request_id 数量上限
+    # （_max_entries），单个 request_id 的 entry 列表无界（长 trace/恶意刷单条
+    # request_id 可无界涨内存）；现按「保留最新 N 条、丢最旧」截断。
+    _MAX_ENTRIES_PER_REQUEST = 5000
+
     def __init__(self, max_entries: int = 10000):
         # OrderedDict 保留插入顺序，用于容量超限时按最旧条目 FIFO 淘汰
         self._store: "OrderedDict[str, list[dict]]" = OrderedDict()
         self._lock = threading.Lock()
         self._max_entries = max_entries
+
+    def _append_entry(self, request_id: str, entry: dict) -> None:
+        self._store[request_id].append(entry)
+        if len(self._store[request_id]) > self._MAX_ENTRIES_PER_REQUEST:
+            # 丢最旧（FIFO），保持有界
+            del self._store[request_id][:-self._MAX_ENTRIES_PER_REQUEST]
 
     def save_entry(self, request_id: str, entry: dict) -> None:
         with self._lock:
@@ -22,7 +33,7 @@ class MemoryTraceStore(TraceStorage):
                 if len(self._store) >= self._max_entries and self._store:
                     self._store.popitem(last=False)  # 弹出最早插入的 request_id
                 self._store[request_id] = []
-            self._store[request_id].append(entry)
+            self._append_entry(request_id, entry)
 
     def save_entries(self, request_id: str, entries: list[dict]) -> None:
         """批量写入（单次锁，原子化）。覆写 ABC 默认实现以减少锁竞争。"""
@@ -31,7 +42,8 @@ class MemoryTraceStore(TraceStorage):
                 if len(self._store) >= self._max_entries and self._store:
                     self._store.popitem(last=False)  # 弹出最早插入的 request_id
                 self._store[request_id] = []
-            self._store[request_id].extend(entries)
+            for entry in entries:
+                self._append_entry(request_id, entry)
 
     def get_entries(self, request_id: str) -> list[dict]:
         with self._lock:
