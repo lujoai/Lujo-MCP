@@ -19,7 +19,7 @@ import pytest
 
 from app.config import settings
 from app.rag import qdrant_vector_store as qdrant_module
-from app.rag.qdrant_vector_store import QdrantVectorStore, _embed_texts, _get_qdrant_client
+from app.rag.qdrant_vector_store import QdrantVectorStore, _embed_texts, _get_qdrant_client, _redact_for_embedding
 from app.rag.vector_store import _reset_vector_store
 
 
@@ -516,3 +516,32 @@ def test_qdrant_connection_exception_records_failure_timestamp(monkeypatch):
     # 连接异常：记录失败时间戳 + 不永久降级（区别于 ImportError 的永久降级）
     assert qdrant_module._qdrant_failed_at is not None
     assert qdrant_module._qdrant_collection_ready is False
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b10-2): embedding 外发应用用户 redaction_extra_patterns
+# ---------------------------------------------------------------------------
+
+
+def test_redact_for_embedding_applies_extra_patterns(monkeypatch):
+    """用户自定义 redaction_extra_patterns 应作用于 embedding 外发脱敏。"""
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"customsecret\s*=\s*\S+")
+    # 重置缓存，避免跨用例污染（模块级缓存按签名命中）
+    monkeypatch.setattr(qdrant_module, "_extra_rules_cache", None)
+    monkeypatch.setattr(qdrant_module, "_extra_rules_signature", None)
+
+    result = _redact_for_embedding("payload customsecret = hunter2 end")
+    assert "hunter2" not in result
+    assert "***" in result
+
+
+def test_redact_for_embedding_invalid_extra_pattern_skipped(monkeypatch):
+    """无效的额外正则被跳过，不抛异常（与 redaction.py 同语义）。"""
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", "([invalid")
+    monkeypatch.setattr(qdrant_module, "_extra_rules_cache", None)
+    monkeypatch.setattr(qdrant_module, "_extra_rules_signature", None)
+
+    result = _redact_for_embedding("plain text no secret")
+    assert result == "plain text no secret"

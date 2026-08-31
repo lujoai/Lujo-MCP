@@ -66,6 +66,37 @@ _REDACT_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "***PHONE***"),
 ]
 
+# 额外脱敏正则缓存（用户 settings.redaction_extra_patterns，换行分隔；与
+# app/runtime/core/redaction.py 的 _load_extra_rules 同语义，架构冻结禁止
+# rag → runtime import 故内联复制）。
+_extra_rules_cache: Optional[list[tuple[re.Pattern[str], str]]] = None
+_extra_rules_signature: Optional[str] = None
+_extra_rules_lock = threading.Lock()
+
+
+def _load_extra_redact_rules() -> list[tuple[re.Pattern[str], str]]:
+    """编译并缓存用户配置的额外脱敏正则；配置变化时重建。线程安全。"""
+    global _extra_rules_cache, _extra_rules_signature
+    sig = settings.redaction_extra_patterns or ""
+    if _extra_rules_cache is not None and _extra_rules_signature == sig:
+        return _extra_rules_cache
+    with _extra_rules_lock:
+        if _extra_rules_cache is not None and _extra_rules_signature == sig:
+            return _extra_rules_cache
+        rules: list[tuple[re.Pattern[str], str]] = []
+        for line in sig.splitlines():
+            pattern = line.strip()
+            if not pattern:
+                continue
+            try:
+                rules.append((re.compile(pattern), "***"))
+            except re.error as e:
+                logger.warning("跳过无效的脱敏正则 %r: %s", pattern, e)
+                continue
+        _extra_rules_cache = rules
+        _extra_rules_signature = sig
+        return rules
+
 
 def _redact_for_embedding(text: str) -> str:
     """embedding 外发前的脱敏。
@@ -80,6 +111,10 @@ def _redact_for_embedding(text: str) -> str:
         logger.warning("redaction disabled — embedding 外发可能包含敏感数据")
         return text
     for pattern, repl in _REDACT_RULES:
+        text = pattern.sub(repl, text)
+    # FIX(v0.7.1-b10-2): 应用用户 redaction_extra_patterns——此前内联副本遗漏，
+    # 自定义敏感字段在 embedding 外发路径漏脱敏。
+    for pattern, repl in _load_extra_redact_rules():
         text = pattern.sub(repl, text)
     return text
 
