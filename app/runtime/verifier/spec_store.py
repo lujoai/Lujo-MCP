@@ -288,7 +288,16 @@ def delete(spec_id: str) -> bool:
             if store.delete_spec(spec_id):
                 existed = True
         except Exception:
-            logger.debug("specs 表删除失败 (spec_id=%s)", spec_id, exc_info=True)
+            # FIX(v0.7.1-b14-1): PG 删除失败时内存/trace_store 已删而 PG 行残留，
+            # 进程重启后 _do_restore 会从 specs 表把该 spec「复活」。此前 debug
+            # 级日志让该失败几乎不可见、复活无从排查；升级为 warning 并显式说明
+            # 后果与补救（PG 恢复后重试删除）。行为不变（优雅降级语义保持）。
+            logger.warning(
+                "specs 表删除失败 (spec_id=%s)：内存与 trace_store 已删，PG 行残留，"
+                "进程重启后该 spec 可能从 PG 恢复（resurrection）；PG 恢复后请重试删除",
+                spec_id,
+                exc_info=True,
+            )
     if existed:
         try:
             delete_logs(spec_id)

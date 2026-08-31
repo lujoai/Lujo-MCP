@@ -260,3 +260,33 @@ class TestAtomicWrites:
         assert restored is not None
         assert restored["target"] == "new"
         assert restored["updated_at"] == 200.0
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b14-1): PG 删除失败时升级日志为 warning（resurrection 可观测性）
+# ---------------------------------------------------------------------------
+
+
+class TestDeletePgFailureLogging:
+    """PG 删除失败 → warning 日志显式说明 resurrection 后果（此前 debug 不可见）。"""
+
+    def test_pg_delete_failure_logs_warning(self, monkeypatch, caplog):
+        import logging
+
+        class _BoomSpecStore:
+            def delete_spec(self, spec_id):
+                raise RuntimeError("pg down")
+
+        monkeypatch.setattr(spec_store, "_pg_spec_store", lambda: _BoomSpecStore())
+        monkeypatch.setattr(spec_store, "_restored", True)
+        spec_store._specs["sp1"] = {"id": "sp1", "kind": "api", "target": "/t"}
+
+        with caplog.at_level(logging.WARNING):
+            ok = spec_store.delete("sp1")
+
+        # 优雅降级语义保持：内存已删仍返回 True
+        assert ok is True
+        assert "sp1" not in spec_store._specs
+        # 失败升级为 warning 且带 resurrection 提示
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("specs 表删除失败" in r.message and "恢复" in r.message for r in warnings)
