@@ -20,6 +20,10 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 # ── 缓存 ──
 _CACHE_TTL = 30  # 秒
 _cache: dict = {}  # key -> (timestamp, data)
+# FIX(v0.7.1-b13-1): 缓存失效与回填竞态的代际计数——invalidate_cache 递增，
+# 计算前快照、写回前校验；若计算期间发生失效（新 trace 持久化），则丢弃本次
+# 旧快照写回，避免把失效窗口的旧数据重新写进 L1/L2（新 trace 最多 30s 不可见）。
+_generation = 0
 _REDIS_CACHE_KEY = "ai-debug:dashboard:all_traces"
 # FIX: R7-A4 —— 缓存按 limit 分档：Dashboard 常态请求（limit≤100）只按
 # 100 条档计算，避免每个 TTL 周期恒按 1000 条全量算（此前每 error 两次
@@ -46,6 +50,10 @@ def invalidate_cache(source: str | None = None) -> None:
     """
     for tier in _CACHE_TIERS:
         _cache.pop(_cache_key(tier), None)
+    # FIX(v0.7.1-b13-1): 递增代际，使并发在途的 _collect_all_traces 计算
+    # 检测到失效并丢弃其旧快照写回（防失效窗口被旧数据回填）。
+    global _generation
+    _generation += 1
     redis_client = _get_redis_cache()
     if redis_client is not None:
         try:
@@ -210,6 +218,9 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
             logger.warning("Dashboard L2 Redis 缓存读取失败", exc_info=True)
 
     # ── 计算（按 cache_limit，而非调用方 limit）──
+    # FIX(v0.7.1-b13-1): 计算前快照代际，写回前校验——计算期间若发生失效
+    # （invalidate_cache 递增），本次旧快照写回被丢弃，避免回填陈旧数据。
+    gen = _generation
     result = []
     seen_ids = set()
 
@@ -229,16 +240,19 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
     result.sort(key=lambda t: t.get("timestamp", 0), reverse=True)
 
     # ── 写 L1 + L2（完整 cache_limit 长度）──
-    _cache[key] = (now, result)
-    if redis_client is not None:
-        try:
-            redis_client.setex(
-                _redis_cache_key(tier),
-                _CACHE_TTL,
-                json.dumps(result, ensure_ascii=False, default=str),
-            )
-        except Exception:
-            logger.warning("Dashboard L2 Redis 缓存写入失败", exc_info=True)
+    # FIX(v0.7.1-b13-1): 代际未变才写回——计算期间发生失效则丢弃旧快照，
+    # 让下一次请求重新计算（新 trace 不再被旧快照遮蔽最多 30s）。
+    if _generation == gen:
+        _cache[key] = (now, result)
+        if redis_client is not None:
+            try:
+                redis_client.setex(
+                    _redis_cache_key(tier),
+                    _CACHE_TTL,
+                    json.dumps(result, ensure_ascii=False, default=str),
+                )
+            except Exception:
+                logger.warning("Dashboard L2 Redis 缓存写入失败", exc_info=True)
 
     return result[:limit]
 

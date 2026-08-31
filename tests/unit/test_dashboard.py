@@ -254,6 +254,33 @@ class TestDashboardCache:
             dashboard_module._collect_all_traces(limit=10)
             assert dashboard_module._cache[dashboard_module._cache_key(100)][0] == 100.0 + dashboard_module._CACHE_TTL + 1
 
+    def test_invalidate_cache_bumps_generation(self, monkeypatch):
+        """FIX b13-1: invalidate_cache 递增 generation（触发在途计算丢弃旧快照）。"""
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: None)
+        before = dashboard_module._generation
+        dashboard_module.invalidate_cache(source="test")
+        assert dashboard_module._generation == before + 1
+
+    def test_generation_guard_discards_stale_write(self, monkeypatch):
+        """FIX b13-1: 计算期间失效（generation 递增）则丢弃旧快照写回。"""
+        dashboard_module._cache.clear()
+        dashboard_module._generation = 0
+
+        original_list_recent = dashboard_module.errors.list_recent
+
+        def _bumping_list_recent(*a, **k):
+            # 模拟计算期间的并发 invalidate_cache（新 trace 持久化）
+            dashboard_module._generation += 1
+            return original_list_recent(*a, **k)
+
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", _bumping_list_recent)
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: None)
+
+        dashboard_module._collect_all_traces(limit=10)
+
+        # 计算期间 generation 已变 → 不写回 L1（旧快照不遮蔽新 trace）
+        assert dashboard_module._cache_key(100) not in dashboard_module._cache
+
 
 # ---------------------------------------------------------------------------
 # FIX: P1-E1 —— 缓存不被首个请求的 limit 固化
