@@ -102,4 +102,7 @@ CREATE TABLE IF NOT EXISTS traces_archive (
 );
 CREATE INDEX IF NOT EXISTS idx_traces_archive_rid ON traces_archive(request_id);
 CREATE INDEX IF NOT EXISTS idx_traces_archive_ts  ON traces_archive(timestamp);
+-- FIX(v0.7.1-b9-4): 归档反查用 `id NOT IN (SELECT id FROM traces_archive)`（delete_after=False
+-- 时防重复归档），traces_archive.id 无索引会导致反查退化为全表扫描；补 id 索引使其走 anti-join 索引。
+CREATE INDEX IF NOT EXISTS idx_traces_archive_id  ON traces_archive(id);
 """

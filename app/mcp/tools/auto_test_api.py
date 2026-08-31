@@ -33,6 +33,9 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
     """内部 async 函数：用 Playwright 异步 API 执行遍历"""
     from playwright.async_api import async_playwright
 
+    # FIX(v0.7.1-b9-3): 遍历期间 console/network 错误列表无界增长——此前只在返回前
+    # 截断 [:20]，遍历中页面刷大量错误/4xx 会无界累积内存；现采集即限长（保前 N 条）。
+    _MAX_CAPTURED_ERRORS = 100
     console_errors = []
     network_errors = []
     executed = []
@@ -51,12 +54,14 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
             if capture_console:
                 page.on("console", lambda msg: (
                     msg.type in ("error", "warning") and
+                    len(console_errors) < _MAX_CAPTURED_ERRORS and
                     console_errors.append({"type": msg.type, "text": msg.text})
                 ) if msg.type in ("error", "warning") else None)
 
             if capture_network:
                 page.on("response", lambda resp: (
                     resp.status >= 400 and
+                    len(network_errors) < _MAX_CAPTURED_ERRORS and
                     network_errors.append({"url": resp.url, "status": resp.status})
                 ) if resp.status >= 400 else None)
 

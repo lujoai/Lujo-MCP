@@ -14,3 +14,5 @@ CREATE TABLE IF NOT EXISTS traces_archive (
 );
 CREATE INDEX IF NOT EXISTS idx_traces_archive_rid ON traces_archive(request_id);
 CREATE INDEX IF NOT EXISTS idx_traces_archive_ts  ON traces_archive(timestamp);
+-- FIX(v0.7.1-b9-4): 归档反查 id NOT IN 子查询需 id 索引（与 ddl.py DDL_TRACES_ARCHIVE 同口径）
+CREATE INDEX IF NOT EXISTS idx_traces_archive_id  ON traces_archive(id);

@@ -714,6 +714,19 @@ class TestAsyncPGStore:
         count = await store.cleanup_expired(ttl_seconds=3600)
         assert count == 3
 
+    @pytest.mark.asyncio
+    async def test_ensure_init_builds_kb_table(self, monkeypatch):
+        """FIX b9-1: asyncpg _ensure_init 应建 kb_entries 表（此前漏建）。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "pg_partition_enabled", False)
+        monkeypatch.setattr(_settings, "pg_archive_enabled", False)
+
+        self._mod._initialized = False
+        await self._mod._ensure_init()
+
+        execs = [c for c in self._conn.calls if c[0] == "execute"]
+        assert any("kb_entries" in c[1] for c in execs), "asyncpg _ensure_init 应建 kb_entries 表"
+
 
 # ════════════════════════════════════════════
 #  Phase 5 P3-1：分区工具函数测试（纯函数，无外部依赖）

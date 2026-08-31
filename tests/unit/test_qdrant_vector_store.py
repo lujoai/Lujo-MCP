@@ -11,6 +11,7 @@ mock 策略：用 monkeypatch 替换 _get_qdrant_client / _get_embedding_client 
 """
 from __future__ import annotations
 
+import time
 import uuid
 from unittest.mock import MagicMock
 
@@ -438,3 +439,80 @@ def test_embedding_client_success_not_cached_as_failed(monkeypatch):
     assert qdrant_module._get_embedding_client() is fake_client
     assert qdrant_module._embedding_unavailable is False
     assert qdrant_module._get_embedding_client() is fake_client  # 命中缓存不重建
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b9-2): Qdrant 连接失败 TTL 重试（短暂不可达可自行恢复）
+# ---------------------------------------------------------------------------
+
+
+def test_qdrant_connection_failure_cooldown_short_circuits(monkeypatch):
+    """连接失败后处于冷却期：直接返回 None，不置 _qdrant_collection_ready（仍可重试）。"""
+    monkeypatch.setattr(qdrant_module, "_qdrant_collection_ready", False)
+    monkeypatch.setattr(qdrant_module, "_qdrant_failed_at", time.time())  # 刚失败
+    monkeypatch.setattr(qdrant_module, "_qdrant_client", None)
+
+    assert qdrant_module._get_qdrant_client() is None
+    # 冷却期短路：不应把状态推进为永久降级（否则永不恢复）
+    assert qdrant_module._qdrant_collection_ready is False
+
+
+def test_qdrant_connection_failure_retries_after_ttl(monkeypatch):
+    """TTL 过期后重试：走 import 失败路径 → 永久降级（缺包场景）。"""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _boom_import(name, *a, **k):
+        if name == "qdrant_client" or name.startswith("qdrant_client."):
+            raise ImportError("qdrant_client not installed")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _boom_import)
+    monkeypatch.setattr(qdrant_module, "_qdrant_collection_ready", False)
+    monkeypatch.setattr(qdrant_module, "_qdrant_failed_at", time.time() - 9999)  # TTL 已过
+    monkeypatch.setattr(qdrant_module, "_qdrant_client", None)
+
+    assert qdrant_module._get_qdrant_client() is None
+    # 重试发生：import 失败 → 永久降级（缺包需重启，与连接失败区分）
+    assert qdrant_module._qdrant_collection_ready is True
+
+
+def test_qdrant_connection_exception_records_failure_timestamp(monkeypatch):
+    """连接异常（非 import 失败）记录失败时间戳且不置永久降级（可 TTL 后重试）。"""
+    import builtins
+    import types
+
+    real_import = builtins.__import__
+
+    class _FakeUnexpectedResponse(Exception):
+        pass
+
+    class _BoomClient:
+        def __init__(self, *a, **k):
+            raise RuntimeError("connection refused")
+
+    def _fake_qdrant_import(name, *a, **k):
+        if name == "qdrant_client":
+            mod = types.ModuleType("qdrant_client")
+            mod.QdrantClient = _BoomClient
+            return mod
+        if name == "qdrant_client.http":
+            return types.ModuleType("qdrant_client.http")
+        if name == "qdrant_client.http.exceptions":
+            exc = types.ModuleType("qdrant_client.http.exceptions")
+            exc.UnexpectedResponse = _FakeUnexpectedResponse
+            return exc
+        if name.startswith("qdrant_client."):
+            return real_import(name, *a, **k)
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_qdrant_import)
+    monkeypatch.setattr(qdrant_module, "_qdrant_collection_ready", False)
+    monkeypatch.setattr(qdrant_module, "_qdrant_failed_at", None)
+    monkeypatch.setattr(qdrant_module, "_qdrant_client", None)
+
+    assert qdrant_module._get_qdrant_client() is None
+    # 连接异常：记录失败时间戳 + 不永久降级（区别于 ImportError 的永久降级）
+    assert qdrant_module._qdrant_failed_at is not None
+    assert qdrant_module._qdrant_collection_ready is False

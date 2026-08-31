@@ -7,7 +7,16 @@
 
 ## [Unreleased]
 
-> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项）+ 批次7（SDK/npm + 文档口径 4 项）+ 批次8（runtime collectors + storage + rag 5 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+> v0.7.1 Minor 债务清理·批次1（正确性/健壮性 10 项）+ 批次2（runtime collectors/context 10 项）+ 批次3（runtime/llm/协议 10 项）+ 批次4（MCP 协议/API/runtime 9 项）+ 批次5（SDK/npm/scripts/CI + config/auth 10 项）+ 批次6（agent/llm/quality + runtime core/storage 8 项）+ 批次7（SDK/npm + 文档口径 4 项）+ 批次8（runtime collectors + storage + rag 5 项）+ 批次9（runtime storage + rag + mcp 4 项），全部来自第 6/7 轮审查 Minor 索引。零回归铁律：全部既有路径行为不变，仅修复此前出错/失真/盲区的路径。
+
+### 🔒 修复（Minor 批次9：runtime storage + rag + mcp 4 项）
+
+- **Qdrant 首次失败后 TTL 重试**：此前连接失败即置 `_qdrant_collection_ready=True` 永久降级（Qdrant 短暂不可达后也不恢复，向量检索永远失效）；现连接类异常记录失败时间戳，按 60s TTL 冷却后自动重试（缺包 ImportError 与维度不匹配仍永久降级）。
+- **asyncpg `_ensure_init` 补齐 KB 表**：同步 `pg_executor` 已建 `kb_entries`，asyncpg 后端此前漏建——走 asyncpg 时 KB 写穿/回灌会因缺表失败；现补齐 `DDL_KB_ENTRIES`。
+- **归档 `id NOT IN` 子查询补索引**：`traces_archive.id` 无索引，`delete_after=False` 时反查防重复归档的子查询退化为全表扫描；`ddl.py` 与迁移文件同步补 `idx_traces_archive_id`。
+- **auto_test 遍历期间错误列表无界增长**：console/network 错误此前只在返回前 `[:20]` 截断、遍历中页面刷大量错误/4xx 会无界累积内存；现采集即限长（`_MAX_CAPTURED_ERRORS=100`）。
+
+> 批次9 复审观察（非阻塞，留痕）：① b9-2 `except Exception` 兜底把 401/403 等永久性错误也当作可重试连接失败（每 60s 重试并告警），但相对「永不恢复」仍是改进、且修好配置即可自愈；② 已补 `except` 分支的时间戳记录测试。
 
 ### 🔒 修复（Minor 批次8：runtime collectors + storage + rag 5 项）
 
@@ -112,8 +121,8 @@
 ### 🛠️ 工程与测试
 
 - **CI sdk-js-smoke 补登记 `sdk-destroy.test.js`**：v0.6.9 新增的该文件此前漏登 CI 门禁（本地 npm test 有跑、CI 没跑），与 v0.6.7 门禁缺口同型；同时登记批次1 新增 `sdk-minor-reuse.test.js`，CI 与 npm test 文件清单恢复一致。
-- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）；批次7 新增回归 1 项（`sdk-destroy` fetch(new Request) method 断言 1）；批次8 新增回归 6 项（`test_code_locator` `_split_remote_local`×2 + vscode URL 转义 1、`test_rag_retriever` 边界等值 1、`test_storage` memory entry 上限×2）。
-- **验证**：`ruff check .` 全绿；unit **1467 tests / 0 failed / 6 skipped**（批次7 后 1461 + 批次8 +6）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **50/50**；check_doc_links **168 链接 0 错误**。八批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS、批次7 4/4 PASS、批次8 5/5 PASS，复审建议均已采纳或在注释留痕）。
+- **测试**：批次1 新增回归 13 项（unit 11 + SDK JS 2）；批次2 新增回归 11 项 + 更新 2 个契约测试；批次3 新增回归 16 项（新建 `test_runtime_collector.py`）；批次4 新增回归 9 项（新建 `test_git_blame.py` 2 项 + jsonrpc 3 + redaction 1 + static_analyzer 1 + mcp_routes 1 + repair integration 2，另更新 1 个既有契约测试 b4-2）；批次5 新增回归 2 项（`test_agent_mode_config` 非法值告警 1 + `test_rbac` 未知 minimum fail-closed 断言更新 1；脚本/配置类改动以语法/行为校验代替单测——node --check、bash -n、docker compose config、check_doc_links 实测 0 错误）；批次6 新增回归 7 项（`test_quality` 4 个调用点同步 + `test_state_store` Redis fail-closed 1 + `test_storage` save 不突变/`_safe_json_loads`×3/close_pool×2）；批次7 新增回归 1 项（`sdk-destroy` fetch(new Request) method 断言 1）；批次8 新增回归 6 项（`test_code_locator` `_split_remote_local`×2 + vscode URL 转义 1、`test_rag_retriever` 边界等值 1、`test_storage` memory entry 上限×2）；批次9 新增回归 3 项（`test_qdrant_vector_store` TTL 冷却短路 + TTL 后重试 + 连接异常时间戳记录、`test_storage` asyncpg KB 表）。
+- **验证**：`ruff check .` 全绿；unit **1470 tests / 0 failed / 6 skipped**（批次8 后 1467 + 批次9 +3）；integration **115 tests / 0 failed**（持平，17 skipped）；e2e **10 tests / 0 failed / 1 skipped**（9 passed + 1 skipped）；Browser SDK JS **50/50**；check_doc_links **168 链接 0 错误**。九批次均经子代理独立复审（批次1-3 10/10 PASS、批次4 9/10 PASS、批次5 10/10 PASS、批次6 8/8 PASS、批次7 4/4 PASS、批次8 5/5 PASS、批次9 4/4 PASS，复审建议均已采纳或在注释留痕）。
 
 ## [0.7.0] - 2026-08-29
 

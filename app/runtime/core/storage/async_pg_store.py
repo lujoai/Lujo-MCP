@@ -46,6 +46,7 @@ from app.runtime.core.storage.ddl import (  # FIX: P0-5 DDL 单源，消除与 p
     DDL_ERRORS,
     DDL_SPECS,
     DDL_TRACES_ARCHIVE,
+    DDL_KB_ENTRIES,  # FIX(v0.7.1-b9-1): 补齐 KB 表（与同步 pg_executor._ensure_init 同口径）
 )
 
 logger = logging.getLogger("lujo-mcp.storage.async_pg")
@@ -302,6 +303,10 @@ async def _ensure_init() -> None:
             await _exec_multi(conn, DDL_SESSIONS)
             await _exec_multi(conn, DDL_ERRORS)
             await _exec_multi(conn, DDL_SPECS)
+            # FIX(v0.7.1-b9-1): 补齐 KB 表——同步 pg_executor._ensure_init 已建
+            # kb_entries（KB 学习闭环 PG 持久化依赖），asyncpg 后端此前漏建，
+            # 走 asyncpg 时 KB 写穿/回灌会因缺表失败。
+            await _exec_multi(conn, DDL_KB_ENTRIES)
 
             # P3-2：归档表
             if settings.pg_archive_enabled:

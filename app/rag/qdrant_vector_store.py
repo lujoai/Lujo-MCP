@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 import uuid
 from typing import Any, Optional
 
@@ -84,8 +85,14 @@ def _redact_for_embedding(text: str) -> str:
 
 # ── 模块级单例（参照 analyzer._get_redis_cache 的双重检查锁模式）────────────
 _qdrant_client: Optional[Any] = None  # QdrantClient | None
-# collection 是否已就绪（含已尝试建连/建表）。True 后不再重试，避免故障期每次调用都打网络。
+# collection 是否已就绪（含已成功建连/建表，或永久失败如缺包/维度不匹配）。
+# True 后不再重试，避免故障期每次调用都打网络。
 _qdrant_collection_ready: bool = False
+# FIX(v0.7.1-b9-2): 连接失败时间戳（None=未失败/已恢复）。Qdrant 是网络服务，
+# 短暂不可达（重启/抖动）后可自行恢复，此前连接失败即置 _qdrant_collection_ready=True
+# 永久降级（永不恢复）；现按 TTL 冷却后自动重试，缺包/维度不匹配仍永久降级。
+_qdrant_failed_at: Optional[float] = None
+_QDRANT_RETRY_TTL_SECONDS = 60
 _qdrant_lock = threading.Lock()
 
 _embedding_client: Optional[Any] = None  # OpenAI | None
@@ -105,18 +112,26 @@ def _get_qdrant_client() -> Optional[Any]:
     """惰性获取 Qdrant 客户端，不可用时返回 None。
 
     流程：
-    1. ``_qdrant_collection_ready=True`` 时无锁快速返回（含 None 降级态）。
-    2. 双重检查锁内：import qdrant_client（失败说明依赖未装）→ 建连 → 探活 collection：
+    1. ``_qdrant_collection_ready=True``（已成功建连，或永久失败如缺包/维度不匹配）
+       时无锁快速返回（含 None 降级态）。
+    2. 连接失败进入 TTL 冷却（``_qdrant_failed_at``）：冷却期内快速返回 None 不重试，
+       冷却期后自动重试（Qdrant 为网络服务，短暂不可达可自行恢复）。
+    3. 双重检查锁内：import qdrant_client（失败说明依赖未装）→ 建连 → 探活 collection：
        - 不存在 → 自动 create_collection（维度=settings.qdrant_embedding_dim, COSINE）
-       - 存在但维度不匹配 → 不自动重建（丢数据）→ warning + None
-    3. 任何异常 → ``_qdrant_client=None`` + ``_qdrant_collection_ready=True``。
+       - 存在但维度不匹配 → 不自动重建（丢数据）→ warning + None（永久降级）
+    4. 连接类异常 → ``_qdrant_client=None`` + 记录失败时间戳（TTL 后重试）。
     """
-    global _qdrant_client, _qdrant_collection_ready
+    global _qdrant_client, _qdrant_collection_ready, _qdrant_failed_at
     if _qdrant_collection_ready:
         return _qdrant_client
+    # FIX(v0.7.1-b9-2): 连接失败冷却期内快速降级（不重试刷 warning）
+    if _qdrant_failed_at is not None and time.time() - _qdrant_failed_at < _QDRANT_RETRY_TTL_SECONDS:
+        return None
     with _qdrant_lock:
         if _qdrant_collection_ready:
             return _qdrant_client
+        if _qdrant_failed_at is not None and time.time() - _qdrant_failed_at < _QDRANT_RETRY_TTL_SECONDS:
+            return None
         try:
             from qdrant_client import QdrantClient
             from qdrant_client.http.exceptions import UnexpectedResponse
@@ -171,19 +186,21 @@ def _get_qdrant_client() -> Optional[Any]:
                         expected_dim,
                     )
                     _qdrant_client = None
-                    _qdrant_collection_ready = True
+                    _qdrant_collection_ready = True  # 永久降级（需人工干预）
                     return None
 
             _qdrant_client = client
+            _qdrant_failed_at = None
+            _qdrant_collection_ready = True
             logger.info("Qdrant 客户端已连接: url=%s collection=%s", settings.qdrant_url, collection_name)
         except UnexpectedResponse as e:
             logger.warning("Qdrant 连接异常 (status=%s): %s", getattr(e, "status_code", "?"), e)
             _qdrant_client = None
+            _qdrant_failed_at = time.time()  # 连接失败：TTL 后重试
         except Exception:
             logger.warning("Qdrant 客户端初始化失败，向量检索降级为 no-op", exc_info=True)
             _qdrant_client = None
-        finally:
-            _qdrant_collection_ready = True
+            _qdrant_failed_at = time.time()  # 连接失败：TTL 后重试
     return _qdrant_client
 
 
@@ -403,10 +420,11 @@ class QdrantVectorStore(VectorStore):
 
 def _reset_qdrant_state() -> None:
     """测试辅助：重置模块级单例（仅供单测使用，生产代码不应调用）。"""
-    global _qdrant_client, _qdrant_collection_ready, _embedding_client, _embedding_unavailable
+    global _qdrant_client, _qdrant_collection_ready, _qdrant_failed_at, _embedding_client, _embedding_unavailable
     with _qdrant_lock:
         _qdrant_client = None
         _qdrant_collection_ready = False
+        _qdrant_failed_at = None
     with _embedding_client_lock:
         _embedding_client = None
         _embedding_unavailable = False
