@@ -111,7 +111,7 @@ async def _get_pool() -> asyncpg.Pool:
 
 async def close_pool() -> None:
     """优雅关闭连接池（在 lifespan shutdown 中调用）。"""
-    global _pool
+    global _pool, _initialized
     async with _pool_lock:
         if _pool is not None:
             try:
@@ -120,6 +120,10 @@ async def close_pool() -> None:
             except Exception as e:
                 logger.warning("关闭 asyncpg 连接池时出错: %s", e)
             _pool = None
+        # FIX(v0.7.1-b11-3): 重置 _initialized——与同步 pg_executor.close_pool（b6-5）
+        # 同口径：池已关闭理应与「未初始化」一致，进程不退出时后续 _ensure_init
+        # 不被短路、新池的 DDL 保障不失效。
+        _initialized = False
 
 
 def _parse_data(value):
@@ -278,43 +282,48 @@ async def _ensure_init() -> None:
             return
         pool = await _get_pool()
         async with pool.acquire() as conn:
-            # P3-1：分区模式下用分区表替代普通表
-            if settings.pg_partition_enabled:
-                row = await conn.fetchrow(
-                    "SELECT 1 FROM pg_tables WHERE tablename = 'traces'"
-                )
-                if row is None:
-                    await conn.execute("""
-                        CREATE TABLE traces (
-                            id          BIGSERIAL,
-                            request_id  TEXT        NOT NULL,
-                            timestamp   DOUBLE PRECISION NOT NULL,
-                            step        TEXT        NOT NULL,
-                            data        JSONB,
-                            PRIMARY KEY (id, timestamp)
-                        ) PARTITION BY RANGE (timestamp)
-                    """)
-                    await conn.execute("CREATE INDEX idx_traces_rid ON traces(request_id)")
-                    await conn.execute("CREATE INDEX idx_traces_ts  ON traces(timestamp)")
-                    logger.info("已创建分区表 traces (RANGE BY timestamp)")
-            else:
-                await _exec_multi(conn, DDL_TRACES)
+            # FIX(v0.7.1-b11-2): DDL 包事务——此前逐条 autocommit，中途失败（如
+            # CREATE INDEX 报错）留半建 schema（表已建、索引缺），且非原子语义
+            # 与同步 pg_executor._ensure_init（单事务 + conn.commit）不一致；
+            # 现用 asyncpg 事务包裹，DDL 全部成功才提交、任一失败整体回滚。
+            async with conn.transaction():
+                # P3-1：分区模式下用分区表替代普通表
+                if settings.pg_partition_enabled:
+                    row = await conn.fetchrow(
+                        "SELECT 1 FROM pg_tables WHERE tablename = 'traces'"
+                    )
+                    if row is None:
+                        await conn.execute("""
+                            CREATE TABLE traces (
+                                id          BIGSERIAL,
+                                request_id  TEXT        NOT NULL,
+                                timestamp   DOUBLE PRECISION NOT NULL,
+                                step        TEXT        NOT NULL,
+                                data        JSONB,
+                                PRIMARY KEY (id, timestamp)
+                            ) PARTITION BY RANGE (timestamp)
+                        """)
+                        await conn.execute("CREATE INDEX idx_traces_rid ON traces(request_id)")
+                        await conn.execute("CREATE INDEX idx_traces_ts  ON traces(timestamp)")
+                        logger.info("已创建分区表 traces (RANGE BY timestamp)")
+                else:
+                    await _exec_multi(conn, DDL_TRACES)
 
-            await _exec_multi(conn, DDL_SESSIONS)
-            await _exec_multi(conn, DDL_ERRORS)
-            await _exec_multi(conn, DDL_SPECS)
-            # FIX(v0.7.1-b9-1): 补齐 KB 表——同步 pg_executor._ensure_init 已建
-            # kb_entries（KB 学习闭环 PG 持久化依赖），asyncpg 后端此前漏建，
-            # 走 asyncpg 时 KB 写穿/回灌会因缺表失败。
-            await _exec_multi(conn, DDL_KB_ENTRIES)
+                await _exec_multi(conn, DDL_SESSIONS)
+                await _exec_multi(conn, DDL_ERRORS)
+                await _exec_multi(conn, DDL_SPECS)
+                # FIX(v0.7.1-b9-1): 补齐 KB 表——同步 pg_executor._ensure_init 已建
+                # kb_entries（KB 学习闭环 PG 持久化依赖），asyncpg 后端此前漏建，
+                # 走 asyncpg 时 KB 写穿/回灌会因缺表失败。
+                await _exec_multi(conn, DDL_KB_ENTRIES)
 
-            # P3-2：归档表
-            if settings.pg_archive_enabled:
-                await _exec_multi(conn, DDL_TRACES_ARCHIVE)
+                # P3-2：归档表
+                if settings.pg_archive_enabled:
+                    await _exec_multi(conn, DDL_TRACES_ARCHIVE)
 
-            # P3-1：确保分区存在
-            if settings.pg_partition_enabled:
-                await _ensure_partitions(conn)
+                # P3-1：确保分区存在
+                if settings.pg_partition_enabled:
+                    await _ensure_partitions(conn)
 
         _initialized = True
         logger.info("asyncpg 表初始化完成")

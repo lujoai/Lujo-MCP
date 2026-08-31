@@ -290,5 +290,7 @@ class TestCoordinatorPhase2Dag:
         git_trace = next(t for t in result["agent_trace"] if t["agent_name"] == "git")
         assert git_trace["status"] == "failed"
         assert "unexpected boom" in (git_trace["error"] or "")
+        # FIX b11-1: started_at 不再用 0 哨兵，duration_s 不再 ≈1.76e9
+        assert git_trace["duration_s"] == 0.0
         assert result["test_plan"] == {}
         assert result["security_review"] == {}

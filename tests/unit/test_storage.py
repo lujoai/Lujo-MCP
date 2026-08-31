@@ -512,6 +512,10 @@ class _FakeConn:
         self.calls.append(("fetchrow", sql, args))
         return self._fetchrow_queue.pop(0) if self._fetchrow_queue else None
 
+    def transaction(self):
+        """模拟 asyncpg conn.transaction() 异步上下文管理器（无真实事务语义）。"""
+        return _FakeAcquireCtx(self)
+
 
 class _FakeAcquireCtx:
     """模拟 asyncpg pool.acquire() 的 async context manager。"""
@@ -726,6 +730,16 @@ class TestAsyncPGStore:
 
         execs = [c for c in self._conn.calls if c[0] == "execute"]
         assert any("kb_entries" in c[1] for c in execs), "asyncpg _ensure_init 应建 kb_entries 表"
+
+    @pytest.mark.asyncio
+    async def test_close_pool_resets_initialized(self, monkeypatch):
+        """FIX b11-3: asyncpg close_pool 重置 _initialized（与同步 pg_executor 同口径）。"""
+        monkeypatch.setattr(self._mod, "_pool", None)
+        monkeypatch.setattr(self._mod, "_initialized", True)
+
+        await self._mod.close_pool()
+
+        assert self._mod._initialized is False
 
 
 # ════════════════════════════════════════════

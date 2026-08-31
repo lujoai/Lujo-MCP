@@ -265,14 +265,18 @@ class Coordinator:
                 "marking all nodes FAILED",
                 timeout,
             )
+            # FIX(v0.7.1-b11-1): started_at 用当前时间而非 0 哨兵——此前 started_at=0
+            # 使 _trace 的 duration_s = finished_at - 0 ≈ 1.76e9（Unix 纪元秒），
+            # 污染 agent_trace 审计数组。
+            now = BaseAgent._now()
             return {
                 name: AgentResult(
                     agent_name=name,
                     status=AgentStatus.FAILED,
                     output={},
                     error=f"DAG parallel timeout after {timeout}s",
-                    started_at=0.0,
-                    finished_at=BaseAgent._now(),
+                    started_at=now,
+                    finished_at=now,
                 )
                 for name, _ in tasks
             }
@@ -284,13 +288,15 @@ class Coordinator:
                 logger.exception(
                     "Coordinator DAG: %s unexpected error", node_name
                 )
+                # FIX(v0.7.1-b11-1): 同上，started_at 不用 0 哨兵避免 duration_s≈1.76e9
+                now = BaseAgent._now()
                 results[node_name] = AgentResult(
                     agent_name=node_name,
                     status=AgentStatus.FAILED,
                     output={},
                     error=str(raw),
-                    started_at=0.0,
-                    finished_at=BaseAgent._now(),
+                    started_at=now,
+                    finished_at=now,
                 )
             elif isinstance(raw, AgentResult):
                 results[node_name] = raw
