@@ -368,3 +368,53 @@ class TestVerifyUIEndpoint:
         resp = client.post("/api/debug/verify/ui", json={})
         # 可能返回 200（业务错误）或 422（校验失败）
         assert resp.status_code in (200, 422)
+
+
+# ---------------------------------------------------------------------------
+# FIX(v0.7.1-b12-1): SSRF 守卫放行浏览器内部 scheme（data/blob/about）
+# ---------------------------------------------------------------------------
+
+
+class _FakeRoute:
+    def __init__(self, url):
+        self.request = type("_Req", (), {"url": url})()
+        self.continued = False
+        self.aborted = False
+
+    def continue_(self):
+        self.continued = True
+
+    def abort(self):
+        self.aborted = True
+
+
+class _FakeContext:
+    def __init__(self):
+        self.handler = None
+
+    def route(self, pattern, handler):
+        self.handler = handler
+
+
+def _install_and_get_handler():
+    ctx = _FakeContext()
+    ui_runner._install_ssrf_guard(ctx)
+    return ctx.handler
+
+
+def test_ssrf_guard_allows_browser_internal_schemes():
+    """data:/blob:/about: 不发起网络请求、不构成 SSRF，应放行（continue_）。"""
+    handler = _install_and_get_handler()
+    for url in ("data:image/png;base64,xxxx", "blob:https://example.com/abc", "about:blank"):
+        route = _FakeRoute(url)
+        handler(route)
+        assert route.continued is True, f"{url} 应放行"
+        assert route.aborted is False, f"{url} 不应被 abort"
+
+
+def test_ssrf_guard_still_blocks_private_http():
+    """http 内网地址仍被 abort（SSRF 防护不被内部 scheme 放行削弱）。"""
+    handler = _install_and_get_handler()
+    route = _FakeRoute("http://127.0.0.1:8080/secret")
+    handler(route)
+    assert route.aborted is True

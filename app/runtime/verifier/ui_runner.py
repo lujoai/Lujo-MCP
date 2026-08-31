@@ -150,8 +150,18 @@ def _install_ssrf_guard(context) -> None:
     残余风险说明：极端 DNS rebinding（TTL 极短、同一域名交替返回
     公网/内网 IP）场景仍可能绕过，生产环境建议叠加网络层防护。
     """
+    # 浏览器内部 scheme：不发起网络请求、不构成 SSRF 面。此前经
+    # inspect_url_security 的 scheme_not_allowed 一律 abort，会连带打断依赖
+    # data:/blob:/about: 子资源（内联图片、JS 生成内容等）的正常页面渲染。
+    _BROWSER_INTERNAL_SCHEMES = ("data:", "blob:", "about:")
+
     def handler(route):
         request_url = route.request.url
+        # FIX(v0.7.1-b12-1): 放行浏览器内部 scheme（data/blob/about），它们不产生
+        # 网络请求、无法用于 SSRF；其余（http/https/ws/file 等）仍走逐跳校验。
+        if request_url.lower().startswith(_BROWSER_INTERNAL_SCHEMES):
+            route.continue_()
+            return
         assessment = inspect_url_security(request_url)
         if not assessment["allowed"]:
             logger.warning(
