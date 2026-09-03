@@ -102,4 +102,5 @@ jobs:
           browser-sdk/test/sdk-batch-limit.test.js
           browser-sdk/test/sdk-destroy.test.js
           browser-sdk/test/sdk-minor-reuse.test.js
+          browser-sdk/test/sdk-rejection.test.js
 

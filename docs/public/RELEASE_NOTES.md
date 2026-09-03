@@ -1,12 +1,44 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.7.1（2026-08-31）**。主题「Minor 债务批量清理」：第 6/7 轮审查 Minor 索引分 15 个批次全部清零——78 项真 bug 修复 + 剩余项逐条留痕关闭。测试基线 unit **1479 tests / 0 failed / 6 skipped**、integration **115 tests / 0 failed**、Browser SDK JS **50/50**、e2e **10/0/1**。无 Breaking Change，无需迁移。详见 CHANGELOG.md [0.7.1] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.1`。
+> 最新版本：**v0.7.2（2026-09-03）**。主题「分发统一 + 前端现场信噪比」：Browser SDK 随 npm 主包分发（CDN 一行引用成立）+ `unhandledrejection` 非标准拒绝载荷堆栈兜底 + README 面向新用户全面重构。测试基线 Browser SDK JS **54/54**、unit 全绿、ruff 硬门禁全绿。无 Breaking Change，无需迁移。详见 CHANGELOG.md [0.7.2] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.2`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.1  
-**Release Date / 发布日期**: 2026-08-31  
-**Codename / 代号**: 债务清零 ｜ Minor Debt Free
+**Version / 版本**: v0.7.2  
+**Release Date / 发布日期**: 2026-09-03  
+**Codename / 代号**: 一把利刃 ｜ One Package
+
+---
+
+## v0.7.2（2026-09-03）
+
+> 主题「分发统一 + 前端现场信噪比」。坚守「MCP Server 调试上下文基础设施」定位：不加 Agent 能力，只把「喂现场」做得更准、接入门槛压到更低。**零 Breaking Change、零新增配置**。
+
+### ⚠️ 升级注意
+
+- **无 Breaking Change**：直接升级即可；npm 主包 `files` 扩展只增不减，既有 `bin` 引用不受影响。
+
+### ✨ 新增：Browser SDK 随主包分发（单包交付 + CDN 直引）
+
+- npm 主包 `files` 扩展为 `["bin", "browser-sdk"]`：装一个 `@lujoai/lujo-mcp`，后端 MCP Server 与前端探针全都有。
+- 前端页面可直接 CDN 一行引用，无需手动拷贝文件：
+  ```html
+  <script src="https://cdn.jsdelivr.net/npm/@lujoai/lujo-mcp/browser-sdk/ai-debug.js"></script>
+  <script>window.AiDebug.init({ endpoint: "http://localhost:8000" });</script>
+  ```
+- **防漂移双重守卫**：prepublish 脚本校验分发副本与仓库源逐字节一致；分发 smoke 测试哈希比对，漂移即 CI 红。
+
+### ✨ 增强：unhandledrejection 非标准 reason 堆栈兜底
+
+- 此前 `Promise.reject("string")` / `Promise.reject({code: 401})` 等非 Error 拒因没有 `stack`，上报的 `frames` 为空数组，AI 只见错误文字、丢失抛出位置。
+- 现结构化解析对象载荷（`name`/`type`/`message`），无堆栈可解析时合成含页面 URL 的兜底帧；新增 JS 契约测试 `sdk-rejection.test.js`（4 项，全部经 `/ingest/batch` 真实批量通道验证）。
+
+### 📖 文档：README 面向新用户全面重构
+
+- **30 秒极速接入**：首推 `npx -y @lujoai/lujo-mcp` 免安装直跑（规避 Claude Desktop 等 GUI 客户端不继承终端 PATH 的 `command not found` 高频问题）。
+- **5 分钟真实调试闭环**：启动服务 → 两行 SDK 引入 → 触发异常 → AI 一键诊断（对齐 DEMO 官方验证路径，修正此前文档中不可用的 CDN 假链接与 stdio 模式下走不通的流程）。
+- **能力阶梯**：明确「零配置即可用」与「配置 1 个 API Key 解锁」的边界；新增三大高频排错 FAQ。
+- 版本历史下沉 RELEASE_NOTES / CHANGELOG，首页回归极简。
 
 ---
 

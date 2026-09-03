@@ -7,7 +7,23 @@
 
 ## [Unreleased]
 
-- 无（v0.7.1 已发布；后续变更在此追加）。
+- 无（v0.7.2 已发布；后续变更在此追加）。
+
+## [0.7.2] - 2026-09-03
+
+> 主题「分发统一 + 前端现场信噪比」：Browser SDK 随 npm 主包分发（CDN 一行引用成立）+ `unhandledrejection` 非标准拒绝载荷堆栈兜底。零 Breaking Change、零新增配置。
+
+### ✨ 分发（单包交付 + CDN 直引）
+
+- **Browser SDK 随主包分发**：npm 元包 `files` 扩展为 `["bin", "browser-sdk"]`，`ai-debug.js` 随 `@lujoai/lujo-mcp` 一起发布——前端页面可直接 CDN 一行引用（`https://cdn.jsdelivr.net/npm/@lujoai/lujo-mcp/browser-sdk/ai-debug.js`），无需手动拷贝文件；分发副本与仓库源加双重防漂移守卫（prepublish 校验 + 分发 smoke 哈希比对）。
+
+### ✨ 增强（前端异常现场）
+
+- **`unhandledrejection` 非标准 reason 堆栈兜底**：此前 `Promise.reject("string")` / `Promise.reject({...})` 等非 Error 拒绝因无 `stack` 丢失全部堆栈帧（`frames: []`）；现结构化解析对象载荷（`name`/`type`/`message`），无堆栈可解析时合成含页面 URL 的兜底帧，AI 定位异步 Bug 不再丢失抛出上下文；新增 JS 契约测试 `sdk-rejection.test.js`（4 项）。
+
+### 📖 文档
+
+- **README 面向新用户全面重构**：30 秒 npx 极速接入（规避桌面 GUI PATH 问题）、5 分钟真实调试闭环（对齐 DEMO 官方路径）、零配置 vs 进阶能力阶梯、高频排错 FAQ；版本历史下沉 RELEASE_NOTES/CHANGELOG。
 
 ## [0.7.1] - 2026-08-31
 

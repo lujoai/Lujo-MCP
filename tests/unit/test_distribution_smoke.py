@@ -77,7 +77,7 @@ def test_npm_meta_package_structure():
     assert meta["name"] == "@lujoai/lujo-mcp"
     assert meta["version"] == _version()
     assert meta["bin"] == {"lujo-mcp-server": "bin/cli.js"}
-    assert meta["files"] == ["bin"]
+    assert meta["files"] == ["bin", "browser-sdk"]
     # optionalDependencies 必须覆盖三平台且版本一致
     od = meta.get("optionalDependencies", {})
     assert set(od) == {
@@ -93,6 +93,16 @@ def test_npm_meta_bin_scripts_exist():
     assert (meta_dir / "bin" / "cli.js").is_file()
     assert (meta_dir / "bin" / "check.js").is_file()
     assert (meta_dir / "scripts" / "check-clean-bin.js").is_file()
+    # browser-sdk 随主包分发，供 CDN 直接引用（v0.7.2）
+    # 分发副本必须与仓库源逐字节一致——漂移会让 CDN 用户拿到旧版 SDK
+    src = BROWSER_SDK / "ai-debug.js"
+    copy = meta_dir / "browser-sdk" / "ai-debug.js"
+    assert src.is_file(), "仓库源 browser-sdk/ai-debug.js 缺失"
+    assert copy.is_file(), "主包分发副本 browser-sdk/ai-debug.js 缺失"
+    assert src.read_bytes() == copy.read_bytes(), (
+        "browser-sdk/ai-debug.js 分发副本与仓库源不一致，"
+        "请执行: cp browser-sdk/ai-debug.js npm/packages/lujo-mcp/browser-sdk/"
+    )
     # cli.js 必须引用平台二进制（开箱即用核心）
     cli = (meta_dir / "bin" / "cli.js").read_text(encoding="utf-8")
     assert "lujo-mcp-server" in cli
