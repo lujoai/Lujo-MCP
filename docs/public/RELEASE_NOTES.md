@@ -1,13 +1,30 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.7.4（2026-09-05）**。主题「修复 npm 启动器 P0」：`lujo-mcp-server` 自 v0.6.8 起在所有平台 100% 启动失败（平台白名单前缀不匹配），npm stdio 用户的服务器从未启动过。本版修复并加双重防复发守卫。**v0.6.8~v0.7.3 的 npm 用户必须升级**；HTTP 模式用户不受影响。详见 CHANGELOG.md [0.7.4] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.4`。
+> 最新版本：**v0.7.5（2026-09-05）**。主题「规范零手写」：新增 `ingest_specs`——宿主 AI 拿到项目的 OpenAPI/Swagger 文档即可一键生成全套 API 断言规范并入库，激活静默失败自动校验（无需手写 expect 规则）。MCP 工具 22 个（公开 18）。测试基线 unit **1502 / 0 failed / 6 skipped**、SDK JS **54/54**、ruff 全绿。无 Breaking Change。详见 CHANGELOG.md [0.7.5] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.5`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.4 ・ **Release Date / 发布日期**: 2026-09-05 ・ **Codename / 代号**: 点火成功 ｜ Launcher Fixed
+**Version / 版本**: v0.7.5 ・ **Release Date / 发布日期**: 2026-09-05 ・ **Codename / 代号**: 零手写规范 ｜ Spec Zero-Touch
 
 ---
 
+## v0.7.5（2026-09-05）
+
+> 主题「规范零手写」。此前静默失败检测需要用户手写 expect JSON（门槛高、几乎无人用）；本版把 OpenAPI 解析能力（v0.7.2 已内置的 `parse_openapi_to_specs` 库函数）暴露为 MCP 工具，宿主 AI 一句话即可把项目的接口文档变成自动校验基线。**零 Breaking Change、零新增配置**。
+
+### ⚠️ 升级注意
+
+- **无 Breaking Change**：直接升级即可；新工具为纯增量，既有 18 个公开工具行为不变。
+
+### ✨ 新增：`ingest_specs` 工具
+
+- **OpenAPI/Swagger 一键生成断言规范并入库**：传入解析后的 OpenAPI JSON，自动提取各接口的成功状态码断言写入 spec_store；之后 `verify` 对这些接口自动比对实际响应，检测「返回 200 但字段缺失/数据不对」的静默失败。
+- 无必填 request_id；`store=false` 仅返回草稿预览；同 `kind+target` 重复入库自动去重；RBAC 为 developer。
+- 6 项新测试覆盖真实存储链路（解析→入库→list 回读、草稿模式、去重、-32602、空 paths、注册契约）。
+
+---
+
+## v0.7.4（2026-09-05）
 ## v0.7.4（2026-09-05）
 
 > 主题「修复 npm 启动器 P0」。`bin/cli.js` / `bin/check.js` 的平台白名单写成无前缀后缀（`win32-x64`），与 `platformPackageName()` 产出的完整包名（`lujo-mcp-win32-x64`）永不相等——`lujo-mcp-server` 在所有平台 100% exit 1（报「暂无官方预编译二进制」），npm stdio 用户自 v0.6.8 起服务器从未启动过。CI 未发现的原因：发布冒烟只测裸二进制、从不测 npm 启动器。

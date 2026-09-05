@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+- 无（v0.7.5 已发布；后续变更在此追加）。
+
+## [0.7.5] - 2026-09-05
+
+> 主题「规范零手写」：新增 `ingest_specs` 工具——宿主 AI 拿到用户项目的 OpenAPI/Swagger 文档即可一键生成全套 API 断言规范并入库，激活静默失败自动校验。零 Breaking Change、零新增配置。
+
 ### ✨ 新增：`ingest_specs` 工具（规范自动生成最后一环）
 
 - **OpenAPI/Swagger 一键生成断言规范并入库**：宿主 AI 拿到用户项目的 `openapi.json` 即可自动生成全套 API 断言规范（成功状态码断言）写入 spec_store，此后 `verify` 对这些接口自动做「返回 200 但数据不对」的静默失败校验——兑现 PRD「静默失败不应依赖手写规范」。

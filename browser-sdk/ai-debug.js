@@ -1,5 +1,5 @@
 /**
- * lujo-mcp Browser SDK v0.7.4
+ * lujo-mcp Browser SDK v0.7.5
  *
  * 版本以 browser-sdk/package.json 的 version 为准（本注释仅为可读性，
  * 升级时随版本 bump 一并更新，避免再次漂移）。
