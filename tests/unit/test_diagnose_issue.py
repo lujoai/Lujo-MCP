@@ -205,6 +205,18 @@ async def test_search_logs_tool():
 
 
 @pytest.mark.asyncio
+async def test_search_logs_session_isolation():
+    """FIX(v0.7.3): 带 session_id 搜索不得泄漏其他会话的全局存储摘要。"""
+    _seed_error(exc_type="TimeoutError", message="session A timeout", session_id="sess-a")
+
+    own = await _call_tool("search_logs", {"keyword": "timeout", "session_id": "sess-a"})
+    other = await _call_tool("search_logs", {"keyword": "timeout", "session_id": "sess-b"})
+
+    assert own["count"] == 1
+    assert other["count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_search_logs_missing_keyword_returns_invalid_params():
     """keyword 必填：缺失 → -32602。"""
     req = JSONRPCRequest(

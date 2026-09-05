@@ -241,7 +241,11 @@ def search_logs(keyword: str, since_minutes: int = 30, session_id: str | None = 
                 "top_frame": _top_frame(e["frames"]),
             })
 
-    storage_ids = list_request_ids(limit=50)
+    storage_ids = []
+    # FIX(v0.7.3): 与 list_recent_traces 同口径——list_request_ids 全局扫描不支持
+    # 会话过滤，带 session_id 时合并全局摘要会把其他会话的错误泄漏进搜索结果。
+    if session_id is None:
+        storage_ids = list_request_ids(limit=50)
     seen_ids = {item["trace_id"] for item in results}
     for rid in storage_ids:
         if rid not in seen_ids:
