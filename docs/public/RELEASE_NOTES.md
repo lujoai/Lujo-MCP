@@ -1,12 +1,41 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.7.2（2026-09-03）**。主题「分发统一 + 前端现场信噪比」：Browser SDK 随 npm 主包分发（CDN 一行引用成立）+ `unhandledrejection` 非标准拒绝载荷堆栈兜底 + README 面向新用户全面重构。测试基线 Browser SDK JS **54/54**、unit 全绿、ruff 硬门禁全绿。无 Breaking Change，无需迁移。详见 CHANGELOG.md [0.7.2] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.2`。
+> 最新版本：**v0.7.3（2026-09-05）**。主题「让 AI 真正用起来工具」：新增统一诊断入口 `diagnose_issue`（无需 request_id 自动定位最近错误并返回完整调试上下文）+ 注册 `list_recent_traces` / `search_logs` 为真 MCP 工具 + `stacktrace` 空参回退 + tools/list 隐藏 SDK 上报工具。测试基线 unit **1501 / 0 failed / 6 skipped**、SDK JS **54/54**、ruff 硬门禁全绿。无 Breaking Change（详见升级注意）。详见 CHANGELOG.md [0.7.3] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.3`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.2  
-**Release Date / 发布日期**: 2026-09-03  
-**Codename / 代号**: 一把利刃 ｜ One Package
+**Version / 版本**: v0.7.3 ・ **Release Date / 发布日期**: 2026-09-05 ・ **Codename / 代号**: 让 AI 用起来 ｜ Agent Adoptable
+
+---
+
+## v0.7.3（2026-09-05）
+
+> 主题「让 AI 真正用起来工具」。修复宿主 AI（Claude / Cursor / Trae / Qoder 等）很少主动调用 Lujo-MCP 工具的问题——不是协议实现缺陷，而是 `tools/list` 货架对 AI 不友好：查询工具全要 AI 拿不到的 ID、stacktrace 空参是死路、文档教 AI 调不存在的工具名。**零 Breaking Change、零新增配置**。
+
+### ⚠️ 升级注意
+
+- **无 Breaking Change**：直接升级即可。唯一可见变化：`tools/list` 默认清单不再包含 4 个 SDK 上报工具（`ingest_network` / `ingest_error` / `ingest_console` / `ingest_silent_failure`）——它们仍可 `tools/call` 按名调用，Browser SDK 与 REST 上报链路完全不受影响。
+- **数据边界不变**：stdio 纯 MCP 接入不接收浏览器 HTTP 上报；浏览器运行现场仍需「Browser SDK + HTTP 服务 + `/ingest`」。
+
+### ✨ 新增：统一诊断入口 `diagnose_issue`（本次核心）
+
+- 用户说「刚才页面报错了」「接口返回 500」「点击没反应」「测试失败帮我排查」时，宿主 AI 现在有一个明确的优先调用入口：**不需要任何 request_id**，自动定位最近一次真实错误并一次性返回完整调试上下文（异常堆栈+源码片段+网络链+UI 事件+git 归因）。
+- 三种用法：无参数=最近错误；`query`=关键词匹配（如「登录失败」「500」）；`request_id`=精确查询；支持 `session_id` 会话隔离。
+- 无数据时返回 `found=false` + `setup_hint` + `next_step`（引导 AI 向用户解释数据从哪来、下一步做什么），绝不返回空对象。
+
+### ✨ 新增：近期错误查询工具
+
+- `list_recent_traces` / `search_logs` 注册为只读 MCP 工具（此前仅为内部函数，文档与实际工具名脱节）；原 Python 函数签名不变；viewer 角色可读。
+- 顺带修复两工具带 `session_id` 时泄漏全局存储摘要的会话隔离缺陷。
+
+### 🔒 修复
+
+- `stacktrace` 无 request_id 时从「读本进程异常（永远为空的死路）」改为回退读取 errors 存储最近一条错误；无错误时返回消息与字段结构与旧版一致。
+- 13 个 Agent 工具 description 补齐触发条件（何时调用/是否需要 ID/是否先调 diagnose_issue/何时不调）。
+
+### 📖 文档
+
+- README / API_REFERENCE / DESIGN / SDK_GUIDE 全部与真实工具名对齐；API_REFERENCE 增加公开清单口径说明（工具清单以 `tools/list` 实际返回为准）。
 
 ---
 

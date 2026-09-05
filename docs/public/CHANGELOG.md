@@ -7,7 +7,37 @@
 
 ## [Unreleased]
 
-- 无（v0.7.2 已发布；后续变更在此追加）。
+- 无（v0.7.3 已发布；后续变更在此追加）。
+
+## [0.7.3] - 2026-09-05
+
+> 主题「让 AI 真正用起来工具」：修复 Agent 客户端（Claude / Cursor / Trae / Qoder 等）很少主动调用 Lujo-MCP 工具的问题——统一诊断入口 + 近期错误查询工具注册 + tools/list 降噪。零 Breaking Change、零新增配置。
+
+### ✨ 新增：统一诊断入口 `diagnose_issue`
+
+- **修复根因**：此前查询类工具（`context`/`trace`/`get_network_trace`）全部必填 `request_id`/`trace_id`，新会话中宿主 AI 无从得知，首次调用即死路，此后不再尝试。
+- 新工具无必填参数：不带参数自动定位**最近一次真实错误**并一次性返回完整调试上下文（堆栈+源码片段+网络链+UI 事件+git 归因）；支持 `query` 关键词匹配、`request_id` 精确查询、`session_id` 会话隔离。
+- 无数据时返回 `found=false` + `setup_hint` + `next_step` 引导结构，绝不返回空对象。
+- description 自包含调用策略（触发词/免 ID/后续工具链/何时不调），复用既有存储能力、零新增依赖。
+
+### ✨ 新增：近期错误查询工具注册
+
+- `list_recent_traces` / `search_logs` 此前仅为 Python 内部函数、未注册为 MCP 工具（文档与实际工具名脱节的根源之一）；现注册为只读工具（viewer 可读），原函数签名不变。
+- 修复两个工具带 `session_id` 时泄漏全局存储摘要的会话隔离缺陷（`list_request_ids` 不支持会话过滤，现带 session_id 时仅读支持隔离的 errors 缓冲）。
+
+### 🔒 修复
+
+- **`stacktrace` 空参死路**：无 request_id 时只读本进程 `sys.exc_info()`（MCP handler 永远不在异常上下文中，浏览器上报的错误不可达）；现回退读取 errors 存储最近一条（复用 `get_stacktrace()`），无错误时保持旧空结果消息，返回字段结构不变。
+- **`tools/list` 噪音**：4 个 SDK 上报工具（`ingest_network`/`ingest_error`/`ingest_console`/`ingest_silent_failure`）默认不再出现在 tools/list（HTTP/stdio 口径一致）；`tools/call` 按名调用与 REST/SDK 上报链路完全不受影响。
+- 13 个 Agent 工具 description 补齐「何时调用/是否需要 ID/是否先调 diagnose_issue」触发条件。
+
+### 📖 文档
+
+- README / API_REFERENCE / DESIGN / SDK_GUIDE：工具名与 `tools/list` 真实注册名对齐（不再把 `get_debug_context` 等内部函数当工具名）；明确 stdio 不接收浏览器 HTTP 上报、浏览器现场需 SDK+HTTP+`/ingest` 链路；API_REFERENCE 增加公开清单口径说明（以 tools/list 实际返回为准）。
+
+### ⚠️ 升级注意
+
+- **无 Breaking Change**：`tools/list` 默认清单减少 4 个 SDK 上报工具（仍可 `tools/call` 按名调用）；若有客户端依赖枚举列表包含 ingest_* 工具，属极小概率边缘场景，按名调用即可。
 
 ## [0.7.2] - 2026-09-03
 
