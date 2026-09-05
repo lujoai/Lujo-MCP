@@ -27,6 +27,7 @@ def register_all_tools():
     from app.mcp.tools.ingest_api import INGEST_ERROR_DEF, ingest_error_handler
     from app.mcp.tools.console_api import INGEST_CONSOLE_DEF, ingest_console_handler
     from app.mcp.tools.spec_api import RELATED_SPECS_DEF, related_specs_handler
+    from app.mcp.tools.spec_ingest_api import INGEST_SPECS_DEF, ingest_specs_handler
     from app.mcp.tools.verify_api import VERIFY_DEF, verify_handler
     from app.mcp.tools.verify_ui_api import VERIFY_UI_DEF, verify_ui_handler, verify_ui_prepare_args
     from app.mcp.tools.auto_test_api import AUTO_TEST_DEF, auto_test_handler
@@ -55,6 +56,7 @@ def register_all_tools():
     register_tool(**INGEST_ERROR_DEF, handler=ingest_error_handler, category="sdk", agent_visible=False)
     register_tool(**INGEST_CONSOLE_DEF, handler=ingest_console_handler, category="sdk", agent_visible=False)
     register_tool(**RELATED_SPECS_DEF, handler=related_specs_handler, category="agent")
+    register_tool(**INGEST_SPECS_DEF, handler=ingest_specs_handler, category="agent")
     register_tool(**VERIFY_DEF, handler=verify_handler, category="agent")
     register_tool(
         **VERIFY_UI_DEF, handler=verify_ui_handler, category="agent",
@@ -77,6 +79,7 @@ TOOL_ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ingest_error":         ("admin", "developer"),
     "ingest_console":       ("admin", "developer"),
     "verify":               ("admin", "developer"),
+    "ingest_specs":         ("admin", "developer"),
     "verify_ui":            ("admin", "developer"),
     "auto_test":            ("admin", "developer"),
     "repair_async":         ("admin", "developer"),

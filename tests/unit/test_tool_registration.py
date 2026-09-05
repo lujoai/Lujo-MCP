@@ -29,6 +29,8 @@ def test_all_tools_registered():
         "diagnose_issue",
         "list_recent_traces",
         "search_logs",
+        # v0.7.5 OpenAPI 一键生成断言规范
+        "ingest_specs",
     }
     missing = expected - names
     assert not missing, f"未注册的工具: {missing}"

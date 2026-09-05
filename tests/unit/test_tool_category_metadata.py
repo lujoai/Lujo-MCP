@@ -74,6 +74,8 @@ class TestToolNamesUnchanged:
         "diagnose_issue",
         "list_recent_traces",
         "search_logs",
+        # v0.7.5 OpenAPI 一键生成断言规范
+        "ingest_specs",
     }
 
     def setup_method(self):
@@ -90,9 +92,9 @@ class TestToolNamesUnchanged:
         extra = registered - self.EXPECTED_NAMES
         assert not extra, f"Unexpected new tools: {extra}"
 
-    def test_tool_count_is_18(self):
-        """注册总数 21 = 原 18 + v0.7.3 新增 3（diagnose_issue/list_recent_traces/search_logs）。"""
-        assert len(_tool_registry) == 21
+    def test_tool_count_matches_whitelist(self):
+        """注册总数与白名单一致（22 = 21 + v0.7.5 ingest_specs）。"""
+        assert len(_tool_registry) == 22
 
 
 # ── 3. inputSchema 不变 ──
@@ -140,8 +142,8 @@ class TestBackwardCompatibility:
     def test_old_client_can_ignore_extra_fields(self):
         """模拟旧客户端只提取 name/description/inputSchema。
 
-        v0.7.3: tools/list 只暴露 Agent-facing 工具——21 个注册工具中
-        4 个 SDK 上报工具（agent_visible=False）不进清单，公开数为 17。
+        v0.7.3: tools/list 只暴露 Agent-facing 工具——4 个 SDK 上报工具
+        （agent_visible=False）不进清单；v0.7.5 新增 ingest_specs 后公开数为 18。
         """
         req = JSONRPCRequest(jsonrpc="2.0", id=1, method="tools/list")
         resp = _handle_tools_list(req)
@@ -150,7 +152,7 @@ class TestBackwardCompatibility:
             {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
             for t in tools
         ]
-        assert len(old_client_view) == 17
+        assert len(old_client_view) == 18
         sdk_names = {"ingest_network", "ingest_error", "ingest_console", "ingest_silent_failure"}
         assert {e["name"] for e in old_client_view} & sdk_names == set()
         # 每个条目都是有效的旧格式
@@ -173,6 +175,7 @@ class TestCategoryMapping:
         "get_blame_for_frame": "agent",
         "get_recent_diff": "agent",
         "get_related_specs": "agent",
+        "ingest_specs": "agent",
         "verify": "agent",
         "verify_ui": "agent",
         # sdk: 数据采集类

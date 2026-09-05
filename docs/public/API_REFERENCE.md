@@ -206,6 +206,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | `get_blame_for_frame` | viewer | 查询文件/行最后一次的修改 commit（git blame） |
 | `get_recent_diff` | viewer | 返回文件最近 N 次 commit 的 diff |
 | `get_related_specs` | viewer | 按文件路径返回相关项目规范片段 |
+| `ingest_specs` | developer | OpenAPI/Swagger 一键生成断言规范并入库，激活静默失败自动校验（同 target 自动去重） |
 | `verify` | developer | 比对实际结果 vs 期望规范，检测静默失败 |
 | `verify_ui` | developer | Playwright 按 UI 规范自动遍历并验证 |
 
@@ -224,6 +225,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | `get_blame_for_frame` | `file`*(string), `line`*(int) | `found`, `blame` |
 | `get_recent_diff` | `file`*(string), `commits_back`(int=3) | `found`, `diff` |
 | `get_related_specs` | `file`*(string) | `found`, `count`, `specs` |
+| `ingest_specs` | `openapi`*(object), `store`(bool=true) | `count`, `stored`, `skipped`, `spec_ids[]` |
 | `verify` | `actual`*(object), `spec`/`spec_id`/`sample`(三选一), `trace_id`(可选) | `matched`, `diffs`, `silent_failure` |
 | `verify_ui` | `spec` 或 `spec_id`(二选一), `timeout_ms`(int=30000) | `matched`, `diffs`, `silent_failure`, `interactions[]`, `security?` |
 
