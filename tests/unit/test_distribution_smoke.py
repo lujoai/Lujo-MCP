@@ -141,3 +141,31 @@ def test_sdk_package_and_tests_exist():
     assert (BROWSER_SDK / "ai-debug.js").is_file()
     # TST-3：SDK 契约单测必须存在（Node，CI 守护）
     assert (BROWSER_SDK / "test" / "sdk-core.test.js").is_file()
+
+
+def test_launcher_platform_allowlist_matches_published_packages():
+    """FIX(v0.7.4 P0)：cli.js/check.js 平台白名单守卫。
+
+    此前白名单写成无前缀后缀（win32-x64），与 platformPackageName() 产出的
+    完整包名（lujo-mcp-win32-x64）永不相等 → npm 启动器在所有平台 100% 启动
+    失败、postinstall 校验空转，自 v0.6.8 起连发多版本未被 CI 发现（发布冒烟
+    只测裸二进制）。白名单必须与实际平台包目录同名且带完整前缀。
+    """
+    import re
+
+    expected = {"lujo-mcp-win32-x64", "lujo-mcp-linux-x64", "lujo-mcp-osx-arm64"}
+    actual_dirs = {
+        p.name for p in NPM_PACKAGES.iterdir()
+        if p.is_dir() and p.name.startswith("lujo-mcp-")
+    }
+    assert actual_dirs == expected, f"平台包目录 {actual_dirs} 与预期 {expected} 不一致"
+
+    for script in ("bin/cli.js", "bin/check.js"):
+        text = (NPM_PACKAGES / "lujo-mcp" / script).read_text(encoding="utf-8")
+        m = re.search(r"supportedPlatforms = new Set\(\[([^\]]+)\]\)", text)
+        assert m, f"{script} 缺 supportedPlatforms 定义"
+        names = set(re.findall(r"'([^']+)'", m.group(1)))
+        assert names == expected, (
+            f"{script} 平台白名单 {names} 与实际平台包 {expected} 不一致——"
+            "必须用完整包名 lujo-mcp-<platform>-<arch>（与 platformPackageName() 同口径）"
+        )

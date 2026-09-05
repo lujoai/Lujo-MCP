@@ -7,7 +7,28 @@
 
 ## [Unreleased]
 
-- 无（v0.7.3 已发布；后续变更在此追加）。
+- 无（v0.7.4 已发布；后续变更在此追加）。
+
+## [0.7.4] - 2026-09-05
+
+> 主题「修复 npm 启动器 P0」：`lujo-mcp-server` 命令自 v0.6.8 起在所有平台 100% 启动失败——平台白名单写成无前缀后缀，与启动器产出的完整包名永不相等。npm 安装用户配好 stdio 后服务器从未启动过（这正是「AI 客户端用不起来」的最大隐藏原因）。**必须升级；HTTP 模式用户不受影响。**
+
+### 🔒 修复（P0：npm 启动器全平台启动失败）
+
+- **根因**：`bin/cli.js` 与 `bin/check.js` 的 `supportedPlatforms` 白名单写成 `['win32-x64', 'linux-x64', 'osx-arm64']`（无前缀），而 `platformPackageName()` 返回 `lujo-mcp-win32-x64`（带前缀）——`has()` 永远 false，`cli.js` 直接 exit 1（「暂无官方预编译二进制」），`check.js`（postinstall）校验分支永远走不到、一直空转。
+- **影响范围**：v0.6.8 ~ v0.7.3 全部 npm 安装用户的 stdio 接入；HTTP 模式与源码运行不受影响。
+- **为何 CI 未发现**：发布工作流只对 PyInstaller 裸二进制做冒烟，从未对 npm 启动器做端到端验证；分发 smoke 均为静态检查。
+- **修复**：白名单统一为完整包名 `['lujo-mcp-win32-x64', 'lujo-mcp-linux-x64', 'lujo-mcp-osx-arm64']`（cli.js + check.js 同步）。
+
+### ✨ 防复发
+
+- **分发 smoke 新增白名单一致性守卫**：静态断言 cli.js/check.js 的 `supportedPlatforms` 必须与实际平台包目录（完整包名）一致，前缀漂移即红。
+- **发布工作流新增「启动器端到端冒烟」**：publish 前按真实链路 `npm pack → npm install → initialize 握手` 验证 npm 启动器，此类缺陷今后出不了门。
+
+### ⚠️ 升级注意
+
+- v0.6.8 ~ v0.7.3 的 npm stdio 用户：升级后 `lujo-mcp-server` 恢复正常，无需改任何客户端配置。
+- 期间若因启动失败误判「MCP 工具不工作」的用户：v0.7.3 的统一诊断入口 `diagnose_issue` 等改进在本版一并生效。
 
 ## [0.7.3] - 2026-09-05
 

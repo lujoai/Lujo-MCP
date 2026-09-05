@@ -1,12 +1,34 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.7.3（2026-09-05）**。主题「让 AI 真正用起来工具」：新增统一诊断入口 `diagnose_issue`（无需 request_id 自动定位最近错误并返回完整调试上下文）+ 注册 `list_recent_traces` / `search_logs` 为真 MCP 工具 + `stacktrace` 空参回退 + tools/list 隐藏 SDK 上报工具。测试基线 unit **1501 / 0 failed / 6 skipped**、SDK JS **54/54**、ruff 硬门禁全绿。无 Breaking Change（详见升级注意）。详见 CHANGELOG.md [0.7.3] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.3`。
+> 最新版本：**v0.7.4（2026-09-05）**。主题「修复 npm 启动器 P0」：`lujo-mcp-server` 自 v0.6.8 起在所有平台 100% 启动失败（平台白名单前缀不匹配），npm stdio 用户的服务器从未启动过。本版修复并加双重防复发守卫。**v0.6.8~v0.7.3 的 npm 用户必须升级**；HTTP 模式用户不受影响。详见 CHANGELOG.md [0.7.4] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.4`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.3 ・ **Release Date / 发布日期**: 2026-09-05 ・ **Codename / 代号**: 让 AI 用起来 ｜ Agent Adoptable
+**Version / 版本**: v0.7.4 ・ **Release Date / 发布日期**: 2026-09-05 ・ **Codename / 代号**: 点火成功 ｜ Launcher Fixed
 
 ---
+
+## v0.7.4（2026-09-05）
+
+> 主题「修复 npm 启动器 P0」。`bin/cli.js` / `bin/check.js` 的平台白名单写成无前缀后缀（`win32-x64`），与 `platformPackageName()` 产出的完整包名（`lujo-mcp-win32-x64`）永不相等——`lujo-mcp-server` 在所有平台 100% exit 1（报「暂无官方预编译二进制」），npm stdio 用户自 v0.6.8 起服务器从未启动过。CI 未发现的原因：发布冒烟只测裸二进制、从不测 npm 启动器。
+
+### ⚠️ 升级注意
+
+- **v0.6.8 ~ v0.7.3 的 npm stdio 用户必须升级**：升级后 `lujo-mcp-server` 即刻恢复，客户端配置零改动。
+- HTTP 模式（`url` 接入）与源码运行不受此 bug 影响。
+
+### 🔒 修复
+
+- 白名单统一为完整包名 `['lujo-mcp-win32-x64', 'lujo-mcp-linux-x64', 'lujo-mcp-osx-arm64']`（cli.js + check.js 同步修复）。
+
+### ✨ 防复发（双重守卫）
+
+- 分发 smoke 新增**白名单一致性守卫**：启动器脚本的平台白名单必须与实际平台包目录逐名一致，前缀漂移即 CI 红。
+- 发布工作流新增**启动器端到端冒烟**：publish 前按真实「npm pack → npm install → initialize 握手」链路验证，此类缺陷今后出不了门。
+
+---
+
+## v0.7.3（2026-09-05）
 
 ## v0.7.3（2026-09-05）
 

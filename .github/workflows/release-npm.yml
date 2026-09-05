@@ -178,6 +178,27 @@ jobs:
           done
           ls -la npm/packages/*/bin/
 
+      # FIX(v0.7.4 P0)：启动器端到端冒烟。此前 cli.js/check.js 平台白名单写成无前缀
+      # 后缀（win32-x64），与 platformPackageName() 产出的完整包名永不相等 → npm
+      # 启动器在所有平台 100% 启动失败，自 v0.6.8 起连发多版本未被 CI 发现（此前
+      # 发布冒烟只测裸二进制，从不测 npm 启动器）。发布前按真实「pack → install →
+      # initialize 握手」链路验证启动器，此类缺陷今后出不了门。
+      - name: Smoke test npm launcher (pack → install → initialize)
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
+        run: |
+          set -e
+          SUFFIX=$(node -p "(() => { const p=process.platform, a=process.arch; return (p==='win32'?'win32':p==='darwin'?'osx':p) + '-' + a; })()")
+          SMOKEDIR=$(mktemp -d)
+          cd "$SMOKEDIR"
+          npm pack --silent \
+            "$GITHUB_WORKSPACE/npm/packages/lujo-mcp" \
+            "$GITHUB_WORKSPACE/npm/packages/lujo-mcp-$SUFFIX"
+          npm install --no-audit --no-fund --silent \
+            "./lujoai-lujo-mcp-$RELEASE_VERSION.tgz" \
+            "./lujoai-lujo-mcp-$SUFFIX-$RELEASE_VERSION.tgz"
+          python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" --cmd "./node_modules/.bin/lujo-mcp-server"
+
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

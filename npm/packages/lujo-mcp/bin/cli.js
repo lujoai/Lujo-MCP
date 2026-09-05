@@ -65,7 +65,11 @@ function run() {
   const pkg = platformPackageName();
   // FIX: P2-F6 —— 与 check.js 一致：非 CI 构建平台无官方预编译包，给出清晰指引而非
   // 提示安装一个不存在的平台包。支持集需与 gen-platform-packages.js 平台数组保持同步。
-  const supportedPlatforms = new Set(['win32-x64', 'linux-x64', 'osx-arm64']);
+  // FIX(v0.7.4 P0)：白名单此前写成无前缀后缀（win32-x64），与 platformPackageName()
+  // 产出的完整包名（lujo-mcp-win32-x64）永不相等 → 启动器在所有平台 100% exit 1，
+  // npm stdio 用户自 v0.6.8 起完全无法启动且 CI 未发现（发布冒烟只测裸二进制）。
+  // 白名单必须用完整包名，test_distribution_smoke 有静态一致性守卫。
+  const supportedPlatforms = new Set(['lujo-mcp-win32-x64', 'lujo-mcp-linux-x64', 'lujo-mcp-osx-arm64']);
   if (!supportedPlatforms.has(pkg)) {
     console.error(
       `[lujo-mcp-server] 当前平台（${pkg}）暂无官方预编译二进制。\n` +

@@ -19,7 +19,9 @@ const binFile = `lujo-mcp-server${process.platform === 'win32' ? '.exe' : ''}`;
 //   - 受支持平台 → 沿用严格的"缺失/版本不匹配"校验；
 //   - 不受支持平台 → 给出清晰说明并以 0 退出（不阻断 npm install）。
 // 支持集需与 npm/scripts/gen-platform-packages.js 的平台数组保持同步。
-const supportedPlatforms = new Set(['win32-x64', 'linux-x64', 'osx-arm64']);
+// FIX(v0.7.4 P0)：白名单必须用完整包名（lujo-mcp-<platform>-<arch>）——此前写成
+// 无前缀后缀，与上方 pkg（带前缀）永不相等，postinstall 校验自 v0.6.8 起一直空转。
+const supportedPlatforms = new Set(['lujo-mcp-win32-x64', 'lujo-mcp-linux-x64', 'lujo-mcp-osx-arm64']);
 
 function pkgVersionAt(pkgDir) {
   try {
