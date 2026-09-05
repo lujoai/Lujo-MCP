@@ -54,7 +54,11 @@ class TestToolsListContainsCategory:
 # ── 2. 原有 tool name 不变 ──
 
 class TestToolNamesUnchanged:
-    """所有原有 tool name 必须保持不变。"""
+    """所有原有 tool name 必须保持不变；新增工具仅允许白名单追加。
+
+    v0.7.3 新增：diagnose_issue（统一诊断入口）/ list_recent_traces /
+    search_logs（近期错误查询工具，此前为内部函数）。
+    """
 
     EXPECTED_NAMES = {
         "debug", "context", "trace", "stacktrace",
@@ -66,6 +70,10 @@ class TestToolNamesUnchanged:
         "auto_test",
         "repair_async", "repair_result",
         "resolve_stack",
+        # v0.7.3 统一诊断入口 + 近期错误查询
+        "diagnose_issue",
+        "list_recent_traces",
+        "search_logs",
     }
 
     def setup_method(self):
@@ -83,7 +91,8 @@ class TestToolNamesUnchanged:
         assert not extra, f"Unexpected new tools: {extra}"
 
     def test_tool_count_is_18(self):
-        assert len(_tool_registry) == 18
+        """注册总数 21 = 原 18 + v0.7.3 新增 3（diagnose_issue/list_recent_traces/search_logs）。"""
+        assert len(_tool_registry) == 21
 
 
 # ── 3. inputSchema 不变 ──
@@ -129,7 +138,11 @@ class TestBackwardCompatibility:
             assert "inputSchema" in tool
 
     def test_old_client_can_ignore_extra_fields(self):
-        """模拟旧客户端只提取 name/description/inputSchema。"""
+        """模拟旧客户端只提取 name/description/inputSchema。
+
+        v0.7.3: tools/list 只暴露 Agent-facing 工具——21 个注册工具中
+        4 个 SDK 上报工具（agent_visible=False）不进清单，公开数为 17。
+        """
         req = JSONRPCRequest(jsonrpc="2.0", id=1, method="tools/list")
         resp = _handle_tools_list(req)
         tools = resp["result"]["tools"]
@@ -137,7 +150,9 @@ class TestBackwardCompatibility:
             {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
             for t in tools
         ]
-        assert len(old_client_view) == 18
+        assert len(old_client_view) == 17
+        sdk_names = {"ingest_network", "ingest_error", "ingest_console", "ingest_silent_failure"}
+        assert {e["name"] for e in old_client_view} & sdk_names == set()
         # 每个条目都是有效的旧格式
         for entry in old_client_view:
             assert set(entry.keys()) == {"name", "description", "inputSchema"}

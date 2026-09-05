@@ -25,11 +25,12 @@ logger = logging.getLogger("lujo-mcp.mcp.tools.repair")
 REPAIR_ASYNC_DEF = {
     "name": "repair_async",
     "description": (
-        "异步生成可执行修复方案（AI Debug Agent）：基于调试上下文、历史相似修复、"
-        "git 近期改动，由 RepairAgent 生成结构化修复方案"
+        "异步生成可执行修复方案（AI Debug Agent，实验能力）：基于调试上下文、"
+        "历史相似修复、git 近期改动，生成结构化修复方案"
         "（含 patch / affected_files / validation_strategy / risk_assessment / confidence）。"
-        "返回 job_id，客户端轮询 repair_result 取结果。"
-        "需 settings.is_agent_active=True。"
+        "需要 request_id/trace_id（二选一，可先由 diagnose_issue 获取）；"
+        "返回 job_id，用 repair_result 轮询结果。"
+        "需 settings.is_agent_active=True（默认关闭，关闭时返回 agent disabled）。"
     ),
     "inputSchema": {
         "type": "object",
@@ -55,6 +56,7 @@ REPAIR_RESULT_DEF = {
     "name": "repair_result",
     "description": (
         "查询 repair_async 异步任务的状态/结果。"
+        "需要 job_id（repair_async 的返回值）。"
         "返回 {status, result, error, created_at, finished_at}。"
     ),
     "inputSchema": {

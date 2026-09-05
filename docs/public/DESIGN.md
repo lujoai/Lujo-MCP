@@ -835,7 +835,7 @@ sequenceDiagram
 `register_all_tools()`（`tools/__init__.py`）**实际注册 18 个工具**，工具名为短名：
 `debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`（v0.5.1 新增）。
 
-> 说明：`get_debug_context / list_recent_traces / search_logs / get_runtime_snapshot / analyze_with_llm` **不是注册的工具名**——它们是内部处理函数，对外以 `context / trace / stacktrace` 短名暴露；`get_runtime_snapshot`、`analyze_with_llm` 当前**未作为独立 MCP 工具注册**。HTTP 与 stdio 共用同一注册表（`mcp_server.py:45`），因此实际是「HTTP 18 / stdio 18」（v0.5.1 新增 `resolve_stack`），不存在数量差异。
+> 说明（v0.7.3 更新）：`get_debug_context / get_runtime_snapshot / analyze_with_llm` 是**内部处理函数**、不是注册的工具名；`list_recent_traces` 与 `search_logs` 已注册为 MCP 工具（此前仅为内部函数，存在文档名不副实的窗口期）。新增统一诊断入口 `diagnose_issue`（Agent-facing，无需 request_id 自动定位最近错误）。SDK 上报类工具（`ingest_network/ingest_error/ingest_console/ingest_silent_failure`）仍注册可 `tools/call`，但 `agent_visible=False`、默认不出现在 `tools/list`（HTTP/stdio 口径一致）。工具总数以 `tools/list` 实际返回为准。
 
 ### 13.6 执行流程要点
 

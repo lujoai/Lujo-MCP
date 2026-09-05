@@ -412,3 +412,106 @@ def test_mcp_post_sse_fallback_has_buffer_control_headers():
     assert "text/event-stream" in resp.headers["content-type"]
     assert resp.headers["Cache-Control"] == "no-cache"
     assert resp.headers["X-Accel-Buffering"] == "no"
+
+
+# ── v0.7.3: HTTP tools/list 暴露 Agent-facing 工具并过滤 SDK 上报工具 ──
+
+
+def _initialized_session(client):
+    """完成 initialize + initialized 握手，返回 (client, session_id)。"""
+    init_resp = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    session_id = init_resp.headers["Mcp-Session-Id"]
+    client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": session_id},
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+    )
+    return session_id
+
+
+def test_http_tools_list_contains_core_agent_tools():
+    from app.mcp.tools import register_all_tools
+
+    register_all_tools()
+    client = _client()
+    session_id = _initialized_session(client)
+    resp = client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": session_id},
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    )
+    assert resp.status_code == 200
+    tools = resp.json()["result"]["tools"]
+    names = {t["name"] for t in tools}
+
+    for core in ("diagnose_issue", "list_recent_traces", "search_logs",
+                 "context", "trace", "stacktrace", "verify", "verify_ui", "debug"):
+        assert core in names, f"HTTP tools/list 缺少核心工具 {core}"
+
+
+def test_http_tools_list_filters_sdk_ingest_tools():
+    """SDK 上报工具不进 HTTP tools/list（与 stdio 口径一致），tools/call 仍可调用。"""
+    import json as _json
+
+    from app.mcp.tools import register_all_tools
+
+    register_all_tools()
+    client = _client()
+    session_id = _initialized_session(client)
+    resp = client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": session_id},
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    )
+    names = {t["name"] for t in resp.json()["result"]["tools"]}
+    assert "ingest_error" not in names
+    assert "ingest_console" not in names
+    assert "ingest_network" not in names
+    assert "ingest_silent_failure" not in names
+
+    # 被过滤的工具按名调用照常执行
+    call_resp = client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": session_id},
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "ingest_error", "arguments": {"exc_type": "E", "message": "m"}},
+        },
+    )
+    assert call_resp.status_code == 200
+    payload = _json.loads(call_resp.json()["result"]["content"][0]["text"])
+    assert payload["saved"] is True
+
+
+def test_http_tools_call_diagnose_issue_empty_result_is_guided():
+    """HTTP 全链路：空数据时 diagnose_issue 返回 found=false + 引导（非空对象）。"""
+    import json as _json
+
+    from app.mcp.tools import register_all_tools
+    from app.runtime.core.storage import factory as _storage_factory
+
+    # memory trace 存储是进程级单例：前序测试（如 ingest_error 调用）可能写入
+    # trace 数据，重置后保证本用例从「零数据」起步（errors._recent 由 conftest 清）
+    _storage_factory._trace_store = None
+    register_all_tools()
+    client = _client()
+    session_id = _initialized_session(client)
+    resp = client.post(
+        "/mcp",
+        headers={"Mcp-Session-Id": session_id},
+        json={
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "diagnose_issue", "arguments": {}},
+        },
+    )
+    assert resp.status_code == 200
+    payload = _json.loads(resp.json()["result"]["content"][0]["text"])
+    assert payload["found"] is False
+    assert payload["setup_hint"]
+    assert payload["next_step"]

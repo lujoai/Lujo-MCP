@@ -7,8 +7,16 @@ def register_all_tools():
     """注册全部 MCP 工具（HTTP 与 stdio 传输共用同一份业务逻辑）"""
     from app.mcp.tools.debug_api import TOOL_DEF as debug_tool, handler as debug_handler
     from app.mcp.tools.context_api import TOOL_DEF as context_tool, handler as context_handler
-    from app.mcp.tools.trace_api import TOOL_DEF as trace_tool, handler as trace_handler
+    from app.mcp.tools.trace_api import (
+        TOOL_DEF as trace_tool,
+        handler as trace_handler,
+        LIST_RECENT_TRACES_DEF,
+        list_recent_traces_handler,
+        SEARCH_LOGS_DEF,
+        search_logs_handler,
+    )
     from app.mcp.tools.stacktrace_api import TOOL_DEF as stacktrace_tool, handler as stacktrace_handler
+    from app.mcp.tools.diagnose_api import DIAGNOSE_DEF, handler as diagnose_handler
     # M3-M7 新增工具
     from app.mcp.tools.network_api import (
         NETWORK_INGEST_DEF, NETWORK_TRACE_DEF,
@@ -30,19 +38,22 @@ def register_all_tools():
 
     # ── v0.5 Tool Category Metadata ──
     # agent: 查询/分析类工具（由 AI Agent 调用）
-    # sdk:   数据采集类工具（由 Browser SDK 调用）
+    # sdk:   数据采集类工具（由 Browser SDK 调用，tools/list 默认不暴露，见 agent_visible）
     # experimental=true: 实验能力，可能变更
     register_tool(**debug_tool, handler=debug_handler, category="agent")
     register_tool(**context_tool, handler=context_handler, category="agent")
     register_tool(**trace_tool, handler=trace_handler, category="agent")
+    register_tool(**LIST_RECENT_TRACES_DEF, handler=list_recent_traces_handler, category="agent")
+    register_tool(**SEARCH_LOGS_DEF, handler=search_logs_handler, category="agent")
+    register_tool(**DIAGNOSE_DEF, handler=diagnose_handler, category="agent")
     register_tool(**stacktrace_tool, handler=stacktrace_handler, category="agent")
-    register_tool(**NETWORK_INGEST_DEF, handler=ingest_network_handler, category="sdk")
+    register_tool(**NETWORK_INGEST_DEF, handler=ingest_network_handler, category="sdk", agent_visible=False)
     register_tool(**NETWORK_TRACE_DEF, handler=get_network_trace_handler, category="agent")
     register_tool(**BLAME_DEF, handler=blame_handler, category="agent")
     register_tool(**RECENT_DIFF_DEF, handler=recent_diff_handler, category="agent")
-    register_tool(**SILENT_FAILURE_DEF, handler=silent_failure_handler, category="sdk")
-    register_tool(**INGEST_ERROR_DEF, handler=ingest_error_handler, category="sdk")
-    register_tool(**INGEST_CONSOLE_DEF, handler=ingest_console_handler, category="sdk")
+    register_tool(**SILENT_FAILURE_DEF, handler=silent_failure_handler, category="sdk", agent_visible=False)
+    register_tool(**INGEST_ERROR_DEF, handler=ingest_error_handler, category="sdk", agent_visible=False)
+    register_tool(**INGEST_CONSOLE_DEF, handler=ingest_console_handler, category="sdk", agent_visible=False)
     register_tool(**RELATED_SPECS_DEF, handler=related_specs_handler, category="agent")
     register_tool(**VERIFY_DEF, handler=verify_handler, category="agent")
     register_tool(
@@ -70,6 +81,9 @@ TOOL_ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "auto_test":            ("admin", "developer"),
     "repair_async":         ("admin", "developer"),
     # ── 只读类工具 ──
+    "diagnose_issue":       ("admin", "developer", "viewer"),
+    "list_recent_traces":   ("admin", "developer", "viewer"),
+    "search_logs":          ("admin", "developer", "viewer"),
     "context":              ("admin", "developer", "viewer"),
     "trace":                ("admin", "developer", "viewer"),
     "stacktrace":           ("admin", "developer", "viewer"),

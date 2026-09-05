@@ -13,11 +13,32 @@ class TestToolDefinition:
 
 
 class TestStacktraceHandler:
-    """覆盖 handler() 的各分支：无异常无 request_id / request_id 无错误 / request_id 有错误 / 当前异常"""
+    """覆盖 handler() 的各分支：无异常无 request_id / request_id 无错误 / request_id 有错误 / 当前异常 / 空参回退最新错误"""
 
-    def test_no_exception_no_request_id(self):
+    def test_no_exception_no_request_id(self, monkeypatch):
+        """无异常且 errors 存储为空 → 保持旧空结果消息（兼容既有调用方）。"""
+        monkeypatch.setattr("app.runtime.core.errors.get_latest", lambda: None)
         result = stacktrace_api.handler({})
         assert result == {"message": "当前上下文中没有异常"}
+
+    def test_empty_args_falls_back_to_latest_stored_error(self, monkeypatch):
+        """FIX(v0.7.3): 无 request_id 且无活跃异常 → 读取 errors 存储最近一条
+        （浏览器 SDK / ingest_error 上报的错误在此），不再返回死路消息。"""
+        err = {
+            "error_id": "err-latest",
+            "type": "TypeError",
+            "message": "browser boom",
+            "traceback": "t",
+            "frames": [{"file": "app.js", "line": 7, "function": "onClick"}],
+            "frame_count": 1,
+        }
+        monkeypatch.setattr("app.runtime.core.errors.get_latest", lambda: err)
+        monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [])
+        result = stacktrace_api.handler({})
+        assert result["error_id"] == "err-latest"
+        assert result["exception"]["type"] == "TypeError"
+        assert result["exception"]["message"] == "browser boom"
+        assert "ai_summary" in result
 
     def test_request_id_no_error(self, monkeypatch):
         monkeypatch.setattr(

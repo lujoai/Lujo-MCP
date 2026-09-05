@@ -27,7 +27,11 @@ NETWORK_INGEST_DEF = {
 
 NETWORK_TRACE_DEF = {
     "name": "get_network_trace",
-    "description": "查询与某条 trace 关联的所有网络请求记录。",
+    "description": (
+        "查询与某条 trace_id 关联的所有网络请求记录（请求体/响应体/耗时/状态码）。"
+        "需要 trace_id：先调用 diagnose_issue 拿到 trace_id；"
+        "适合排查接口超时、响应异常、前端请求链路等问题；纯代码问题不要调用。"
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {"trace_id": {"type": "string", "description": "追踪 ID"}},

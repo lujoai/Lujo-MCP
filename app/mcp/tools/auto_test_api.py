@@ -11,7 +11,9 @@ AUTO_TEST_DEF = {
     "description": (
         "自动遍历页面所有可交互元素（按钮/链接/输入框），"
         "依次执行点击并监听控制台错误和网络 4xx/5xx。"
-        "不需要手动指定选择器，适合快速验收 AI 生成的前端页面。"
+        "需要 url、不需要 request_id；不需要手动指定选择器，"
+        "适合快速验收 AI 生成的前端页面、批量发现「点了没反应」的静默问题；"
+        "定位单个已知问题请先用 diagnose_issue。"
         "需要 Playwright（pip install playwright && playwright install chromium）。"
     ),
     "inputSchema": {

@@ -38,7 +38,7 @@ from mcp.types import Tool, TextContent
 from app.config import settings
 from app import __version__
 from app.runtime.hooks.exception_hook import install_global_hook, uninstall_global_hook
-from app.mcp.protocol.server import _tool_registry, is_heavy_tool
+from app.mcp.protocol.server import _tool_registry, get_agent_visible_tools, is_heavy_tool
 from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
 from app.mcp.tools import register_all_tools
 
@@ -181,6 +181,8 @@ async def _run_registered_tool(name: str, tool: dict, arguments: dict):
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:#async声明函数是可以等待的
+    # v0.7.3: 与 HTTP 侧 _handle_tools_list 保持一致——只暴露 Agent-facing
+    # 工具（SDK 上报类 agent_visible=False 不进清单，tools/call 仍可按名调用）
     return [
         Tool(
             name=tool["name"],
@@ -189,7 +191,7 @@ async def list_tools() -> list[Tool]:#async声明函数是可以等待的
             category=tool.get("category"),
             experimental=tool.get("experimental", False),
         )
-        for tool in _tool_registry.values()
+        for tool in get_agent_visible_tools()
     ]
 
 

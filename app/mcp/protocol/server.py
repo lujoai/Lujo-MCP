@@ -147,6 +147,10 @@ def register_tool(
     FIX C2: 支持可选 ``prepare_args`` 钩子——重型工具改在子进程执行后，父进程
     内存态（如 spec_store）对子进程不可见，需在派发前于父进程把入参预处理
     （如 verify_ui 把 spec_id 解析为 spec）。
+    v0.7.3: 支持 ``agent_visible=False``——SDK 上报类工具（ingest_*）仍注册
+    可被 tools/call 直接调用（REST/SDK 链路不受影响），但默认不出现在
+    tools/list 中，减少宿主 AI 的选择噪音（HTTP/stdio 经 get_agent_visible_tools
+    保持一致过滤）。
     """
     _tool_registry[name] = {
         "name": name,
@@ -157,7 +161,17 @@ def register_tool(
         "experimental": kwargs.get("experimental", False),
         "heavy": kwargs.get("heavy", False),
         "prepare_args": kwargs.get("prepare_args"),
+        "agent_visible": kwargs.get("agent_visible", True),
     }
+
+
+def get_agent_visible_tools() -> list[dict]:
+    """返回 tools/list 应暴露的 Agent-facing 工具（按注册顺序）。
+
+    agent_visible=False 的 SDK 上报类工具不在其中，但仍保留在 _tool_registry
+    里，tools/call 按名调用照常执行——过滤只影响「清单展示」，不影响「调用」。
+    """
+    return [t for t in _tool_registry.values() if t.get("agent_visible", True)]
 
 
 def _handle_initialize(req: JSONRPCRequest) -> dict:
@@ -201,6 +215,8 @@ def _handle_tools_list(req: JSONRPCRequest) -> dict:
 
     v0.5: 响应中包含 category 和 experimental 元数据。
     旧 MCP 客户端可忽略这些额外字段（JSON 语义安全）。
+    v0.7.3: 默认只暴露 Agent-facing 工具（agent_visible=False 的 SDK 上报类
+    工具不进清单，但 tools/call 按名调用仍可执行）。
     """
     tools = [
         {
@@ -210,7 +226,7 @@ def _handle_tools_list(req: JSONRPCRequest) -> dict:
             "category": t.get("category"),
             "experimental": t.get("experimental", False),
         }
-        for t in _tool_registry.values()
+        for t in get_agent_visible_tools()
     ]
     return make_response(req.id, {"tools": tools})
 

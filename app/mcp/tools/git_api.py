@@ -9,7 +9,11 @@ from app.runtime.core.git import get_blame_for_frame, get_recent_diff
 # ── HTTP 侧注册用 TOOL_DEF（M8 注册）──
 BLAME_DEF = {
     "name": "get_blame_for_frame",
-    "description": "查询指定文件/行最后一次是谁在哪次 commit 修改的，用于判断错误是不是近期改动引入。",
+    "description": (
+        "git blame：查询指定文件/行最后一次是谁在哪次 commit 修改的。"
+        "需要 file+line（可从 diagnose_issue 返回的堆栈帧取得）；"
+        "适合判断报错代码是否由近期改动引入、辅助定位引入者；纯代码问题不要调用。"
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -22,7 +26,11 @@ BLAME_DEF = {
 
 RECENT_DIFF_DEF = {
     "name": "get_recent_diff",
-    "description": "返回指定文件最近 N 次 commit 的 diff，用于对比近期改动。",
+    "description": (
+        "返回指定文件最近 N 次 commit 的 diff。需要 file；"
+        "适合在 diagnose_issue 定位到可疑文件后，对比近期改动找出引入问题的变更；"
+        "纯代码问题不要调用。"
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {

@@ -12,11 +12,12 @@ from app.runtime.verifier import spec_store
 VERIFY_DEF = {
     "name": "verify",
     "description": (
-        "比对实际结果与期望规范，自动检测静默失败（返回正常但不符合规范）。"
-        "传入 actual（实际结果）+ [spec | spec_id | sample] 三选一。"
-        "若提供 sample（成功基线样本），将自动推导规范基线并与 actual 进行比对。"
-        "返回 {matched, diffs, silent_failure}。"
-        "当 matched=false 且无异常、无 4xx/5xx 时，silent_failure=true。"
+        "比对实际结果与期望规范，自动检测静默失败（返回 200/无报错但行为不符规范）。"
+        "适合用户说「接口没报错但功能不对」「返回了但数据是空的」这类问题。"
+        "传入 actual（实际结果）+ [spec | spec_id | sample] 三选一："
+        "若提供 sample（成功基线样本），将自动推导规范基线并与 actual 比对，无需手写 spec。"
+        "返回 {matched, diffs, silent_failure}；matched=false 且无异常、无 4xx/5xx 时 silent_failure=true。"
+        "运行时排错请先用 diagnose_issue 拿现场。"
     ),
     "inputSchema": {
         "type": "object",

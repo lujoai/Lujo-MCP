@@ -5,13 +5,58 @@ from app.runtime.core.errors import list_recent, search as search_errors
 
 TOOL_DEF = {
     "name": "trace",
-    "description": "获取请求的完整原始追踪日志（时间、步骤、数据的时序列表）",
+    "description": (
+        "获取请求的完整原始追踪日志（时间、步骤、数据的时序列表）。"
+        "需要 request_id：一般先调用 diagnose_issue 拿到 trace_id，再用本工具查看"
+        "该次请求的逐步执行明细；不知道 request_id 时请勿直接调用本工具。"
+        "适合核对某次请求内部每一步的数据流；纯代码问题不要调用。"
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {
             "request_id": {"type": "string", "description": "请求 ID"},
         },
         "required": ["request_id"],
+    },
+}
+
+
+# ── v0.7.3：近期错误查询能力注册为 Agent-facing 工具（此前仅为内部函数）──
+
+LIST_RECENT_TRACES_DEF = {
+    "name": "list_recent_traces",
+    "description": (
+        "列出最近被捕获的错误/异常摘要（trace_id、类型、消息、时间、top_frame，"
+        "不含完整堆栈）。定位具体问题请优先调用 diagnose_issue（无需 ID 即可"
+        "拿到最近错误+完整上下文）；本工具适合浏览多条近期错误概况后再选一条深入。"
+        "不需要 request_id。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "返回条数上限，默认 10", "default": 10},
+            "session_id": {"type": "string", "description": "会话 ID（可选，会话隔离查询）"},
+        },
+        "required": [],
+    },
+}
+
+
+SEARCH_LOGS_DEF = {
+    "name": "search_logs",
+    "description": (
+        "按关键词在近期捕获的错误中搜索（匹配错误类型与消息，不区分大小写，"
+        "返回 trace_id/类型/消息/发生次数）。需要 keyword；不知道搜什么时先调用 "
+        "diagnose_issue。适合按「Timeout」「登录」「500」等关键词筛选多条历史错误。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "keyword": {"type": "string", "description": "搜索关键词"},
+            "since_minutes": {"type": "integer", "description": "时间窗口（分钟），默认 30", "default": 30},
+            "session_id": {"type": "string", "description": "会话 ID（可选）"},
+        },
+        "required": ["keyword"],
     },
 }
 
@@ -124,7 +169,13 @@ def list_recent_traces(limit: int = 10, session_id: str | None = None) -> list:
             "top_frame": _top_frame(e["frames"]),
         })
 
-    storage_ids = list_request_ids(limit=limit)
+    storage_ids = []
+    # FIX(v0.7.3): session_id 隔离语义——errors 缓冲支持按 session 过滤，
+    # 而 list_request_ids 是全局扫描（不支持会话过滤）；带 session_id 查询时
+    # 若合并全局存储摘要，会把其他会话的错误泄漏进结果。会话查询只读
+    # errors 缓冲；无 session_id 时保持原有全局合并行为不变。
+    if session_id is None:
+        storage_ids = list_request_ids(limit=limit)
     seen_ids = {item["trace_id"] for item in results}
     for rid in storage_ids:
         if rid not in seen_ids:
@@ -135,6 +186,34 @@ def list_recent_traces(limit: int = 10, session_id: str | None = None) -> list:
 
     results.sort(key=lambda e: e.get("last_seen", e.get("timestamp", 0)), reverse=True)
     return results[:limit]
+
+
+def list_recent_traces_handler(arguments: dict) -> dict:
+    """list_recent_traces MCP 工具 handler（包装同名内部函数）。"""
+    arguments = arguments or {}
+    try:
+        limit = int(arguments.get("limit") or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, 100))
+    items = list_recent_traces(limit=limit, session_id=arguments.get("session_id"))
+    return {"count": len(items), "traces": items}
+
+
+def search_logs_handler(arguments: dict) -> dict:
+    """search_logs MCP 工具 handler（包装同名内部函数）。"""
+    arguments = arguments or {}
+    keyword = arguments.get("keyword") or ""
+    if not keyword:
+        return {"error": "keyword 不能为空", "count": 0, "results": []}
+    try:
+        since_minutes = int(arguments.get("since_minutes") or 30)
+    except (TypeError, ValueError):
+        since_minutes = 30
+    items = search_logs(
+        keyword, since_minutes=since_minutes, session_id=arguments.get("session_id")
+    )
+    return {"count": len(items), "results": items}
 
 
 def search_logs(keyword: str, since_minutes: int = 30, session_id: str | None = None) -> list:

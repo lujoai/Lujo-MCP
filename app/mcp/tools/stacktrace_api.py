@@ -9,7 +9,12 @@ from app.mcp.observability import observe_context, attach_metadata
 
 TOOL_DEF = {
     "name": "stacktrace",
-    "description": "捕获当前异常或指定请求关联的错误堆栈信息",
+    "description": (
+        "获取错误堆栈（含每帧源码片段）。优先调用 diagnose_issue（一步拿到"
+        "堆栈+上下文+网络链）；本工具适合只想要纯堆栈时使用。"
+        "无需 request_id：不带参数时自动返回最近一次捕获的错误堆栈"
+        "（含浏览器 SDK 上报的错误）；带 request_id 则查询指定请求关联的错误。"
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -44,7 +49,16 @@ def handler(arguments: dict) -> dict:
                 "message": "当前请求没有捕获到异常",
             }
     else:
-        return {"message": "当前上下文中没有异常"}
+        # FIX(v0.7.3): 无 request_id 且当前无活跃异常时，回退读取 errors 存储
+        # 最近一条——浏览器 SDK / ingest_error 上报的错误都落在这里。旧行为只看
+        # 本进程 sys.exc_info()，而 MCP handler 永远不在异常上下文中，等于死路
+        # （AI 首次空参调用只拿到"没有异常"，之后不再尝试）。
+        # 复用 get_stacktrace()（get_latest 优先 → 活跃异常兜底），无错误时保持
+        # 旧的空结果消息，不影响既有调用方。
+        result = get_stacktrace()
+        if "exception" not in result:
+            return {"message": "当前上下文中没有异常"}
+        return result
 
     # 附加每帧源码片段（FR11：免手动翻找代码文件）
     frames = exc_data.get("frames", [])

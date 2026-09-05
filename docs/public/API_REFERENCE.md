@@ -16,7 +16,7 @@
   - [2.4 规范 CRUD `/api/spec`](#24-规范-crud-apispec)
   - [2.5 MCP 传输 `/mcp`](#25-mcp-传输-mcp)
   - [2.6 令牌签发 `/auth`](#26-令牌签发-auth)
-- [3. MCP 工具（18 个）](#3-mcp-工具18-个)
+- [3. MCP 工具](#3-mcp-工具)
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
@@ -184,19 +184,24 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ---
 
-## 3. MCP 工具（18 个）
+## 3. MCP 工具
 
 > 工具经 HTTP（`POST /mcp` → `tools/call`）或 stdio 传输调用。HTTP 传输下受 RBAC 工具级门控（见每项「角色」）。
 > 类别含义：`agent` = 供 AI Agent 调用的查询/分析/验证类；`sdk` = 供 Browser SDK 上报的数据采集类。
+>
+> **tools/list 口径（v0.7.3）**：`tools/list` 默认只暴露 `agent` 类工具（含下表全部查询/验证工具与三个近期错误查询工具）；`sdk` 类上报工具**不进 tools/list**，但 `tools/call` 按名调用仍然有效（REST/SDK 上报链路不受影响）。工具清单以 `tools/list` 实际返回为准，勿以本文档数目为准。
 
 ### 3.1 查询 / 分析类工具（agent）
 
 | 工具名 | 角色 | 说明 |
 |--------|------|------|
+| `diagnose_issue` | viewer | **统一诊断入口（优先调用）**：无需 request_id 自动定位最近错误并返回完整调试上下文；支持 query 关键词 / request_id 精确查询 |
+| `list_recent_traces` | viewer | 列出近期错误摘要（trace_id/类型/消息/时间/top_frame） |
+| `search_logs` | viewer | 按关键词搜索近期错误（类型/消息匹配，含发生次数） |
 | `debug` | developer | 执行完整调试流程，返回结构化调试上下文 |
 | `context` | viewer | 按 request_id 获取调试上下文（流程/输入输出/错误） |
 | `trace` | viewer | 获取请求完整原始追踪日志 |
-| `stacktrace` | viewer | 捕获当前异常或指定请求的堆栈（含源码片段） |
+| `stacktrace` | viewer | 获取错误堆栈（含源码片段）：无 request_id 时自动返回最近一次捕获的错误 |
 | `get_network_trace` | viewer | 查询某 trace 关联的网络请求记录 |
 | `get_blame_for_frame` | viewer | 查询文件/行最后一次的修改 commit（git blame） |
 | `get_recent_diff` | viewer | 返回文件最近 N 次 commit 的 diff |
@@ -208,15 +213,18 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 | 工具 | 入参（必填标 *） | 返回要点 |
 |------|-----------------|----------|
+| `diagnose_issue` | 无必填；`request_id`(string)/`query`(string)/`since_minutes`(int=30)/`session_id`(string) 可选 | `found`, `trace_id`, `summary`, `debug_context`；无数据时 `found=false` + `setup_hint` + `next_step` |
+| `list_recent_traces` | `limit`(int=10), `session_id`(string) 可选 | `count`, `traces[]`（含 trace_id/type/message/top_frame） |
+| `search_logs` | `keyword`*(string), `since_minutes`(int=30), `session_id`(string) 可选 | `count`, `results[]` |
 | `debug` | `payload`*(object), `metadata`(object) | `request_id`, `result`, `trace`, `context` |
 | `context` | `request_id`*(string) | 结构化上下文 + `code_snippets` |
 | `trace` | `request_id`*(string) | `trace`(时序列表), `step_count` |
-| `stacktrace` | `request_id`(string, 可选) | `exception`, `code_snippets`, `ai_summary` |
+| `stacktrace` | `request_id`(string, 可选；无参时自动取最近错误) | `exception`, `code_snippets`, `ai_summary` |
 | `get_network_trace` | `trace_id`*(string) | `found`, `count`, `records` |
 | `get_blame_for_frame` | `file`*(string), `line`*(int) | `found`, `blame` |
 | `get_recent_diff` | `file`*(string), `commits_back`(int=3) | `found`, `diff` |
 | `get_related_specs` | `file`*(string) | `found`, `count`, `specs` |
-| `verify` | `actual`*(object), `spec` 或 `spec_id`(二选一), `trace_id`(可选) | `matched`, `diffs`, `silent_failure` |
+| `verify` | `actual`*(object), `spec`/`spec_id`/`sample`(三选一), `trace_id`(可选) | `matched`, `diffs`, `silent_failure` |
 | `verify_ui` | `spec` 或 `spec_id`(二选一), `timeout_ms`(int=30000) | `matched`, `diffs`, `silent_failure`, `interactions[]`, `security?` |
 
 ### 3.2 数据采集类工具（sdk）

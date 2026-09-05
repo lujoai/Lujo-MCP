@@ -14,8 +14,9 @@ from app.runtime.verifier import ui_runner
 VERIFY_UI_DEF = {
     "name": "verify_ui",
     "description": (
-        "按 UI 规范启动浏览器自动遍历页面交互并验证结果。"
-        "spec.kind 须为 'ui'，含 target(页面URL) 和 expect.interactions 列表。"
+        "按 UI 规范启动浏览器自动遍历页面交互并验证结果（「点击无反应」类静默"
+        "失败的自动化验证）。需要 spec（kind='ui'，含 target 页面 URL 和 "
+        "expect.interactions 列表）或 spec_id；不需要 request_id。"
         "交互类型: click / type / navigate / hover / select。"
         "expect 可继续使用 state_change.dom_change/route_change，"
         "也支持 expect.assertions[] 中的 text/url/form/data_table/numeric_range 断言。"

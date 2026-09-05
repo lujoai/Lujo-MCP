@@ -9,7 +9,12 @@ from app.mcp.observability import observe_context, attach_metadata
 
 TOOL_DEF = {
     "name": "context",
-    "description": "根据请求 ID 获取结构化的调试上下文，包含执行流程、输入输出、错误信息",
+    "description": (
+        "根据 request_id 获取结构化调试上下文（执行流程、输入输出、错误、源码片段）。"
+        "需要 request_id：先调用 diagnose_issue 拿到 trace_id 再用本工具深入；"
+        "不知道 request_id 时不要直接调用本工具。适合在诊断入口给出概览后，"
+        "对某次请求做更细的执行流程分析；纯代码问题不要调用。"
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {

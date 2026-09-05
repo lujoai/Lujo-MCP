@@ -29,7 +29,7 @@
 
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
-> 📌 stdio 模式让你**即刻获得全部 18 个 MCP 工具**（堆栈解析、上下文构建、规范断言等）。若要让 AI 看到**浏览器运行现场**（控制台、网络失败、点击链路），还需按下方「5 分钟跑通第一个真实调试」启动 HTTP 服务并在页面接入 SDK。
+> 📌 stdio 模式让你**即刻获得 MCP 调试工具集**（统一诊断入口 `diagnose_issue`、堆栈解析、上下文构建、规范断言等，以 `tools/list` 实际返回为准）。若要让 AI 看到**浏览器运行现场**（控制台、网络失败、点击链路），还需按下方「5 分钟跑通第一个真实调试」启动 HTTP 服务并在页面接入 SDK。
 
 ### 替代方式：全局安装
 
@@ -116,12 +116,12 @@ fetch('/api/user/profile').then(res => {
 
 > 💬 *“刚才前端页面报错了，帮我查查是什么原因并给出修复方案。”*
 
-宿主 AI 会自动调用 `lujo.get_debug_context` 或 `lujo.list_recent_traces`，读取完整的控制台报错、网络请求 Payload/Status、源码行号与调用栈，直接给出修复代码！
+宿主 AI 会自动调用统一诊断入口 `diagnose_issue`（**无需任何 request_id**，自动定位最近一次真实错误），一次性读取完整的控制台报错、网络请求 Payload/Status、源码行号与调用栈，直接给出修复代码！
 
 ```text
 AI Agent 自动调用上下文：
 ┌────────────────────────────────────────────────────────┐
-│ lujo.get_debug_context                                 │
+│ diagnose_issue          ← 统一诊断入口，免 ID 直查      │
 │ ├─ exception_type: "Error"                             │
 │ ├─ message: "API 500: Failed to fetch profile"         │
 │ ├─ network_trace: GET /api/user/profile (Status: 500)  │
@@ -131,6 +131,8 @@ AI Agent 自动调用上下文：
 ```
 
 > 📖 想看完整还原的实战案例（React 登录静默失败），见 [DEMO.md](./docs/public/DEMO.md)。
+>
+> ⚠️ **数据边界说明**：stdio MCP 接入不能自动接收浏览器 SDK 的 HTTP 上报——浏览器运行现场（控制台/网络/交互链路）需要「Browser SDK + HTTP 服务 + `/ingest`」链路；后端异常经全局异常钩子自动捕获，stdio 下也可用。Agent 是否调用工具最终由宿主模型决定，本项目通过清晰的统一入口（`diagnose_issue`）与自包含的工具描述**提高**调用概率，但不承诺 100% 强制调用。
 
 ---
 
@@ -141,7 +143,7 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ 🟢 零配置（默认开箱即用）                                     │
-│   • 18 个 MCP 工具即刻可用                                   │
+│   • MCP 调试工具集即刻可用（diagnose_issue 统一诊断入口）    │
 │   • 运行时堆栈、源码行号与系统快照收集                       │
 │   • 纯内存运行，无外部数据库与 API Key 依赖                  │
 │   • 浏览器现场采集（控制台/网络/UI 链路）：接入 Browser SDK   │
@@ -195,7 +197,7 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
   1. 确认 Lujo-MCP HTTP 服务已启动（SDK 上报依赖 `/ingest` 端点）；
   2. 确认页面已加载 SDK 并调用了 `AiDebug.init({ endpoint: "http://localhost:8000" })`——**未配置 `endpoint` 时 SDK 会静默不上报**；
   3. 打开浏览器 DevTools Network 面板，确认页面有发往 `endpoint` 的 `/ingest/batch` 请求；
-  4. 可让 AI 尝试调用 `lujo.list_recent_traces` 检索最近的运行日志。
+  4. 可让 AI 调用 `diagnose_issue`（免 ID 自动定位最近错误）或 `list_recent_traces` 检索最近的运行日志。
 
 ---
 
@@ -237,7 +239,7 @@ python -m app.main
 | 文档 | 描述 |
 |---|---|
 | 📖 [DEMO.md](./docs/public/DEMO.md) | 端到端实战演示（以 React 登录 Bug 为例的完整调试链路） |
-| 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | 18 个 MCP 工具详细入参、返回值与 REST 端点参考 |
+| 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | MCP 工具详细入参、返回值与 REST 端点参考 |
 | 💻 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | Browser SDK 采集手册（XHR/Fetch 拦截、脱敏、UI 静默失败检测） |
 | 🧠 [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md) | 调试经验知识库：指纹匹配、跨会话沉淀与置信度进化机制 |
 | 🏗️ [DESIGN.md](./docs/public/DESIGN.md) | 核心六层系统架构与数据流转设计 |

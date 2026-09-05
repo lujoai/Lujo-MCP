@@ -109,7 +109,7 @@ AiDebug.reportSilentFailure({
 });
 ```
 
-SDK 会自动从环形缓冲取最近 `silentFailureContextSize`（默认 20）条 network/UI 事件，拼为 `observed_events` 与 `trace_id` 一起上报；服务端按 `kind` 分类入库，供 `get_debug_context` 召回完整事件链。
+SDK 会自动从环形缓冲取最近 `silentFailureContextSize`（默认 20）条 network/UI 事件，拼为 `observed_events` 与 `trace_id` 一起上报；服务端按 `kind` 分类入库，供宿主 AI 通过 `diagnose_issue` / `context` 等 MCP 工具召回完整事件链。
 
 ---
 

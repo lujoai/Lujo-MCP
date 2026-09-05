@@ -25,10 +25,14 @@ def test_all_tools_registered():
         # FR14 新增
         "verify_ui",
         "auto_test",
+        # v0.7.3 统一诊断入口 + 近期错误查询工具
+        "diagnose_issue",
+        "list_recent_traces",
+        "search_logs",
     }
     missing = expected - names
     assert not missing, f"未注册的工具: {missing}"
-    assert len(names) >= 15
+    assert len(names) >= 18
 
 
 def test_each_registered_tool_has_handler():
@@ -39,13 +43,56 @@ def test_each_registered_tool_has_handler():
 
 
 def test_stdio_exports_dynamic_registered_tools():
+    """stdio tools/list 与 HTTP 一致：只暴露 Agent-facing 工具。
+
+    v0.7.3: SDK 上报类工具（ingest_*，agent_visible=False）不再出现在
+    tools/list 中（减少宿主 AI 选择噪音），但 registry 保留、tools/call
+    按名调用仍可执行。
+    """
     import app.mcp_server as mcp_server
 
     tools = asyncio.run(mcp_server.list_tools())
     names = {tool.name for tool in tools}
+    # Agent-facing 核心工具必须在列
     assert "verify" in names
     assert "verify_ui" in names
-    assert "ingest_console" in names
+    assert "diagnose_issue" in names
+    assert "list_recent_traces" in names
+    assert "search_logs" in names
+    # SDK 上报类工具不进清单
+    assert "ingest_console" not in names
+    assert "ingest_error" not in names
+
+
+def test_sdk_ingest_tools_filtered_from_tools_list_but_callable():
+    """tools/list 过滤 SDK 工具，但 tools/call 按名调用照常执行（REST/SDK 链路不受影响）。"""
+    import json as _json
+
+    from app.mcp.protocol.server import get_agent_visible_tools
+
+    register_all_tools()
+    visible_names = {t["name"] for t in get_agent_visible_tools()}
+    registry_names = set(_tool_registry.keys())
+    sdk_tools = {"ingest_network", "ingest_error", "ingest_console", "ingest_silent_failure"}
+    # 过滤生效
+    assert sdk_tools & visible_names == set()
+    # registry 保留（tools/call 可调用）
+    assert sdk_tools <= registry_names
+    # 公开清单仍包含核心 Agent 工具
+    for core in ("diagnose_issue", "list_recent_traces", "search_logs",
+                 "context", "trace", "stacktrace", "verify", "verify_ui"):
+        assert core in visible_names, f"核心工具 {core} 不应在 tools/list 中缺席"
+
+    # tools/call 直接调用被过滤的 SDK 工具仍可执行（ingest_error 落 memory 存储）
+    req = JSONRPCRequest(
+        id="req-vis",
+        method="tools/call",
+        params={"name": "ingest_error", "arguments": {"exc_type": "E", "message": "m"}},
+    )
+    resp = asyncio.run(_handle_tools_call(req))
+    assert resp.get("error") is None
+    payload = _json.loads(resp["result"]["content"][0]["text"])
+    assert payload["saved"] is True
 
 
 # ---------------------------------------------------------------------------
