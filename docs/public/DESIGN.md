@@ -167,13 +167,17 @@ flowchart TB
 - 注册方式：客户端配置 `{"command":"python","args":["-m","app.mcp_server"],"cwd":"<abs>"}`。
 - stdio 唯一启动命令：`python -m app.mcp_server`。
 
-**MCP 工具总览（HTTP 18 个 / stdio 18 个，业务实现共用）**：
+**MCP 工具总览（注册 22 个 / `tools/list` 公开 18 个，业务实现共用）**：
 
 | 工具（短名） | 说明 | 实现 |
 | --- | --- | --- |
 | `debug` | 调试入口（含 context 组装） | `debug_api.py` |
 | `context` | trace+runtime+源码片段 | `context_api.py` |
-| `trace` | 按关键字+时间窗搜历史 trace / 最近错误摘要 | `trace_api.py` |
+| `trace` | 按 request_id 取原始追踪日志 | `trace_api.py` |
+| `list_recent_traces` | 近期错误摘要列表（免 ID） | `trace_api.py`（v0.7.3） |
+| `search_logs` | 按关键词搜索近期错误 | `trace_api.py`（v0.7.3） |
+| `diagnose_issue` | 统一诊断入口（免 ID 自动定位最近错误+完整上下文） | `diagnose_api.py`（v0.7.3） |
+| `ingest_specs` | OpenAPI 一键生成断言规范并入库 | `spec_ingest_api.py`（v0.7.5） |
 | `stacktrace` | 最近/指定异常堆栈（文件/行/函数） | `stacktrace_api.py` |
 | `ingest_network` / `get_network_trace` | 网络请求采集 | `network_api.py` |
 | `get_blame_for_frame` / `get_recent_diff` | Git 代码追溯 | `git_api.py` |
@@ -190,7 +194,7 @@ flowchart TB
 
 #### 3.1.3 双传输一致性
 
-HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **18 个工具**；stdio 传输（`mcp_server.py`）共用同一注册表，**实际各 18 个**，工具名为短名：`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`。
+HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **22 个工具**（v0.7.5）；stdio 传输（`mcp_server.py`）共用同一注册表。`tools/list` 公开 18 个 Agent-facing 工具：`debug, context, trace, stacktrace, diagnose_issue, list_recent_traces, search_logs, ingest_specs, get_network_trace, get_blame_for_frame, get_recent_diff, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`。
 
 ### 3.2 中间件层（`app/middleware.py`）✅
 
@@ -623,7 +627,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
 | AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
-| **合计** | — | **1479 tests / 0 failed / 6 skipped**（1473 passed）| 当前 v0.7.1 单元基线；本节表格其余数字为历史快照，仅作演进记录 |
+| **合计** | — | **1508 tests / 0 failed / 6 skipped**（1502 passed）| 当前 v0.7.5 单元基线；本节表格其余数字为历史快照，仅作演进记录 |
 
 ### 11.2 测试执行
 
@@ -832,10 +836,10 @@ sequenceDiagram
 
 ### 13.5 工具注册与执行流程（订正工具清单）
 
-`register_all_tools()`（`tools/__init__.py`）**实际注册 18 个工具**，工具名为短名：
-`debug, context, trace, stacktrace, ingest_network, get_network_trace, get_blame_for_frame, get_recent_diff, ingest_silent_failure, ingest_error, ingest_console, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`（v0.5.1 新增）。
+`register_all_tools()`（`tools/__init__.py`）**实际注册 22 个工具**（v0.7.5），`tools/list` 公开 18 个 Agent-facing 工具：
+`debug, context, trace, stacktrace, diagnose_issue, list_recent_traces, search_logs, ingest_specs, get_network_trace, get_blame_for_frame, get_recent_diff, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`。
 
-> 说明（v0.7.3 更新）：`get_debug_context / get_runtime_snapshot / analyze_with_llm` 是**内部处理函数**、不是注册的工具名；`list_recent_traces` 与 `search_logs` 已注册为 MCP 工具（此前仅为内部函数，存在文档名不副实的窗口期）。新增统一诊断入口 `diagnose_issue`（Agent-facing，无需 request_id 自动定位最近错误）。SDK 上报类工具（`ingest_network/ingest_error/ingest_console/ingest_silent_failure`）仍注册可 `tools/call`，但 `agent_visible=False`、默认不出现在 `tools/list`（HTTP/stdio 口径一致）。工具总数以 `tools/list` 实际返回为准。
+> 说明（v0.7.5 更新）：`get_debug_context / get_runtime_snapshot / analyze_with_llm` 是**内部处理函数**、不是注册的工具名；`list_recent_traces` 与 `search_logs` 已注册为 MCP 工具（此前仅为内部函数，存在文档名不副实的窗口期）。统一诊断入口 `diagnose_issue`（Agent-facing，无需 request_id 自动定位最近错误）与 `ingest_specs`（OpenAPI 一键生成断言规范）已注册。SDK 上报类工具（`ingest_network/ingest_error/ingest_console/ingest_silent_failure`）仍注册可 `tools/call`，但 `agent_visible=False`、默认不出现在 `tools/list`（HTTP/stdio 口径一致）。工具总数以 `tools/list` 实际返回为准。
 
 ### 13.6 执行流程要点
 

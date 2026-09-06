@@ -74,7 +74,7 @@ Verifier 验证
 | 经验检索器 | [app/rag/retriever.py](../../app/rag/retriever.py) | 三层检索：fingerprint 精确 → message normalize → vector（默认关闭） |
 | 向量检索抽象 | [app/rag/vector_store.py](../../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
 | Qdrant 语义召回 | [app/rag/qdrant_vector_store.py](../../app/rag/qdrant_vector_store.py) | `QdrantVectorStore` Embeddings 语义检索 + uuid5 幂等 upsert |
-| 工具注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) | register_all_tools（18 个工具，含 `repair_async`/`repair_result`/`resolve_stack`） |
+| 工具注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) | register_all_tools（注册 22 个 / tools/list 公开 18 个，v0.7.3 新增 `diagnose_issue`/`list_recent_traces`/`search_logs`、v0.7.5 新增 `ingest_specs`） |
 | AI Debug Agent | [app/agent/](../../app/agent/) | 自动修复方案生成 + 多 Agent DAG 协同（Phase 1 单 Agent + Phase 2 多 Agent DAG，共 11 文件） |
 | 浏览器 SDK | [browser-sdk/ai-debug.js](../../browser-sdk/ai-debug.js) | UMD/CJS/ESM 三格式 |
 | npm 分发 | [npm/packages/lujo-mcp](../../npm/packages/lujo-mcp) + [packaging/lujo-mcp-server.spec](../../packaging/lujo-mcp-server.spec) | PyInstaller 单文件打包 + npm 元包 + 3 平台二进制包（win32-x64/linux-x64/osx-arm64），`npm install -g @lujoai/lujo-mcp` 开箱即用 |
@@ -179,7 +179,7 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **unit 1479 tests / 0 failed / 6 skipped**（1473 passed，junit 权威计数；v0.6.7 基线 1231 → 1290 → 1298 → 1386 → 1409，v0.7.0 → 1479，v0.7.1）+ **integration 115 tests / 0 failed**（首次全绿）；另有 Browser SDK JS 契约测试 50 项由 CI `sdk-js-smoke` job 守护
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **unit 1508 tests / 0 failed / 6 skipped**（1502 passed，junit 权威计数；v0.7.1 → 1479，v0.7.5 → 1508）+ **integration 115 tests / 0 failed**（首次全绿）；另有 Browser SDK JS 契约测试 54 项由 CI `sdk-js-smoke` job 守护
 - ✅ ruff 硬门禁：仓库根 `ruff.toml` 显式锁定规则集（`E4/E7/E9/F` + `C4` + `PIE`），`ruff check .` = All checks passed；`requirements-dev.txt` 锁 `ruff>=0.16.4,<0.17.0` 防规则集随版本漂移
 
 ### v0.3.0 Release Audit 收口 ✅
@@ -215,6 +215,10 @@ Verifier 验证
 - **v0.6.9**（2026-08-29）：第 7 轮全量代码审查修复发布 —— P1 安全×2（R7-P1-1 XFF 反代限流绕过复活（off-by-one）、R7-P1-2 异常指纹"算好被丢"三断点、KB 学习闭环复活）+ Major·P2 22 项（R7-S1/S2、T1-T5、A1-A5、G1、V1-V4、Q1-Q5）+ 第 6 轮遗留 P2 全部收口（B2/B4/B5、C2 重活子进程隔离+超时强杀、G3 SDK destroy()）。基线 1298 → **1386**（+88），SDK JS 35 → **42**（+7）。
 - **v0.7.0**（2026-08-29）：主题「稳定 + 可观测 + 债务清理」——KB 学习闭环可观测性（Prometheus `kb_hits_total`/`kb_writeback_total`/`kb_experience_recall_total` + `GET /api/dashboard/kb-stats` + Dashboard「KB Learning Loop」面板）；Minor 大扫除两批 20 项（安全/健壮性 10 项：SDK 环引用保护/相似域名防丢数据/beacon UTF-8 字节/spec PATCH 白名单/.env.example 安全段等；死代码/文档口径 9 项：agent/schemas.py 零消费方模型、beacon 死分支、PROMETHEUS_ENABLED 死配置等）；工程卫生（npm 5 包 engines>=18、CI concurrency + pip cache、release 不可取消语义、pytest --strict-markers、lint.sh 锁 ruff）；integration 套件**首次全绿**（修复 11 个历史盲区失败）。unit **1409 tests / 0 failed**，integration 113 tests / 0 failed，SDK JS **47/47**。
 - **v0.7.1**（2026-08-31）：主题「Minor 债务批量清理」——第 6/7 轮审查 Minor 索引分 15 批次全部清零——78 项真 bug 修复 + 其余逐条核实为设计取舍/低风险留痕关闭。零 Breaking Change，无需迁移。unit **1479 tests / 0 failed**，integration **115 tests / 0 failed**，Browser SDK JS **50/50**。
+- **v0.7.2**（2026-09-03）：主题「分发统一 + 前端现场信噪比」——Browser SDK 随 npm 主包分发（CDN 一行引用成立，防漂移双守卫）+ `unhandledrejection` 非标准拒因堆栈兜底 + README 面向新用户重构。SDK JS **54/54**。
+- **v0.7.3**（2026-09-05）：主题「让 AI 真正用起来工具」——统一诊断入口 `diagnose_issue`（免 request_id 自动定位最近错误）+ `list_recent_traces`/`search_logs` 注册为真 MCP 工具（修复会话隔离泄漏）+ `stacktrace` 空参回退 errors 存储 + tools/list 隐藏 SDK 上报工具（agent_visible）+ 13 个工具 description 补触发条件。
+- **v0.7.4**（2026-09-05）：主题「修复 npm 启动器 P0」——`lujo-mcp-server` 平台白名单前缀不匹配致 v0.6.8 起 npm stdio 服务器 100% 启动失败；修复 + 双重防复发守卫（白名单静态守卫 + 发布工作流启动器端到端冒烟）。
+- **v0.7.5**（2026-09-05）：主题「规范零手写」——`ingest_specs` 工具（OpenAPI 一键生成断言规范并入库，同 target 去重），激活静默失败自动校验闭环。unit **1508 tests / 0 failed**，SDK JS **54/54**。
 
 **当前路线**：**v0.7.1 发布执行**（Minor 债务批量清理 15 批次全部清零，78 项真 bug 修复；版本号已同步 bump 0.7.1，待打 tag `v0.7.1` + push + npm publish）。剩余：v0.8.0 待规划。当前无已确认 P0/P1 阻塞项。
 
@@ -256,7 +260,7 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1479 passed / 6 skipped / 0 failed / 0 errors**（v0.7.0 基线 1409；v0.7.1 +70 = 1479；单测已强制 memory 后端与 CI 一致）。Browser SDK 另有 50 项 Node 契约测试（`browser-sdk/test/`，CI `sdk-js-smoke` job 守护，不计入 pytest 基线）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1502 passed / 6 skipped / 0 failed / 0 errors**（v0.7.1 基线 1479；v0.7.5 → 1508；单测已强制 memory 后端与 CI 一致）。Browser SDK 另有 54 项 Node 契约测试（`browser-sdk/test/`，CI `sdk-js-smoke` job 守护，不计入 pytest 基线）。
 
 **当前优先级**：
 

@@ -583,8 +583,8 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-已注册的 18 个工具:
-`debug`, `context`, `trace`, `stacktrace`, `ingest_network`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `ingest_silent_failure`, `ingest_error`, `ingest_console`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
+`tools/list` 公开 18 个 Agent-facing 工具（v0.7.5；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
+`debug`, `context`, `trace`, `stacktrace`, `diagnose_issue`, `list_recent_traces`, `search_logs`, `ingest_specs`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
 
