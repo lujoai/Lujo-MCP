@@ -245,7 +245,11 @@ jobs:
           # The npm launcher defaults to unified stdio + localhost HTTP. The
           # protocol smoke only needs stdio and opts out explicitly so the
           # temporary process exits immediately after stdin closes.
-          python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" --cmd "./node_modules/.bin/lujo-mcp-server --no-http"
+          # --ignore-scripts intentionally avoids the package postinstall check;
+          # invoke the checked-in bin entry directly instead of relying on npm's
+          # optional .bin shim being created in every npm version/configuration.
+          python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" \
+            --cmd "node ./node_modules/@lujoai/lujo-mcp/bin/cli.js --no-http"
 
       - name: Publish platform packages
         env:
