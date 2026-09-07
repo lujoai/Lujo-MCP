@@ -4,7 +4,12 @@ import asyncio
 import pytest
 
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
-from app.mcp.protocol.server import _handle_tools_call, _tool_registry, register_tool
+from app.mcp.protocol.server import (
+    _handle_tools_call,
+    _is_tool_available,
+    _tool_registry,
+    register_tool,
+)
 from app.mcp.tools import register_all_tools
 
 
@@ -57,7 +62,10 @@ def test_stdio_exports_dynamic_registered_tools():
     names = {tool.name for tool in tools}
     # Agent-facing 核心工具必须在列
     assert "verify" in names
-    assert "verify_ui" in names
+    if _is_tool_available(_tool_registry["verify_ui"]):
+        assert "verify_ui" in names
+    else:
+        assert "verify_ui" not in names
     assert "diagnose_issue" in names
     assert "list_recent_traces" in names
     assert "search_logs" in names
@@ -82,10 +90,15 @@ def test_sdk_ingest_tools_filtered_from_tools_list_but_callable():
     assert sdk_tools <= registry_names
     # 公开清单仍包含核心 Agent 工具
     for core in ("diagnose_issue", "list_recent_traces", "search_logs",
-                 "context", "trace", "stacktrace", "verify", "verify_ui"):
+                 "context", "trace", "stacktrace", "verify"):
         assert core in visible_names, f"核心工具 {core} 不应在 tools/list 中缺席"
 
     # tools/call 直接调用被过滤的 SDK 工具仍可执行（ingest_error 落 memory 存储）
+    if _is_tool_available(_tool_registry["verify_ui"]):
+        assert "verify_ui" in visible_names
+    else:
+        assert "verify_ui" not in visible_names
+
     req = JSONRPCRequest(
         id="req-vis",
         method="tools/call",

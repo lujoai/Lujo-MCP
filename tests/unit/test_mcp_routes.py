@@ -433,6 +433,7 @@ def _initialized_session(client):
 
 def test_http_tools_list_contains_core_agent_tools():
     from app.mcp.tools import register_all_tools
+    from app.mcp.protocol.server import _is_tool_available, _tool_registry
 
     register_all_tools()
     client = _client()
@@ -447,8 +448,15 @@ def test_http_tools_list_contains_core_agent_tools():
     names = {t["name"] for t in tools}
 
     for core in ("diagnose_issue", "list_recent_traces", "search_logs",
-                 "context", "trace", "stacktrace", "verify", "verify_ui", "debug"):
+                 "context", "trace", "stacktrace", "verify", "debug"):
         assert core in names, f"HTTP tools/list 缺少核心工具 {core}"
+
+    # verify_ui 依赖可选的 Playwright：依赖存在时必须公开，未安装时应被
+    # availability 过滤，但 registry 仍保留、tools/call 仍可用。
+    if _is_tool_available(_tool_registry["verify_ui"]):
+        assert "verify_ui" in names
+    else:
+        assert "verify_ui" not in names
 
 
 def test_http_tools_list_filters_sdk_ingest_tools():

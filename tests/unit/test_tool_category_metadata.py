@@ -12,7 +12,7 @@ import asyncio
 import json
 
 
-from app.mcp.protocol.server import _tool_registry, _handle_tools_list
+from app.mcp.protocol.server import _is_tool_available, _tool_registry, _handle_tools_list
 from app.mcp.tools import register_all_tools
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
 
@@ -152,7 +152,11 @@ class TestBackwardCompatibility:
             {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
             for t in tools
         ]
-        assert len(old_client_view) == 18
+        optional_ui_tools = ("verify_ui", "auto_test")
+        unavailable_optional_count = sum(
+            not _is_tool_available(_tool_registry[name]) for name in optional_ui_tools
+        )
+        assert len(old_client_view) == 18 - unavailable_optional_count
         sdk_names = {"ingest_network", "ingest_error", "ingest_console", "ingest_silent_failure"}
         assert {e["name"] for e in old_client_view} & sdk_names == set()
         # 每个条目都是有效的旧格式
@@ -247,7 +251,10 @@ class TestExperimentalFlag:
         resp = _handle_tools_list(req)
         tools = {t["name"]: t for t in resp["result"]["tools"]}
         for name, expected_exp in self.EXPECTED_EXPERIMENTAL.items():
-            assert tools[name]["experimental"] == expected_exp
+            if _is_tool_available(_tool_registry[name]):
+                assert tools[name]["experimental"] == expected_exp
+            else:
+                assert name not in tools
 
 
 # ── 7. stdio transport 也包含 metadata ──
