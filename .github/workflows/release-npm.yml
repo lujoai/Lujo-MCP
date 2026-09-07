@@ -233,8 +233,12 @@ jobs:
           npm pack --silent \
             "$GITHUB_WORKSPACE/npm/packages/lujo-mcp" \
             "$GITHUB_WORKSPACE/npm/packages/lujo-mcp-$SUFFIX"
+          # 安装主包时，npm 会先解析 optionalDependencies；当 registry 正在
+          # 处理某个平台的大包时，它可能静默跳过该 optional 包。分两步安装，
+          # 用本地平台 tarball 明确补上当前 runner 的二进制，再执行 launcher。
           npm install --no-audit --no-fund --silent \
-            "./lujoai-lujo-mcp-$RELEASE_VERSION.tgz" \
+            "./lujoai-lujo-mcp-$RELEASE_VERSION.tgz"
+          npm install --no-audit --no-fund --silent \
             "./lujoai-lujo-mcp-$SUFFIX-$RELEASE_VERSION.tgz"
           # The npm launcher defaults to unified stdio + localhost HTTP. The
           # protocol smoke only needs stdio and opts out explicitly so the
