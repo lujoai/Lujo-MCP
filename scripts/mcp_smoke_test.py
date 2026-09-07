@@ -53,7 +53,10 @@ for _stream in (sys.stdout, sys.stderr):
 _ID = 0
 
 # 单条 JSON-RPC 响应的读取超时（秒）：服务端挂死时冒烟脚本不得永久阻塞
-_READ_TIMEOUT = 10.0
+_DEFAULT_READ_TIMEOUT = 10.0
+_READ_TIMEOUT = _DEFAULT_READ_TIMEOUT
+# 发布构建可通过 --read-timeout 放宽冷启动较慢的冻结进程（尤其 Windows
+# heavy 子进程）验证时间；默认值保持轻量开发冒烟的快速失败语义。
 
 
 def _next_id() -> int:
@@ -248,6 +251,7 @@ def _run_smoke(
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _READ_TIMEOUT
     parser = argparse.ArgumentParser(description="Lujo-MCP stdio 接入冒烟验证")
     parser.add_argument("--tool", default=None, help="要调用的工具名（默认 debug）")
     parser.add_argument(
@@ -266,7 +270,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="可选：等待统一模式 HTTP health URL 后再执行 stdio 冒烟",
     )
+    parser.add_argument(
+        "--read-timeout",
+        type=float,
+        default=_DEFAULT_READ_TIMEOUT,
+        help="单条 MCP 响应读取超时（秒，默认 10；冻结构建可适当放宽）",
+    )
     args = parser.parse_args(argv)
+    if args.read_timeout <= 0:
+        parser.error("--read-timeout 必须大于 0")
+    _READ_TIMEOUT = args.read_timeout
     try:
         tool_arguments = _parse_tool_arguments(args.arguments_json)
     except ValueError as exc:

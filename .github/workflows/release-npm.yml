@@ -94,7 +94,8 @@ jobs:
           python scripts/mcp_smoke_test.py \
             --cmd "./$BIN" \
             --tool verify \
-            --arguments-json "$HEAVY_ARGS_JSON"
+            --arguments-json "$HEAVY_ARGS_JSON" \
+            --read-timeout 60
 
       - name: Upload platform binary
         uses: actions/upload-artifact@v4
