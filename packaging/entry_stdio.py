@@ -6,11 +6,11 @@
 import asyncio
 import multiprocessing
 
-from app.mcp_server import main
-
 if __name__ == "__main__":
-    # PyInstaller 冻结程序中的 heavy 工具使用 spawn 创建子进程。
-    # 必须在进入 asyncio 主循环前分流 multiprocessing 的子进程入口，
-    # 否则 Windows 产物可能把子进程再次当作 MCP 主进程启动。
+    # 必须在导入 app.mcp_server 之前分流 multiprocessing 的子进程入口。
+    # Windows 冻结程序的 spawn 子进程会重新执行这个入口；过晚调用会先
+    # 导入并初始化完整 MCP 服务，导致 heavy 子进程无法及时进入 target。
     multiprocessing.freeze_support()
+    from app.mcp_server import main
+
     asyncio.run(main())
