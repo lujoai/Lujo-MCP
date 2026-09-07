@@ -11,6 +11,11 @@ MCP 工具：verify_ui —— 按 UI 规范启动 Playwright 自动遍历并验�
 """
 from app.runtime.verifier import ui_runner
 
+
+def is_available() -> bool:
+    """返回当前 Python 运行时是否安装了 Playwright。"""
+    return ui_runner.is_available()
+
 VERIFY_UI_DEF = {
     "name": "verify_ui",
     "description": (

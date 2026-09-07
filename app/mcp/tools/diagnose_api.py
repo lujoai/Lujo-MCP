@@ -96,21 +96,25 @@ def _not_found(message: str, next_step: str | None = None) -> dict:
     }
 
 
-def _build_context(trace_id: str) -> dict | None:
-    """构建调试上下文，失败降级为 None（不阻断摘要返回）。"""
+def _build_context(trace_id: str, session_id: str | None = None) -> dict | None:
+    """构建调试上下文，失败降级为 None（不阻断摘要返回）。
+
+    FIX: R5 —— session_id 透传到 trace 查询边界（内存 + 存储回退 +
+    上下文构建全程校验会话归属），而不是只过滤摘要。
+    """
     try:
-        ctx = build_debug_context(trace_id)
+        ctx = build_debug_context(trace_id, session_id=session_id)
         return ctx.model_dump() if ctx is not None else None
     except Exception:
         logger.exception("build_debug_context 失败 (trace_id=%s)，降级为仅摘要", trace_id)
         return None
 
 
-def _finish(trace_id: str, err: dict | None, source: str) -> dict:
+def _finish(trace_id: str, err: dict | None, source: str, session_id: str | None = None) -> dict:
     """汇总单条命中结果：摘要 + 完整上下文。"""
     if err is None:
-        err = errors.get_by_id(trace_id)
-    ctx = _build_context(trace_id)
+        err = errors.get_by_id(trace_id, session_id=session_id)
+    ctx = _build_context(trace_id, session_id=session_id)
     if err is None and not ctx:
         return _not_found(
             f"记录 {trace_id} 存在摘要但无法构建调试上下文",
@@ -130,7 +134,8 @@ def handler(arguments: dict) -> dict:
     arguments = arguments or {}
     request_id = arguments.get("request_id")
     query = arguments.get("query")
-    session_id = arguments.get("session_id")
+    # FIX: R5 —— 空串会话等价于未指定（"" 会命中 errors 的空串 bucket）
+    session_id = arguments.get("session_id") or None
     try:
         since_minutes = int(arguments.get("since_minutes") or 30)
     except (TypeError, ValueError):
@@ -139,7 +144,9 @@ def handler(arguments: dict) -> dict:
     # ① request_id 精确查询
     if request_id:
         err = errors.get_by_id(request_id, session_id=session_id)
-        ctx = _build_context(request_id)
+        # FIX: R5 —— 上下文构建同样受会话过滤；err 为 None 时不得仅凭
+        # 上下文存在就返回 found=true（那会把其他会话的现场泄漏出去）。
+        ctx = _build_context(request_id, session_id=session_id)
         if err is None and not ctx:
             return _not_found(
                 f"未找到 {request_id} 对应的错误或追踪记录",
@@ -172,6 +179,7 @@ def handler(arguments: dict) -> dict:
             best.get("trace_id") or best.get("error_id") or "",
             err=None,
             source="query",
+            session_id=session_id,
         )
 
     # ③ 默认：最近一次真实错误（errors 缓冲优先，回退存储摘要）
@@ -181,13 +189,19 @@ def handler(arguments: dict) -> dict:
             latest.get("error_id") or latest.get("trace_id") or "",
             err=latest,
             source="latest",
+            session_id=session_id,
         )
 
     from app.mcp.tools.trace_api import list_recent_traces as _list_recent
 
     recent = _list_recent(limit=1, session_id=session_id)
     if recent:
-        return _finish(recent[0].get("trace_id") or "", err=None, source="recent_traces")
+        return _finish(
+            recent[0].get("trace_id") or "",
+            err=None,
+            source="recent_traces",
+            session_id=session_id,
+        )
 
     return _not_found(
         "当前服务没有捕获到任何错误或追踪记录（可能是刚启动或尚无数据上报）",

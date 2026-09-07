@@ -31,6 +31,15 @@ AUTO_TEST_DEF = {
 logger = logging.getLogger("lujo-mcp.auto_test")
 
 
+def is_available() -> bool:
+    """返回当前 Python 运行时是否安装了 Playwright。"""
+    try:
+        from playwright.async_api import async_playwright as _  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 async def _run(url: str, max_actions: int, capture_console: bool, capture_network: bool) -> dict:
     """内部 async 函数：用 Playwright 异步 API 执行遍历"""
     from playwright.async_api import async_playwright

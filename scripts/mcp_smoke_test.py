@@ -4,6 +4,7 @@
 - 验证 Lujo-MCP stdio MCP Server 可被外部 MCP 客户端（Claude Desktop / Cursor / Trae 等）
   正常接入：启动 → initialize 握手 → tools/list 枚举 → 调用一个无害工具 → 退出。
 - 不修改任何生产代码，不改 MCP 协议，不引入 LLM 调用。
+- 传入 `--http-url` 时还会等待统一模式的 HTTP health，与 stdio 握手一起验证。
 
 用法：
     python scripts/mcp_smoke_test.py
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 # FIX(v0.7.0 Minor): clientInfo 版本此前硬编码 0.4.1-beta（早已失真）。
@@ -125,7 +127,40 @@ def _resolve_cmd(cmd) -> list[str]:
     return list(cmd)
 
 
-def _run_smoke(tool: str | None, cmd=None) -> int:
+def _parse_tool_arguments(raw: str) -> dict:
+    """解析冒烟工具参数，拒绝数组/标量以保持 tools/call 契约。"""
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--arguments-json 不是合法 JSON：{exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("--arguments-json 必须是 JSON 对象")
+    return value
+
+
+def _wait_http(url: str, timeout: float = _READ_TIMEOUT) -> dict:
+    """等待本机 HTTP health 成功，供统一 transport 发布冒烟使用。"""
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=0.5) as response:
+                if 200 <= response.status < 300:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    return payload if isinstance(payload, dict) else {"value": payload}
+                last_error = RuntimeError(f"HTTP status {response.status}")
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.05)
+    raise TimeoutError(f"等待 HTTP health 超时（>{timeout}s）: {url}; last={last_error}")
+
+
+def _run_smoke(
+    tool: str | None,
+    cmd=None,
+    http_url: str | None = None,
+    tool_arguments: dict | None = None,
+) -> int:
     cmd = _resolve_cmd(cmd)
     proc = subprocess.Popen(
         cmd,
@@ -134,10 +169,19 @@ def _run_smoke(tool: str | None, cmd=None) -> int:
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
     out_q = _start_readers(proc)
     try:
+        if http_url:
+            try:
+                health = _wait_http(http_url)
+                print(f"[OK] HTTP health: {json.dumps(health, ensure_ascii=False)}")
+            except Exception as exc:
+                print(f"[FAIL] HTTP health 失败: {exc}", file=sys.stderr)
+                return 1
+
         # 1. initialize 握手
         init = _send(proc, out_q, "initialize", {
             "protocolVersion": "2024-11-05",
@@ -177,13 +221,17 @@ def _run_smoke(tool: str | None, cmd=None) -> int:
             target = names[0]
         call = _send(proc, out_q, "tools/call", {
             "name": target,
-            "arguments": {},
+            "arguments": tool_arguments or {},
         })
         if "error" in call:
-            print(f"[WARN] tools/call {target} 返回 error（非致命，视工具而定）：{call['error']}")
-        else:
-            content = call.get("result", {}).get("content", [])
-            print(f"[OK] tools/call {target}: {len(content)} 个 content 块")
+            print(f"[FAIL] tools/call {target} 返回协议 error：{call['error']}", file=sys.stderr)
+            return 1
+        result = call.get("result", {})
+        if result.get("isError"):
+            print(f"[FAIL] tools/call {target} 返回 isError=true：{result}", file=sys.stderr)
+            return 1
+        content = result.get("content", [])
+        print(f"[OK] tools/call {target}: {len(content)} 个 content 块")
 
         print("[PASS] MCP stdio 冒烟验证通过")
         return 0
@@ -203,14 +251,28 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lujo-MCP stdio 接入冒烟验证")
     parser.add_argument("--tool", default=None, help="要调用的工具名（默认 debug）")
     parser.add_argument(
+        "--arguments-json",
+        default="{}",
+        help="工具调用参数 JSON 对象（用于验证需要入参的工具）",
+    )
+    parser.add_argument(
         "--cmd",
         default=None,
         help="要启动的 MCP server 命令（默认：python -m app.mcp_server；"
         "发布前验证二进制时传 ./dist/lujo-mcp-server(.exe)）",
     )
+    parser.add_argument(
+        "--http-url",
+        default=None,
+        help="可选：等待统一模式 HTTP health URL 后再执行 stdio 冒烟",
+    )
     args = parser.parse_args(argv)
+    try:
+        tool_arguments = _parse_tool_arguments(args.arguments_json)
+    except ValueError as exc:
+        parser.error(str(exc))
     start = time.monotonic()
-    rc = _run_smoke(args.tool, args.cmd)
+    rc = _run_smoke(args.tool, args.cmd, args.http_url, tool_arguments)
     print(f"耗时 {(time.monotonic() - start) * 1000:.0f}ms，退出码 {rc}")
     return rc
 

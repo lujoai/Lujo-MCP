@@ -23,3 +23,14 @@ def slow_hang(arguments: dict) -> dict:
     """长时间挂起，验证超时强杀（父进程应在 timeout 后 terminate 本子进程）。"""
     time.sleep(float(arguments.get("sleep", 30)))
     return {"ok": True}
+
+
+def big_result(arguments: dict) -> dict:
+    """回显超过管道缓冲的大结果，验证 R6：子进程运行期间读结果，不死锁。"""
+    size = int(arguments.get("size", 1024 * 1024))
+    return {"ok": True, "echo": "x" * size}
+
+
+def unserializable_result(arguments: dict) -> dict:
+    """返回不可 pickle 的结果，验证父进程收到结构化错误而非挂死。"""
+    return {"ok": True, "fn": lambda: 1}

@@ -7,7 +7,27 @@
 
 ## [Unreleased]
 
-- 无（v0.7.5 已发布；后续变更在此追加）。
+- 无（0.7.6 发布准备中的变更已整理到下方版本段）。
+
+## [0.7.6] - 2026-09-07
+
+> 主题「本地调试链路稳定性与发行加固」。本版本保持本地 MCP Server 定位，不新增自主 Agent；重点修复浏览器现场关联、会话隔离、Source Map 定位、重型工具执行和 stdio/HTTP 错误契约，并完善本地统一启动与发行验证。
+
+### 修复与增强
+
+- 统一 `error_id`、`caller_trace_id` 与网络/UI/console 事件的关联查询，诊断结果可以返回同一浏览器现场。
+- 统一 SDK 与服务端的顶层 `session_id` 上报契约，兼容旧版 `extra.session_id`，避免不同会话相互合并或泄漏。
+- 保留有效的 Source Map `column`，避免压缩代码定位到错误源文件。
+- 所有诊断分支贯穿 `session_id` 归属校验，存储回退同样 fail-closed。
+- 重型工具改为运行期间读取子进程结果，超时后 terminate/kill 并兜底回收。
+- HTTP 与 stdio 对工具失败统一返回可识别的 `isError=true` 语义。
+- npm/npx 默认使用同一进程提供 stdio 与 localhost HTTP，`--no-http` 保留纯 stdio 模式。
+- 发布入口补充 PyInstaller multiprocessing 分流；可选依赖工具不会在不可用运行时的 `tools/list` 中误导宿主。
+
+### 验证
+
+- Python unit、Browser SDK Node 测试、ruff、跨模块复现和统一本地 stdio+HTTP 冒烟通过。
+- 发布前继续执行三平台冻结产物、npm clean-install、Playwright 能力和真实宿主接入门禁。
 
 ## [0.7.5] - 2026-09-05
 

@@ -141,8 +141,7 @@
   var resultList = document.getElementById("resultList");
 
   AiDebug.init({
-    endpoint: "http://localhost:8000",
-    apiKey: "test_secret_key_456",
+    endpoint: window.location.origin,
     captureNetwork: true,
     captureUI: true,
     autoDetectNetworkErrors: true,

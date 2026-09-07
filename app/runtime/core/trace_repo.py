@@ -55,6 +55,34 @@ def _new_id(prefix: str = "rec") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
+# FIX: R1 —— canonical ID 与 caller ID 的别名解析必须收敛在存取层。
+# save_trace 把异常写到 errors 缓冲的 err-... 下，SDK 的原始 sdk-trace-... 仅
+# 记录在该 error_id 的 trace_link 条目里；而 network / UI / console 上报仍按
+# SDK 的 caller ID 存储。查询侧统一解析别名，保证 builder、HTTP 查询端点和
+# MCP 工具走同一关联规则，而不是各 handler 各自打补丁。
+def _related_trace_ids(trace_id: str) -> list[str]:
+    """解析 trace 别名链：返回 [查询 ID, 关联的 caller_trace_id...]（去重保序）。"""
+    ids = [trace_id]
+    try:
+        for entry in get_logs(trace_id):
+            if entry.get("step") != _STEP_LINK:
+                continue
+            data = entry.get("data")
+            caller = data.get("caller_trace_id") if isinstance(data, dict) else None
+            if caller and caller not in ids:
+                ids.append(caller)
+    except Exception:
+        logger.exception("解析 trace 别名失败 (trace_id=%s)", trace_id)
+    return ids
+
+
+def _session_matches(data: object, session_id: Optional[str]) -> bool:
+    """按会话过滤事件；指定会话时缺失/畸形归属一律不可见。"""
+    if session_id is None:
+        return True
+    return isinstance(data, dict) and data.get("session_id") == session_id
+
+
 # ── trace（异常/静默失败）──
 def save_trace(
     exc_type: str,
@@ -82,6 +110,9 @@ def save_trace(
         "frames": frames,
         "traceback": "",
         "frame_count": len(frames),
+        # FIX: R5 —— 会话归属随 trace_data 持久化：errors 内存缓冲淘汰/
+        # 重启后走存储回退时，仍能校验该记录属于哪个会话。
+        "session_id": session_id,
         # FIX: R7-P1-2（断点②）—— 落库数据持久化指纹：重启/缓冲淘汰后
         # _rebuild_trace_from_store 回读时可直接恢复（与 errors.record 内
         # compute_fingerprint 同一算法，保持两路指纹一致）。
@@ -126,10 +157,16 @@ def save_trace(
     return error_id
 
 
-def _rebuild_trace_from_store(error_id: str) -> Optional[dict]:
+def _rebuild_trace_from_store(
+    error_id: str, session_id: Optional[str] = None
+) -> Optional[dict]:
     """从 trace_store 回读重建 trace 对象（C4：errors 缓冲未命中时使用）。
 
     必须能找到 step=trace_data 的条目；trace_meta / trace_link 可选。
+
+    FIX: R5 —— 指定 session_id 时校验会话归属：记录未携带 session_id
+    （旧数据/无会话上报）或与查询会话不一致时返回 None（对该查询不可见），
+    否则存储回退会成为绕过会话隔离的后门。
     """
     trace_data = None
     meta = {}
@@ -149,6 +186,9 @@ def _rebuild_trace_from_store(error_id: str) -> Optional[dict]:
         return None
 
     if trace_data is None:
+        return None
+
+    if session_id is not None and trace_data.get("session_id") != session_id:
         return None
 
     frames = trace_data.get("frames") or []
@@ -171,6 +211,7 @@ def _rebuild_trace_from_store(error_id: str) -> Optional[dict]:
         "last_seen": timestamp,
         "trace_kind": meta.get("trace_kind", "exception"),
         "extra": meta.get("extra", {}),
+        "session_id": trace_data.get("session_id"),
         "caller_trace_id": caller_trace_id,
         "from_store": True,  # 标记来自回读，便于诊断
     }
@@ -194,9 +235,9 @@ def get_trace(trace_id: Optional[str] = None, session_id: Optional[str] = None) 
         error_id = trace_id
         err = _get_error(error_id, session_id=session_id)
 
-    # errors 内存未命中时回读 trace_store（C4 下半段）
+    # errors 内存未命中时回读 trace_store（C4 下半段；R5：回读同样受会话归属校验）
     if err is None:
-        rebuilt = _rebuild_trace_from_store(error_id)
+        rebuilt = _rebuild_trace_from_store(error_id, session_id=session_id)
         if rebuilt is not None:
             return rebuilt
         return None
@@ -229,6 +270,7 @@ def get_trace(trace_id: Optional[str] = None, session_id: Optional[str] = None) 
         "last_seen": err.get("last_seen", err["timestamp"]),
         "trace_kind": meta.get("trace_kind", "exception"),
         "extra": meta.get("extra", {}),
+        "session_id": err.get("session_id"),
         "caller_trace_id": caller_trace_id,
     }
 
@@ -239,6 +281,7 @@ def save_network_record(
     trace_id: Optional[str] = None,
     request_id: Optional[str] = None,
     extra: Optional[dict] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """保存一条网络请求记录，返回 record_id。
 
@@ -252,6 +295,8 @@ def save_network_record(
     payload["request_id"] = request_id
     payload["timestamp"] = payload.get("timestamp") or time.time()
     payload["direction"] = payload.get("direction") or "outbound"
+    if session_id is not None:
+        payload["session_id"] = session_id
     # 入库前脱敏（FIX: P1-6 request/response body 可能是 dict/list，递归脱敏）
     payload["url"] = redact_nested(payload.get("url"))
     payload["request_body"] = redact_nested(payload.get("request_body"))
@@ -263,9 +308,22 @@ def save_network_record(
     return record_id
 
 
-def get_network_records(trace_id: str) -> list[dict]:
-    """查询与某 trace 关联的所有网络请求记录（按时间顺序）。"""
-    return [e["data"] for e in get_logs(trace_id) if e.get("step") == _STEP_NETWORK]
+def get_network_records(trace_id: str, session_id: Optional[str] = None) -> list[dict]:
+    """查询与某 trace 关联的所有网络请求记录（按时间顺序）。
+
+    R1：同时查询规范 error_id 与其 caller 别名——SDK 按 sdk-trace-... 上报的
+    网络记录，经入库回执的 error_id 也能取回。
+    """
+    records: list[dict] = []
+    for tid in _related_trace_ids(trace_id):
+        records.extend(
+            e["data"]
+            for e in get_logs(tid)
+            if e.get("step") == _STEP_NETWORK
+            and _session_matches(e.get("data"), session_id)
+        )
+    records.sort(key=lambda r: r.get("timestamp") or 0)
+    return records
 
 
 # ── ui_event ──
@@ -273,6 +331,7 @@ def save_ui_event(
     event: dict,
     trace_id: Optional[str] = None,
     extra: Optional[dict] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """保存一条前端 UI 事件，返回 event_id。
 
@@ -285,6 +344,8 @@ def save_ui_event(
     payload["trace_id"] = trace_id
     payload["timestamp"] = payload.get("timestamp") or time.time()
     payload["event_type"] = payload.get("event_type") or "click"
+    if session_id is not None:
+        payload["session_id"] = session_id
     # 入库前脱敏（FIX: P1-6 payload_json 可能是 dict/list，递归脱敏）
     payload["route_path"] = redact_nested(payload.get("route_path"))
     payload["payload_json"] = redact_nested(payload.get("payload_json"))
@@ -295,9 +356,21 @@ def save_ui_event(
     return event_id
 
 
-def get_ui_events(trace_id: str) -> list[dict]:
-    """查询与某 trace 关联的所有 UI 事件（按时间顺序）。"""
-    return [e["data"] for e in get_logs(trace_id) if e.get("step") == _STEP_UI]
+def get_ui_events(trace_id: str, session_id: Optional[str] = None) -> list[dict]:
+    """查询与某 trace 关联的所有 UI 事件（按时间顺序）。
+
+    R1：别名关联规则同 get_network_records。
+    """
+    events: list[dict] = []
+    for tid in _related_trace_ids(trace_id):
+        events.extend(
+            e["data"]
+            for e in get_logs(tid)
+            if e.get("step") == _STEP_UI
+            and _session_matches(e.get("data"), session_id)
+        )
+    events.sort(key=lambda ev: ev.get("timestamp") or 0)
+    return events
 
 
 # ── console ──
@@ -308,6 +381,7 @@ def save_console_log(
     extra: Optional[dict] = None,
     trace_id: Optional[str] = None,
     request_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """保存一条控制台日志，返回 record_id。
 
@@ -325,6 +399,8 @@ def save_console_log(
         "message": redact_nested(message),
         "source": source,
     }
+    if session_id is not None:
+        payload["session_id"] = session_id
     if extra:
         payload["extra"] = redact_nested(extra)
 
@@ -332,6 +408,18 @@ def save_console_log(
     return record_id
 
 
-def get_console_logs(trace_id: str) -> list[dict]:
-    """查询与某 trace 关联的所有控制台日志（按时间顺序）。"""
-    return [e["data"] for e in get_logs(trace_id) if e.get("step") == _STEP_CONSOLE]
+def get_console_logs(trace_id: str, session_id: Optional[str] = None) -> list[dict]:
+    """查询与某 trace 关联的所有控制台日志（按时间顺序）。
+
+    R1：别名关联规则同 get_network_records。
+    """
+    logs: list[dict] = []
+    for tid in _related_trace_ids(trace_id):
+        logs.extend(
+            e["data"]
+            for e in get_logs(tid)
+            if e.get("step") == _STEP_CONSOLE
+            and _session_matches(e.get("data"), session_id)
+        )
+    logs.sort(key=lambda item: item.get("timestamp") or 0)
+    return logs

@@ -107,6 +107,9 @@ def test_npm_meta_bin_scripts_exist():
     cli = (meta_dir / "bin" / "cli.js").read_text(encoding="utf-8")
     assert "lujo-mcp-server" in cli
     assert "lujoai" in cli
+    # npm 主入口默认启用统一本地模式；--no-http 保留纯 stdio 回退。
+    assert "--no-http" in cli
+    assert "childArgs.push('--http')" in cli
 
 
 # ── npm/ 平台包 ─────────────────────────────────────────────────────
@@ -141,6 +144,14 @@ def test_sdk_package_and_tests_exist():
     assert (BROWSER_SDK / "ai-debug.js").is_file()
     # TST-3：SDK 契约单测必须存在（Node，CI 守护）
     assert (BROWSER_SDK / "test" / "sdk-core.test.js").is_file()
+
+
+def test_builtin_browser_demos_are_zero_config_and_same_origin():
+    """内置演示页不能携带失效测试密钥，也不能制造 localhost/127.0.0.1 跨域。"""
+    for name in ("network_capture_demo.html", "silent_failure_demo.html"):
+        text = (ROOT / "app" / "web" / name).read_text(encoding="utf-8")
+        assert "test_secret_key_456" not in text
+        assert "endpoint: window.location.origin" in text
 
 
 def test_launcher_platform_allowlist_matches_published_packages():

@@ -1,7 +1,8 @@
 # npm 分发（开箱即用）
 
-Lujo-MCP 的 stdio MCP Server 通过 **npm 元包 + 平台二进制包** 模式分发，让用户
-无需安装 Python 即可开箱即用。参考了 esbuild / @biomejs / @nuphus/nuphus-mcp 的做法。
+Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式分发，让用户
+无需安装 Python 即可开箱即用。默认一个进程同时提供 MCP stdio 和 localhost HTTP，
+浏览器 SDK 的 `/ingest` 数据会与 MCP 工具共享同一份内存状态。
 
 ## 发布结构
 
@@ -39,6 +40,11 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 }
 ```
 
+启动器默认启用统一本地模式（HTTP 绑定 `127.0.0.1:8000`）。需要纯 stdio 时使用
+`"args": ["--no-http"]`；也可传 `--http-port` 或 `--http-host` 覆盖 HTTP 监听参数。
+浏览器页面若在其他端口运行，请通过 MCP 配置的 `env` 设置 `CORS_ORIGINS`，例如
+`"CORS_ORIGINS": "http://localhost:3000"`。
+
 ## 发布流程（维护者）
 
 1. **打 Python 依赖的二进制**（每个平台）：
@@ -49,7 +55,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
    ```
 2. **生成平台包骨架**：
    ```bash
-   node npm/scripts/gen-platform-packages.js <version>  # 例如 0.7.0
+   node npm/scripts/gen-platform-packages.js <version>  # 例如 0.7.6
    ```
 3. **把各平台二进制放入对应平台包**：
    `npm/packages/lujo-mcp-<suffix>/bin/lujo-mcp-server(.exe)`
@@ -65,7 +71,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 
 ## 备注
 
-- 二进制由 PyInstaller 从 Python 源码打包，仍保留 Python 运行时体积（数十 MB），
+- 二进制由 PyInstaller 从 Python 源码打包，仍保留 Python 运行时和 Web/MCP 依赖体积（数十 MB 以上），
   属预期代价；可用 UPX 进一步压缩。
 - 所有平台包发布后才能发布元包，否则 `npm install` 找不到对应平台二进制。
 
@@ -88,10 +94,10 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 
 ```bash
 # 方式一：手动触发（填版本号）
-gh workflow run release-npm.yml -f version=<version>  # 例如 0.7.0
+gh workflow run release-npm.yml -f version=<version>  # 例如 0.7.6
 
 # 方式二：打 tag 自动触发（v 前缀）
-git tag v<version>  # 例如 v0.7.0
+git tag v<version>  # 例如 v0.7.6
 git push origin v<version>
 ```
 

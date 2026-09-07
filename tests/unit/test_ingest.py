@@ -360,3 +360,234 @@ def test_batch_valid_gzip_payload_ok():
     )
     assert resp.status_code == 200
     assert resp.json()["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# R2：session_id envelope（顶层规范位置 + 兼容旧 SDK 的 extra.session_id）
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_error_session_from_extra_compat():
+    """旧 SDK 把 session_id 放 extra：服务端必须兼容并参与会话分桶。
+
+    FIX: R2 —— 此前服务端只读顶层 session_id，普通 SDK 数据进入 _global
+    桶，会话查询无结果、相同错误跨页面被错误合并。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+    from app.runtime.core import errors as errors_mod
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    resp = client.post("/ingest/error", json={
+        "exc_type": "Error",
+        "message": "boom",
+        "frames": [{"file": "a.js", "line": 1, "function": "f"}],
+        "extra": {"session_id": "sdk-sess-A"},
+    })
+    assert resp.status_code == 200
+    tid = resp.json()["trace_id"]
+
+    rec = errors_mod.get_by_id(tid, session_id="sdk-sess-A")
+    assert rec is not None, "extra.session_id 应参与会话分桶"
+    assert rec["session_id"] == "sdk-sess-A"
+    assert errors_mod.get_by_id(tid, session_id="sdk-sess-B") is None
+
+
+def test_ingest_error_session_top_level_wins():
+    """顶层与 extra 同时携带 session_id 时顶层优先（规范位置）。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+    from app.runtime.core import errors as errors_mod
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    resp = client.post("/ingest/error", json={
+        "exc_type": "Error",
+        "message": "boom",
+        "frames": [],
+        "session_id": "top-level",
+        "extra": {"session_id": "inner"},
+    })
+    tid = resp.json()["trace_id"]
+    assert errors_mod.get_by_id(tid, session_id="top-level") is not None
+    assert errors_mod.get_by_id(tid, session_id="inner") is None
+
+
+def test_ingest_batch_session_from_extra_compat():
+    """批量端点（SDK 实际上报路径）同样兼容 extra.session_id。"""
+    client = _make_batch_client()
+    resp = client.post("/ingest/batch", json={"events": [
+        {
+            "path": "/ingest/error",
+            "payload": {
+                "exc_type": "Error",
+                "message": "batch boom",
+                "frames": [],
+                "extra": {"session_id": "batch-sess"},
+            },
+        }
+    ]})
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["ok"] is True
+    tid = result["result"]["trace_id"]
+
+    from app.runtime.core import errors as errors_mod
+    assert errors_mod.get_by_id(tid, session_id="batch-sess") is not None
+
+
+def test_two_sessions_same_code_not_merged():
+    """两个会话在同一源码位置报相同错误：各自可查询且互不合并；
+    同一会话内重复错误仍正确聚合。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+    from app.runtime.core import errors as errors_mod
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    payload = {
+        "exc_type": "TypeError",
+        "message": "Cannot read properties of undefined",
+        "frames": [{"file": "login.js", "line": 42, "function": "submit"}],
+    }
+    r1 = client.post("/ingest/error", json={**payload, "extra": {"session_id": "sess-1"}}).json()
+    r2 = client.post("/ingest/error", json={**payload, "extra": {"session_id": "sess-2"}}).json()
+    # 跨会话：不同 error_id（不合并）
+    assert r1["trace_id"] != r2["trace_id"]
+    # 各自可查
+    assert errors_mod.get_by_id(r1["trace_id"], session_id="sess-1") is not None
+    assert errors_mod.get_by_id(r2["trace_id"], session_id="sess-2") is not None
+    # 同会话重复：聚合到同一条
+    r3 = client.post("/ingest/error", json={**payload, "extra": {"session_id": "sess-1"}}).json()
+    assert r3["trace_id"] == r1["trace_id"]
+    assert errors_mod.get_by_id(r1["trace_id"], session_id="sess-1")["occurrence_count"] == 2
+
+
+def test_event_routes_propagate_session_id_and_filter_context():
+    """R2/R5：network、UI、console 单条端点都保存并隔离 session_id。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.ingest import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    trace_id = "event-session-route"
+
+    responses = [
+        client.post("/ingest/network", json={
+            "record": {"url": "http://route/network", "status_code": 500},
+            "trace_id": trace_id,
+            "session_id": "session-a",
+        }),
+        client.post("/ingest/ui-event", json={
+            "event": {"event_type": "click", "target_selector": "#a"},
+            "trace_id": trace_id,
+            "session_id": "session-a",
+        }),
+        client.post("/ingest/console", json={
+            "level": "error",
+            "message": "route console",
+            "trace_id": trace_id,
+            "session_id": "session-a",
+        }),
+    ]
+    assert all(response.status_code == 200 for response in responses)
+
+    assert trace_repo.get_network_records(trace_id, session_id="session-a")
+    assert trace_repo.get_ui_events(trace_id, session_id="session-a")
+    assert trace_repo.get_console_logs(trace_id, session_id="session-a")
+    assert trace_repo.get_network_records(trace_id, session_id="session-b") == []
+    assert trace_repo.get_ui_events(trace_id, session_id="session-b") == []
+    assert trace_repo.get_console_logs(trace_id, session_id="session-b") == []
+
+
+def test_batch_event_routes_propagate_session_id():
+    """R2：batch 的三类现场事件使用同一 envelope 会话规则。"""
+    client = _make_batch_client()
+    trace_id = "event-session-batch"
+    resp = client.post("/ingest/batch", json={"events": [
+        {"path": "/ingest/network", "payload": {
+            "record": {"url": "http://batch/network"},
+            "trace_id": trace_id,
+            "session_id": "batch-session",
+        }},
+        {"path": "/ingest/ui-event", "payload": {
+            "event": {"event_type": "click"},
+            "trace_id": trace_id,
+            "session_id": "batch-session",
+        }},
+        {"path": "/ingest/console", "payload": {
+            "message": "batch console",
+            "trace_id": trace_id,
+            "session_id": "batch-session",
+        }},
+    ]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 3
+    assert all(item["ok"] for item in body["results"])
+    assert trace_repo.get_network_records(trace_id, session_id="batch-session")
+    assert trace_repo.get_ui_events(trace_id, session_id="batch-session")
+    assert trace_repo.get_console_logs(trace_id, session_id="batch-session")
+    assert trace_repo.get_network_records(trace_id, session_id="other-session") == []
+
+
+# ---------------------------------------------------------------------------
+# R4：入库规范化保留 column（Source Map 精确还原必需）
+# ---------------------------------------------------------------------------
+
+
+def test_parse_frames_preserves_column():
+    """column 保留；缺失/非数值时不伪造 0（按缺失处理）。"""
+    frames = ingest_api._parse_frames([
+        {"file": "app.js", "line": 1, "function": "login", "column": 51},
+        {"file": "app.js", "line": 2, "function": "no-column"},
+        {"file": "app.js", "line": 3, "function": "bad", "column": "abc"},
+        {"file": "app.js", "line": 4, "function": "fraction", "column": 1.5},
+        {"file": "app.js", "line": 5, "function": "bool", "column": True},
+    ])
+    assert frames[0]["column"] == 51
+    assert "column" not in frames[1]
+    assert "column" not in frames[2]
+    assert "column" not in frames[3]
+    assert "column" not in frames[4]
+    # 原有字段不回归
+    assert frames[0]["file"] == "app.js"
+    assert frames[0]["function"] == "login"
+
+
+def test_ingest_error_preserves_column_end_to_end():
+    """真实 SDK 形状帧经 tool_ingest_error 落库后 column 仍在。"""
+    res = ingest_api.tool_ingest_error(
+        exc_type="Error",
+        message="boom",
+        frames=[{"file": "http://x/app.js", "line": 1, "function": "f", "column": 51}],
+    )
+    trace = trace_repo.get_trace(res["trace_id"])
+    assert trace["frames"][0].get("column") == 51
+
+
+def test_silent_failure_parse_frames_preserves_column():
+    """silent-failure 帧转换入口同一契约（R4 审查的其他转换入口）。"""
+    from app.mcp.tools import silent_failure_api
+
+    frames = silent_failure_api._parse_frames([
+        {"file": "app.js", "line": 1, "function": "f", "column": 12},
+        {"file": "app.js", "line": 2, "function": "g"},
+    ])
+    assert frames[0]["column"] == 12
+    assert "column" not in frames[1]

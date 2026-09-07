@@ -22,7 +22,11 @@ _STEP_SPEC = "spec"
 
 # 主存：spec_id → spec dict
 _specs: dict[str, dict] = {}
-_lock = threading.Lock()
+# Spec CRUD is infrequent, but each operation must be linearizable across the
+# in-memory cache and the optional persistence mirrors.  A re-entrant lock lets
+# get()/list_specs() call _restore_if_needed() without reopening the
+# create/delete race that could resurrect a spec after deletion.
+_lock = threading.RLock()
 _restored = False
 
 
@@ -122,19 +126,16 @@ def _do_restore() -> list[dict]:
 def _restore_if_needed() -> None:
     """从 trace_store 恢复 spec 到内存缓存（C4 对标模式）。
 
-    IO 操作在锁外执行，合并结果时才加锁，避免持锁做 IO 阻塞其他 spec 操作。
+    恢复读取与合并在同一把锁内完成。规范 CRUD 需要在内存缓存和持久化
+    镜像之间保持线性化；如果恢复读取在锁外执行，delete() 可能完成后又被
+    旧快照重新合并，导致已删除规范复活。规范操作频率低，接受短暂 IO 阻塞。
     恢复失败静默降级，不影响正常功能。
     """
     global _restored
     with _lock:
         if _restored:
             return
-
-    # IO 在锁外执行，不阻塞并发 spec 操作
-    restored_specs = _do_restore()
-
-    # 合并结果时加锁
-    with _lock:
+        restored_specs = _do_restore()
         if not _restored:
             for spec_data in restored_specs:
                 sid = spec_data.get("id")
@@ -160,17 +161,19 @@ def create(spec: dict) -> str:
         "created_at": spec.get("created_at") or now,
         "updated_at": now,
     }
+    # 以内存缓存、PG 镜像和 trace_store 的整个提交序列作为一个临界区，
+    # 使同 ID 的 create/delete 具备明确的先后关系。
     with _lock:
         _specs[spec_id] = record
-    # Phase 2.4：双写 —— specs 表（PG 后端优先）
-    store = _pg_spec_store()
-    if store is not None:
-        try:
-            store.save_spec(record)
-        except Exception:
-            logger.debug("specs 表写入失败 (spec_id=%s)", spec_id, exc_info=True)
-    # 保留 trace_store 写入（迁移期双写）
-    add_log(spec_id, _STEP_SPEC, record)
+        # Phase 2.4：双写 —— specs 表（PG 后端优先）
+        store = _pg_spec_store()
+        if store is not None:
+            try:
+                store.save_spec(record)
+            except Exception:
+                logger.debug("specs 表写入失败 (spec_id=%s)", spec_id, exc_info=True)
+        # 保留 trace_store 写入（迁移期双写）
+        add_log(spec_id, _STEP_SPEC, record)
     return spec_id
 
 
@@ -183,54 +186,51 @@ def get(spec_id: str) -> dict | None:
     进程重启后恢复的旧值）永不回源，内存旧值残留。现改为先回源读 specs 表，
     updated_at 较新则覆盖内存缓存；无 PG 时保持原内存优先语义。
     """
-    # FIX: P2 先回源，避免内存旧值压过存储新值
-    store = _pg_spec_store()
-    if store is not None:
-        try:
-            data = store.get_spec(spec_id)
-            if data is not None:
-                with _lock:
+    with _lock:
+        # FIX: P2 先回源，避免内存旧值压过存储新值
+        store = _pg_spec_store()
+        if store is not None:
+            try:
+                data = store.get_spec(spec_id)
+                if data is not None:
                     cached = _specs.get(spec_id)
                     if cached is None or _spec_version_ts(data, {}) > _spec_version_ts(cached, {}):
                         _specs[spec_id] = data
-                return dict(data)
-        except Exception:
-            logger.debug("specs 表读取失败 (spec_id=%s)", spec_id, exc_info=True)
+                    return dict(data)
+            except Exception:
+                logger.debug("specs 表读取失败 (spec_id=%s)", spec_id, exc_info=True)
 
-    # 内存兜底
-    with _lock:
+        # 内存兜底
         if spec_id in _specs:
             return dict(_specs[spec_id])
 
-    # fallback：从 trace_store 恢复到内存
-    _restore_if_needed()
-    with _lock:
+        # fallback：从 trace_store 恢复到内存
+        _restore_if_needed()
         if spec_id in _specs:
             return dict(_specs[spec_id])
 
-    # 仍然未找到，尝试直接从存储读取（SEC-13：取最新版本）
-    best_data = None
-    best_ts = -1.0
-    for entry in get_logs(spec_id):
-        if entry.get("step") != _STEP_SPEC:
-            continue
-        data = entry.get("data")
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except (json.JSONDecodeError, TypeError):
+        # 仍然未找到，尝试直接从存储读取（SEC-13：取最新版本）
+        best_data = None
+        best_ts = -1.0
+        for entry in get_logs(spec_id):
+            if entry.get("step") != _STEP_SPEC:
                 continue
-        if not isinstance(data, dict):
-            continue
-        ts = _spec_version_ts(data, entry)
-        if ts > best_ts:
-            best_ts = ts
-            best_data = data
-    if best_data is not None:
-        with _lock:
+            data = entry.get("data")
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if not isinstance(data, dict):
+                continue
+            ts = _spec_version_ts(data, entry)
+            if ts > best_ts:
+                best_ts = ts
+                best_data = data
+        if best_data is not None:
             _specs[spec_id] = best_data
-        return dict(best_data)
-    return None
+            return dict(best_data)
+        return None
 
 
 def update(spec_id: str, patch: dict) -> dict | None:
@@ -253,19 +253,19 @@ def update(spec_id: str, patch: dict) -> dict | None:
         existing["updated_at"] = time.time()
         updated = dict(existing)
 
-    # Phase 2.4：双写 —— specs 表（PG 后端优先）
-    store = _pg_spec_store()
-    if store is not None:
+        # Phase 2.4：双写 —— specs 表（PG 后端优先）
+        store = _pg_spec_store()
+        if store is not None:
+            try:
+                store.save_spec(updated)
+            except Exception:
+                logger.debug("specs 表更新失败 (spec_id=%s)", spec_id, exc_info=True)
+        # crash-safe append：写入新版本作为提交点，失败仅记录日志不影响内存层
         try:
-            store.save_spec(updated)
+            add_log(spec_id, _STEP_SPEC, updated)
         except Exception:
-            logger.debug("specs 表更新失败 (spec_id=%s)", spec_id, exc_info=True)
-    # crash-safe append：写入新版本作为提交点，失败仅记录日志不影响内存层
-    try:
-        add_log(spec_id, _STEP_SPEC, updated)
-    except Exception:
-        logger.exception("写入 spec 失败 (spec_id=%s)", spec_id)
-    return updated
+            logger.exception("写入 spec 失败 (spec_id=%s)", spec_id)
+        return updated
 
 
 def delete(spec_id: str) -> bool:
@@ -281,29 +281,29 @@ def delete(spec_id: str) -> bool:
         existed = spec_id in _specs
         _specs.pop(spec_id, None)
 
-    # Phase 2.4：双删 —— specs 表（PG 后端优先）
-    store = _pg_spec_store()
-    if store is not None:
-        try:
-            if store.delete_spec(spec_id):
-                existed = True
-        except Exception:
-            # FIX(v0.7.1-b14-1): PG 删除失败时内存/trace_store 已删而 PG 行残留，
-            # 进程重启后 _do_restore 会从 specs 表把该 spec「复活」。此前 debug
-            # 级日志让该失败几乎不可见、复活无从排查；升级为 warning 并显式说明
-            # 后果与补救（PG 恢复后重试删除）。行为不变（优雅降级语义保持）。
-            logger.warning(
-                "specs 表删除失败 (spec_id=%s)：内存与 trace_store 已删，PG 行残留，"
-                "进程重启后该 spec 可能从 PG 恢复（resurrection）；PG 恢复后请重试删除",
-                spec_id,
-                exc_info=True,
-            )
-    if existed:
-        try:
-            delete_logs(spec_id)
-        except Exception:
-            pass
-    return existed
+        # Phase 2.4：双删 —— specs 表（PG 后端优先）
+        store = _pg_spec_store()
+        if store is not None:
+            try:
+                if store.delete_spec(spec_id):
+                    existed = True
+            except Exception:
+                # FIX(v0.7.1-b14-1): PG 删除失败时内存/trace_store 已删而 PG 行残留，
+                # 进程重启后 _do_restore 会从 specs 表把该 spec「复活」。此前 debug
+                # 级日志让该失败几乎不可见、复活无从排查；升级为 warning 并显式说明
+                # 后果与补救（PG 恢复后重试删除）。行为不变（优雅降级语义保持）。
+                logger.warning(
+                    "specs 表删除失败 (spec_id=%s)：内存与 trace_store 已删，PG 行残留，"
+                    "进程重启后该 spec 可能从 PG 恢复（resurrection）；PG 恢复后请重试删除",
+                    spec_id,
+                    exc_info=True,
+                )
+        if existed:
+            try:
+                delete_logs(spec_id)
+            except Exception:
+                pass
+        return existed
 
 
 def list_specs(kind: str | None = None, target: str | None = None) -> list[dict]:

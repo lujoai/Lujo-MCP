@@ -134,7 +134,7 @@ class TestDashboardTraceEndpointJsonStructure:
 class TestModelDumpEquivalence:
     """DebugContext.model_dump() 产出的 dict 应与原始 build_debug_context 的 dict 等价。"""
 
-    def test_model_dump_has_all_25_fields(self):
+    def test_model_dump_has_all_26_fields(self):
         tid = trace_repo.save_trace(
             "ValueError", "msg",
             frames=[{"file": "app/config.py", "line": 9, "function": "Settings"}],
@@ -153,6 +153,8 @@ class TestModelDumpEquivalence:
             "fingerprint",
             # FIX(v0.7.1-b2-3)：复发信号与调用链线索透传（21 → 25）
             "occurrence_count", "first_seen", "last_seen", "caller_trace_id",
+            # FIX: R1 —— 控制台现场纳入上下文契约（25 → 26）
+            "console_logs",
         }
         assert set(dumped.keys()) == expected_fields
 

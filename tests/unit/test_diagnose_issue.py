@@ -234,3 +234,141 @@ async def test_diagnose_issue_registered_and_listed():
     tool = _tool_registry["diagnose_issue"]
     assert "优先" in tool["description"]
     assert "request_id" in tool["description"]
+
+
+# ── R5：指定 request_id 时会话过滤必须贯穿上下文构建 ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_diagnose_request_id_wrong_session_not_found():
+    """FIX: R5 —— A 会话数据用 B 会话的精确查询不可见（含 debug_context）。"""
+    seeded = _seed_error(message="session A only", session_id="sess-a")
+
+    result = await _call_tool("diagnose_issue", {"request_id": seeded, "session_id": "sess-b"})
+
+    assert result["found"] is False
+    assert result["setup_hint"]
+
+
+@pytest.mark.asyncio
+async def test_diagnose_request_id_right_session_found_with_context():
+    """归属会话的精确查询返回摘要 + 完整上下文。"""
+    seeded = _seed_error(message="session A only", session_id="sess-a")
+
+    result = await _call_tool("diagnose_issue", {"request_id": seeded, "session_id": "sess-a"})
+
+    assert result["found"] is True
+    assert result["summary"]["message"] == "session A only"
+    assert result["debug_context"]["exception"]["message"] == "session A only"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_store_fallback_session_enforced():
+    """内存未命中（模拟重启/缓冲淘汰）后，存储回退同样受会话过滤约束。"""
+    seeded = _seed_error(message="persisted session A", session_id="sess-a")
+    from app.runtime.core import errors as errors_mod
+
+    errors_mod._recent.clear()
+
+    wrong = await _call_tool("diagnose_issue", {"request_id": seeded, "session_id": "sess-b"})
+    assert wrong["found"] is False
+
+    right = await _call_tool("diagnose_issue", {"request_id": seeded, "session_id": "sess-a"})
+    assert right["found"] is True
+    assert right["debug_context"]["exception"]["message"] == "persisted session A"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_query_session_isolated():
+    """FIX: R5 —— 关键词查询在错误会话下不可见。"""
+    _seed_error(message="login failed in sess A", session_id="sess-a")
+
+    result = await _call_tool("diagnose_issue", {"query": "login", "session_id": "sess-b"})
+
+    assert result["found"] is False
+
+
+@pytest.mark.asyncio
+async def test_diagnose_empty_session_id_treated_as_unspecified():
+    """空串 session_id 等价于未指定（不应命中 "" bucket）。"""
+    seeded = _seed_error(message="no session filter", session_id=None)
+
+    result = await _call_tool("diagnose_issue", {"request_id": seeded, "session_id": ""})
+
+    assert result["found"] is True
+
+
+# ── R1 × diagnose：SDK 页面现场经 error_id 诊断可见 ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_diagnose_error_returns_caller_network_and_ui():
+    """FIX: R1 —— 网络/UI 按 caller sdk-trace-ID 上报、错误存于 err-ID：
+    宿主拿错误回执 ID 调 diagnose_issue 必须能取回同次现场。"""
+    from app.runtime.core.trace_repo import save_network_record, save_ui_event
+
+    caller_tid = "sdk-trace-r1-diagnose"
+    save_ui_event(
+        {"event_type": "click", "target_selector": "#login", "route_path": "/login"},
+        trace_id=caller_tid,
+    )
+    save_network_record(
+        {"method": "POST", "url": "http://x/api/login", "status_code": 500},
+        trace_id=caller_tid,
+    )
+    error_id = save_trace(
+        exc_type="Error",
+        message="review login failed",
+        frames=[{"file": "app.js", "line": 1, "function": "login"}],
+        source="browser-sdk",
+        trace_id=caller_tid,
+    )
+
+    result = await _call_tool("diagnose_issue", {"request_id": error_id})
+
+    assert result["found"] is True
+    ctx = result["debug_context"]
+    assert ctx.get("network_trace"), "network_trace 不应为空"
+    assert ctx["network_trace"][0]["status_code"] == 500
+    assert ctx.get("ui_events"), "ui_events 不应为空"
+    assert ctx["ui_events"][0]["event_type"] == "click"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_context_filters_caller_events_by_session():
+    """R2/R5：同一 caller trace 下的不同会话事件不得混入诊断上下文。"""
+    from app.runtime.core.trace_repo import (
+        save_console_log,
+        save_network_record,
+        save_ui_event,
+    )
+
+    caller_tid = "sdk-trace-session-isolation"
+    error_id = _seed_error(
+        message="session A error",
+        trace_id=caller_tid,
+        session_id="sess-a",
+    )
+    save_network_record(
+        {"method": "GET", "url": "http://x/a"},
+        trace_id=caller_tid,
+        session_id="sess-a",
+    )
+    save_network_record(
+        {"method": "GET", "url": "http://x/b"},
+        trace_id=caller_tid,
+        session_id="sess-b",
+    )
+    save_ui_event({"event_type": "a"}, trace_id=caller_tid, session_id="sess-a")
+    save_ui_event({"event_type": "b"}, trace_id=caller_tid, session_id="sess-b")
+    save_console_log("error", "console-a", trace_id=caller_tid, session_id="sess-a")
+    save_console_log("error", "console-b", trace_id=caller_tid, session_id="sess-b")
+
+    result = await _call_tool(
+        "diagnose_issue", {"request_id": error_id, "session_id": "sess-a"}
+    )
+    assert result["found"] is True
+    context = result["debug_context"]
+    assert [r["url"] for r in context["network_trace"]] == ["http://x/a"]
+    assert [e["event_type"] for e in context["ui_events"]] == ["a"]
+    assert [e["message"] for e in context["console_logs"]] == ["console-a"]

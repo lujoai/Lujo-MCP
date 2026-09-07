@@ -75,4 +75,9 @@ test_full_flow.py
 test_output.txt
 
 .pytest_tmp/
+.pytest-tmp/
+
+# 本地 IDE/代码索引缓存（不属于发布源代码）
+.codegraph/
+.qoder-cn/
 .claude/

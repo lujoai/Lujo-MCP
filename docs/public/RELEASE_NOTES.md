@@ -1,10 +1,42 @@
 # Release Notes / 发布说明
 
-> 最新版本：**v0.7.5（2026-09-05）**。主题「规范零手写」：新增 `ingest_specs`——宿主 AI 拿到项目的 OpenAPI/Swagger 文档即可一键生成全套 API 断言规范并入库，激活静默失败自动校验（无需手写 expect 规则）。MCP 工具 22 个（公开 18）。测试基线 unit **1502 / 0 failed / 6 skipped**、SDK JS **54/54**、ruff 全绿。无 Breaking Change。详见 CHANGELOG.md [0.7.5] 段。npm `latest` → `@lujoai/lujo-mcp@0.7.5`。
+> 待发布版本：**v0.7.6（准备中）**。主题「本地调试链路稳定性与发行加固」：修复浏览器现场关联、会话隔离、Source Map 定位、重型工具执行和统一错误语义；npm/npx 默认启动同一进程的 stdio + localhost HTTP。发布前 npm `latest` 仍为 `@lujoai/lujo-mcp@0.7.5`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.5 ・ **Release Date / 发布日期**: 2026-09-05 ・ **Codename / 代号**: 零手写规范 ｜ Spec Zero-Touch
+**Version / 版本**: v0.7.6 ・ **Release Date / 发布日期**: 2026-09-07 ・ **Codename / 代号**: 本地链路稳定 ｜ Local Path Stability
+
+---
+
+## v0.7.6（2026-09-07）
+
+### 版本概述
+
+本版本面向本地 MCP 使用场景，集中修复真实浏览器采集到 MCP 诊断之间的数据关联和会话隔离问题，并加固 stdio、localhost HTTP、重型工具和 npm 发行链路。Lujo 仍然是调试证据服务，不会自动替代宿主智能体修改用户代码。
+
+### 主要修复
+
+- 错误、网络、UI、console 事件支持统一 trace 别名关联。
+- Browser SDK 与服务端统一顶层 `session_id`，兼容旧载荷。
+- Source Map `column` 在 HTTP 入库和 silent-failure 路径中保持一致。
+- 诊断查询和存储回退贯穿会话归属校验。
+- 重型工具避免大结果 Pipe 阻塞，超时强杀并清理子进程。
+- HTTP/stdio 对业务失败统一暴露 `isError=true`。
+- npm/npx 默认启动 stdio + localhost HTTP 的统一本地进程，`--no-http` 保留纯 stdio 回退。
+
+### 升级说明
+
+- 现有 stdio 配置可以继续使用 `command: npx`；默认会额外开启回环 HTTP 采集入口。
+- 只需要纯 stdio 的客户端可在 args 中加入 `--no-http`。
+- 浏览器 SDK 采集仍需访问本地 `/ingest`；memory 模式无需数据库或云端服务。
+
+### 验证基线
+
+本轮新增 3 个回归用例后，Python unit 基线为 **1547 passed / 6 skipped / 0 failed**。
+
+- Python unit：1547 passed / 6 skipped / 0 failed。
+- Browser SDK Node：54/54。
+- ruff、跨模块复现、统一本地 stdio+HTTP 冒烟：通过。
 
 ---
 

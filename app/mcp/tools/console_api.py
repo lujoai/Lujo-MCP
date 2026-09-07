@@ -22,6 +22,7 @@ INGEST_CONSOLE_DEF = {
             "extra": {"type": "object", "default": {}, "description": "额外上下文"},
             "trace_id": {"type": "string", "description": "关联的 trace ID"},
             "request_id": {"type": "string", "description": "关联的 request ID"},
+            "session_id": {"type": "string", "description": "会话 ID"},
         },
         "required": ["message"],
     },
@@ -35,6 +36,7 @@ def tool_ingest_console(
     extra: dict | None = None,
     trace_id: str | None = None,
     request_id: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """接收浏览器控制台日志上报，落库后返回 record_id。"""
     record_id = save_console_log(
@@ -44,6 +46,7 @@ def tool_ingest_console(
         extra=extra,
         trace_id=trace_id,
         request_id=request_id,
+        session_id=session_id,
     )
     return {"record_id": record_id, "trace_id": trace_id, "saved": True}
 
@@ -56,4 +59,5 @@ def ingest_console_handler(arguments: dict) -> dict:
         extra=arguments.get("extra"),
         trace_id=arguments.get("trace_id"),
         request_id=arguments.get("request_id"),
+        session_id=arguments.get("session_id"),
     )

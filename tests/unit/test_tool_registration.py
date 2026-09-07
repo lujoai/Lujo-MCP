@@ -97,6 +97,21 @@ def test_sdk_ingest_tools_filtered_from_tools_list_but_callable():
     assert payload["saved"] is True
 
 
+def test_unavailable_tool_is_hidden_but_remains_callable():
+    """缺少可选依赖的工具不误导 tools/list，但按名调用仍保持兼容。"""
+    from app.mcp.protocol.server import get_agent_visible_tools
+
+    register_tool(
+        "optional_unavailable_test_tool",
+        "optional dependency test tool",
+        lambda arguments: {"ok": True},
+        availability=lambda: False,
+    )
+    visible_names = {tool["name"] for tool in get_agent_visible_tools()}
+    assert "optional_unavailable_test_tool" not in visible_names
+    assert "optional_unavailable_test_tool" in _tool_registry
+
+
 # ---------------------------------------------------------------------------
 # FIX: P1-C5 —— inputSchema 轻量校验（参数错误 → -32602，LLM 自纠错依据）
 # ---------------------------------------------------------------------------

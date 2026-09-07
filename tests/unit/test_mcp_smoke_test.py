@@ -59,3 +59,29 @@ def test_start_readers_pushes_lines_then_eof_sentinel():
 
     assert out_q.get(timeout=1) == '{"id":1}\n'
     assert out_q.get(timeout=1) is None
+
+
+def test_wait_http_accepts_successful_health_payload(monkeypatch):
+    """统一 transport 冒烟的 HTTP 检查应解析 2xx health JSON。"""
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":"degraded"}'
+
+    monkeypatch.setattr(sm.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    assert sm._wait_http("http://127.0.0.1:8000/health", timeout=0.1) == {"status": "degraded"}
+
+
+def test_parse_tool_arguments_requires_json_object():
+    assert sm._parse_tool_arguments('{"ok": true}') == {"ok": True}
+    with pytest.raises(ValueError):
+        sm._parse_tool_arguments("[]")
+    with pytest.raises(ValueError):
+        sm._parse_tool_arguments("not-json")

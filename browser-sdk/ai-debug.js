@@ -861,6 +861,8 @@
         message: String(msg),
         frames: frames,
         trace_id: _traceId,
+        // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+        session_id: _sessionId,
         source: "browser-sdk",
         extra: {
           session_id: _sessionId,
@@ -906,6 +908,8 @@
         message: message,
         frames: frames,
         trace_id: _traceId,
+        // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+        session_id: _sessionId,
         source: "browser-sdk",
         extra: {
           session_id: _sessionId,
@@ -1042,6 +1046,8 @@
       _send("/ingest/network", {
         record: record,
         trace_id: _traceId,
+        // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+        session_id: _sessionId,
         source: "browser-sdk",
         extra: { session_id: _sessionId },
       }, force);
@@ -1478,6 +1484,8 @@
         _send("/ingest/ui-event", {
           event: uiEvent,
           trace_id: _traceId,
+          // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+          session_id: _sessionId,
           source: "browser-sdk",
           extra: { session_id: _sessionId },
         });
@@ -1543,6 +1551,8 @@
       level: level,
       message: messages.join(" "),
       trace_id: _traceId,
+      // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+      session_id: _sessionId,
       source: "browser-sdk",
       extra: {
         session_id: _sessionId,
@@ -1765,6 +1775,8 @@
       observed: silentPayload.observed,
       observed_events: silentPayload.observed_events,
       trace_id: silentPayload.trace_id,
+      // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+      session_id: _sessionId,
       source: silentPayload.source,
       extra: silentPayload.extra,
     }, true);
@@ -1792,6 +1804,8 @@
       message: error ? error.message || String(error) : "",
       frames: error && error.stack ? _parseStack(error.stack) : [],
       trace_id: _traceId,
+      // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+      session_id: _sessionId,
       source: "browser-sdk",
       extra: Object.assign({
         session_id: _sessionId,
@@ -1815,6 +1829,8 @@
         route_path: event.route_path || (global.location ? global.location.pathname : ""),
       },
       trace_id: _traceId,
+      // FIX: R2 —— session_id 上移到顶层规范位置（extra 内保留兼容旧服务端）
+      session_id: _sessionId,
       source: "browser-sdk",
       extra: { session_id: _sessionId },
     });

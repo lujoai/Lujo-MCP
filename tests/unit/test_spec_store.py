@@ -1,4 +1,6 @@
 """单元测试：规范存储 spec_store"""
+import threading
+
 import pytest
 from app.runtime.verifier import spec_store
 
@@ -90,6 +92,42 @@ class TestDelete:
 
     def test_delete_nonexistent(self):
         assert spec_store.delete("no-such-id") is False
+
+    def test_create_delete_same_id_is_linearized(self, monkeypatch):
+        """create 的持久化不能与 delete 交错，否则删除后会复活旧日志。"""
+        spec_id = "race-spec"
+        create_reached_log = threading.Event()
+        allow_create_log = threading.Event()
+        delete_finished = threading.Event()
+        real_add_log = spec_store.add_log
+
+        def blocked_add_log(request_id, step, data):
+            if request_id == spec_id and not allow_create_log.is_set():
+                create_reached_log.set()
+                assert allow_create_log.wait(timeout=2), "create 未在测试截止时间内继续"
+            return real_add_log(request_id, step, data)
+
+        monkeypatch.setattr(spec_store, "add_log", blocked_add_log)
+        create_thread = threading.Thread(
+            target=spec_store.create,
+            args=({"id": spec_id, "kind": "api", "target": "/race", "expect": {}},),
+        )
+        delete_thread = threading.Thread(
+            target=lambda: (spec_store.delete(spec_id), delete_finished.set()),
+        )
+
+        create_thread.start()
+        assert create_reached_log.wait(timeout=2), "create 未进入受控持久化点"
+        delete_thread.start()
+        assert not delete_finished.wait(timeout=0.1), "delete 与 create 的提交发生了交错"
+
+        allow_create_log.set()
+        create_thread.join(timeout=2)
+        delete_thread.join(timeout=2)
+        assert not create_thread.is_alive()
+        assert not delete_thread.is_alive()
+        assert delete_finished.is_set()
+        assert spec_store.get(spec_id) is None
 
 
 class TestListSpecs:

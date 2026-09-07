@@ -1,5 +1,6 @@
 """结构化日志模块"""
 
+import os
 import sys
 import json
 import logging
@@ -52,7 +53,11 @@ def setup_logging() -> None:
     root = logging.getLogger("lujo-mcp")
     root.setLevel(level)
 
-    handler = logging.StreamHandler(sys.stdout)
+    # MCP stdio shares process stdout with the JSON-RPC protocol. In unified
+    # local mode logs must stay on stderr or they corrupt frames seen by the
+    # host client. Standalone HTTP keeps the historical stdout behaviour.
+    log_stream = sys.stderr if os.environ.get("LUJO_MCP_STDIO_MODE") == "1" else sys.stdout
+    handler = logging.StreamHandler(log_stream)
     handler.setLevel(level)
 
     if settings.log_format == "json":

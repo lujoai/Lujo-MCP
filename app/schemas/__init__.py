@@ -44,6 +44,7 @@ class DebugContext(BaseModel):
     # ── v0.5 新增：运行时证据链 ──
     network_trace: Optional[list[dict]] = None
     ui_events: Optional[list[dict]] = None
+    console_logs: Optional[list[dict]] = None  # FIX: R1 —— 控制台现场纳入上下文契约
     spec_diffs: Optional[list[dict]] = None
 
     # ── v0.5 新增：故障定位 ──

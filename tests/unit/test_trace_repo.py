@@ -104,6 +104,26 @@ def test_network_and_ui_isolated_by_step():
     assert len(trace_repo.get_ui_events(tid)) == 1
 
 
+def test_event_records_are_isolated_by_session():
+    """网络/UI/console 事件带 session_id 时按会话 fail-closed 过滤。"""
+    tid = trace_repo.save_trace("E", "m", [], session_id="session-a")
+    trace_repo.save_network_record({"url": "http://a"}, trace_id=tid, session_id="session-a")
+    trace_repo.save_network_record({"url": "http://b"}, trace_id=tid, session_id="session-b")
+    trace_repo.save_ui_event({"event_type": "click-a"}, trace_id=tid, session_id="session-a")
+    trace_repo.save_ui_event({"event_type": "click-b"}, trace_id=tid, session_id="session-b")
+    trace_repo.save_console_log("error", "a", trace_id=tid, session_id="session-a")
+    trace_repo.save_console_log("error", "b", trace_id=tid, session_id="session-b")
+
+    assert [r["url"] for r in trace_repo.get_network_records(tid, session_id="session-a")] == ["http://a"]
+    assert [r["url"] for r in trace_repo.get_network_records(tid, session_id="session-b")] == ["http://b"]
+    assert [e["event_type"] for e in trace_repo.get_ui_events(tid, session_id="session-a")] == ["click-a"]
+    assert [e["event_type"] for e in trace_repo.get_ui_events(tid, session_id="session-b")] == ["click-b"]
+    assert [e["message"] for e in trace_repo.get_console_logs(tid, session_id="session-a")] == ["a"]
+    assert [e["message"] for e in trace_repo.get_console_logs(tid, session_id="session-b")] == ["b"]
+    # 旧的无会话查询保持兼容，仍可查看同一 trace 下的全部事件。
+    assert len(trace_repo.get_network_records(tid)) == 2
+
+
 def test_save_trace_redacts_frames_before_storage():
     frames = [
         {
@@ -259,3 +279,98 @@ class TestSaveTraceAtomicity:
         steps = [e["step"] for e in get_logs(error_id)]
         assert "trace_data" in steps, "trace_data 条目应存在"
         assert "trace_meta" in steps, "trace_meta 条目应存在"
+
+
+# ── R1：caller 别名关联（network / UI / console 经 error_id 可查）──────────
+
+class TestCallerAliasResolution:
+    """SDK 真实链路：异常存于 err-...，network/UI/console 按 sdk-trace-... 存储。
+
+    FIX: R1 —— 查询侧必须在存取层统一解析别名，否则宿主拿到错误回执的
+    error_id 后取不到同次现场的网络/点击/控制台记录。
+    """
+
+    def _seed(self, caller_tid: str, session_id: str | None = None) -> str:
+        return trace_repo.save_trace(
+            "Error", "boom", [{"file": "app.js", "line": 1, "function": "f"}],
+            source="browser-sdk", trace_id=caller_tid, session_id=session_id,
+        )
+
+    def test_events_under_caller_visible_via_error_id(self):
+        """事件先到（caller 键）、错误后到：经 error_id 可查全部现场。"""
+        caller_tid = "sdk-trace-r1-events-first"
+        error_id = self._seed(caller_tid)
+        trace_repo.save_network_record(
+            {"method": "POST", "url": "http://x/api", "status_code": 500}, trace_id=caller_tid
+        )
+        trace_repo.save_ui_event(
+            {"event_type": "click", "target_selector": "#btn"}, trace_id=caller_tid
+        )
+        trace_repo.save_console_log(level="error", message="boom", trace_id=caller_tid)
+
+        assert len(trace_repo.get_network_records(error_id)) == 1
+        assert len(trace_repo.get_ui_events(error_id)) == 1
+        assert len(trace_repo.get_console_logs(error_id)) == 1
+        # 直接按 caller ID 查询行为不变
+        assert len(trace_repo.get_network_records(caller_tid)) == 1
+
+    def test_error_first_events_later_still_resolved(self):
+        """错误先到、事件后到（反向到达）：别名解析在查询侧，同样可查。"""
+        caller_tid = "sdk-trace-r1-error-first"
+        error_id = self._seed(caller_tid)
+        trace_repo.save_network_record({"url": "http://x/late"}, trace_id=caller_tid)
+        assert len(trace_repo.get_network_records(error_id)) == 1
+
+    def test_alias_does_not_mix_other_pages(self):
+        """另一个页面（不同 caller ID）的数据不混入。"""
+        error_id = self._seed("sdk-trace-page-a")
+        trace_repo.save_network_record({"url": "http://x/a"}, trace_id="sdk-trace-page-a")
+        trace_repo.save_network_record({"url": "http://x/b"}, trace_id="sdk-trace-page-b")
+
+        records = trace_repo.get_network_records(error_id)
+        assert len(records) == 1
+        assert records[0]["url"] == "http://x/a"
+
+    def test_merged_records_sorted_by_timestamp(self):
+        """跨别名合并后按时间有序（caller 键旧事件在前）。"""
+        caller_tid = "sdk-trace-r1-order"
+        error_id = self._seed(caller_tid)
+        trace_repo.save_network_record({"url": "http://x/old", "timestamp": 100.0}, trace_id=caller_tid)
+        trace_repo.save_network_record({"url": "http://x/new", "timestamp": 200.0}, trace_id=error_id)
+
+        records = trace_repo.get_network_records(error_id)
+        assert [r["url"] for r in records] == ["http://x/old", "http://x/new"]
+
+
+# ── R5：存储回退的会话归属校验 ────────────────────────────────────────────
+
+class TestStoreFallbackSessionEnforcement:
+    """FIX: R5 —— errors 内存未命中（重启/淘汰）后走存储回退时，
+    会话过滤必须同样生效，否则内存命中与回退行为分叉、隔离被绕过。"""
+
+    def test_rebuild_without_session_still_works(self):
+        """不带会话过滤的回读不受影响（向后兼容）。"""
+        error_id = trace_repo.save_trace(
+            "ValueError", "persisted", [{"file": "a.py", "line": 1, "function": "f"}],
+            session_id="sess-a",
+        )
+        errors._recent.clear()
+        got = trace_repo.get_trace(error_id)
+        assert got is not None
+        assert got["message"] == "persisted"
+
+    def test_rebuild_rejects_foreign_session(self):
+        """A 会话数据在 B 会话查询的存储回退中不可见。"""
+        error_id = trace_repo.save_trace(
+            "ValueError", "sess-a only", [], session_id="sess-a"
+        )
+        errors._recent.clear()
+        assert trace_repo.get_trace(error_id, session_id="sess-b") is None
+        assert trace_repo.get_trace(error_id, session_id="sess-a") is not None
+
+    def test_rebuild_sessionless_record_invisible_to_session_query(self):
+        """无会话上报的记录对指定会话的查询不可见（fail-closed）。"""
+        error_id = trace_repo.save_trace("ValueError", "no session", [])
+        errors._recent.clear()
+        assert trace_repo.get_trace(error_id, session_id="sess-a") is None
+        assert trace_repo.get_trace(error_id) is not None

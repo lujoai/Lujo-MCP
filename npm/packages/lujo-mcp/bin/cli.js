@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // lujo-mcp-server launcher — locates the platform-specific binary in the companion
-// lujo-mcp-<platform>-<arch> package and spawns it as the MCP stdio server.
+// lujo-mcp-<platform>-<arch> package and starts the local unified server.
 //
 // Mirrors the pattern used by esbuild/@biomejs/@nuphus: the root package is a thin
 // meta package whose optionalDependencies install only the binary for the current
@@ -87,7 +87,16 @@ or reinstall the meta package:
     npm install -g @lujoai/lujo-mcp`);
     process.exit(1);
   }
-  const child = spawn(bin, process.argv.slice(2), {
+  // npm users get the useful local mode out of the box: one process serves both
+  // MCP stdio and localhost HTTP, so Browser SDK /ingest events are immediately
+  // visible to the MCP client. Keep an explicit --no-http escape hatch for
+  // clients that require a pure stdio process (and for release smoke tests).
+  const requestedArgs = process.argv.slice(2);
+  const disableHttp = requestedArgs.includes('--no-http');
+  const childArgs = requestedArgs.filter((arg) => arg !== '--no-http');
+  if (!disableHttp && !childArgs.includes('--http')) childArgs.push('--http');
+
+  const child = spawn(bin, childArgs, {
     stdio: 'inherit',
     windowsHide: true,
   });

@@ -186,6 +186,8 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ## 3. MCP 工具
 
+> 可选依赖：`auto_test` / `verify_ui` 依赖 Playwright。运行时缺少该依赖时，它们不会出现在 `tools/list`；如果客户端已经缓存了工具名而直接调用，服务端仍会返回结构化失败结果并标记 `isError=true`。
+
 > 工具经 HTTP（`POST /mcp` → `tools/call`）或 stdio 传输调用。HTTP 传输下受 RBAC 工具级门控（见每项「角色」）。
 > 类别含义：`agent` = 供 AI Agent 调用的查询/分析/验证类；`sdk` = 供 Browser SDK 上报的数据采集类。
 >

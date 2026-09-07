@@ -20,6 +20,7 @@ NETWORK_INGEST_DEF = {
             "record": {"type": "object", "description": "网络请求记录"},
             "trace_id": {"type": "string", "description": "关联的 trace_id"},
             "request_id": {"type": "string", "description": "关联的 request_id"},
+            "session_id": {"type": "string", "description": "会话 ID"},
         },
         "required": ["record"],
     },
@@ -34,22 +35,32 @@ NETWORK_TRACE_DEF = {
     ),
     "inputSchema": {
         "type": "object",
-        "properties": {"trace_id": {"type": "string", "description": "追踪 ID"}},
+        "properties": {
+            "trace_id": {"type": "string", "description": "追踪 ID"},
+            "session_id": {"type": "string", "description": "会话 ID"},
+        },
         "required": ["trace_id"],
     },
 }
 
 
-def tool_ingest_network(record: dict, trace_id: str | None = None, request_id: str | None = None) -> dict:
+def tool_ingest_network(
+    record: dict,
+    trace_id: str | None = None,
+    request_id: str | None = None,
+    session_id: str | None = None,
+) -> dict:
     """解析并保存一条网络记录，返回 record_id 和关联的 trace_id。"""
     parsed = parse_network_record(record)
-    record_id = save_network_record(parsed, trace_id=trace_id, request_id=request_id)
+    record_id = save_network_record(
+        parsed, trace_id=trace_id, request_id=request_id, session_id=session_id
+    )
     return {"record_id": record_id, "trace_id": trace_id, "saved": True}
 
 
-def tool_get_network_trace(trace_id: str) -> dict:
+def tool_get_network_trace(trace_id: str, session_id: str | None = None) -> dict:
     """查询指定 trace_id 关联的所有网络请求记录。"""
-    records = get_network_records(trace_id)
+    records = get_network_records(trace_id, session_id=session_id)
     return {
         "found": bool(records),
         "count": len(records),
@@ -63,8 +74,11 @@ def ingest_network_handler(arguments: dict) -> dict:
         record=arguments.get("record", {}),
         trace_id=arguments.get("trace_id"),
         request_id=arguments.get("request_id"),
+        session_id=arguments.get("session_id"),
     )
 
 
 def get_network_trace_handler(arguments: dict) -> dict:
-    return tool_get_network_trace(arguments["trace_id"])
+    return tool_get_network_trace(
+        arguments["trace_id"], session_id=arguments.get("session_id")
+    )

@@ -623,3 +623,62 @@ class TestAuthMiddlewareSignatureUnchanged:
         sig = inspect.signature(AuthMiddleware.__init__)
         params = list(sig.parameters.keys())
         assert params == ["self", "app"]
+
+
+# ---------------------------------------------------------------------------
+# R3：首次浏览器接入的 CORS 行为（README 配置必须真实可跑）
+# ---------------------------------------------------------------------------
+
+
+def _build_cors_app(monkeypatch, cors_origins: str) -> TestClient:
+    """构造带完整中间件栈 + /ingest 路由的测试 app（内存限流后端）。"""
+    from app.middleware import setup_middleware
+    from app.api.ingest import router as ingest_router
+
+    monkeypatch.setattr(settings, "cors_origins", cors_origins)
+    monkeypatch.setattr(settings, "api_key", None)
+    monkeypatch.setattr(settings, "api_keys", "")
+    app = FastAPI()
+    setup_middleware(app)
+    app.include_router(ingest_router)
+    return TestClient(app)
+
+
+_PREFLIGHT_HEADERS = {
+    "Origin": "http://localhost:3000",
+    "Access-Control-Request-Method": "POST",
+    "Access-Control-Request-Headers": "content-type",
+}
+
+
+class TestCorsFirstRunContract:
+    """默认收紧、显式白名单放行 —— 对应 README「5 分钟跑通」的两种场景。"""
+
+    def test_default_config_blocks_cross_origin_preflight(self, monkeypatch):
+        """默认 CORS_ORIGINS 为空：跨端口开发页面的预检被 405 拒绝、无 allow-origin。
+
+        这就是 README 必须要求配置 CORS_ORIGINS 的原因（不配置则 SDK 上报全挂）。
+        """
+        client = _build_cors_app(monkeypatch, cors_origins="")
+        resp = client.options("/ingest/error", headers=_PREFLIGHT_HEADERS)
+        assert resp.status_code == 405
+        assert resp.headers.get("access-control-allow-origin") is None
+
+    def test_configured_origin_preflight_ok(self, monkeypatch):
+        """按 README 配置 CORS_ORIGINS 后：合法预检 200 且回显 allow-origin。"""
+        client = _build_cors_app(monkeypatch, cors_origins="http://localhost:3000")
+        resp = client.options("/ingest/error", headers=_PREFLIGHT_HEADERS)
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+    def test_configured_origin_actual_post_ok(self, monkeypatch):
+        """配置白名单后，跨源真实上报请求也通过 CORS（200，落库成功）。"""
+        client = _build_cors_app(monkeypatch, cors_origins="http://localhost:3000")
+        resp = client.post(
+            "/ingest/error",
+            json={"exc_type": "Error", "message": "cors e2e", "frames": []},
+            headers={"Origin": "http://localhost:3000", "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["saved"] is True
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"

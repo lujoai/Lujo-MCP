@@ -125,3 +125,67 @@ def test_cleanup_resources_shuts_down_tool_executor(monkeypatch):
     mcp_server._cleanup_done = False  # 恢复，避免影响其他用例的幂等语义
 
     assert mcp_server._TOOL_EXECUTOR._shutdown is True
+
+
+def test_runtime_args_support_unified_http_without_breaking_stdio():
+    """启动参数契约：默认纯 stdio，--http 才启用本机 HTTP。"""
+    import app.mcp_server as mcp_server
+
+    defaults = mcp_server._parse_runtime_args([])
+    assert defaults.http is False
+    assert defaults.no_http is False
+
+    options = mcp_server._parse_runtime_args(
+        ["--http", "--http-host", "127.0.0.1", "--http-port", "8123", "--client-flag"]
+    )
+    assert options.http is True
+    assert options.http_host == "127.0.0.1"
+    assert options.http_port == 8123
+
+    with pytest.raises(SystemExit):
+        mcp_server._parse_runtime_args(["--http-port", "70000"])
+
+
+@pytest.mark.asyncio
+async def test_unified_transport_stops_http_after_stdio_eof(monkeypatch):
+    """stdio EOF 必须通知 HTTP 优雅退出，不能留下后台监听任务。"""
+    import app.mcp_server as mcp_server
+
+    fake_main = types.ModuleType("app.main")
+    fake_main.app = object()
+
+    class FakeConfig:
+        def __init__(self, app, **kwargs):
+            self.app = app
+            self.kwargs = kwargs
+
+    class FakeServer:
+        instances = []
+
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+            self.served = False
+            self.__class__.instances.append(self)
+
+        async def serve(self):
+            self.served = True
+            while not self.should_exit:
+                await asyncio.sleep(0.001)
+
+    fake_uvicorn = types.ModuleType("uvicorn")
+    fake_uvicorn.Config = FakeConfig
+    fake_uvicorn.Server = FakeServer
+    monkeypatch.setitem(sys.modules, "app.main", fake_main)
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+
+    async def fake_stdio():
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(mcp_server, "_run_stdio_transport", fake_stdio)
+    await asyncio.wait_for(
+        mcp_server._run_unified_transport("127.0.0.1", 8123), timeout=2
+    )
+
+    assert FakeServer.instances[-1].served is True
+    assert FakeServer.instances[-1].should_exit is True

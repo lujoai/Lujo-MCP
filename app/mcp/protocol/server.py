@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app import __version__
 from app.config import settings
 from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
+from app.mcp.protocol.tool_errors import is_tool_failure_result
 from app.observability import (
     record_mcp_tool_call,
     record_mcp_tool_busy,
@@ -161,8 +162,21 @@ def register_tool(
         "experimental": kwargs.get("experimental", False),
         "heavy": kwargs.get("heavy", False),
         "prepare_args": kwargs.get("prepare_args"),
+        "availability": kwargs.get("availability"),
         "agent_visible": kwargs.get("agent_visible", True),
     }
+
+
+def _is_tool_available(tool: dict) -> bool:
+    """检查可选依赖，避免 tools/list 宣布当前运行时无法执行的工具。"""
+    checker = tool.get("availability")
+    if checker is None:
+        return True
+    try:
+        return bool(checker())
+    except Exception:
+        logger.warning("工具 %s 可用性检查失败，按不可用处理", tool.get("name"), exc_info=True)
+        return False
 
 
 def get_agent_visible_tools() -> list[dict]:
@@ -171,7 +185,10 @@ def get_agent_visible_tools() -> list[dict]:
     agent_visible=False 的 SDK 上报类工具不在其中，但仍保留在 _tool_registry
     里，tools/call 按名调用照常执行——过滤只影响「清单展示」，不影响「调用」。
     """
-    return [t for t in _tool_registry.values() if t.get("agent_visible", True)]
+    return [
+        t for t in _tool_registry.values()
+        if t.get("agent_visible", True) and _is_tool_available(t)
+    ]
 
 
 def _handle_initialize(req: JSONRPCRequest) -> dict:
@@ -489,6 +506,19 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         _size = 0
     # Phase 3 D5：记录 Tool 响应耗时/大小（仅日志，不修改协议响应、不打印敏感负载）
     logger.info("MCP HTTP tool=%s response_ms=%.1f response_size=%d", tool_name, _elapsed * 1000, _size)
+    # FIX: R7 —— handler 正常返回但代表执行失败的 dict（含非空 error 键）必须
+    # 标记 isError=true，与 stdio 的 ToolExecutionError 契约一致；正常无数据
+    # （found=false 等，无 error 键）仍是成功结果。
+    if is_tool_failure_result(result):
+        return make_response(req.id, {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(result, ensure_ascii=False, default=str),
+                }
+            ],
+            "isError": True,
+        })
     return make_response(req.id, {
         "content": [
             {

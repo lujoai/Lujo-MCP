@@ -46,12 +46,20 @@ def build_context(request_id: str, logs: list) -> dict:
     }
 
 
-def build_debug_context(trace_id: str | None = None, include_runtime: bool = True) -> DebugContext | None:
+def build_debug_context(
+    trace_id: str | None = None,
+    include_runtime: bool = True,
+    session_id: str | None = None,
+) -> DebugContext | None:
     """一次性组装完整调试上下文（M8）：异常帧 + 源码片段 + git 归因 + 网络链 + UI 事件 + 运行时。
 
     复用 trace_repo(M2) / code_locator / git(M5) / runtime。
     返回 DebugContext（Pydantic model），无 trace 时返回 None。
     各子采集失败降级，不阻断整体构建。
+
+    FIX: R5 —— session_id 透传到 trace 查询边界；带会话过滤的查询若在
+    trace 层校验失败（内存未命中 + 存储回退归属不符），不允许再走下方
+    无归属校验的存储兜底路径，否则会话隔离被绕过。
     """
     from app.runtime.core import trace_repo
     from app.runtime.collectors.code_locator import get_snippets_for_frames
@@ -59,8 +67,11 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     from app.runtime.collectors.runtime import collect_runtime_snapshot
     from app.runtime.collectors.spec import get_related_specs
 
-    trace = trace_repo.get_trace(trace_id)
+    trace = trace_repo.get_trace(trace_id, session_id=session_id)
     if trace is None:
+        # FIX: R5 —— 会话过滤未通过时不走存储兜底（兜底无法校验归属）
+        if session_id is not None:
+            return None
         # fallback: 数据可能通过 add_log 直接写入存储（非 errors 缓冲），
         # 从 TraceStorage 构造最小 trace 对象
         from app.runtime.core.logs import get_logs
@@ -177,7 +188,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
     # 现读取一次后透传复用。注意传原始结果（含空列表）而非 or None 折叠值，
     # 空记录场景用 `is None` 判定才不会退化成二次读存储。
     try:
-        network_records_raw = trace_repo.get_network_records(tid) or []
+        network_records_raw = trace_repo.get_network_records(tid, session_id=session_id) or []
     except Exception:
         network_records_raw = []
     network_trace = network_records_raw or None
@@ -223,9 +234,16 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
 
     # UI 事件（仅当存在）
     try:
-        ui_events = trace_repo.get_ui_events(tid) or None
+        ui_events = trace_repo.get_ui_events(tid, session_id=session_id) or None
     except Exception:
         ui_events = None
+
+    # FIX: R1 —— 控制台日志同样按别名关联查询；此前 builder 未组装 console 列表，
+    # SDK 上报的控制台现场对宿主不可见。
+    try:
+        console_logs = trace_repo.get_console_logs(tid, session_id=session_id) or None
+    except Exception:
+        console_logs = None
 
     # verify 断言结果（spec_diffs，V5 闭环）
     try:
@@ -320,6 +338,7 @@ def build_debug_context(trace_id: str | None = None, include_runtime: bool = Tru
         "related_specs": related_specs or None,
         "network_trace": network_trace,
         "ui_events": ui_events,
+        "console_logs": console_logs,
         "spec_diffs": spec_diffs,
         "runtime": runtime,
         "fault_localization": fault_localization,
@@ -342,7 +361,9 @@ def _extract_request_target(
         try:
             from app.runtime.core import trace_repo
 
-            network_records = trace_repo.get_network_records(trace.get("trace_id", "")) or []
+            network_records = trace_repo.get_network_records(
+                trace.get("trace_id", ""), session_id=trace.get("session_id")
+            ) or []
         except Exception:
             network_records = []
     try:

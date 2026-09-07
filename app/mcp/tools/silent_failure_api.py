@@ -58,7 +58,11 @@ SILENT_FAILURE_DEF = {
 
 
 def _parse_frames(frames) -> list[dict]:
-    """规范化外部上报的堆栈帧，丢弃缺 file/line 的无效项。"""
+    """规范化外部上报的堆栈帧，丢弃缺 file/line 的无效项。
+
+    FIX: R4 —— 保留 column（与 ingest_api._parse_frames 同一契约）：
+    缺失/非数值列号时不伪造 0，按缺失处理由下游降级。
+    """
     out: list[dict] = []
     for f in frames or []:
         if not isinstance(f, dict):
@@ -71,12 +75,23 @@ def _parse_frames(frames) -> list[dict]:
             line_int = int(line)
         except (TypeError, ValueError):
             continue
-        out.append({
+        frame = {
             "file": str(file),
             "line": line_int,
             "function": f.get("function") or "unknown",
             "code": f.get("code") or f.get("code_context") or "",
-        })
+        }
+        column = f.get("column")
+        if isinstance(column, bool):
+            column = None
+        elif isinstance(column, float) and not column.is_integer():
+            column = None
+        if column is not None:
+            try:
+                frame["column"] = int(column)
+            except (TypeError, ValueError):
+                pass
+        out.append(frame)
     return out
 
 
@@ -174,12 +189,12 @@ def tool_ingest_silent_failure(
     # 关联入库（单条失败不阻断整体）
     for event in all_ui_events:
         try:
-            save_ui_event(event, trace_id=result_trace_id)
+            save_ui_event(event, trace_id=result_trace_id, session_id=session_id)
         except Exception:
             logger.warning("保存 ui_event 失败 (trace_id=%s)", result_trace_id)
     for record in all_network_records:
         try:
-            save_network_record(record, trace_id=result_trace_id)
+            save_network_record(record, trace_id=result_trace_id, session_id=session_id)
         except Exception:
             logger.warning("保存 network_record 失败 (trace_id=%s)", result_trace_id)
 

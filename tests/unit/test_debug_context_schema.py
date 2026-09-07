@@ -39,9 +39,9 @@ class TestNewFieldsExist:
         for field in self.EXPECTED_NEW_FIELDS:
             assert field in DebugContext.model_fields, f"Missing field: {field}"
 
-    def test_total_field_count_is_21(self):
-        """7 基础 + 13 新增（v0.5） + resolved_frames（v0.5.1）= 21"""
-        assert len(DebugContext.model_fields) == 21
+    def test_total_field_count_is_22(self):
+        """7 基础 + 13 新增（v0.5） + resolved_frames（v0.5.1） + console_logs（R1）= 22"""
+        assert len(DebugContext.model_fields) == 22
 
     def test_new_fields_are_optional(self):
         """所有新增字段必须有默认值（Optional）。"""

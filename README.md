@@ -29,7 +29,7 @@
 
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
-> 📌 stdio 模式让你**即刻获得 MCP 调试工具集**（统一诊断入口 `diagnose_issue`、堆栈解析、上下文构建、规范断言等，以 `tools/list` 实际返回为准）。若要让 AI 看到**浏览器运行现场**（控制台、网络失败、点击链路），还需按下方「5 分钟跑通第一个真实调试」启动 HTTP 服务并在页面接入 SDK。
+> 📌 npm 入口默认启动**统一本地模式**：同一个进程同时提供 MCP stdio 和 `http://127.0.0.1:8000` HTTP。AI 可以直接使用 MCP 工具，浏览器 SDK 也能把控制台、网络失败和点击链路写入同一份内存上下文；不需要再手动启动第二个服务。
 
 ### 替代方式：全局安装
 
@@ -50,6 +50,10 @@ npm install -g @lujoai/lujo-mcp
 }
 ```
 
+> 需要纯 stdio（例如只做协议冒烟或兼容严格的旧客户端）时，把 `args` 改为 `["--no-http"]`。源码入口 `python -m app.mcp_server` 默认也是纯 stdio，传入 `--http` 才开启同样的统一本地模式。
+>
+> 页面若运行在 `localhost:3000` 等其他端口，请在 MCP 配置的 `env` 中加入 `"CORS_ORIGINS": "http://localhost:3000"`（多个来源用逗号分隔）；打开内置 `http://127.0.0.1:8000/demo` 则无需配置跨域。
+
 ---
 
 ## 🧭 主流客户端配置路径
@@ -65,17 +69,47 @@ npm install -g @lujoai/lujo-mcp
 
 ## 🚀 5 分钟跑通第一个真实调试（浏览器 Bug 场景）
 
-> 浏览器运行现场的采集链路是：**页面 SDK → Lujo-MCP HTTP 服务（/ingest）→ AI 通过 MCP 读取**。因此本流程需要先启动 Lujo-MCP HTTP 服务（一行 Docker 命令即可），并让 MCP 客户端以 HTTP 模式接入。
+> 浏览器运行现场的采集链路是：**页面 SDK → Lujo-MCP HTTP 服务（/ingest）→ AI 通过 MCP 读取**。因此本流程需要先启动 Lujo-MCP HTTP 服务，并让 MCP 客户端以 HTTP 模式接入同一个服务进程。
+>
+> **推荐用本地源码 + 纯内存模式跑通**：不需要 Docker、PostgreSQL、Redis、密码或 API Key。Docker 编排面向持久化部署（需要数据库密码与 API Key），放在[进阶流程](#进阶docker-持久化部署需要完整凭据配置)。
 
-### 第 0 步：启动 Lujo-MCP HTTP 服务（一次性）
+### 第 0 步：启动 Lujo-MCP HTTP 服务（本地源码，零外部依赖）
+
+如果已经按上面的 npm 方式接入，这一步已经由 `lujo-mcp-server` 自动完成，可直接访问 `http://127.0.0.1:8000/demo`。下面的源码方式适合开发 Lujo-MCP 本身，或需要自定义 Python 依赖的场景。
 
 ```bash
 git clone https://github.com/lujoai/Lujo-MCP.git
 cd Lujo-MCP
-docker compose up -d          # 拉起 HTTP 服务（含 Dashboard 与 /ingest 端点）
+pip install -r requirements.txt
 ```
 
-MCP 客户端改用 HTTP 模式接入（与 SDK 上报同一个服务进程）：
+在项目根目录创建 `.env`（两个必填项都和启动安全校验/浏览器跨域有关，缺一不可）：
+
+```ini
+# 只监听本机回环地址。默认 0.0.0.0 + 无 API Key 会被启动校验直接拒绝；
+# 本地调试也不应把无鉴权服务暴露到局域网。
+HOST=127.0.0.1
+
+# 你的开发页面源（协议+域名+端口）。页面端口与服务端口不同源时，
+# 浏览器会先发 CORS 预检；不配置白名单，预检会被 405 拒绝、SDK 上报全部失败。
+# 按需追加，逗号分隔，例如：CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+CORS_ORIGINS=http://localhost:3000
+```
+
+启动（纯内存存储，重启后数据清空，适合首次接入验证）：
+
+```bash
+python -m app.main
+# 或：uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+也可以让源码入口同时提供 stdio + HTTP（推荐给本地 MCP 客户端）：
+
+```bash
+python -m app.mcp_server --http
+```
+
+MCP 客户端以 HTTP 模式接入（与 SDK 上报同一个服务进程）：
 
 ```json
 {
@@ -87,6 +121,45 @@ MCP 客户端改用 HTTP 模式接入（与 SDK 上报同一个服务进程）�
 }
 ```
 
+> 未设置 `API_KEY` 时服务以免鉴权模式运行（仅限本机回环监听），SDK 与 MCP 客户端无需再传令牌。
+
+### 进阶：Docker 持久化部署（需要完整凭据配置）
+
+`docker compose up -d` 走 PostgreSQL + Redis 持久化栈，Compose 强制要求以下变量，缺一个容器就起不来。在项目根目录创建 `.env`：
+
+```ini
+POSTGRES_PASSWORD=change-me-pg-password   # 或用 PG_PASSWORD，二选一
+API_KEY=change-me-api-key                 # 必填；SDK 与 MCP 客户端都要用它
+HOST=127.0.0.1
+CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
+```
+
+三项配置必须相互匹配，缺一会导致「服务在跑但 SDK 上不去 / MCP 连不上」：
+
+1. **SDK**：初始化时带 `apiKey`（SDK 会换取短时令牌后上报）：
+
+   ```html
+   <script src="/ai-debug.js"></script>
+   <script>
+     window.AiDebug.init({ endpoint: "http://127.0.0.1:8000", apiKey: "change-me-api-key" });
+   </script>
+   ```
+
+2. **MCP 客户端**：HTTP 接入时在请求头携带同一个 Key（客户端配置支持 `headers` 的写法）：
+
+   ```json
+   {
+     "mcpServers": {
+       "lujo": {
+         "url": "http://127.0.0.1:8000/mcp",
+         "headers": { "Authorization": "Bearer change-me-api-key" }
+       }
+     }
+   }
+   ```
+
+3. **CORS**：`CORS_ORIGINS` 必须包含页面的完整源；服务端口（8000）与页面端口（如 3000）不同源，未配置白名单时预检直接失败。
+
 ### 第 1 步：页面接入采集 SDK（两行代码）
 
 下载或复制仓库中的 [`browser-sdk/ai-debug.js`](./browser-sdk/ai-debug.js) 到你的前端项目，然后在页面中加入：
@@ -94,11 +167,14 @@ MCP 客户端改用 HTTP 模式接入（与 SDK 上报同一个服务进程）�
 ```html
 <script src="/ai-debug.js"></script>
 <script>
-  window.AiDebug.init({ endpoint: "http://localhost:8000" });
+  window.AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
+  // Docker/API Key 模式再加：, apiKey: "change-me-api-key"
 </script>
 ```
 
 > SDK 无需构建工具，`<script>` 直接引入即可；`init` 时的 `endpoint` 指向上一步启动的 Lujo-MCP 服务地址。
+>
+> 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
 ### 第 2 步：触发一个运行时异常
 
@@ -132,7 +208,7 @@ AI Agent 自动调用上下文：
 
 > 📖 想看完整还原的实战案例（React 登录静默失败），见 [DEMO.md](./docs/public/DEMO.md)。
 >
-> ⚠️ **数据边界说明**：stdio MCP 接入不能自动接收浏览器 SDK 的 HTTP 上报——浏览器运行现场（控制台/网络/交互链路）需要「Browser SDK + HTTP 服务 + `/ingest`」链路；后端异常经全局异常钩子自动捕获，stdio 下也可用。Agent 是否调用工具最终由宿主模型决定，本项目通过清晰的统一入口（`diagnose_issue`）与自包含的工具描述**提高**调用概率，但不承诺 100% 强制调用。
+> ⚠️ **数据边界说明**：只有纯 stdio（`--no-http` 或未加 `--http` 的源码入口）不会接收浏览器 SDK 的 HTTP 上报；npm 默认统一本地模式已经包含 `/ingest`。Agent 是否调用工具最终由宿主模型决定，本项目通过清晰的统一入口（`diagnose_issue`）与自包含的工具描述**提高**调用概率，但不承诺 100% 强制调用。
 
 ---
 
@@ -223,10 +299,13 @@ docker compose up -d
 # 安装依赖
 pip install -r requirements.txt
 
-# 启动 MCP stdio 服务
+# 启动 MCP stdio 服务（默认纯 stdio）
 python -m app.mcp_server
 
-# 或启动 HTTP API 与 Web 界面
+# 同一进程同时启动 MCP stdio + HTTP API 与 Web 界面
+python -m app.mcp_server --http
+
+# 仅启动 HTTP API 与 Web 界面
 python -m app.main
 ```
 

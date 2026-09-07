@@ -5,6 +5,8 @@
 - is_heavy_tool / _get_tool_executor_and_slots：重活判定与「重活不再用线程池」。
 - run_heavy_tool_blocking：子进程执行成功回传、异常结构化回传、超时强杀（真起轻量
   子进程，不起浏览器；浏览器路径另有冒烟脚本验证）。
+- R6：大结果（超过管道缓冲）在子进程运行期间读取，不再先 join 后 recv 死锁误判
+  超时；超时与成功路径均无残留子进程。
 """
 from __future__ import annotations
 
@@ -103,6 +105,33 @@ class TestRunHeavyToolBlocking:
         elapsed = time.monotonic() - start
         # 超时 2s + 强杀宽限，远小于子进程本应的 30s
         assert elapsed < 20
+
+
+class TestHeavyLargeResultNoDeadlock:
+    """FIX: R6 —— 大结果不再因「先 join 后 recv」的相互等待被误判超时强杀。"""
+
+    def test_big_result_beyond_pipe_buffer_returns(self):
+        """1 MiB（> 管道缓冲）结果正常回传；业务计算早已完成即应在时限内返回。"""
+        size = 1024 * 1024
+        start = time.monotonic()
+        result = run_heavy_tool_blocking(_SELFTEST, "big_result", {"size": size}, timeout=15)
+        elapsed = time.monotonic() - start
+        assert result["ok"] is True
+        assert len(result["echo"]) == size
+        # 结果写回只需远小于 timeout 的时间（修复前 1 MiB 即触发 TimeoutError）
+        assert elapsed < 10
+
+    def test_timeout_semantics_preserved_with_small_deadline(self):
+        """截止时间语义保持：无结果产出的挂起子进程 + 极小 timeout 仍按超时强杀。"""
+        start = time.monotonic()
+        with pytest.raises(asyncio.TimeoutError):
+            run_heavy_tool_blocking(_SELFTEST, "slow_hang", {"sleep": 30}, timeout=0.5)
+        assert time.monotonic() - start < 15
+
+    def test_unserializable_result_returns_structured_error(self):
+        """R6 验收：不可序列化结果 → 子进程退化为结构化错误，父进程 RuntimeError 而非挂死。"""
+        with pytest.raises(RuntimeError, match="not serializable"):
+            run_heavy_tool_blocking(_SELFTEST, "unserializable_result", {}, timeout=15)
 
 
 @pytest.mark.asyncio

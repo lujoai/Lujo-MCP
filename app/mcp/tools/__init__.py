@@ -29,8 +29,14 @@ def register_all_tools():
     from app.mcp.tools.spec_api import RELATED_SPECS_DEF, related_specs_handler
     from app.mcp.tools.spec_ingest_api import INGEST_SPECS_DEF, ingest_specs_handler
     from app.mcp.tools.verify_api import VERIFY_DEF, verify_handler
-    from app.mcp.tools.verify_ui_api import VERIFY_UI_DEF, verify_ui_handler, verify_ui_prepare_args
-    from app.mcp.tools.auto_test_api import AUTO_TEST_DEF, auto_test_handler
+    from app.mcp.tools.verify_ui_api import (
+        VERIFY_UI_DEF, verify_ui_handler, verify_ui_prepare_args,
+        is_available as verify_ui_available,
+    )
+    from app.mcp.tools.auto_test_api import (
+        AUTO_TEST_DEF, auto_test_handler,
+        is_available as auto_test_available,
+    )
     from app.mcp.tools.repair_api import (
         REPAIR_ASYNC_DEF, REPAIR_RESULT_DEF,
         repair_async_handler, repair_result_handler,
@@ -61,8 +67,12 @@ def register_all_tools():
     register_tool(
         **VERIFY_UI_DEF, handler=verify_ui_handler, category="agent",
         prepare_args=verify_ui_prepare_args,
+        availability=verify_ui_available,
     )
-    register_tool(**AUTO_TEST_DEF, handler=auto_test_handler, category="agent", experimental=True)
+    register_tool(
+        **AUTO_TEST_DEF, handler=auto_test_handler, category="agent", experimental=True,
+        availability=auto_test_available,
+    )
     register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler, category="agent", experimental=True)
     register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler, category="agent", experimental=True)
     register_tool(**sourcemap_tool, handler=sourcemap_handler, category="agent", experimental=True)

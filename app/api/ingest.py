@@ -27,6 +27,27 @@ _MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
 _MAX_BATCH_EVENTS = 100
 
 
+def _extract_session_id(payload: dict) -> str | None:
+    """FIX: R2 —— 统一上报 envelope 的 session_id 提取。
+
+    规范位置是顶层 ``session_id``；兼容旧版浏览器 SDK 把会话放在
+    ``extra.session_id`` 的上报格式。两者同时存在时顶层优先（显式入参
+    可信度更高）。普通 SDK 数据此前因此进入 _global 桶，会话查询无结果、
+    相同错误跨页面被错误合并。
+    """
+    if not isinstance(payload, dict):
+        return None
+    sid = payload.get("session_id")
+    if sid:
+        return str(sid)
+    extra = payload.get("extra")
+    if isinstance(extra, dict):
+        sid = extra.get("session_id")
+        if sid:
+            return str(sid)
+    return None
+
+
 class _DecompressedSizeExceeded(Exception):
     """gzip 解压后体积超限。
 
@@ -61,6 +82,7 @@ def ingest_network(req: dict):
             record=req.get("record", {}),
             trace_id=req.get("trace_id"),
             request_id=req.get("request_id"),
+            session_id=_extract_session_id(req),
         )
     except ValueError as e:
         logger.error(str(e), exc_info=True)
@@ -71,9 +93,9 @@ def ingest_network(req: dict):
 
 
 @router.get("/network/{trace_id}", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
-def get_network_trace(trace_id: str):
+def get_network_trace(trace_id: str, session_id: str | None = None):
     """查询某 trace 关联的网络请求记录。"""
-    return tool_get_network_trace(trace_id)
+    return tool_get_network_trace(trace_id, session_id=session_id)
 
 
 @router.post("/silent-failure", dependencies=[Depends(require_role("admin", "developer"))])
@@ -91,7 +113,7 @@ def ingest_silent_failure(req: dict):
             source=req.get("source", "browser_sdk"),
             extra=req.get("extra"),
             trace_id=req.get("trace_id"),
-            session_id=req.get("session_id"),
+            session_id=_extract_session_id(req),
         )
     except Exception as e:
         logger.error(str(e), exc_info=True)
@@ -109,7 +131,7 @@ def ingest_error(req: dict):
             source=req.get("source", "http_ingest"),
             extra=req.get("extra"),
             trace_id=req.get("trace_id"),
-            session_id=req.get("session_id"),
+            session_id=_extract_session_id(req),
         )
     except Exception as e:
         logger.error(str(e), exc_info=True)
@@ -127,6 +149,7 @@ def ingest_console(req: dict):
             extra=req.get("extra"),
             trace_id=req.get("trace_id"),
             request_id=req.get("request_id"),
+            session_id=_extract_session_id(req),
         )
     except Exception as e:
         logger.error(str(e), exc_info=True)
@@ -142,6 +165,7 @@ def ingest_ui_event(req: dict):
             event=req.get("event", {}) or {},
             trace_id=trace_id,
             extra=req.get("extra"),
+            session_id=_extract_session_id(req),
         )
         return {"event_id": event_id, "trace_id": trace_id, "saved": True}
     except Exception as e:
@@ -163,13 +187,14 @@ def _dispatch_single(path: str, payload: dict) -> dict:
             source=payload.get("source", "http_ingest"),
             extra=payload.get("extra"),
             trace_id=payload.get("trace_id"),
-            session_id=payload.get("session_id"),
+            session_id=_extract_session_id(payload),
         )
     if path == "/ingest/network":
         return tool_ingest_network(
             record=payload.get("record", {}),
             trace_id=payload.get("trace_id"),
             request_id=payload.get("request_id"),
+            session_id=_extract_session_id(payload),
         )
     if path == "/ingest/ui-event":
         trace_id = payload.get("trace_id")
@@ -177,6 +202,7 @@ def _dispatch_single(path: str, payload: dict) -> dict:
             event=payload.get("event", {}) or {},
             trace_id=trace_id,
             extra=payload.get("extra"),
+            session_id=_extract_session_id(payload),
         )
         return {"event_id": event_id, "trace_id": trace_id, "saved": True}
     if path == "/ingest/console":
@@ -187,6 +213,7 @@ def _dispatch_single(path: str, payload: dict) -> dict:
             extra=payload.get("extra"),
             trace_id=payload.get("trace_id"),
             request_id=payload.get("request_id"),
+            session_id=_extract_session_id(payload),
         )
     if path == "/ingest/silent-failure":
         return tool_ingest_silent_failure(
@@ -200,7 +227,7 @@ def _dispatch_single(path: str, payload: dict) -> dict:
             source=payload.get("source", "browser_sdk"),
             extra=payload.get("extra"),
             trace_id=payload.get("trace_id"),
-            session_id=payload.get("session_id"),
+            session_id=_extract_session_id(payload),
         )
     raise ValueError(f"Unknown ingest path: {path}")
 

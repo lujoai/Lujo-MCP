@@ -1,13 +1,13 @@
 name: Release npm
 
-# 触发：手动运行 + 打 tag（如 v0.4.1-beta）
+# 触发：手动运行 + 打 tag（如 v0.7.6）
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号（如 0.4.1-beta）"
+        description: "发布版本号（如 0.7.6）"
         required: true
-        default: "0.4.1-beta"
+        default: "0.7.6"
   push:
     tags:
       - "v*"
@@ -73,12 +73,28 @@ jobs:
       # 这里在各自平台原生运行打包产物，走完整 stdio 冒烟（启动→initialize→tools/list
       # →tools/call），任一步骤失败即阻断构建。mcp_smoke_test.py 已支持 --cmd 指定启动命令。
       - name: Smoke test binary (runtime verification)
+        env:
+          TOOL_HEAVY_NAMES: verify
+          HEAVY_ARGS_JSON: >-
+            {"actual":{"status_code":200},"spec":{"kind":"api","target":"health","expect":{"status":200}}}
         shell: bash
         run: |
           set -e
           BIN="dist/${{ matrix.artifact }}"
           chmod +x "$BIN" 2>/dev/null || true
           python scripts/mcp_smoke_test.py --cmd "./$BIN"
+          # Verify the unified local mode shipped in the same binary: HTTP
+          # health must become ready while stdio still completes MCP handshake.
+          python scripts/mcp_smoke_test.py \
+            --cmd "./$BIN --http --http-port 8129" \
+            --http-url "http://127.0.0.1:8129/health"
+          # Force one deterministic synchronous tool through the heavy
+          # subprocess path.  This verifies the frozen multiprocessing entry
+          # without requiring Playwright/Chromium in the lightweight package.
+          python scripts/mcp_smoke_test.py \
+            --cmd "./$BIN" \
+            --tool verify \
+            --arguments-json "$HEAVY_ARGS_JSON"
 
       - name: Upload platform binary
         uses: actions/upload-artifact@v4
@@ -121,7 +137,7 @@ jobs:
             echo "value=${TAGGED_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           fi
 
-      # FIX: P1-F3 —— 发布版本与 app.__version__ 一致性硬校验。
+      # FIX: P1-F3 —— 发布版本与所有运行时/分发 manifest 一致性硬校验。
       # 此前版本号完全来自 tag 名/手工输入，而二进制内的 __version__ 来自
       # app/__init__.py：打 tag v0.6.8 但忘改 app/__init__.py（仍是 0.6.7）
       # 会发布"npm 版本 0.6.8、MCP 握手 serverInfo 报 0.6.7"的错版包且无告警。
@@ -131,22 +147,44 @@ jobs:
         run: |
           python3 - <<'EOF'
           import os
+          import json
           import re
           import sys
 
           release_ver = os.environ["RELEASE_VERSION"]
+          if not re.fullmatch(r"0\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", release_ver):
+              print(f"::error::Invalid release version: {release_ver!r}")
+              sys.exit(1)
+
           src = open("app/__init__.py", encoding="utf-8").read()
           m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', src)
-          app_ver = m.group(1) if m else "<not found>"
-          if app_ver != release_ver:
+          versions = {"app/__init__.py": m.group(1) if m else "<not found>"}
+          manifest_paths = [
+              "browser-sdk/package.json",
+              "npm/packages/lujo-mcp/package.json",
+              "npm/packages/lujo-mcp-win32-x64/package.json",
+              "npm/packages/lujo-mcp-linux-x64/package.json",
+              "npm/packages/lujo-mcp-osx-arm64/package.json",
+          ]
+          for path in manifest_paths:
+              with open(path, encoding="utf-8") as fh:
+                  versions[path] = json.load(fh).get("version", "<not found>")
+
+          mismatches = {path: value for path, value in versions.items() if value != release_ver}
+          meta = json.load(open("npm/packages/lujo-mcp/package.json", encoding="utf-8"))
+          optional = meta.get("optionalDependencies") or {}
+          optional_mismatches = {
+              name: value for name, value in optional.items()
+              if value != release_ver
+          }
+          if mismatches or optional_mismatches:
               print(
-                  f"::error::Version mismatch: releasing {release_ver} but "
-                  f"app/__init__.py __version__ is {app_ver}. Bump the version "
-                  "set (app/__init__.py + browser-sdk/package.json + npm meta "
-                  "+ 3 platform packages) before tagging."
+                  f"::error::Version mismatch for release {release_ver}: "
+                  f"manifests={mismatches}, optionalDependencies={optional_mismatches}. "
+                  "Bump every release manifest before tagging."
               )
               sys.exit(1)
-          print(f"Version consistency OK: {release_ver}")
+          print(f"Version consistency OK: {release_ver} ({len(versions)} manifests)")
           EOF
 
       - name: Generate platform package skeletons
@@ -197,7 +235,10 @@ jobs:
           npm install --no-audit --no-fund --silent \
             "./lujoai-lujo-mcp-$RELEASE_VERSION.tgz" \
             "./lujoai-lujo-mcp-$SUFFIX-$RELEASE_VERSION.tgz"
-          python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" --cmd "./node_modules/.bin/lujo-mcp-server"
+          # The npm launcher defaults to unified stdio + localhost HTTP. The
+          # protocol smoke only needs stdio and opts out explicitly so the
+          # temporary process exits immediately after stdin closes.
+          python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" --cmd "./node_modules/.bin/lujo-mcp-server --no-http"
 
       - name: Publish platform packages
         env:
