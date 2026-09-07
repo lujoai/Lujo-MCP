@@ -238,8 +238,10 @@ jobs:
           # 用本地平台 tarball 明确补上当前 runner 的二进制，再执行 launcher。
           npm install --no-audit --no-fund --silent --omit=optional \
             "./lujoai-lujo-mcp-$RELEASE_VERSION.tgz"
-          npm install --no-audit --no-fund --silent \
-            "./lujoai-lujo-mcp-$SUFFIX-$RELEASE_VERSION.tgz"
+          platform_dir="node_modules/@lujoai/lujo-mcp-$SUFFIX"
+          mkdir -p "$platform_dir"
+          tar -xzf "./lujoai-lujo-mcp-$SUFFIX-$RELEASE_VERSION.tgz" \
+            -C "$platform_dir" --strip-components=1
           # The npm launcher defaults to unified stdio + localhost HTTP. The
           # protocol smoke only needs stdio and opts out explicitly so the
           # temporary process exits immediately after stdin closes.
