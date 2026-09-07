@@ -236,7 +236,7 @@ jobs:
           # 安装主包时，npm 会先解析 optionalDependencies；当 registry 正在
           # 处理某个平台的大包时，它可能静默跳过该 optional 包。分两步安装，
           # 用本地平台 tarball 明确补上当前 runner 的二进制，再执行 launcher。
-          npm install --no-audit --no-fund --silent --omit=optional \
+          npm install --no-audit --no-fund --silent --omit=optional --ignore-scripts \
             "./lujoai-lujo-mcp-$RELEASE_VERSION.tgz"
           platform_dir="node_modules/@lujoai/lujo-mcp-$SUFFIX"
           mkdir -p "$platform_dir"
