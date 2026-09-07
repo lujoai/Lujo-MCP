@@ -5,12 +5,17 @@
 """
 import asyncio
 import multiprocessing
+import sys
 
 if __name__ == "__main__":
     # 必须在导入 app.mcp_server 之前分流 multiprocessing 的子进程入口。
     # Windows 冻结程序的 spawn 子进程会重新执行这个入口；过晚调用会先
     # 导入并初始化完整 MCP 服务，导致 heavy 子进程无法及时进入 target。
     multiprocessing.freeze_support()
+    if len(sys.argv) >= 2 and sys.argv[1] == "--lujo-heavy-worker":
+        from app.mcp.protocol.heavy_process import run_frozen_worker_entry
+
+        raise SystemExit(run_frozen_worker_entry())
     from app.mcp_server import main
 
     asyncio.run(main())

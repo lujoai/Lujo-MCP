@@ -22,9 +22,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import io
 import logging
 import multiprocessing as mp
+import pickle
+import subprocess
+import sys
 import time
+from contextlib import redirect_stdout
 
 logger = logging.getLogger("lujo-mcp.mcp.heavy")
 
@@ -34,6 +39,13 @@ _KILL_JOIN_GRACE = 5.0
 _RESULT_POLL = 0.05
 # 收到结果后等子进程自行退出的宽限（秒）；超时仍存活则 terminate（防残留）
 _POST_RECV_JOIN_GRACE = 5.0
+
+# PyInstaller 的 Windows spawn 子进程会重新启动冻结的可执行文件。对单文件
+# console 程序，multiprocessing 的内部 ``--multiprocessing-fork`` 启动路径
+# 可能在 stdio 已被 bootloader 关闭后落入 ``ValueError: I/O operation on
+# closed file``，导致重型工具没有任何结果。冻结版改用本项目自己的 worker
+# 参数和 pickle 标准流协议；源码运行仍使用 multiprocessing Pipe。
+_FROZEN_WORKER_FLAG = "--lujo-heavy-worker"
 
 
 def _heavy_subprocess_entry(handler_module: str, handler_name: str, arguments: dict, conn) -> None:
@@ -77,6 +89,114 @@ def _terminate_subprocess(proc: mp.Process, handler_name: str, reason: str) -> N
     )
 
 
+def _terminate_frozen_worker(proc: subprocess.Popen, handler_name: str, reason: str) -> None:
+    """终止冻结版 worker，并等待其真正退出。"""
+    try:
+        proc.terminate()
+        proc.wait(timeout=_KILL_JOIN_GRACE)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=_KILL_JOIN_GRACE)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    logger.warning(
+        "重型工具 %s 冻结版 worker(pid=%s)已强制回收（%s）",
+        handler_name,
+        getattr(proc, "pid", None),
+        reason,
+    )
+
+
+def _run_frozen_worker_blocking(
+    handler_module: str, handler_name: str, arguments: dict, timeout: float
+):
+    """通过自定义 stdin/stdout 协议运行 PyInstaller 冻结版重型 worker。
+
+    ``subprocess.communicate`` 会在等待子进程的同时持续收取 stdout/stderr，
+    因而大结果不会堵满管道；超时后 terminate/kill 也不会留下子进程。
+    worker 只执行指定 handler，不启动 MCP server。
+    """
+    try:
+        request = pickle.dumps(arguments, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as exc:
+        raise RuntimeError("heavy tool arguments not serializable") from exc
+
+    proc = subprocess.Popen(
+        [sys.executable, _FROZEN_WORKER_FLAG, handler_module, handler_name],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        try:
+            stdout, stderr = proc.communicate(request, timeout=float(timeout))
+        except subprocess.TimeoutExpired as exc:
+            _terminate_frozen_worker(proc, handler_name, f"timed out(>{timeout}s)")
+            raise asyncio.TimeoutError(
+                f"heavy tool {handler_name} timed out after {timeout}s (frozen worker killed)"
+            ) from exc
+
+        if not stdout:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            if detail:
+                logger.warning("冻结版 worker %s 无结果：%s", handler_name, detail[-1000:])
+            raise RuntimeError(
+                f"heavy tool {handler_name} exited without result (exitcode={proc.returncode})"
+            )
+        try:
+            status, payload = pickle.loads(stdout)
+        except Exception as exc:
+            raise RuntimeError(
+                f"heavy tool {handler_name} returned invalid worker payload"
+            ) from exc
+        if status == "ok":
+            return payload
+        raise RuntimeError(f"heavy tool {handler_name} failed: {payload}")
+    finally:
+        # communicate normally已等待退出；异常路径（包括启动/解码失败）仍兜底回收。
+        if proc.poll() is None:
+            _terminate_frozen_worker(proc, handler_name, "cleanup")
+
+
+def run_frozen_worker_entry(argv: list[str] | None = None) -> int:
+    """冻结版入口的最小 worker 分流（由 :mod:`packaging.entry_stdio` 调用）。"""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if len(args) != 3 or args[0] != _FROZEN_WORKER_FLAG:
+        return 2
+    _, handler_module, handler_name = args
+    output = getattr(sys.stdout, "buffer", sys.stdout)
+    try:
+        raw_arguments = getattr(sys.stdin, "buffer", sys.stdin).read()
+        arguments = pickle.loads(raw_arguments)
+        module = importlib.import_module(handler_module)
+        handler = getattr(module, handler_name)
+        # handler 的意外 stdout 输出不能破坏父进程的二进制协议。
+        with redirect_stdout(io.StringIO()):
+            result = handler(arguments)
+        try:
+            message = ("ok", result)
+            encoded = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception:
+            encoded = pickle.dumps(
+                ("error", "heavy tool result not serializable"),
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+    except Exception as exc:  # noqa: BLE001 —— worker 只回传结构化错误
+        encoded = pickle.dumps(
+            ("error", f"{type(exc).__name__}: {exc}"),
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+    try:
+        output.write(encoded)
+        output.flush()
+    except Exception:
+        return 1
+    return 0
+
+
 def run_heavy_tool_blocking(
     handler_module: str, handler_name: str, arguments: dict, timeout: float
 ):
@@ -93,6 +213,11 @@ def run_heavy_tool_blocking(
         asyncio.TimeoutError: 超时（子进程已被 ``terminate`` 回收）。
         RuntimeError: 子进程异常退出、结果不可序列化或未返回结果。
     """
+    if getattr(sys, "frozen", False):
+        return _run_frozen_worker_blocking(
+            handler_module, handler_name, arguments, timeout
+        )
+
     ctx = mp.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=False)
     proc = ctx.Process(
