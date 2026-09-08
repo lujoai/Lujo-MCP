@@ -226,12 +226,24 @@ class TestVerifyUiViaDispatch:
         ]
 
     def test_playwright_not_installed_returns_graceful_error(self):
-        """playwright 未装时返回降级提示，不抛异常、不阻塞。"""
+        """playwright 未装时返回降级提示，不抛异常、不阻塞。
+
+        FIX(R8) 两条教训：
+        1. 目标不能用 localhost/回环——默认 ``ui_url_allow_private=False``，
+           URL 安全校验会先拒绝它，返回的 security 载荷没有 ``error`` 键
+           （CI 上正是以 KeyError 暴露）；必须用默认配置下即可通过安全校验
+           的公网地址，才能真正走到 playwright 分支。
+        2. 不能靠 monkeypatch 伪造"未安装"——verify_ui 是重型工具，在
+           **子进程**执行，父进程改 settings/模块全局都传不进去。降级分支的
+           确定性覆盖由 tests/unit/test_ui_runner.py 的进程内用例承担；
+           本用例走真实传输链路，仅在未安装 playwright 的环境（如 CI 的
+           integration job）执行。
+        """
         if ui_runner.is_available():
             pytest.skip("playwright 已安装，跳过未装降级路径测试")
 
         req = _make_tools_call_req("verify_ui", {
-            "spec": {"kind": "ui", "target": "http://localhost:0/nope"},
+            "spec": {"kind": "ui", "target": "https://example.com/nope"},
         })
         resp = asyncio.run(protocol_server.dispatch(req))
 
@@ -474,6 +486,10 @@ class TestVerifyUiViaStdioSubprocess:
 
     def test_verify_ui_called_via_stdio_mcp_channel(self):
         """完整 stdio MCP 链路调用 verify_ui，验证通道可用、不阻塞、不抛异常。"""
+        if not ui_runner.is_available():
+            pytest.skip(
+                "playwright 未安装：verify_ui 被能力过滤，不在 tools/list（CI 口径）"
+            )
         from mcp.client.stdio import stdio_client, StdioServerParameters
         from mcp.client.session import ClientSession
 

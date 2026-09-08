@@ -23,6 +23,32 @@ class TestUIRunner:
         assert result["matched"] is False
         assert "playwright 未安装" in result.get("error", "")
 
+    def test_playwright_missing_branch_is_deterministic(self, monkeypatch):
+        """降级分支的确定性覆盖：不依赖环境是否装了 playwright（R8）。
+
+        上面那条用例在装了 playwright 的开发机上永远 skip，于是"未安装降级"
+        只在 CI 才被跑到；而 CI 的 integration job 里对应集成用例又因目标 URL
+        先被安全校验拒绝而 KeyError —— 这条分支实际上从未被真正验证过。
+        这里进程内直接调 runner 并强制"未安装"，钉住分支顺序（URL 安全校验
+        → playwright 检查）与降级载荷形状。
+
+        注意：只能进程内测。verify_ui 作为重型工具经 MCP 传输调用时在
+        **子进程**执行，父进程的 monkeypatch / settings 改动传不进去
+        （详见 tests/integration/test_mcp_verify_ui.py 同名用例的说明）。
+        """
+        monkeypatch.setattr(ui_runner, "_PLAYWRIGHT_AVAILABLE", False)
+        monkeypatch.setattr("app.config.settings.ui_url_allow_private", True)
+
+        result = ui_runner.run_ui_verification({
+            "kind": "ui",
+            "target": "http://127.0.0.1:9/nope",
+            "expect": {},
+        })
+        assert result["matched"] is False
+        assert "playwright 未安装" in result["error"]
+        # 放开私网限制后安全校验放行，才轮得到 playwright 检查
+        assert result["security"]["target"]["allowed"] is True
+
     def test_no_target_returns_error(self):
         """无 target 时返回错误"""
         if not ui_runner.is_available():
