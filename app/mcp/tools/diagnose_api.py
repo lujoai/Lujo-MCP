@@ -104,10 +104,26 @@ def _build_context(trace_id: str, session_id: str | None = None) -> dict | None:
 
     FIX: R5 —— session_id 透传到 trace 查询边界（内存 + 存储回退 +
     上下文构建全程校验会话归属），而不是只过滤摘要。
+
+    证据缺口提示（missing_evidence）：按各维度真实存在性给出
+    「缺什么证据、怎么补」的可执行提示，供宿主 AI 主动补齐。仅本工具
+    在返回的调试上下文上注入（build_debug_context 的输出字段契约由
+    既有测试锁定，不扩展；纯确定性逻辑、无 LLM/无 I/O）。fail-open：
+    计算异常时保持 null，绝不阻断诊断主链路。
     """
     try:
         ctx = build_debug_context(trace_id, session_id=session_id)
-        return ctx.model_dump() if ctx is not None else None
+        if ctx is None:
+            return None
+        dumped = ctx.model_dump()
+        dumped["missing_evidence"] = None
+        try:
+            from app.runtime.context.evidence_gaps import compute_missing_evidence
+
+            dumped["missing_evidence"] = compute_missing_evidence(dumped) or None
+        except Exception:
+            logger.warning("missing_evidence 计算失败，保持 null", exc_info=True)
+        return dumped
     except Exception:
         logger.exception("build_debug_context 失败 (trace_id=%s)，降级为仅摘要", trace_id)
         return None
