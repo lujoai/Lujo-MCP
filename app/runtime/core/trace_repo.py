@@ -61,18 +61,28 @@ def _new_id(prefix: str = "rec") -> str:
 # SDK 的 caller ID 存储。查询侧统一解析别名，保证 builder、HTTP 查询端点和
 # MCP 工具走同一关联规则，而不是各 handler 各自打补丁。
 def _related_trace_ids(trace_id: str) -> list[str]:
-    """解析 trace 别名链：返回 [查询 ID, 关联的 caller_trace_id...]（去重保序）。"""
+    """解析 trace 别名链：返回 [查询 ID, 当前归属的 caller_trace_id]（去重保序）。
+
+    FIX(R8)：此前把 error_id 下**所有** trace_link 的 caller 都并进来。同指纹
+    重复报错会共用同一个 error_id（errors.record 聚合，记录的 frames/message
+    取最新一次），但每次报错都追加一条 trace_link，于是
+    get_network_records / get_ui_events / get_console_logs 会把**多次不同操作**
+    的采集拼成一份现场——堆栈是第二次的、网络列表却是两次的总和，AI 拿到的是
+    拼错的案发现场。现在只认最新一条 link：记录代表最新一次报错；更早的现场
+    仍可用各自的 caller trace_id 直接查到，数据不丢只是不并入当前记录。
+    """
     ids = [trace_id]
     try:
-        for entry in get_logs(trace_id):
-            if entry.get("step") != _STEP_LINK:
-                continue
-            data = entry.get("data")
-            caller = data.get("caller_trace_id") if isinstance(data, dict) else None
-            if caller and caller not in ids:
-                ids.append(caller)
+        links = [e for e in get_logs(trace_id) if e.get("step") == _STEP_LINK]
     except Exception:
         logger.exception("解析 trace 别名失败 (trace_id=%s)", trace_id)
+        return ids
+    for entry in reversed(links):
+        data = entry.get("data")
+        caller = data.get("caller_trace_id") if isinstance(data, dict) else None
+        if caller and caller not in ids:
+            ids.append(caller)
+        break
     return ids
 
 

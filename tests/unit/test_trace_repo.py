@@ -124,6 +124,45 @@ def test_event_records_are_isolated_by_session():
     assert len(trace_repo.get_network_records(tid)) == 2
 
 
+def test_repeated_same_fingerprint_error_keeps_latest_occurrence_evidence():
+    """同指纹错误重复报错：记录只挂最新一次报错的现场，不把多次拼成一份。
+
+    用户同一类错误出现两次（两次不同操作，各有自己的 caller trace）。
+    errors.record 聚合后两次共用同一个 error_id，且记录的 frames/message 取
+    最新一次；此前 _related_trace_ids 把 error_id 下所有 trace_link 都并进来，
+    于是 get_network_records 会把两次的网络请求并成一份——堆栈是第二次的、
+    网络列表却是两次的总和，AI 拿到的是拼错的案发现场。
+    """
+    frames = [{"file": "app.js", "line": 10, "function": "onSubmit"}]
+    first = trace_repo.save_trace(
+        "TypeError", "boom", [dict(f) for f in frames],
+        trace_id="T-first", session_id="sess-A",
+    )
+    second = trace_repo.save_trace(
+        "TypeError", "boom", [dict(f) for f in frames],
+        trace_id="T-second", session_id="sess-A",
+    )
+    # 前置：同指纹聚合，两次返回同一个 error_id（记录代表最新一次报错）
+    assert first == second
+
+    trace_repo.save_network_record(
+        {"url": "http://first-cart"}, trace_id="T-first", session_id="sess-A"
+    )
+    trace_repo.save_network_record(
+        {"url": "http://second-pay"}, trace_id="T-second", session_id="sess-A"
+    )
+
+    # 记录的堆栈/消息是最新一次，其网络现场也必须是最新一次，不得拼接
+    got = trace_repo.get_network_records(second, session_id="sess-A")
+    assert [r["url"] for r in got] == ["http://second-pay"]
+    # 不带 session 的兼容查询路径同样不拼接
+    assert [r["url"] for r in trace_repo.get_network_records(second)] == ["http://second-pay"]
+    # 更早的现场没有丢：用它自己的 caller trace_id 仍可查到
+    assert [r["url"] for r in trace_repo.get_network_records("T-first", session_id="sess-A")] == ["http://first-cart"]
+    # get_trace 暴露的 caller 也指向最新一次，供审计对得上
+    assert trace_repo.get_trace(second, session_id="sess-A")["caller_trace_id"] == "T-second"
+
+
 def test_save_trace_redacts_frames_before_storage():
     frames = [
         {
