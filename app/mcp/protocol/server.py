@@ -152,6 +152,9 @@ def register_tool(
     可被 tools/call 直接调用（REST/SDK 链路不受影响），但默认不出现在
     tools/list 中，减少宿主 AI 的选择噪音（HTTP/stdio 经 get_agent_visible_tools
     保持一致过滤）。
+    FIX(R8): 支持可选 ``is_failure`` 谓词——全局失败契约「dict 含非空 error 键
+    ⇒ 失败」对结论型工具不成立（verify_ui 的载荷本身就是验证结论，error 只是
+    解释字段）。声明谓词的工具按自身语义判定，未声明的工具行为完全不变。
     """
     _tool_registry[name] = {
         "name": name,
@@ -164,7 +167,17 @@ def register_tool(
         "prepare_args": kwargs.get("prepare_args"),
         "availability": kwargs.get("availability"),
         "agent_visible": kwargs.get("agent_visible", True),
+        "is_failure": kwargs.get("is_failure"),
     }
+
+
+def tool_failure_predicate(tool: dict):
+    """取该工具的失败判定谓词；未声明则回落到全局默认契约。
+
+    HTTP 与 stdio 两条传输都必须经此函数取谓词，避免各自内联默认值造成口径漂移
+    （R8 修的 stdio 门控缺失就是这类漂移的结果）。
+    """
+    return tool.get("is_failure") or is_tool_failure_result
 
 
 def _is_tool_available(tool: dict) -> bool:
@@ -509,7 +522,9 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     # FIX: R7 —— handler 正常返回但代表执行失败的 dict（含非空 error 键）必须
     # 标记 isError=true，与 stdio 的 ToolExecutionError 契约一致；正常无数据
     # （found=false 等，无 error 键）仍是成功结果。
-    if is_tool_failure_result(result):
+    # FIX(R8): 判定改走工具自己的谓词（未声明则仍用全局契约），
+    # 结论型工具的载荷不再被误标为失败。
+    if tool_failure_predicate(tool)(result):
         return make_response(req.id, {
             "content": [
                 {

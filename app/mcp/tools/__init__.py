@@ -29,6 +29,7 @@ def register_all_tools():
     from app.mcp.tools.spec_api import RELATED_SPECS_DEF, related_specs_handler
     from app.mcp.tools.spec_ingest_api import INGEST_SPECS_DEF, ingest_specs_handler
     from app.mcp.tools.verify_api import VERIFY_DEF, verify_handler
+    from app.mcp.protocol.tool_errors import conclusion_tool_is_failure
     from app.mcp.tools.verify_ui_api import (
         VERIFY_UI_DEF, verify_ui_handler, verify_ui_prepare_args,
         is_available as verify_ui_available,
@@ -63,11 +64,18 @@ def register_all_tools():
     register_tool(**INGEST_CONSOLE_DEF, handler=ingest_console_handler, category="sdk", agent_visible=False)
     register_tool(**RELATED_SPECS_DEF, handler=related_specs_handler, category="agent")
     register_tool(**INGEST_SPECS_DEF, handler=ingest_specs_handler, category="agent")
-    register_tool(**VERIFY_DEF, handler=verify_handler, category="agent")
+    register_tool(
+        **VERIFY_DEF, handler=verify_handler, category="agent",
+        # FIX(R8): 与 verify_ui 同为结论型工具，载荷是验证结论不是失败报告
+        is_failure=conclusion_tool_is_failure,
+    )
     register_tool(
         **VERIFY_UI_DEF, handler=verify_ui_handler, category="agent",
         prepare_args=verify_ui_prepare_args,
         availability=verify_ui_available,
+        # FIX(R8): 结论型工具——载荷是验证结论，其中的 error 只是原因说明，
+        # 不应按全局「含 error 键即失败」契约标成 isError=true。
+        is_failure=conclusion_tool_is_failure,
     )
     register_tool(
         **AUTO_TEST_DEF, handler=auto_test_handler, category="agent", experimental=True,

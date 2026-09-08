@@ -18,7 +18,11 @@ from mcp.types import CallToolRequest, CallToolRequestParams
 from app.config import settings
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
 from app.mcp.protocol.server import _handle_tools_call, _tool_registry, register_tool
-from app.mcp.protocol.tool_errors import ToolExecutionError, is_tool_failure_result
+from app.mcp.protocol.tool_errors import (
+    ToolExecutionError,
+    conclusion_tool_is_failure,
+    is_tool_failure_result,
+)
 from app.mcp.tools import register_all_tools
 
 
@@ -177,3 +181,81 @@ class TestStdioIsErrorSemantics:
         assert dumped["isError"] is False
         payload = json.loads(dumped["content"][0]["text"])
         assert "count" in payload and "traces" in payload
+
+
+# ── R8：结论型工具（verify / verify_ui）的失败判定 ────────────────────
+
+
+class TestConclusionToolContract:
+    """验证结论不是工具失败。
+
+    全局契约「dict 含非空 error 键 ⇒ 失败」对 verify / verify_ui 不成立：
+    它们的载荷本身就是答案（matched / diffs / silent_failure），error 只是原因
+    说明。标成 isError=true 会让宿主重试而不是读结论——包括「验证不通过」这种
+    最有价值的结论。两条传输都必须给出同一判定。
+    """
+
+    def test_conclusion_payload_is_not_failure(self):
+        assert conclusion_tool_is_failure(
+            {"matched": False, "diffs": [], "silent_failure": False,
+             "error": "must provide spec or spec_id"}
+        ) is False
+
+    def test_bare_error_dict_is_still_failure(self):
+        """谓词不是"该工具永不失败"的口子：非结论形状仍按全局契约判失败。"""
+        assert conclusion_tool_is_failure({"error": "boom"}) is True
+
+    def test_non_dict_is_not_failure(self):
+        assert conclusion_tool_is_failure(None) is False
+        assert conclusion_tool_is_failure("text") is False
+
+    @pytest.mark.parametrize(
+        ("tool_name", "arguments", "expected_error_text"),
+        [
+            ("verify_ui", {}, "must provide spec or spec_id"),
+            ("verify_ui", {"spec": {"kind": "http"}}, "spec.kind must be 'ui'"),
+            # verify 的 schema 要求 actual，必须带上才能走到结论分支
+            ("verify", {"actual": {"status_code": 200}, "spec_id": "no-such-spec"},
+             "not found"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_http_marks_conclusion_as_success(
+        self, tool_name, arguments, expected_error_text
+    ):
+        resp = await _http_call(tool_name, arguments)
+        assert resp.get("error") is None
+        assert resp["result"]["isError"] is False
+        payload = json.loads(resp["result"]["content"][0]["text"])
+        assert expected_error_text in payload["error"]
+        assert payload["matched"] is False
+
+    @pytest.mark.parametrize(
+        ("tool_name", "arguments"),
+        [
+            ("verify_ui", {}),
+            ("verify_ui", {"spec": {"kind": "http"}}),
+            ("verify", {"actual": {"status_code": 200}, "spec_id": "no-such-spec"}),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_stdio_marks_conclusion_as_success(self, tool_name, arguments):
+        """stdio 与 HTTP 同口径：结论不得被包成 ToolExecutionError。"""
+        import app.mcp_server as stdio
+
+        result = await stdio.server.request_handlers[CallToolRequest](
+            _call_tool_request(tool_name, arguments)
+        )
+        dumped = result.model_dump(mode="json")
+        assert dumped["isError"] is False
+        payload = json.loads(dumped["content"][0]["text"])
+        assert payload["matched"] is False
+        assert payload["error"]
+
+    def test_registry_wires_the_predicate_for_both_tools(self):
+        """守卫：谓词必须真的挂到注册表上，否则传输层回落到全局契约。"""
+        from app.mcp.tools import register_all_tools
+
+        register_all_tools()
+        for name in ("verify", "verify_ui"):
+            assert _tool_registry[name]["is_failure"] is conclusion_tool_is_failure
