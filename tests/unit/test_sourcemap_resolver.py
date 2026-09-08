@@ -268,10 +268,44 @@ class TestResolveFrames:
         resolved, _ = resolve_frames(frames, self._parser())
         assert resolved[0] == frames[0]
 
-    def test_missing_column_defaults_zero(self):
+    def test_missing_column_on_multi_target_line_is_not_resolved(self):
+        """缺列号 + 同行多个候选源码位置 → 不得按第 0 列猜测并冒充精确还原。
+
+        本用例替代 v0.7.6 之前的 test_missing_column_defaults_zero：那条断言的
+        正是缺陷本身（列号被折叠成 0，于是返回同行第一个段的 src/app.ts，
+        而真实答案是 col 48213 的 src/util.ts:10 formatPrice）。
+        """
         frames = [{"file": "app.9f3b2c.js", "line": 1, "function": "t"}]  # 无 column
-        resolved, _ = resolve_frames(frames, self._parser())
-        assert resolved[0]["file"] == "src/app.ts"  # col 0 → 段 0
+        resolved, snippets = resolve_frames(frames, self._parser())
+        assert resolved[0] == frames[0]          # 原样返回
+        assert "resolved" not in resolved[0]     # 不标注已还原
+        assert resolved[0]["file"] == "app.9f3b2c.js"
+        assert snippets == []                    # 不给出可能错误的源码片段
+        # 同一帧带上真实列号后仍然精确还原（证明降级只由缺列号触发）
+        exact, _ = resolve_frames([{**frames[0], "column": 48213}], self._parser())
+        assert exact[0]["file"] == "src/util.ts"
+        assert exact[0]["resolved"] is True
+
+    def test_missing_column_on_single_target_line_still_resolves(self):
+        """唯一候选：整行只映射到一个源码位置时，缺列号不存在歧义，仍应还原。
+
+        守住修复的边界——不能把非 minified / 单段行（旧 SDK、onerror 兜底等
+        常见无列号来源）一并退化成不还原。
+        """
+        m = build_map(
+            # 段元组为绝对坐标 (gen_col, src_idx, src_line, src_col, name_idx)：
+            # 两段同属 src/app.ts 第 0 行，仅生成列/原始列/符号不同 → 唯一候选
+            [[(0, 0, 0, 0, 0), (12, 0, 0, 5, 1)]],
+            sources=["src/app.ts", "src/util.ts"],
+            names=["handleSubmit", "formatPrice"],
+        )
+        frames = [{"file": "app.9f3b2c.js", "line": 1, "function": "t"}]
+        resolved, _ = resolve_frames(frames, SourceMapParser(m))
+        assert resolved[0]["file"] == "src/app.ts"
+        assert resolved[0]["line"] == 1
+        assert resolved[0]["resolved"] is True
+        # 还原结果不带伪造的列号断言，仅确认未被降级
+        assert resolved[0]["original"]["column"] is None
 
     def test_snippet_from_sources_content(self):
         frames = [{"file": "app.js", "line": 1, "column": 48213, "function": "t"}]
@@ -307,6 +341,69 @@ class TestResolveFrames:
         snapshot = dict(frames[0])
         resolve_frames(frames, self._parser())
         assert frames[0] == snapshot
+
+
+# ── ingest → resolver 跨模块契约 ──
+
+
+class TestIngestToResolverSeam:
+    """SDK 上报帧 → ingest 规范化 → source map 还原。
+
+    v0.7.6 之前这条缝没有任何用例：两侧各自单测（test_ingest 只验到入库、
+    本文件只验已规范化的帧），缺陷正好落在缝上——ingest 刻意不为缺列号伪造 0，
+    resolver 却又把缺列号折叠成 0 并按第 0 列"精确还原"。
+    """
+
+    _MINIFIED = "https://cdn.example.com/static/js/app.9f3b2c.js"
+
+    def _parser(self) -> SourceMapParser:
+        # 复用多段歧义行 fixture：gen 1:0 → src/app.ts:1 handleSubmit，
+        #                    gen 1:48213 → src/util.ts:10 formatPrice
+        return TestResolveFrames()._parser()
+
+    def test_real_column_survives_ingest_into_resolver(self):
+        from app.mcp.tools.ingest_api import _parse_frames
+
+        stored = _parse_frames(
+            [{"file": self._MINIFIED, "line": 1, "column": 48213, "function": "t"}]
+        )
+        assert stored[0]["column"] == 48213
+        resolved, _ = resolve_frames(stored, self._parser())
+        assert resolved[0]["file"] == "src/util.ts"
+        assert resolved[0]["line"] == 10
+        assert resolved[0]["function"] == "formatPrice"
+        assert resolved[0]["resolved"] is True
+
+    def test_absent_column_is_not_fabricated_then_not_resolved(self):
+        from app.mcp.tools.ingest_api import _parse_frames
+
+        stored = _parse_frames([{"file": self._MINIFIED, "line": 1, "function": "t"}])
+        assert "column" not in stored[0]                 # ingest 不伪造 0
+        resolved, snippets = resolve_frames(stored, self._parser())
+        assert "resolved" not in resolved[0]             # 契约必须延续到还原
+        assert resolved[0]["file"] == self._MINIFIED     # 保持生成位置，不误导
+        assert snippets == []
+
+    def test_bool_column_is_treated_as_missing(self):
+        """True 不是列号 1：JSON 中出现布尔值时按缺列号处理。"""
+        from app.mcp.tools.ingest_api import _parse_frames
+
+        frame = {"file": self._MINIFIED, "line": 1, "function": "t", "column": True}
+        assert "column" not in _parse_frames([frame])[0]
+        resolved, _ = resolve_frames([frame], self._parser())
+        assert "resolved" not in resolved[0]
+
+    def test_line_targets_reports_candidate_count(self):
+        """歧义判定依据本身可测：多候选行 vs 唯一候选行 vs 无映射行。"""
+        parser = self._parser()
+        assert len(parser.line_targets(1)) == 2          # app.ts:1 与 util.ts:10
+        assert parser.line_targets(9) == []              # 无映射行
+        single = SourceMapParser(build_map(
+            [[(0, 0, 0, 0, 0), (12, 0, 0, 5, 1)]],
+            sources=["src/app.ts", "src/util.ts"],
+            names=["handleSubmit", "formatPrice"],
+        ))
+        assert single.line_targets(1) == [("src/app.ts", 1)]
 
 
 # ── 缓存 ──

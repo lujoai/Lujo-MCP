@@ -147,6 +147,8 @@ test("带 stack 的对象 reason：按 stack 解析真实帧", () => {
   assert.equal(payload.message, "invalid cart");
   assert.equal(payload.frames[0].file, "cart.js");
   assert.equal(payload.frames[0].line, 42);
+  // source map 精确还原依赖列号，解析出来就必须上报
+  assert.equal(payload.frames[0].column, 15);
 });
 
 test("Error 实例 reason：行为与旧版一致", () => {

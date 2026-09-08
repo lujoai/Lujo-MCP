@@ -190,6 +190,22 @@ class SourceMapParser:
             name=name,
         )
 
+    def line_targets(self, line: int) -> list[tuple[str, int]]:
+        """该生成行上所有携带源码信息的 mapping 段指向的去重 (source, 原始行)。
+
+        长度为 1 表示即使没有列号，该行的还原也唯一；长度 >1 说明同一生成行
+        映射到多个源码位置（minified bundle 常态），此时缺列号只能靠猜。
+        供 :func:`resolve_frame` 区分这两种情形。
+        """
+        targets: list[tuple[str, int]] = []
+        for seg in self._lines.get(line - 1) or []:
+            if seg.source_idx is None or seg.source_line is None:
+                continue
+            item = (self.sources[seg.source_idx], seg.source_line + 1)
+            if item not in targets:
+                targets.append(item)
+        return targets
+
     def source_content(self, source: str) -> Optional[str]:
         """返回内嵌 sourcesContent 中该 source 的内容（无则 None）。"""
         try:
@@ -272,6 +288,21 @@ def _snippet_from_content(content: str, line: int, context_lines: int) -> Option
     return "\n".join(out)
 
 
+def _frame_column(value) -> int | None:
+    """取帧的列号，严格区分「未提供/非数值」与真实的第 0 列。
+
+    两者不可折叠：第 0 列是一个确定位置，缺列号则意味着无法在该行的多个
+    mapping 段之间作出选择。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        column = int(value)
+    except (TypeError, ValueError):
+        return None
+    return column if column >= 0 else None
+
+
 def resolve_frame(
     frame: dict,
     parser: SourceMapParser,
@@ -282,11 +313,20 @@ def resolve_frame(
 
     file = str(frame.get("file") or "")
     line = int(frame.get("line") or 0)
-    column = int(frame.get("column") or 0)
+    column = _frame_column(frame.get("column"))
     if not is_frontend_frame(file) or line <= 0:
         return dict(frame), None
 
-    pos = parser.original_position_for(line, column)
+    if column is None and len(parser.line_targets(line)) > 1:
+        # FIX(R8): 此前 `int(frame.get("column") or 0)` 把"缺列号"折叠成
+        # "第 0 列"，于是 minified 同一生成行上第一个 mapping 段被当成精确还原
+        # 返回（file/line/function 与源码片段一起错指到同行的第一个符号）。
+        # ingest_api._parse_frames 刻意不为缺列号伪造 0，就是要下游在此降级
+        # 而不是猜测——现在按该行是否只有一个候选源码位置来决定：唯一才还原，
+        # 有多个候选则原样返回且不标注 resolved。
+        return dict(frame), None
+
+    pos = parser.original_position_for(line, column if column is not None else 0)
     if pos is None:
         return dict(frame), None
 
