@@ -426,12 +426,16 @@ class TestAddLogRedactsPayload:
         assert data["nested"]["ok"] == 1
 
     def test_add_log_string_payload_regex_redacted(self):
-        """data 为字符串（JSON 序列化 payload）→ 存储层脱敏（A2 后统一为 dict）。
+        """data 为字符串（JSON 序列化 payload）→ 解析成 dict 后按嵌套路径脱敏。
 
-        FIX(v0.7.0 复审): 第 6 轮 A2 修复后 add_log 对字符串 payload 先
-        json.loads → redact_nested → 存 dict（不再原样存 JSON 字符串）。
-        本断言此前仍检查旧字符串形态（'\"client_secret\":\"***\"' in data），
-        与现行契约不符——改为断言 dict 形态的脱敏结果。
+        A2 契约：add_log 对字符串 payload 先 json.loads → redact_nested → 存
+        dict，两种存储后端行为一致。
+
+        R8 更正：本用例 2026-08-29（46a761d）改写成 dict 断言时，掩码期望
+        （"***"）抄自 PG 的偶然行为——字符串先被正则打码成 ***、再被 JSONB
+        解析回 dict，因此只有在连着真库跑时才成立；memory 后端永远给不出
+        这个组合，这条用例于是"单独跑绿、混跑红"。现按契约统一断言
+        redact_nested 的键名掩码标记 ***REDACTED***（与 dict 入库路径一致）。
         """
         import json
 
@@ -446,7 +450,7 @@ class TestAddLogRedactsPayload:
         data = entries[-1]["data"]
         # A2 契约：字符串 payload 解析后按嵌套路径脱敏，存储为 dict
         assert isinstance(data, dict)
-        assert data["client_secret"] == "***"
+        assert data["client_secret"] == "***REDACTED***"
         assert "cs-1" not in json.dumps(data)
         assert data["note"] == "hello"
 

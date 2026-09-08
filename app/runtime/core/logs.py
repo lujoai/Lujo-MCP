@@ -1,5 +1,6 @@
 """追踪日志模块 —— 封装存储层的便捷 API"""
 
+import json
 import time
 import uuid
 from typing import Any
@@ -12,6 +13,23 @@ def create_request_id() -> str:
     return str(uuid.uuid4())
 
 
+def _coerce_structured_payload(data: Any) -> Any:
+    """A2 契约：调用方透传的 JSON 字符串解析成结构化值后再入库。
+
+    此前只有 PG 后端"碰巧"满足该契约——``data JSONB`` 列读回来自动是 dict；
+    memory 后端把脱敏后的字符串原样存取，同一条用例在两种后端上结果不同
+    （test_redaction_integration 的 dict 断言因此随机器状态漂移）。
+    仅当字符串以 ``{`` / ``[`` 开头才尝试解析；普通文本（console 消息等）
+    或解析失败时保持原样，行为不变。
+    """
+    if isinstance(data, str) and data[:1] in ("{", "["):
+        try:
+            return json.loads(data)
+        except ValueError:
+            return data
+    return data
+
+
 def add_log(request_id: str, step: str, data=None) -> None:
     store = get_trace_store()
     store.save_entry(request_id, {
@@ -20,7 +38,8 @@ def add_log(request_id: str, step: str, data=None) -> None:
         # FIX: A2 —— data 可能是调用方透传的原始用户 payload（如 POST /debug
         # 的 request body），入库前必须脱敏；此前仅 trace_repo 的 save_* 系列
         # 脱敏，本直写路径绕过了"存储边界统一脱敏"承诺（重复脱敏幂等无害）
-        "data": redact_nested(data),
+        # FIX(R8) —— 字符串 payload 先按 A2 契约归一成结构化值，两种后端一致
+        "data": redact_nested(_coerce_structured_payload(data)),
     })
     # 持久化新 trace 数据后失效 Dashboard 概览缓存，使新数据立即可见
     # （save_entry 路径：覆盖 save_trace/network/ui/console 等所有写入）。
@@ -42,7 +61,9 @@ def add_logs_batch(request_id: str, items: list[tuple[str, Any]]) -> None:
     now = time.time()
     entries = [
         # FIX: A2 —— 与 add_log 一致，批量直写路径同样在存储边界脱敏
-        {"timestamp": now, "step": step, "data": redact_nested(data)}
+        # FIX(R8) —— 同口径先归一 JSON 字符串 payload
+        {"timestamp": now, "step": step,
+         "data": redact_nested(_coerce_structured_payload(data))}
         for step, data in items
     ]
     store.save_entries(request_id, entries)
