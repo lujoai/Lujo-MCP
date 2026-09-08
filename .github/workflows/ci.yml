@@ -104,3 +104,9 @@ jobs:
           browser-sdk/test/sdk-minor-reuse.test.js
           browser-sdk/test/sdk-rejection.test.js
 
+      # npm 启动器（bin/cli.js）契约测试：参数拼装、平台二进制两种落盘布局解析、
+      # 以及终止信号转发（本 job 为 Linux runner，SIGTERM 用例会真实执行；
+      # Windows 上宿主以 TerminateProcess 结束进程，该用例自行 skip）。
+      - name: Run npm launcher contract tests
+        run: node --test npm/test/launcher.test.js
+

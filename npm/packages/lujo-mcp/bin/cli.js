@@ -91,12 +91,7 @@ or reinstall the meta package:
   // MCP stdio and localhost HTTP, so Browser SDK /ingest events are immediately
   // visible to the MCP client. Keep an explicit --no-http escape hatch for
   // clients that require a pure stdio process (and for release smoke tests).
-  const requestedArgs = process.argv.slice(2);
-  const disableHttp = requestedArgs.includes('--no-http');
-  const childArgs = requestedArgs.filter((arg) => arg !== '--no-http');
-  if (!disableHttp && !childArgs.includes('--http')) childArgs.push('--http');
-
-  const child = spawn(bin, childArgs, {
+  const child = spawn(bin, translateArgs(process.argv.slice(2)), {
     stdio: 'inherit',
     windowsHide: true,
   });
@@ -104,10 +99,53 @@ or reinstall the meta package:
     console.error(`[lujo-mcp-server] failed to spawn ${bin}: ${err.message}`);
     process.exit(1);
   });
+
+  // FIX(R8): 终止信号必须转发。宿主（Claude / Codex / Trae 等）停止 MCP 服务
+  // 时只处理它直接启动的那个进程——也就是本启动器——被 spawn 出来的二进制不会
+  // 被自动带走（Windows 没有 POSIX 的进程组/信号语义，实测杀掉启动器后二进制
+  // 存活并继续监听统一模式的 HTTP 端口）。孤儿会接收浏览器 SDK 发往该端口的
+  // 全部上报，新起的实例抢不到端口，当前会话因此表现为「报过错但
+  // diagnose_issue 查不到任何现场」。
+  // 子进程自身退出时由下面的 exit 处理器决定本进程退出码，这里只负责带离。
+  let forwarding = false;
+  function forward(signal) {
+    if (forwarding) return;
+    forwarding = true;
+    try {
+      child.kill(signal);
+    } catch {
+      // 子进程可能已经退出：无需要做的，交给 exit 兜底
+    }
+  }
+  // Windows 收不到 SIGTERM/SIGHUP（注册无害且永不触发），但能收到 SIGBREAK。
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+    process.on(sig, () => forward('SIGTERM'));
+  }
+  process.on('uncaughtException', (err) => {
+    console.error(`[lujo-mcp-server] launcher error: ${err && err.message}`);
+    forward('SIGTERM');
+    process.exit(1);
+  });
+  // 任何原因导致的本进程退出（含上面的 process.exit 路径）都不能把子进程留下。
+  process.on('exit', () => forward('SIGTERM'));
+
   child.on('exit', (code, signal) => {
     if (signal) process.kill(process.pid, signal);
     else process.exit(code == null ? 0 : code);
   });
 }
 
-run();
+// 参数拼装与 npm 默认模式：抽出以便在无平台二进制的环境下直接单测。
+function translateArgs(requestedArgs) {
+  const args = Array.isArray(requestedArgs) ? requestedArgs.slice() : [];
+  const disableHttp = args.includes('--no-http');
+  const childArgs = args.filter((arg) => arg !== '--no-http');
+  if (!disableHttp && !childArgs.includes('--http')) childArgs.push('--http');
+  return childArgs;
+}
+
+if (require.main === module) {
+  run();
+}
+
+module.exports = { platformPackageName, translateArgs, binaryNameFor };

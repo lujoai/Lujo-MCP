@@ -19,15 +19,27 @@ for (const rel of required) {
 
 // v0.7.2: browser-sdk 随主包分发（CDN 一行引用的前提）。防止仓库源与分发副本
 // 漂移：两者内容不一致时拒绝发布，先同步再发。
-const sdkSource = path.resolve(root, '..', '..', 'browser-sdk', 'ai-debug.js');
+// FIX(R8): 此前上溯少算一级，sdkSource 解析到 <repo>/npm/browser-sdk/
+// ai-debug.js（永不存在），下面的 existsSync 组合恒为 false → 比对自 v0.7.2
+// 起从未执行，守卫只产出绿灯却不守护任何东西。现修正路径，并且「找不到比对源」
+// 一律判失败：守卫看不到被守护对象时不得静默通过。
+const sdkSource = path.resolve(root, '..', '..', '..', 'browser-sdk', 'ai-debug.js');
 const sdkCopy = path.join(root, 'browser-sdk', 'ai-debug.js');
-if (fs.existsSync(sdkSource) && fs.existsSync(sdkCopy)) {
-  if (!fs.readFileSync(sdkSource).equals(fs.readFileSync(sdkCopy))) {
+if (fs.existsSync(sdkCopy)) {
+  if (!fs.existsSync(sdkSource)) {
+    console.error(
+      `[lujo-mcp-server] cannot locate the repository SDK to compare against: ${sdkSource}\n` +
+        'The drift guard is unable to run — fix the path instead of shipping unchecked.'
+    );
+    ok = false;
+  } else if (!fs.readFileSync(sdkSource).equals(fs.readFileSync(sdkCopy))) {
     console.error(
       '[lujo-mcp-server] browser-sdk/ai-debug.js drifted from npm/packages/lujo-mcp/browser-sdk/ai-debug.js.\n' +
         'Sync the copy before publishing: cp browser-sdk/ai-debug.js npm/packages/lujo-mcp/browser-sdk/'
     );
     ok = false;
+  } else {
+    console.log('[lujo-mcp-server] browser-sdk copy matches the repository source.');
   }
 }
 

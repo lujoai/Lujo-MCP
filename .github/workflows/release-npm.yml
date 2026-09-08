@@ -245,11 +245,22 @@ jobs:
           # The npm launcher defaults to unified stdio + localhost HTTP. The
           # protocol smoke only needs stdio and opts out explicitly so the
           # temporary process exits immediately after stdin closes.
-          # --ignore-scripts intentionally avoids the package postinstall check;
-          # invoke the checked-in bin entry directly instead of relying on npm's
-          # optional .bin shim being created in every npm version/configuration.
+          # --ignore-scripts intentionally avoids the package postinstall check
+          # during install (registry flakiness on big optional packages); the
+          # check itself is executed explicitly below, since it is part of what
+          # a real user's `npm install` runs.
           python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" \
             --cmd "node ./node_modules/@lujoai/lujo-mcp/bin/cli.js --no-http"
+
+          # FIX(R8): postinstall 安装检查在整条发布链路中从未被执行过
+          # （上面的 install 用了 --ignore-scripts）。v0.6.8~v0.7.3 期间
+          # bin/check.js 因平台白名单不匹配长期空转（恒走"未安装"分支）也没有
+          # 任何门禁发现。这里按真实安装语义跑一次：布局正确必须 exit 0。
+          node ./node_modules/@lujoai/lujo-mcp/bin/check.js
+
+          # prepublishOnly 守卫（browser-sdk 包内副本与仓库源一致性等）也显式跑
+          # 一次：npm pack 是否触发 prepublishOnly 随 npm 版本而异，不能依赖。
+          node "$GITHUB_WORKSPACE/npm/packages/lujo-mcp/scripts/check-clean-bin.js"
 
       - name: Publish platform packages
         env:
