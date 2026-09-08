@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号（如 0.7.6）"
+        description: "发布版本号（如 0.7.7）"
         required: true
-        default: "0.7.6"
+        default: "0.7.7"
   push:
     tags:
       - "v*"

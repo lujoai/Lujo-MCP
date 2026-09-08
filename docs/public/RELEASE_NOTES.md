@@ -1,10 +1,43 @@
 # Release Notes / 发布说明
 
-> 待发布版本：**v0.7.6（准备中）**。主题「本地调试链路稳定性与发行加固」：修复浏览器现场关联、会话隔离、Source Map 定位、重型工具执行和统一错误语义；npm/npx 默认启动同一进程的 stdio + localhost HTTP。发布前 npm `latest` 仍为 `@lujoai/lujo-mcp@0.7.5`。
+> 待发布版本：**v0.7.7（准备中）**。主题「让宿主 AI 读对现场」：`diagnose_issue` 新增 `missing_evidence` 证据缺口提示，宿主 AI 能看到「缺什么证据、怎么补」；一批正确性修复让诊断结论不再被污染、结论型工具不再被误判为失败；integration 与 Playwright e2e 正式纳入发布门禁。发布前 npm `latest` 仍为 `@lujoai/lujo-mcp@0.7.6`。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.6 ・ **Release Date / 发布日期**: 2026-09-07 ・ **Codename / 代号**: 本地链路稳定 ｜ Local Path Stability
+**Version / 版本**: v0.7.7 ・ **Release Date / 发布日期**: 2026-09-08 ・ **Codename / 代号**: 读对现场 ｜ Evidence-Gap Awareness
+
+---
+
+## v0.7.7（2026-09-08）
+
+### 版本概述
+
+本版本围绕「让宿主 AI 读对现场」：`diagnose_issue` 新增 `missing_evidence` 证据缺口提示，宿主 AI 据此主动补齐证据而不是基于残缺现场猜测；同时修复一批会污染诊断结论的问题（结论型工具被误标失败、同指纹重复报错证据拼接、minified 堆栈错位还原），补齐 stdio 传输的校验与并发门控，解决 npm 启动器孤儿进程；并把 integration 与 Playwright e2e 正式纳入 CI 发布门禁。Lujo 仍然是调试证据服务，不会自动替代宿主智能体修改用户代码。
+
+### 主要新增
+
+- `diagnose_issue` 调试上下文新增可选字段 `missing_evidence`：按堆栈、源码片段、运行时快照、git 归因、网络请求链、UI 事件、规范校验七个维度判定证据是否真实存在，缺哪项就给出可执行的补齐建议。证据齐备或计算异常时为 `null`，旧客户端可安全忽略。
+
+### 主要修复
+
+- `verify` / `verify_ui` 的验证结论不再被误标为工具失败（v0.7.6 引入的「含非空 `error` 键即失败」契约误伤结论型载荷，宿主会反复重试而不是读取结论）。
+- 同一错误重复上报只关联最新一次采集现场，网络 / UI / 控制台证据不再把多次操作拼接成一份；更早报错的数据仍可用各自 trace_id 单独查询。
+- 前端堆栈 Source Map 还原不再把「缺列号」当作「第 0 列」精确还原，避免 minified 堆栈被错指到该行第一个符号。
+- stdio 传输对齐 HTTP 的入参校验（`INVALID_PARAMS`）、轻/重型工具并发门控（`TOOL_BUSY`）与 `mcp_tool_*` 指标口径。
+- 统一模式启动前探测端口占用，端口冲突立即显式报错并给出处置，不再静默退出，避免上报落入另一实例。
+- npm 启动器 `lujo-mcp-server` 转发终止信号并在退出时带离子进程，宿主停止服务后不再留下占用 HTTP 端口的孤儿进程（Windows TerminateProcess 强杀为已知残留）。
+- `diagnose_issue` 描述写明「最近一条错误」的归属口径与 `session_id` 过滤用法，降低宿主 AI 取错现场的概率。
+- 追踪日志的 JSON 字符串 payload 统一解析为结构化对象返回，memory 与 PostgreSQL 后端结果一致，敏感字段掩码统一为 `***REDACTED***`。
+
+### 升级说明
+
+- 零 Breaking Change、零新增配置；现有 stdio 配置无需修改。
+- `missing_evidence` 为新增可选字段，旧客户端/宿主可安全忽略。
+- 若曾遇到「停止服务后端口被占」「上报落进旧进程」，本版本的启动端口探测 + 信号转发共同消除该类问题；Windows TerminateProcess 强杀残留场景会得到明确报错而非静默错绑。
+
+### 验证基线
+
+CI 全绿（run 34241875002）：unit **1599 passed / 6 skipped / 0 failed**、integration **75 passed / 40 skipped / 0 failed**、Playwright e2e（真实 Chromium）**9 passed / 1 skipped / 0 failed**、Browser SDK Node **54/54**、npm 启动器契约 **12/12**。
 
 ---
 
