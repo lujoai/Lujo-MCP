@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -45,10 +46,24 @@ from mcp.types import Tool, TextContent
 from app.config import settings
 from app import __version__
 from app.runtime.hooks.exception_hook import install_global_hook, uninstall_global_hook
-from app.mcp.protocol.server import _tool_registry, get_agent_visible_tools, is_heavy_tool
+from app.mcp.protocol.server import (
+    _acquire_slot_or_fastfail,
+    _get_tool_executor_and_slots,
+    _tool_registry,
+    _validate_tool_arguments,
+    get_agent_visible_tools,
+    is_heavy_tool,
+    tool_failure_predicate,
+)
 from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
-from app.mcp.protocol.tool_errors import ToolExecutionError, is_tool_failure_result
+from app.mcp.protocol.tool_errors import ToolExecutionError
 from app.mcp.tools import register_all_tools
+from app.observability import (
+    record_mcp_tool_busy,
+    record_mcp_tool_call,
+    record_mcp_tool_wait,
+)
+from app.observability import shutdown_observability
 
 logging.basicConfig(level=logging.INFO, stream=None, force=True)  # stdio模式下不要往stdout打日志，避免污染协议流
 logger = logging.getLogger("lujo-mcp")
@@ -97,6 +112,8 @@ def cleanup_resources() -> None:
       1) 取消 periodic_cleanup 后台任务（若存在；当前 stdio 未启动，预留兜底）
       2) 关闭 PG 连接池（仅当 storage_backend == "postgresql"）
       3) 卸载全局 excepthook
+      4) 关闭 OTel 指标导出器（工具埋点惰性创建的后台导出线程）
+      5) 关闭同步工具专用线程池
     """
     global _cleanup_done, _periodic_cleanup_task
     with _cleanup_lock:
@@ -126,7 +143,16 @@ def cleanup_resources() -> None:
     except Exception as e:
         logger.warning(f"stdio 退出卸载 excepthook 失败: {e}")
 
-    # 4) FIX: R7-A5 —— 关闭同步工具专用线程池。ThreadPoolExecutor 非 daemon，
+    # 4) FIX(R8): 关闭 OTel 指标导出器。工具埋点 record_mcp_tool_* 会惰性
+    # 创建 PeriodicExportingMetricReader 后台线程；纯 stdio 模式没有 FastAPI
+    # lifespan（HTTP 侧由它负责关闭），此前该线程在退出时才被解释器收尾，
+    # 边拆日志系统边向不可达端点重试，刷 "--- Logging error ---" 并拖慢退出。
+    try:
+        shutdown_observability()
+    except Exception as e:
+        logger.warning(f"stdio 退出关闭指标导出器失败: {e}")
+
+    # 5) FIX: R7-A5 —— 关闭同步工具专用线程池。ThreadPoolExecutor 非 daemon，
     # 此前退出从不 shutdown：超时仍在跑的工具线程在解释器退出时被
     # concurrent.futures 的 _python_exit join → 进程无法退出直至宿主强杀。
     # wait=False 不等运行中任务；cancel_futures 撤掉排队未启动的任务。
@@ -211,6 +237,31 @@ async def _run_stdio_transport() -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
+def _http_port_conflict(host: str, port: int) -> str | None:
+    """探测 HTTP 端口是否已被另一实例占用，返回冲突描述或 None。
+
+    为什么要在 uvicorn 绑定之前自己查一次：不带本守卫时端口冲突也会失败，但
+    失败发生在 ``from app.main import app`` 之后——那时 FastAPI 应用已导入、
+    repair queue 已启动、知识库种子已加载，随后才由 uvicorn 抛出一行
+    ``[Errno 10048] error while attempting to bind ...`` 再走完整优雅关闭。
+    对宿主而言表现为「MCP 服务起来又静默退出，原因藏在 stderr 末尾」。
+    提前探测可以：无副作用地立刻失败、给出端口号和两条可执行处置。
+
+    探测刻意用不带 SO_REUSEADDR 的 socket（否则 Windows 上语义更松），探测完
+    立即关闭，随后仍由 uvicorn 带 SO_REUSEADDR 正式绑定，保留其对 TIME_WAIT
+    的容忍——不在正常重启路径上引入新的误报。
+    """
+    family = socket.AF_INET6 if (":" in host and not host.startswith(("0.0.0.0", "127."))) else socket.AF_INET
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        probe.bind((host, port))
+    except OSError as exc:
+        return f"{host}:{port} ({exc.strerror or exc})"
+    finally:
+        probe.close()
+    return None
+
+
 async def _run_unified_transport(host: str, port: int) -> None:
     """在一个进程内并行运行 stdio MCP 与 FastAPI HTTP。
 
@@ -218,6 +269,20 @@ async def _run_unified_transport(host: str, port: int) -> None:
     ``/ingest`` 写入的数据可以立即被 stdio MCP 客户端读取。任一 transport
     结束都会有序停止另一个，避免 stdio EOF 后留下孤儿 HTTP 进程。
     """
+    conflict = _http_port_conflict(host, port)
+    if conflict:
+        # 显式失败而不是带着冲突继续。占用该端口的另一实例会收到浏览器 SDK 发往
+        # 该地址的全部 /ingest 上报，本实例的存储则一条都收不到——宿主在当前会话
+        # 里查到的永远是空现场，而这正是最难排查的一类问题。
+        # SystemExit 的文案走 stderr，不污染 stdio 协议流。
+        raise SystemExit(
+            f"[lujo-mcp] HTTP 端口被占用: {conflict}\n"
+            "该端口上已有另一个 Lujo 实例在提供采集服务，浏览器 SDK 的上报会全部"
+            "进入它的存储，本实例查不到任何运行现场。\n"
+            "处置：关闭另一个 Lujo 实例；或用 --http-port <n> 换一个端口"
+            "（同时把 SDK 的 endpoint 指过去）；只需 stdio 工具时加 --no-http。"
+        )
+
     # 延迟导入 HTTP app，保证默认纯 stdio 启动不引入 FastAPI 生命周期或
     # 额外副作用，也让 PyInstaller 的 stdio 启动路径保持向后兼容。
     from app.main import app
@@ -336,26 +401,71 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     ``CallToolResult(isError=True)``），而不是包装成含 error 字段的
     "成功"文本结果：宿主智能体依赖 isError 识别失败并重试。
     保持既有 JSON 载荷结构不变，仅修正外层失败标记。
+
+    FIX(R8): 入参校验与轻/重双池门控改与 HTTP 侧共用同一实现
+    （``app.mcp.protocol.server``），此前 stdio 两者皆无：
+
+    1. 官方 SDK 只对出现在 tools/list 里的工具做 jsonschema 校验，而
+       ``agent_visible=False`` 的 SDK 上报类工具刻意不进清单 → stdio 上
+       完全绕过校验（HTTP 侧则一律先校验）。缺参/类型错入参会直接落到
+       handler 变成 TOOL_INTERNAL，宿主拿不到可自纠错的参数级错误。
+    2. stdio 不做槽位门控 → 重型工具（verify_ui 等）可被无上限并发调用，
+       每次都拉起一个浏览器子进程；HTTP 侧同样入参只允许
+       ``tool_heavy_executor_workers`` 个并发。stdio 是 npm 默认传输，
+       这条路径的资源上限此前形同不存在。
+    3. stdio 不记 MCP 工具指标 → mcp_tool_* 指标只反映 HTTP 流量。
     """
     _tool_start = time.monotonic()
-    try:
-        tool = _tool_registry.get(name)
-        if tool is None:
-            raise ToolExecutionError(json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False))
-        result = await _run_registered_tool(name, tool, arguments)
-        if is_tool_failure_result(result):
-            raise ToolExecutionError(json.dumps(result, ensure_ascii=False, indent=2))
-    except asyncio.TimeoutError:
-        logger.warning("工具 %s 执行超时（>%ss），已中止", name, settings.tool_timeout_seconds)
+    tool = _tool_registry.get(name)
+    if tool is None:
+        record_mcp_tool_call(name, "error", 0.0)
+        raise ToolExecutionError(json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False))
+
+    validation_error = _validate_tool_arguments(tool, arguments)
+    if validation_error:
+        record_mcp_tool_call(name, "invalid_params", 0.0)
         raise ToolExecutionError(json.dumps(
-            {"error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。", "_timed_out": True},
+            {"error": validation_error, "error_code": "INVALID_PARAMS"},
             ensure_ascii=False,
         ))
-    except ToolExecutionError:
-        raise
-    except Exception as e:
-        logger.error(str(e), exc_info=True)
-        raise ToolExecutionError(json.dumps({"error": "Tool execution failed"}, ensure_ascii=False))
+
+    # 与 HTTP 侧同一套轻/重分池信号量：async 工具不需要线程池，仅取槽位门控。
+    _, slots, pool_type = _get_tool_executor_and_slots(name)
+    busy_timeout = settings.tool_busy_queue_timeout
+    wait_start = time.perf_counter()
+    if not await _acquire_slot_or_fastfail(slots, busy_timeout):
+        wait_sec = time.perf_counter() - wait_start
+        record_mcp_tool_busy(name, pool_type, wait_sec)
+        record_mcp_tool_call(name, "busy", wait_sec)
+        logger.warning("工具 %s (%s池) 执行队列已满，已拒绝执行", name, pool_type)
+        raise ToolExecutionError(json.dumps(
+            {"error": "工具执行队列已满，请稍后重试。", "error_code": "TOOL_BUSY", "_busy": True},
+            ensure_ascii=False,
+        ))
+    record_mcp_tool_wait(name, pool_type, time.perf_counter() - wait_start)
+
+    try:
+        try:
+            result = await _run_registered_tool(name, tool, arguments)
+            record_mcp_tool_call(name, "ok", time.monotonic() - _tool_start)
+        except asyncio.TimeoutError:
+            record_mcp_tool_call(name, "timeout", settings.tool_timeout_seconds)
+            logger.warning("工具 %s 执行超时（>%ss），已中止", name, settings.tool_timeout_seconds)
+            raise ToolExecutionError(json.dumps(
+                {"error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。", "_timed_out": True},
+                ensure_ascii=False,
+            ))
+        except ToolExecutionError:
+            raise
+        except Exception as e:
+            record_mcp_tool_call(name, "error", time.monotonic() - _tool_start)
+            logger.error(str(e), exc_info=True)
+            raise ToolExecutionError(json.dumps({"error": "Tool execution failed"}, ensure_ascii=False))
+    finally:
+        slots.release()
+
+    if tool_failure_predicate(tool)(result):
+        raise ToolExecutionError(json.dumps(result, ensure_ascii=False, indent=2))
 
     # Phase 3 D5：记录 Tool 响应耗时（仅日志，不修改协议响应、不打印敏感负载）
     _elapsed = time.monotonic() - _tool_start

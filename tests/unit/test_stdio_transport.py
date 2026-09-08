@@ -146,10 +146,68 @@ def test_runtime_args_support_unified_http_without_breaking_stdio():
         mcp_server._parse_runtime_args(["--http-port", "70000"])
 
 
+def _free_port() -> int:
+    """取一个当前空闲的回环端口（统一模式启动前会真做端口归属探测）。"""
+    import socket as _socket
+
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.asyncio
+async def test_unified_transport_refuses_port_owned_by_another_instance(monkeypatch):
+    """回归（R8）：HTTP 端口冲突要在产生任何副作用之前显式失败。
+
+    不带守卫时冲突同样会失败（实测 Windows/POSIX 均为 10048），但失败发生在
+    ``from app.main import app`` 之后 —— FastAPI 应用已导入、repair queue 已
+    启动、知识库种子已加载，然后才由 uvicorn 甩出一行原始 bind 错误再走完整
+    优雅关闭。对宿主来说表现为「MCP 服务起来又静默退出，原因藏在 stderr 末尾」。
+    现在提前失败：无副作用、带端口号、给出可执行的下一步。
+    """
+    import socket as _socket
+
+    import app.mcp_server as mcp_server
+
+    stdio_started = []
+
+    async def _fake_stdio():
+        stdio_started.append(1)
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(mcp_server, "_run_stdio_transport", _fake_stdio)
+
+    occupied = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    occupied.bind(("127.0.0.1", 0))
+    occupied.listen(1)
+    port = occupied.getsockname()[1]
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            await asyncio.wait_for(
+                mcp_server._run_unified_transport("127.0.0.1", port), timeout=5
+            )
+        message = str(excinfo.value)
+        assert "端口被占用" in message
+        assert f"127.0.0.1:{port}" in message
+        assert "--http-port" in message          # 给出可操作的下一步
+        assert stdio_started == []               # 冲突在启动 HTTP app 前就被拦下
+    finally:
+        occupied.close()
+
+
+def test_http_port_conflict_helper_ignores_free_port():
+    """空闲端口不得误报冲突，否则统一模式会被守卫自己锁死。"""
+    import app.mcp_server as mcp_server
+
+    assert mcp_server._http_port_conflict("127.0.0.1", _free_port()) is None
+
+
 @pytest.mark.asyncio
 async def test_unified_transport_stops_http_after_stdio_eof(monkeypatch):
     """stdio EOF 必须通知 HTTP 优雅退出，不能留下后台监听任务。"""
     import app.mcp_server as mcp_server
+
+    port = _free_port()
 
     fake_main = types.ModuleType("app.main")
     fake_main.app = object()
@@ -184,7 +242,7 @@ async def test_unified_transport_stops_http_after_stdio_eof(monkeypatch):
 
     monkeypatch.setattr(mcp_server, "_run_stdio_transport", fake_stdio)
     await asyncio.wait_for(
-        mcp_server._run_unified_transport("127.0.0.1", 8123), timeout=2
+        mcp_server._run_unified_transport("127.0.0.1", port), timeout=2
     )
 
     assert FakeServer.instances[-1].served is True
