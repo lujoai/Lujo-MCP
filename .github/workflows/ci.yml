@@ -44,39 +44,83 @@ jobs:
       - name: Run unit tests
         run: pytest tests/unit -q --tb=short --junitxml=test-results.xml
 
+      # 全 skip 假绿守卫：内联 heredoc 已抽出为 scripts/check_junit_skip_guard.py，
+      # 与下方 integration / e2e 两个测试 job 复用同一实现（v0.7.6 起）。
       - name: Print skip summary (guard against all-skip false-green)
         if: always()
+        run: python scripts/check_junit_skip_guard.py test-results.xml
+
+  # ── 集成测试门禁（v0.7.6 后补）───────────────────────────────────────────
+  # 历史：CI 只跑 tests/unit，"integration 红而 CI 绿"的回归已发生过两次
+  # （verify_ui 失败标记、redaction 字符串归一，曾在 f221d6d 上红两天无人知晓）。
+  # tests/integration/conftest.py 默认强制 memory 后端，CI 无需真实
+  # PostgreSQL/Redis/Qdrant；依赖真库的 pg 标记用例按自身 _require_pg 守卫
+  # 自动 skip —— 允许部分 skip，全 skip 由守卫判红。
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements-locked.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run integration tests
+        run: pytest tests/integration -q -p no:cacheprovider --junitxml=integration-results.xml
+
+      - name: Print skip summary (guard against all-skip false-green)
+        if: always()
+        run: python scripts/check_junit_skip_guard.py integration-results.xml
+
+  # ── SDK Playwright e2e 门禁（v0.7.6 起进 CI）────────────────────────────
+  # 真 Chromium 全链路：SDK 加载 → 埋点上报 → /ingest 入库。此前 CI 不跑 e2e，
+  # 由 sdk-js-smoke 顶替；现补真实浏览器链路，sdk-js-smoke 保留为秒级快反馈。
+  # conftest（tests/e2e）自起 uvicorn(127.0.0.1:8000) 并强制 memory 后端，
+  # 无外部服务依赖；LLM 未配置的知识库用例自行 skip（1 条，不触发全 skip 守卫）。
+  # playwright 与本地验证环境 pin 一致（升级时先本地复跑 tests/e2e 全绿再动）；
+  # --with-deps 一并安装 Ubuntu 系统库，Chromium 下载约 150MB（接受该耗时）。
+  e2e-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements-locked.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # e2e 专属依赖不进 requirements-dev.txt（其余 job 用不到），在此显式安装。
+      - name: Install Playwright + Chromium
         run: |
-          python - <<'EOF'
-          import sys
-          import xml.etree.ElementTree as ET
+          pip install "playwright==1.61.0"
+          playwright install --with-deps chromium
 
-          try:
-              root = ET.parse("test-results.xml").getroot()
-          except FileNotFoundError:
-              print("::error::test-results.xml not found, cannot compute skip summary")
-              sys.exit(1)
+      - name: Run e2e tests
+        run: pytest tests/e2e -q -p no:cacheprovider --junitxml=e2e-results.xml
 
-          suites = root.findall(".//testsuite") if root.tag == "testsuites" else [root]
-          totals = {"tests": 0, "skipped": 0, "failures": 0, "errors": 0}
-          for s in suites:
-              for k in totals:
-                  totals[k] += int(s.get(k, 0))
-
-          passed = totals["tests"] - totals["skipped"] - totals["failures"] - totals["errors"]
-          print(f"::notice::passed={passed}, skipped={totals['skipped']}, "
-                f"failures={totals['failures']}, errors={totals['errors']}")
-
-          # 全 skip 假绿：没有任何通过、没有任何失败/错误、却存在被跳过的用例
-          if passed == 0 and totals["failures"] == 0 and totals["errors"] == 0 and totals["skipped"] > 0:
-              print("::error::All tests were skipped — possible false-green! "
-                    "请检查是否缺少依赖/环境导致用例整体被跳过。")
-              sys.exit(1)
-          EOF
+      - name: Print skip summary (guard against all-skip false-green)
+        if: always()
+        run: python scripts/check_junit_skip_guard.py e2e-results.xml
 
   # SDK JS 核心契约 smoke（TST-3）：Node 无浏览器加载 ai-debug.js，守护
   # 公开 API 面 / V5 传输配置 / _getPublicConfig 不含 apiKey 等契约。
-  # 防止 SDK 演进（如闭包化配置）后 e2e 接口再次失联（CI 不跑 Playwright e2e）。
+  # 防止 SDK 演进（如闭包化配置）后 e2e 接口再次失联（Playwright e2e 已由
+  # e2e-tests job 覆盖，本 job 是秒级快反馈的第一道契约防线）。
   sdk-js-smoke:
     runs-on: ubuntu-latest
     steps:
