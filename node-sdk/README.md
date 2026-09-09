@@ -11,6 +11,7 @@ const { createClient } = require("@lujoai/lujo-mcp-node-sdk");
 const client = createClient({
   endpoint: "http://127.0.0.1:8000",
   apiKey: process.env.LUJO_MCP_API_KEY,
+  release: "orders-service@1.4.0",
 });
 
 client.reportError(new Error("database unavailable"), { operation: "read" });

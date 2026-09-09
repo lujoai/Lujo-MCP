@@ -1,13 +1,13 @@
 name: Release npm
 
-# 触发：手动运行 + 打 tag（如 v0.7.6）
+# 触发：手动运行 + 打 tag（如 v0.7.9）
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号（如 0.7.8）"
+        description: "发布版本号（如 0.7.9）"
         required: true
-        default: "0.7.8"
+        default: "0.7.9"
   push:
     tags:
       - "v*"
@@ -167,6 +167,7 @@ jobs:
           versions = {"app/__init__.py": m.group(1) if m else "<not found>"}
           manifest_paths = [
               "browser-sdk/package.json",
+              "node-sdk/package.json",
               "npm/packages/lujo-mcp/package.json",
               "npm/packages/lujo-mcp-win32-x64/package.json",
               "npm/packages/lujo-mcp-linux-x64/package.json",
@@ -178,6 +179,13 @@ jobs:
 
           mismatches = {path: value for path, value in versions.items() if value != release_ver}
           meta = json.load(open("npm/packages/lujo-mcp/package.json", encoding="utf-8"))
+          node_sdk = json.load(open("node-sdk/package.json", encoding="utf-8"))
+          if node_sdk.get("name") != "@lujoai/lujo-mcp-node-sdk":
+              print(
+                  "::error::node-sdk/package.json must define name "
+                  "@lujoai/lujo-mcp-node-sdk"
+              )
+              sys.exit(1)
           optional = meta.get("optionalDependencies") or {}
           optional_mismatches = {
               name: value for name, value in optional.items()
@@ -192,6 +200,86 @@ jobs:
               sys.exit(1)
           print(f"Version consistency OK: {release_ver} ({len(versions)} manifests)")
           EOF
+
+      # Node SDK 发布前门禁：先跑仓库测试，再从 packed tarball 安装到空目录。
+      # CJS/ESM 根入口和 close() 都在真实安装结果上检查；node-sdk 缺失或契约
+      # 不完整时直接失败，不允许发布流水线静默跳过。
+      - name: Install Node SDK dependencies
+        working-directory: node-sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts --no-audit --no-fund
+          else
+            npm install --ignore-scripts --no-audit --no-fund
+          fi
+
+      - name: Run Node SDK tests
+        run: npm test --prefix node-sdk
+
+      - name: Pack and clean-install Node SDK
+        shell: bash
+        env:
+          SDK_PACKAGE_NAME: "@lujoai/lujo-mcp-node-sdk"
+        run: |
+          set -euo pipefail
+          pack_dir="$(mktemp -d)"
+          npm pack --silent --pack-destination "$pack_dir" "$GITHUB_WORKSPACE/node-sdk"
+          tarball="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          test -n "$tarball"
+
+          smoke_dir="$(mktemp -d)"
+          cd "$smoke_dir"
+          npm init -y >/dev/null 2>&1
+          npm install --ignore-scripts --no-audit --no-fund "$tarball"
+
+          node - <<'NODE'
+          const assert = require("node:assert/strict");
+          const sdk = require(process.env.SDK_PACKAGE_NAME);
+          assert.equal(typeof sdk.createClient, "function", "CJS root export createClient");
+          const client = sdk.createClient({ endpoint: "http://127.0.0.1:9" });
+          for (const method of ["reportError", "reportNetworkError", "flush", "close"]) {
+            assert.equal(typeof client[method], "function", `CJS client.${method}`);
+          }
+          client.close().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
+
+          node --input-type=module - <<'NODE'
+          import assert from "node:assert/strict";
+          const sdk = await import(process.env.SDK_PACKAGE_NAME);
+          assert.equal(typeof sdk.createClient, "function", "ESM root export createClient");
+          const client = sdk.createClient({ endpoint: "http://127.0.0.1:9" });
+          for (const method of ["reportError", "reportNetworkError", "flush", "close"]) {
+            assert.equal(typeof client[method], "function", `ESM client.${method}`);
+          }
+          await client.close();
+          NODE
+
+      - name: Publish Node SDK
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="@lujoai/lujo-mcp-node-sdk"
+          ver="$RELEASE_VERSION"
+          probe="$RUNNER_TEMP/lujo-node-sdk-npm-probe.txt"
+          if npm view "$name@$ver" version --json >"$probe" 2>&1; then
+            echo "$name@$ver already exists; skipping"
+          else
+            if ! grep -q "E404" "$probe"; then
+              cat "$probe"
+              echo "::error::Unable to determine whether $name@$ver is already published"
+              exit 1
+            fi
+            echo "Publishing $name@$ver"
+            npm publish node-sdk --access public --tag latest
+          fi
 
       - name: Generate platform package skeletons
         env:

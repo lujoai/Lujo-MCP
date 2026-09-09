@@ -277,6 +277,7 @@ class NodeSdkClient {
     if (typeof apiKey !== "string") throw new TypeError("apiKey must be a string");
     this._apiKey = apiKey;
     this._source = typeof options.source === "string" && options.source ? options.source : "node-sdk";
+    this._release = this._normalizeId(options.release);
     this._batchSize = integerOption(options.batchSize, DEFAULT_BATCH_SIZE, 1, MAX_BATCH_SIZE);
     this._batchIntervalMs = integerOption(
       options.batchIntervalMs ?? options.batchInterval,
@@ -369,7 +370,16 @@ class NodeSdkClient {
       trace_id: this._traceId,
       session_id: this._sessionId,
     };
-    if (typeof extra !== "undefined") payload.extra = extra;
+    if (this._release) {
+      if (extra && typeof extra === "object" && !Array.isArray(extra)) {
+        payload.extra = { ...extra, release: this._release };
+      } else {
+        payload.extra = { release: this._release };
+        if (typeof extra !== "undefined") payload.extra.context = extra;
+      }
+    } else if (typeof extra !== "undefined") {
+      payload.extra = extra;
+    }
     this._enqueue("/ingest/error", payload);
     return {
       trace_id: this._traceId,
@@ -402,6 +412,9 @@ class NodeSdkClient {
       (result) => {
         this._lastFlushResult = result;
         this._flushPromise = null;
+        if (this._queue.length > 0 && !this._closing && !this._closed) {
+          this._startAutomaticFlush();
+        }
         return result;
       },
       (error) => {
@@ -416,12 +429,12 @@ class NodeSdkClient {
   async _flushQueue() {
     const result = { sent: 0, failed: 0, batches: 0, attempts: 0 };
     while (this._queue.length > 0) {
-      const batch = this._queue.splice(0, MAX_BATCH_SIZE);
+      const batch = this._queue.splice(0, Math.min(this._batchSize, MAX_BATCH_SIZE));
       const outcome = await this._sendBatch(batch);
       result.batches += 1;
       result.attempts += outcome.attempts;
-      if (outcome.ok) result.sent += batch.length;
-      else result.failed += batch.length;
+      result.sent += outcome.sent;
+      result.failed += outcome.failed;
     }
     return result;
   }
@@ -432,17 +445,26 @@ class NodeSdkClient {
 
     while (true) {
       attempt += 1;
-      let status = null;
+      let response = null;
       try {
-        status = await this._sendRequest(body);
+        response = await this._sendRequest(body);
       } catch (_) {
-        if (attempt > this._maxRetries) return { ok: false, attempts: attempt };
+        if (attempt > this._maxRetries) {
+          return { sent: 0, failed: batch.length, attempts: attempt };
+        }
       }
 
-      if (status !== null) {
-        if (status >= 200 && status < 300) return { ok: true, attempts: attempt };
+      if (response !== null) {
+        const { status, payload } = response;
+        if (status >= 200 && status < 300) {
+          if (Array.isArray(payload?.results) && payload.results.length === batch.length) {
+            const sent = payload.results.filter((item) => item?.ok === true).length;
+            return { sent, failed: batch.length - sent, attempts: attempt, status };
+          }
+          return { sent: batch.length, failed: 0, attempts: attempt, status };
+        }
         if (!isRetryableStatus(status) || attempt > this._maxRetries) {
-          return { ok: false, attempts: attempt, status };
+          return { sent: 0, failed: batch.length, attempts: attempt, status };
         }
       }
 
@@ -473,8 +495,23 @@ class NodeSdkClient {
       if (!response || typeof response.status !== "number") {
         throw new TypeError("fetch returned an invalid response");
       }
-      if (typeof response.text === "function") await response.text();
-      return response.status;
+      let payload = null;
+      if (typeof response.text === "function") {
+        try {
+          const raw = await response.text();
+          if (raw) payload = JSON.parse(raw);
+        } catch (_) {
+          // Headers prove the server accepted or rejected the request. A body
+          // read/parse failure must not retry a non-idempotent accepted batch.
+        }
+      } else if (response.body && typeof response.body.cancel === "function") {
+        try {
+          await response.body.cancel();
+        } catch (_) {
+          // Best-effort cleanup only; status remains authoritative.
+        }
+      }
+      return { status: response.status, payload };
     } finally {
       if (timeout !== null) clearTimeout(timeout);
     }

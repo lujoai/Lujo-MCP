@@ -1,7 +1,7 @@
 # Lujo-MCP API 参考手册
 
-> 版本：v0.7.1（2026-08-31）
-> 本文档覆盖 Lujo-MCP 对外暴露的两类接口：**REST API** 与 **MCP 工具**。
+> 当前发布版本：v0.7.8（2026-09-09）。Node SDK 部分对应 v0.7.9 Unreleased 接线，正式 release-prepare 前仓库版本仍为 0.7.8。
+> 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
 ---
@@ -20,7 +20,8 @@
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
-- [4. 常用字段速查](#4-常用字段速查)
+- [4. Node SDK（v0.7.9 Unreleased）](#4-node-sdkv079-unreleased)
+- [5. 常用字段速查](#5-常用字段速查)
 
 ---
 
@@ -114,7 +115,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ### 2.2 数据接入 `/ingest`
 
-> 供 Browser SDK / 外部服务 / 非 Python 运行时直接上报原始数据，入库前统一脱敏。
+> 供 Browser SDK、Node SDK、外部服务和其他非 Python 运行时直接上报原始数据，入库前统一脱敏。Browser SDK 负责浏览器自动采集；Node SDK 只提供服务端显式上报，不依赖 DOM 或浏览器全局对象。
 
 | 方法 | 路径 | 角色 | 说明 |
 |------|------|------|------|
@@ -288,7 +289,50 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ---
 
-## 4. 常用字段速查
+## 4. Node SDK（v0.7.9 Unreleased）
+
+包名固定为 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。当前发布版本仍为 v0.7.8；Node SDK 在正式 release-prepare 时才升至 v0.7.9。
+
+```bash
+npm install @lujoai/lujo-mcp-node-sdk
+```
+
+```js
+import { createClient } from "@lujoai/lujo-mcp-node-sdk";
+
+const client = createClient({
+  endpoint: "http://127.0.0.1:8000",
+  apiKey: process.env.LUJO_MCP_API_KEY,
+  release: "orders-service@1.4.0",
+});
+
+try {
+  client.reportError(new Error("order lookup failed"), { operation: "getOrder" });
+  client.reportNetworkError({
+    method: "GET",
+    url: "https://api.example.com/orders/42",
+    status: 503,
+  });
+  await client.flush();
+} finally {
+  await client.close();
+}
+```
+
+| API | 语义 |
+|-----|------|
+| `createClient({ endpoint?, apiKey?, release?, ... })` | 创建进程内客户端。`endpoint` 使用 Lujo-MCP 服务根地址，省略时默认为 `http://127.0.0.1:8000`；`apiKey` 通过 `X-API-Key` 或等价鉴权请求头发送。 |
+| `reportError(error, extra?)` | 显式上报错误；事件先进入内存批量队列，调用返回不代表已经发送完成。 |
+| `reportNetworkError(record)` | 显式上报网络失败记录；可包含 `method`、`url`、`status_code`、`duration_ms` 等字段。 |
+| `flush()` | 发送当前队列并等待结果，返回 `sent`、`failed`、`batches`、`attempts` 计数；单批不超过 100 条，429/5xx 按有限退避策略重试，永久 4xx 不无限重试。 |
+| `close()` | 退出前完成最后一次 flush，停止后台定时器并释放资源；幂等，关闭后不要继续调用上报 API。 |
+| `getSessionId()` / `getTraceId()` / `setTraceId(id)` | 读取或设置关联标识，便于把同一业务操作的错误与网络现场串起来。 |
+
+可选传输参数包括 `batchSize`（1–100）、`batchIntervalMs`、`maxRetries`、`retryDelayMs`、`maxRetryDelayMs` 和 `requestTimeoutMs`；测试或自定义传输时可注入 `fetch` 实现。
+
+Node SDK 在发送前递归脱敏错误、网络记录和 `extra`；默认敏感键包括 `password`、`token`、`secret`、`authorization`、`cookie`、`api_key` 和 `private_key`。它不自动拦截 `fetch`、`http`、`undici`、`axios`，也不提供浏览器 UI/console/XHR 采集；这些能力由 Browser SDK 提供。详见 [SDK_GUIDE.md](./SDK_GUIDE.md)。
+
+## 5. 常用字段速查
 
 | 字段 | 含义 |
 |------|------|

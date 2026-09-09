@@ -90,6 +90,7 @@ test("reports error frames and network records through a real local HTTP server"
   const client = cjsApi.createClient({
     endpoint,
     apiKey: "local-api-key",
+    release: "orders-service@1.4.0",
     batchIntervalMs: 60000,
   });
 
@@ -149,6 +150,7 @@ test("reports error frames and network records through a real local HTTP server"
     assert.equal(events[0].payload.extra.authorization, "***REDACTED***");
     assert.equal(events[0].payload.extra.nested.token, "***REDACTED***");
     assert.equal(events[0].payload.extra.nested.password, "***REDACTED***");
+    assert.equal(events[0].payload.extra.release, "orders-service@1.4.0");
     assert.doesNotMatch(
       JSON.stringify(events[0].payload),
       /secret-auth|secret-token|another-secret|serialized-secret/,
@@ -160,6 +162,75 @@ test("reports error frames and network records through a real local HTTP server"
     assert.equal(events[1].payload.record.headers.Cookie, "***REDACTED***");
     assert.equal(events[1].payload.record.headers["X-API-Key"], "***REDACTED***");
     assert.doesNotMatch(JSON.stringify(events[1].payload), /query-secret|secret-cookie|secret-key/);
+  } finally {
+    await client.close();
+    await closeServer(server);
+  }
+});
+
+test("honors a configured batch size below the server maximum", async () => {
+  const batchLengths = [];
+  const { server, endpoint } = await startServer(async ({ response, body }) => {
+    batchLengths.push(body.events.length);
+    respond(response, 200, { count: body.events.length });
+  });
+  const client = cjsApi.createClient({ endpoint, batchSize: 2, batchIntervalMs: 60000 });
+
+  try {
+    for (let index = 0; index < 5; index += 1) {
+      client.reportError(new Error(`event-${index}`));
+    }
+    assert.deepEqual(await client.flush(), { sent: 5, failed: 0, batches: 3, attempts: 3 });
+    assert.deepEqual(batchLengths, [2, 2, 1]);
+  } finally {
+    await client.close();
+    await closeServer(server);
+  }
+});
+
+test("does not retry a persisted response when only body cleanup fails", async () => {
+  let requestCount = 0;
+  const client = cjsApi.createClient({
+    endpoint: "http://127.0.0.1:1",
+    maxRetries: 3,
+    batchIntervalMs: 60000,
+    fetch: async () => {
+      requestCount += 1;
+      return {
+        status: 202,
+        body: { cancel: async () => { throw new Error("cleanup failed"); } },
+      };
+    },
+  });
+
+  try {
+    client.reportError(new Error("accepted once"));
+    assert.deepEqual(await client.flush(), { sent: 1, failed: 0, batches: 1, attempts: 1 });
+    assert.equal(requestCount, 1);
+  } finally {
+    await client.close();
+  }
+});
+
+test("reports per-event batch failures without retrying successful events", async () => {
+  let requestCount = 0;
+  const { server, endpoint } = await startServer(async ({ response, body }) => {
+    requestCount += 1;
+    respond(response, 200, {
+      count: body.events.length,
+      results: [
+        { path: body.events[0].path, ok: true, result: { saved: true } },
+        { path: body.events[1].path, ok: false, error: "Invalid request payload" },
+      ],
+    });
+  });
+  const client = cjsApi.createClient({ endpoint, batchIntervalMs: 60000, maxRetries: 3 });
+
+  try {
+    client.reportError(new Error("accepted"));
+    client.reportNetworkError({ method: "GET", url: "not-a-url" });
+    assert.deepEqual(await client.flush(), { sent: 1, failed: 1, batches: 1, attempts: 1 });
+    assert.equal(requestCount, 1, "partial batch failures must not duplicate successful events");
   } finally {
     await client.close();
     await closeServer(server);

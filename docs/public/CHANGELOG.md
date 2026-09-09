@@ -7,7 +7,13 @@
 
 ## [Unreleased]
 
-- 无（v0.7.8 准备中的变更已整理到下方版本段）。
+### 新增
+
+- **Node SDK（预发布接线）**：新增 `@lujoai/lujo-mcp-node-sdk` 的 CI、发布和文档接线，覆盖 Node 18/20/22、CJS/ESM 根入口、错误与网络上报、批量发送、脱敏、重试、`flush()` 和 `close()`。当前仓库发布版本仍为 v0.7.8，Node SDK 将在正式 release-prepare 时随 v0.7.9 一起发布。
+
+### 文档
+
+- SDK 文档补充 Node SDK 与 Browser SDK 的运行时边界、最小用法、支持版本和发布验证要求；Browser SDK 的 v0.5.0 陈旧版本标记已更新。
 
 ## [0.7.8] - 2026-09-09
 

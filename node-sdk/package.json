@@ -3,6 +3,22 @@
   "version": "0.7.8",
   "description": "Node.js SDK for reporting errors and network failures to lujo-mcp",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lujoai/Lujo-MCP.git",
+    "directory": "node-sdk"
+  },
+  "homepage": "https://github.com/lujoai/Lujo-MCP/tree/main/node-sdk",
+  "bugs": {
+    "url": "https://github.com/lujoai/Lujo-MCP/issues"
+  },
+  "keywords": [
+    "debugging",
+    "mcp",
+    "nodejs",
+    "observability",
+    "error-reporting"
+  ],
   "engines": {
     "node": ">=18"
   },
@@ -16,6 +32,7 @@
     }
   },
   "files": [
+    "LICENSE",
     "client.cjs",
     "index.cjs",
     "index.mjs",
@@ -23,5 +40,8 @@
   ],
   "scripts": {
     "test": "node --test test/node-sdk.test.js"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

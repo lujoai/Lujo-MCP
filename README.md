@@ -176,6 +176,42 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
+### Node 服务接入：使用 Node SDK（v0.7.9 Unreleased）
+
+服务端 Node.js 使用独立包 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18/20/22 和 CJS/ESM。它只做显式错误与网络上报，不安装浏览器的 DOM、XHR/fetch、console 或 `localStorage` 钩子；浏览器页面继续使用上面的 Browser SDK。
+
+```bash
+npm install @lujoai/lujo-mcp-node-sdk
+```
+
+```js
+const { createClient } = require("@lujoai/lujo-mcp-node-sdk");
+
+const lujo = createClient({
+  endpoint: "http://127.0.0.1:8000",
+  apiKey: process.env.LUJO_MCP_API_KEY,
+  release: "orders-service@1.4.0",
+});
+
+async function main() {
+  try {
+    await handleRequest();
+  } catch (error) {
+    lujo.reportError(error, { operation: "handleRequest" });
+    throw error;
+  } finally {
+    await lujo.close();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+事件先进入内存批量队列；`flush()` 等待发送和有限重试完成，单批不超过 100 条，429/5xx 会退避重试，永久 4xx 不会无限重试。应用退出或 worker 重启前应 `await lujo.close()`，它会完成最后一次 flush、停止定时器并释放资源。Node SDK 与 Browser SDK 的完整 API、脱敏和边界说明见 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md)。
+
 ### 第 2 步：触发一个运行时异常
 
 比如在前端控制台或代码中执行一段错误逻辑：
@@ -365,7 +401,7 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 |---|---|
 | 📖 [DEMO.md](./docs/public/DEMO.md) | 端到端实战演示（以 React 登录 Bug 为例的完整调试链路） |
 | 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | MCP 工具详细入参、返回值与 REST 端点参考 |
-| 💻 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | Browser SDK 采集手册（XHR/Fetch 拦截、脱敏、UI 静默失败检测） |
+| 💻 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | Browser SDK 与 Node SDK 使用手册（运行时边界、上报、脱敏、重试、批量与关闭语义） |
 | 🧠 [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md) | 调试经验知识库：指纹匹配、跨会话沉淀与置信度进化机制 |
 | 🏗️ [DESIGN.md](./docs/public/DESIGN.md) | 核心六层系统架构与数据流转设计 |
 | 📝 [RELEASE_NOTES.md](./docs/public/RELEASE_NOTES.md) | 版本演进历史与详细更新日志 |

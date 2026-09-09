@@ -160,3 +160,95 @@ jobs:
       - name: Run npm launcher contract tests
         run: node --test npm/test/launcher.test.js npm/test/platform-package-gen.test.js
 
+  # Node SDK 运行时/模块门禁：每个 Node 版本只跑一次完整测试，随后在同一个
+  # packed fixture 中分别验证 CJS 与 ESM 根入口，避免把昂贵测试重复跑六遍。
+  # node-sdk 缺失、包名错误、test script 缺失或任一根入口不可导入都会直接失败，
+  # 不允许用条件 skip 把未接入的 SDK 伪装成绿色。
+  node-sdk:
+    name: Node SDK / Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Validate Node SDK manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f node-sdk/package.json
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const pkg = JSON.parse(fs.readFileSync("node-sdk/package.json", "utf8"));
+          if (pkg.name !== "@lujoai/lujo-mcp-node-sdk") {
+            throw new Error(`Unexpected package name: ${pkg.name}`);
+          }
+          if (typeof pkg.scripts?.test !== "string" || pkg.scripts.test.trim() === "") {
+            throw new Error("node-sdk/package.json must define a test script");
+          }
+          if (typeof pkg.engines?.node !== "string" || !pkg.engines.node.includes(">=18")) {
+            throw new Error("Node SDK must declare Node >=18 support");
+          }
+          NODE
+
+      - name: Install Node SDK dependencies
+        working-directory: node-sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts --no-audit --no-fund
+          else
+            npm install --ignore-scripts --no-audit --no-fund
+          fi
+
+      - name: Run Node SDK test suite
+        run: npm test --prefix node-sdk
+
+      - name: Pack and install Node SDK smoke fixture
+        shell: bash
+        env:
+          SDK_PACKAGE_NAME: "@lujoai/lujo-mcp-node-sdk"
+        run: |
+          set -euo pipefail
+          pack_dir="$(mktemp -d)"
+          npm pack --silent --pack-destination "$pack_dir" "$GITHUB_WORKSPACE/node-sdk"
+          tarball="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          test -n "$tarball"
+
+          smoke_dir="$(mktemp -d)"
+          cd "$smoke_dir"
+          npm init -y >/dev/null 2>&1
+          npm install --ignore-scripts --no-audit --no-fund "$tarball"
+
+          node - <<'NODE'
+          const assert = require("node:assert/strict");
+          const sdk = require(process.env.SDK_PACKAGE_NAME);
+          assert.equal(typeof sdk.createClient, "function", "CJS root export createClient");
+          const client = sdk.createClient({ endpoint: "http://127.0.0.1:9" });
+          for (const method of ["reportError", "reportNetworkError", "flush", "close"]) {
+            assert.equal(typeof client[method], "function", `CJS client.${method}`);
+          }
+          client.close().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
+
+          node --input-type=module - <<'NODE'
+          import assert from "node:assert/strict";
+          const sdk = await import(process.env.SDK_PACKAGE_NAME);
+          assert.equal(typeof sdk.createClient, "function", "ESM root export createClient");
+          const client = sdk.createClient({ endpoint: "http://127.0.0.1:9" });
+          for (const method of ["reportError", "reportNetworkError", "flush", "close"]) {
+            assert.equal(typeof client[method], "function", `ESM client.${method}`);
+          }
+          await client.close();
+          NODE

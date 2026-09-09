@@ -1,13 +1,15 @@
-# Lujo-MCP 浏览器 SDK 使用手册
+# Lujo-MCP SDK 使用手册
 
-> SDK 版本：v0.5.0（`browser-sdk/ai-debug.js`，UMD/CJS/ESM 三格式）
-> 文档版本：v0.7.1（2026-08-31）
-> 概括：前端自动采集（异常 / 网络 / UI / 控制台 / 静默失败）并以批量、可压缩、节流、失败降级的方式上报到 Lujo-MCP 服务端，让 AI 拿到真实运行现场。
+> 当前发布版本：v0.7.8（2026-09-09）。本文同时记录 v0.7.9 Unreleased 的 Node SDK 接线；正式 release-prepare 前仓库版本仍为 0.7.8。
+> Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
+> 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 
 ---
 
 ## 目录
 
+- [SDK 选择与边界](#sdk-选择与边界)
+- [Node SDK（服务端 Node.js）](#node-sdk服务端-nodejs)
 - [1. 快速接入](#1-快速接入)
 - [2. 初始化配置项](#2-初始化配置项)
 - [3. 公开 API](#3-公开-api)
@@ -18,6 +20,94 @@
 - [8. 鉴权与 beacon 令牌](#8-鉴权与-beacon-令牌)
 
 ---
+
+## SDK 选择与边界
+
+| SDK | 适用运行时 | 采集方式 | 发布包 |
+|-----|------------|----------|--------|
+| Browser SDK | 浏览器页面 | 自动捕获 `window` 异常、XHR/fetch、UI、console 和静默失败 | 随 `@lujoai/lujo-mcp` 分发的 `browser-sdk/ai-debug.js` |
+| Node SDK | Node.js 服务端（Node 18/20/22） | 应用代码显式调用错误/网络上报 API | `@lujoai/lujo-mcp-node-sdk` |
+
+Browser SDK 依赖 DOM、浏览器网络对象、`localStorage` 和 `sendBeacon`，不要在 Node 服务进程中调用它的 `init()`。Node SDK 不安装浏览器钩子，不读取 DOM、XHR、`localStorage` 或 `sendBeacon`；它通过显式 API 将服务端异常和网络记录送到 `/ingest`。两者可以把 `session_id`、`trace_id` 和 `release` 设为同一业务值，供服务端关联现场。
+
+## Node SDK（服务端 Node.js）
+
+Node SDK 面向 Node.js 服务端的主动上报，当前接线目标为 v0.7.9，支持 Node 18、20、22，并提供 CommonJS 和 ESM 两种包根入口。当前仓库发布版本仍是 v0.7.8，正式发布前不要把示例中的版本号写入其他 manifest。
+
+安装独立包：
+
+```bash
+npm install @lujoai/lujo-mcp-node-sdk
+```
+
+CommonJS：
+
+```js
+const { createClient } = require("@lujoai/lujo-mcp-node-sdk");
+
+const lujo = createClient({
+  endpoint: "http://127.0.0.1:8000",
+  apiKey: process.env.LUJO_MCP_API_KEY,
+  release: "orders-service@1.4.0",
+});
+
+async function main() {
+  try {
+    await handleRequest();
+  } catch (error) {
+    lujo.reportError(error, { operation: "handleRequest" });
+    await lujo.flush();
+    throw error;
+  } finally {
+    await lujo.close();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+ESM：
+
+```js
+import { createClient } from "@lujoai/lujo-mcp-node-sdk";
+
+const lujo = createClient({
+  endpoint: "http://127.0.0.1:8000",
+  apiKey: process.env.LUJO_MCP_API_KEY,
+});
+
+lujo.reportNetworkError({
+  method: "GET",
+  url: "https://api.example.com/orders",
+  status_code: 503,
+  duration_ms: 420,
+});
+
+await lujo.flush();
+await lujo.close();
+```
+
+### Node SDK API 与传输语义
+
+| API | 语义 |
+|-----|------|
+| `createClient({ endpoint?, apiKey?, release?, ... })` | 创建一个进程内客户端；`endpoint` 是 Lujo-MCP 服务根地址，省略时使用 `http://127.0.0.1:8000`。`apiKey` 通过请求头发送，`release` 随错误现场透传。 |
+| `reportError(error, extra?)` | 将 `Error` 或可序列化错误加入错误队列；`extra` 用于补充业务上下文。调用本身不保证已经完成网络发送。 |
+| `reportNetworkError(record)` | 将一次网络失败记录加入网络事件队列；建议传 `method`、`url`、`status_code` 和 `duration_ms`。 |
+| `flush()` | 等待当前队列发送和有限重试完成，并返回 `sent`、`failed`、`batches`、`attempts` 计数；单批不超过服务端允许的 100 条事件，调用方应检查 `failed`。 |
+| `close()` | 应用退出或 worker 重启前调用；完成最后一次 flush、停止内部定时器并释放客户端资源。重复调用安全，关闭后不要继续提交事件。 |
+| `getSessionId()` / `getTraceId()` | 读取当前会话/追踪标识；`setTraceId(id)` 可把多个上报关联到同一业务操作。 |
+
+可选传输参数包括 `batchSize`（1–100）、`batchIntervalMs`、`maxRetries`、`retryDelayMs`、`maxRetryDelayMs` 和 `requestTimeoutMs`；客户端仍会把单批大小限制在 100 条以内。测试或自定义传输时可注入 `fetch` 实现。
+
+客户端在发送前递归脱敏错误、网络记录和 `extra` 中的敏感字段；默认覆盖 `password`、`token`、`secret`、`authorization`、`cookie`、`api_key`、`private_key` 等键。不要把密钥拼到 URL 或错误消息中，脱敏是最后一道保护而不是传递秘密的方式。
+
+传输失败按有限次数重试：429 和 5xx 属于临时错误，使用退避后重试；4xx 参数或鉴权错误不应无限重试。超过重试上限后，`flush()` 会报告发送失败，调用方可记录本地日志并决定是否继续抛出原始业务错误。SDK 不承诺离线持久化，进程退出前应显式 `await close()`。
+
+Node SDK 不会自动拦截 `fetch`、`http`、`undici` 或 `axios`。需要透明网络采集、页面 DOM 变化和浏览器卸载兜底时，请使用 Browser SDK；需要服务端异常和网络失败时，请使用 Node SDK 的显式 API。
 
 ## 1. 快速接入
 
@@ -32,18 +122,19 @@
 
 > 服务端内置挂载路径为 `/ai-debug.js`（见 `app/main.py`），直接相对引入即可。
 
-### 方式二：ES module / CommonJS
+### 方式二：在浏览器构建工具中加载
 
 ```js
-// ES module
-import { init } from "./ai-debug.js";
-init({ endpoint: "http://localhost:8000" });
+// ai-debug.js 运行在浏览器上下文，并把 AiDebug 暴露到 globalThis
+import "./ai-debug.js";
+globalThis.AiDebug.init({ endpoint: "http://localhost:8000" });
 
-// CommonJS（Node 环境，含无浏览器契约测试）
+// CommonJS 仅适合浏览器打包/测试环境；不要在纯 Node 进程中调用 init()
 const AiDebug = require("./ai-debug.js");
+AiDebug.init({ endpoint: "http://localhost:8000" });
 ```
 
-初始化后 SDK 自动安装采集钩子（错误 / 网络 / XHR / UI / 静默失败 / 控制台 / 页面卸载），无需手动调用。
+初始化后 Browser SDK 自动安装浏览器采集钩子（错误 / 网络 / XHR / UI / 静默失败 / 控制台 / 页面卸载），无需手动调用。Node 服务端请使用上面的 Node SDK 显式上报。
 
 ---
 
