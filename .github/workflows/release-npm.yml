@@ -278,7 +278,7 @@ jobs:
               exit 1
             fi
             echo "Publishing $name@$ver"
-            npm publish node-sdk --access public --tag latest
+            npm publish ./node-sdk --access public --tag latest
           fi
 
       - name: Generate platform package skeletons

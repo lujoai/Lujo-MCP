@@ -20,7 +20,7 @@
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
-- [4. Node SDK（v0.7.9 Unreleased）](#4-node-sdkv079-unreleased)
+- [4. Node SDK（v0.7.9 发布中）](#4-node-sdkv079-发布中)
 - [5. 常用字段速查](#5-常用字段速查)
 
 ---

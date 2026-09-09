@@ -32,8 +32,6 @@
 - 本地 unit：1621 项，1615 passed / 6 skipped / 0 failed；integration：120 项，79 passed / 41 skipped；e2e：11 项，10 passed / 1 skipped。
 - PG async：5 passed；PG sync：18 项，17 passed / 1 skipped；executor：3 passed；Node SDK：11 passed；`ruff check .`、文档链接检查和 `git diff --check` 通过。
 
-## [Unreleased]
-
 ## [0.7.8] - 2026-09-09
 
 > 主题「发布工程收口 + 使用面文档」：零新增工具、零 Breaking、零 schema 变更。修复平台包 `engines` 声明被发布流水线静默丢弃的问题，清理 CI 的 Node 20 弃用告警，并在 README 补齐多项目「端口即隔离」使用示例。

@@ -113,7 +113,7 @@ flush、停止定时器并释放资源。完整 API 和脱敏规则见
 5. **发布 Node SDK**（独立包，发布前必须通过测试和 clean-install smoke）：
    ```bash
    npm test --prefix node-sdk
-   npm publish node-sdk --access public
+   npm publish ./node-sdk --access public
    ```
 
 > 版本号需在 `package.json`（元包 + 3 平台包 + gen 脚本入参）之间保持一致，
