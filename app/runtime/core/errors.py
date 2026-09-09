@@ -74,11 +74,19 @@ _schedule_lock = threading.Lock()
 def _schedule_pg_upsert(record_data: dict) -> None:
     """异步调度 PG upsert，不阻塞 record() 主流程。
 
+    - 非 postgresql 后端直接快速返回，不产生节流记账开销。
     - 同 (fingerprint, session_id) 在节流窗口内只调度一次（重复错误聚合到内存层，
       PG 侧由 upsert 的 occurrence_count 逻辑收敛，不重复建线程）。
     - 有运行中的事件循环（FastAPI/uvicorn）：用 asyncio.to_thread / ensure_future 包装。
     - 无事件循环（同步上下文/异常钩子）：用守护线程。
     """
+    try:
+        from app.config import settings
+        if settings.storage_backend != "postgresql":
+            return
+    except Exception:
+        return
+
     fingerprint = str(record_data.get("fingerprint") or record_data.get("error_id") or "")
     session_id = str(record_data.get("session_id") or "_global")
     throttle_key = (fingerprint, session_id)
@@ -97,21 +105,30 @@ def _schedule_pg_upsert(record_data: dict) -> None:
         if len(_last_scheduled) > 10000:  # 防止异常种类无限增长
             _last_scheduled.clear()
 
-    try:
-        from app.config import settings
-        if settings.storage_backend != "postgresql":
+    if settings.pg_async_enabled:
+        # Phase 3.1: pg_async_enabled=True 时直接调度 asyncpg 协程入队
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 已知限制（CODE_REVIEW §2.2）：asyncpg 连接池绑定事件循环，无 running
+            # loop 的线程（如线程池中的 MCP 工具 handler）既不跨线程调度也不回落
+            # 同步写，只告警并跳过 PG 写入，内存态记录不受影响。
+            logger.warning(
+                "PG async 写入跳过：当前线程无运行中的事件循环，asyncpg 协程无法调度入队 "
+                "(fingerprint=%s, session_id=%s)",
+                fingerprint,
+                session_id,
+            )
             return
-        if settings.pg_async_enabled:
-            # Phase 3.1: pg_async_enabled=True 时直接调度 asyncpg 协程入队
-            try:
-                loop = asyncio.get_running_loop()
-                from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
-                asyncio.ensure_future(AsyncPGErrorStore().upsert_error(record_data), loop=loop)
-            except RuntimeError:
-                pass
-            return
-    except Exception:
-        logger.debug("检查 PG async 配置失败", exc_info=True)
+        try:
+            from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+            asyncio.ensure_future(AsyncPGErrorStore().upsert_error(record_data), loop=loop)
+        except Exception:
+            # 兜底必须覆盖非 RuntimeError（如 async_pg_store 模块级 `import asyncpg`
+            # 失败）：本函数在 record() 中是裸调用，异常逃逸会让 record() 抛出，
+            # 连带打断 trace_repo 依赖其返回值的落库链路。与下方同步分支对称。
+            logger.warning("调度 asyncpg errors upsert 失败", exc_info=True)
+        return
 
     try:
         loop = asyncio.get_running_loop()
@@ -502,5 +519,7 @@ def query_pg_errors(
             # （连接池中毒，直至重启）。改用 _safe_put 统一 rollback 后归还。
             _safe_put(conn)
     except Exception:
-        logger.debug("PG errors 查询失败", exc_info=True)
+        # 失败返回的空列表与「确实无错误」对调用方不可区分（dashboard 同步分支
+        # 会呈现为空历史），故必须 warning 级可见，不能停在 debug。
+        logger.warning("PG errors 查询失败，返回空列表", exc_info=True)
         return []

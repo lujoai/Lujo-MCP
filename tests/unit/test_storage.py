@@ -355,6 +355,51 @@ class TestStorageFactory:
 
         assert "case-sensitive" in str(exc_info.value)
 
+    def test_async_getter_rejects_backend_outside_whitelist(self, monkeypatch):
+        """'postgres'（白名单外的常见拼法）→ get_error_store_async 抛 ValueError。
+
+        回归：dashboard 的 errors/history 曾把该值并入异步分支判定，而调用方直接
+        实例化 AsyncPGErrorStore 又绕过了工厂，使 _validate_backend() 的 fail-fast
+        被吞成「恒 degraded + 空列表」——正是本白名单要防的静默失效。
+        """
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "postgres")
+        monkeypatch.setattr(_settings, "pg_async_enabled", True)
+
+        with pytest.raises(ValueError) as exc_info:
+            factory_mod.get_error_store_async()
+
+        assert "postgres" in str(exc_info.value)
+
+    def test_async_getter_rejects_sync_config(self, monkeypatch):
+        """postgresql + pg_async_enabled=False → 抛 ValueError，不退回同步 store。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "postgresql")
+        monkeypatch.setattr(_settings, "pg_async_enabled", False)
+
+        with pytest.raises(ValueError) as exc_info:
+            factory_mod.get_error_store_async()
+
+        assert "get_error_store()" in str(exc_info.value)
+
+    def test_async_getter_rejects_memory_backend(self, monkeypatch):
+        """默认 memory 后端 → 抛 ValueError（异步入口只对 PG async 链路开放）。"""
+        from app.config import settings as _settings
+        monkeypatch.setattr(_settings, "storage_backend", "memory")
+        monkeypatch.setattr(_settings, "pg_async_enabled", True)
+
+        with pytest.raises(ValueError):
+            factory_mod.get_error_store_async()
+
+    def test_async_getter_returns_asyncpg_store(self, monkeypatch):
+        """postgresql + pg_async_enabled=True → 返回 AsyncPGErrorStore 实例。"""
+        from app.config import settings as _settings
+        from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+        monkeypatch.setattr(_settings, "storage_backend", "postgresql")
+        monkeypatch.setattr(_settings, "pg_async_enabled", True)
+
+        assert isinstance(factory_mod.get_error_store_async(), AsyncPGErrorStore)
+
 
 class TestErrorSpecFactory:
     """校验 factory 对 ErrorStorage / SpecStorage 的后端分发（方案 C）。

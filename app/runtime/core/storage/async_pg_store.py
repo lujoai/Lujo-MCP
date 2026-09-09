@@ -692,8 +692,16 @@ class AsyncPGErrorStore(ErrorStorage):
                     "occurrence_count": row["occurrence_count"],
                     "first_seen": row["first_seen"],
                     "last_seen": row["last_seen"],
-                    "created_at": str(row["created_at"]) if row["created_at"] else None,
-                    "updated_at": str(row["updated_at"]) if row["updated_at"] else None,
+                    "created_at": (
+                        row["created_at"].isoformat()
+                        if hasattr(row["created_at"], "isoformat")
+                        else str(row["created_at"])
+                    ) if row["created_at"] else None,
+                    "updated_at": (
+                        row["updated_at"].isoformat()
+                        if hasattr(row["updated_at"], "isoformat")
+                        else str(row["updated_at"])
+                    ) if row["updated_at"] else None,
                 })
             return result
 

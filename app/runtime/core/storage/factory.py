@@ -168,6 +168,31 @@ def get_error_store() -> ErrorStorage:
     return _error_store
 
 
+def get_error_store_async() -> ErrorStorage:
+    """返回 asyncpg 后端的错误存储实例，是 pg_async_enabled=True 链路的唯一合法入口。
+
+    架构冻结第 3 条：数据库访问必须经本工厂获取 store，调用方不得直接实例化。
+    与 :func:`get_error_store` 互补——后者在 ``pg_async_enabled=True`` 时对同步
+    getter fail-fast（``_raise_async_mix``），异步链路（FastAPI handler 等）改由
+    本函数进入，同样先过 ``_validate_backend()``，使非法 ``STORAGE_BACKEND``
+    在此 fail-fast，而不是被调用方吞成「查询降级、恒返回空列表」。
+
+    不做模块级缓存：``AsyncPGErrorStore`` 自身无状态（连接池是 ``async_pg_store``
+    的模块级单例，由 ``_ensure_init`` 惰性建立），缓存只会新增一份需要各测试
+    conftest 显式重置的全局状态。
+    """
+    _validate_backend()
+    if settings.storage_backend != "postgresql" or not settings.pg_async_enabled:
+        raise ValueError(
+            "get_error_store_async() 仅在 STORAGE_BACKEND=postgresql 且 "
+            f"PG_ASYNC_ENABLED=true 时可用（当前 storage_backend="
+            f"{settings.storage_backend!r}, pg_async_enabled="
+            f"{settings.pg_async_enabled!r}）。同步链路请用 get_error_store()。"
+        )
+    from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+    return AsyncPGErrorStore()
+
+
 def get_spec_store() -> SpecStorage:
     """返回规范存储实例（方案 C：按后端分发，PG 真实持久化，memory no-op）。"""
     global _spec_store

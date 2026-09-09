@@ -11,6 +11,7 @@ async def test_async_pg_error_store_query_errors(monkeypatch):
     """验证 AsyncPGErrorStore.query_errors 拼接参数并解析 frames JSON。"""
     store = AsyncPGErrorStore()
 
+    from datetime import datetime
     fake_rows = [
         {
             "error_id": "err-1",
@@ -25,8 +26,8 @@ async def test_async_pg_error_store_query_errors(monkeypatch):
             "occurrence_count": 3,
             "first_seen": 100.0,
             "last_seen": 200.0,
-            "created_at": None,
-            "updated_at": None,
+            "created_at": datetime(2026, 9, 9, 22, 0, 14),
+            "updated_at": datetime(2026, 9, 9, 22, 0, 14),
         }
     ]
 
@@ -54,6 +55,8 @@ async def test_async_pg_error_store_query_errors(monkeypatch):
     assert isinstance(results[0]["frames"], list)
     assert results[0]["frames"][0]["file"] == "x.py"
     assert results[0]["occurrence_count"] == 3
+    assert results[0]["created_at"] == "2026-09-09T22:00:14"
+    assert results[0]["updated_at"] == "2026-09-09T22:00:14"
 
     # 验证 SQL 调用参数
     args = mock_conn.fetch.call_args[0]
@@ -102,3 +105,32 @@ def test_dashboard_errors_history_async_pg_dispatch(monkeypatch):
     data = resp.json()
     assert data["total"] == 1
     assert data["errors"][0]["error_id"] == "err-async-test"
+    assert data["degraded"] is False
+
+
+def test_dashboard_errors_history_async_pg_degraded_on_error(monkeypatch):
+    """当 AsyncPG 查询抛出异常时，应安全降级返回空列表并标记 degraded=True。"""
+    from app.config import settings
+    from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+    from starlette.testclient import TestClient
+    from app.api.dashboard import router
+    from fastapi import FastAPI
+
+    monkeypatch.setattr(settings, "pg_async_enabled", True)
+    monkeypatch.setattr(settings, "storage_backend", "postgresql")
+
+    async def fail_query_errors(*args, **kwargs):
+        raise ConnectionRefusedError("Pool is closed")
+
+    monkeypatch.setattr(AsyncPGErrorStore, "query_errors", fail_query_errors)
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    resp = client.get("/api/dashboard/errors/history?fingerprint=fp-test&limit=5")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
+    assert data["errors"] == []
+    assert data["degraded"] is True

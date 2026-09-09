@@ -508,18 +508,24 @@ async def get_errors_history(
     since_minutes = max(since_minutes, 1)
     limit = min(max(limit, 1), 1000)
 
+    degraded = False
     if settings.storage_backend == "postgresql" and settings.pg_async_enabled:
-        from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+        # 架构冻结第 3 条：store 必须经工厂获取。工厂调用刻意放在 degraded 的
+        # try 之外——非法 STORAGE_BACKEND / flag 组合属配置错误，必须 fail-fast
+        # 冒到调用方，不能被吞成「查询降级、恒返回空列表」。
+        from app.runtime.core.storage.factory import get_error_store_async
+        store = get_error_store_async()
         try:
-            history = await AsyncPGErrorStore().query_errors(
+            history = await store.query_errors(
                 fingerprint=fingerprint,
                 session_id=session_id,
                 since_minutes=since_minutes,
                 limit=limit,
             )
         except Exception as e:
-            logger.debug("AsyncPG errors query 失败: %s", e)
+            logger.warning("AsyncPG errors query 失败，降级为空列表: %s", e)
             history = []
+            degraded = True
     else:
         history = errors.query_pg_errors(
             fingerprint=fingerprint,
@@ -532,4 +538,5 @@ async def get_errors_history(
         "errors": history,
         "total": len(history),
         "since_minutes": since_minutes,
+        "degraded": degraded,
     }

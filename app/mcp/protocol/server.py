@@ -76,6 +76,13 @@ def _get_light_tool_executor() -> ThreadPoolExecutor:
 
     保证在同一进程内某处触发 shutdown（如 stdio 关闭或测试回收）后，
     后续 HTTP/其它通道的工具调用仍可自愈恢复，避免被永久毒化。
+
+    shutdown 检测只能读 ``ThreadPoolExecutor._shutdown``：关闭动作发生在本模块
+    之外（``app/mcp_server.py`` 的退出清理、测试直接调 ``executor.shutdown()``），
+    自持标记没有任何路径能置位，只会给出恒 False 的假信号。也不用
+    ``getattr(..., False)`` 兜底——属性一旦消失会静默失去自愈能力、把池永久
+    毒化且无告警，直接访问反而显式失败。该属性自 CPython 3.9 起稳定存在，
+    本项目锁定 3.12（AGENTS.md §8），且单元测试已直接断言它。
     """
     global _LIGHT_TOOL_EXECUTOR, _TOOL_EXECUTOR
     with _executor_lock:

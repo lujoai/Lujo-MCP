@@ -219,3 +219,60 @@ async def test_pg_async_enabled_upsert_scheduling(monkeypatch):
     assert scheduled[0]["fingerprint"] == "fp-async-1"
 
 
+# 11. 回归：pg_async 分派块的非 RuntimeError 不得逃出 record()
+@pytest.mark.asyncio
+async def test_pg_async_dispatch_non_runtime_error_does_not_escape(monkeypatch):
+    """async 分派失败（非 RuntimeError）必须被兜住，record() 仍正常返回 error_id。
+
+    _schedule_pg_upsert 在 record() 中是裸调用，而 record() 的返回值被 trace_repo
+    直接使用（未包 try）；异常逃逸会连带打断落库链路。修复前该块只捕 RuntimeError，
+    async_pg_store 的模块级 ``import asyncpg`` 失败一类错误会一路抛出。
+
+    必须在事件循环内跑：无 running loop 时会先命中「无 loop」分支提前返回，
+    根本走不到导入语句，测不到本用例要覆盖的路径。
+    """
+    import sys
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "storage_backend", "postgresql")
+    monkeypatch.setattr(settings, "pg_async_enabled", True)
+    # 阻断 async_pg_store 导入，模拟其模块级 `import asyncpg` 失败
+    monkeypatch.setitem(sys.modules, "app.runtime.core.storage.async_pg_store", None)
+    errors._last_scheduled.clear()
+
+    rec = {"fingerprint": "fp-esc", "session_id": "sess-esc", "type": "ValueError"}
+    errors._schedule_pg_upsert(rec)  # 不得抛出
+
+    err_id = errors.record(
+        {"type": "ValueError", "message": "m", "frames": _frames(), "traceback": "tb"},
+        source="test-esc",
+        session_id="sess-esc-record",
+    )
+    assert err_id
+
+
+# 12. CODE_REVIEW §2.2 已定性限制：无 running loop 时跳过 PG async 写入
+def test_pg_async_dispatch_without_running_loop_warns_and_skips(monkeypatch, caplog):
+    """无 running loop 的线程中 pg_async 写入被告警跳过，不回落同步写、不抛异常。
+
+    锁住当前已定性的契约（asyncpg 连接池绑定事件循环，worker 线程无法跨线程调度），
+    避免将来被误当缺陷"顺手修掉"而引入未经真库验证的跨线程写入。
+    """
+    import logging
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "storage_backend", "postgresql")
+    monkeypatch.setattr(settings, "pg_async_enabled", True)
+    errors._last_scheduled.clear()
+
+    sync_upserted = []
+    monkeypatch.setattr(errors, "_pg_upsert_error", lambda rec: sync_upserted.append(rec))
+
+    rec = {"fingerprint": "fp-noloop", "session_id": "sess-noloop", "type": "ValueError"}
+    with caplog.at_level(logging.WARNING, logger="lujo-mcp.errors"):
+        errors._schedule_pg_upsert(rec)  # 不得抛出
+
+    assert sync_upserted == [], "无 loop 时不得回落同步写（§2.2 已定性）"
+    assert any("无运行中的事件循环" in r.getMessage() for r in caplog.records)
+
+
