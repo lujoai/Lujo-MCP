@@ -152,5 +152,5 @@ jobs:
       # 以及终止信号转发（本 job 为 Linux runner，SIGTERM 用例会真实执行；
       # Windows 上宿主以 TerminateProcess 结束进程，该用例自行 skip）。
       - name: Run npm launcher contract tests
-        run: node --test npm/test/launcher.test.js
+        run: node --test npm/test/launcher.test.js npm/test/platform-package-gen.test.js
 
