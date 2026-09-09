@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前发布版本：v0.7.8（2026-09-09）。Node SDK 部分对应 v0.7.9 Unreleased 接线，正式 release-prepare 前仓库版本仍为 0.7.8。
+> 当前发布目标：v0.7.9（2026-09-10，发布中）。本版包含 Node SDK 首发；最终 CI、npm 与 GitHub Release 证据见 CHANGELOG。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -291,7 +291,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ## 4. Node SDK（v0.7.9 Unreleased）
 
-包名固定为 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。当前发布版本仍为 v0.7.8；Node SDK 在正式 release-prepare 时才升至 v0.7.9。
+包名固定为 `@lujoai/lujo-mcp-node-sdk`，当前发布目标为 v0.7.9，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。
 
 ```bash
 npm install @lujoai/lujo-mcp-node-sdk

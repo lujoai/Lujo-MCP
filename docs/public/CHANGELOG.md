@@ -7,13 +7,32 @@
 
 ## [Unreleased]
 
-### 新增
+## [0.7.9] - 2026-09-10
 
-- **Node SDK（预发布接线）**：新增 `@lujoai/lujo-mcp-node-sdk` 的 CI、发布和文档接线，覆盖 Node 18/20/22、CJS/ESM 根入口、错误与网络上报、批量发送、脱敏、重试、`flush()` 和 `close()`。当前仓库发布版本仍为 v0.7.8，Node SDK 将在正式 release-prepare 时随 v0.7.9 一起发布。
+> 主题「异步 PostgreSQL 验证 + Node SDK 首发」：补齐 asyncpg 错误读写链路的真实数据库验证，修复跨事件循环重建连接池时的生命周期问题，并发布 Node.js 服务端 SDK。默认 memory 后端、公开工具面和数据库 schema 保持不变。
 
-### 文档
+### ✨ 新增
 
-- SDK 文档补充 Node SDK 与 Browser SDK 的运行时边界、最小用法、支持版本和发布验证要求；Browser SDK 的 v0.5.0 陈旧版本标记已更新。
+- **Node.js 服务端 SDK 首发**：发布 `@lujoai/lujo-mcp-node-sdk@0.7.9`，支持 Node 18/20/22、CommonJS/ESM 根入口、显式错误与网络上报、批量发送、递归脱敏、有限重试、`flush()` 和 `close()`。
+- **asyncpg 真库回归覆盖**：在隔离 PostgreSQL 数据库中验证错误上报、工厂查询、Dashboard 历史查询、时间字段、`session_id` 过滤和 `(fingerprint, session_id)` 节流语义。
+
+### 🔒 修复与加固
+
+- async 错误写入统一通过 storage factory 获取 store；非法 `STORAGE_BACKEND` 在 Dashboard 读路径 fail-fast，真正的查询/连接失败仍返回 `degraded=true` 并记录 warning。
+- asyncpg 连接池关闭后重建事件循环绑定的生命周期锁，避免测试、重载或多事件循环场景复用已绑定旧循环的锁。
+- 验证 stdio executor 关闭后协议层轻量工具仍可用，stdio executor getter 可自愈；未重构现有双池和 heavy tool 子进程模型。
+- 集成测试子进程使用当前项目解释器 `sys.executable`，避免 Windows 本机系统 Python 与项目虚拟环境不一致造成假失败。
+
+### ⚠️ 已知边界
+
+- `PG_ASYNC_ENABLED=true` 时 `app/main.py` 仍会初始化同步 trace/session store；本版验证并交付的是 errors 的 asyncpg 链路，不宣称全应用已完成异步存储生命周期统一。默认 `STORAGE_BACKEND=memory` 行为不变。
+
+### 验证
+
+- 本地 unit：1621 项，1615 passed / 6 skipped / 0 failed；integration：120 项，79 passed / 41 skipped；e2e：11 项，10 passed / 1 skipped。
+- PG async：5 passed；PG sync：18 项，17 passed / 1 skipped；executor：3 passed；Node SDK：11 passed；`ruff check .`、文档链接检查和 `git diff --check` 通过。
+
+## [Unreleased]
 
 ## [0.7.8] - 2026-09-09
 

@@ -1,12 +1,38 @@
 # Release Notes / 发布说明
 
-> 待发布版本：无（**v0.7.8 已发布**，2026-09-09，tag `v0.7.8` → `ecc789d`，npm 四包 0.7.8 / `latest`，GitHub Release 三平台资产齐全，发布流水线一次通过）。下一版立项前，本节顶部将随新版本更新。
+> **v0.7.9 正在发布**（2026-09-10，版本与文档已准备；CI 和 release-npm 流水线完成后补入最终 run、tag、npm 与 Release 证据）。上一版 v0.7.8 已发布：tag `v0.7.8` → `ecc789d`，npm 四包 0.7.8 / `latest`，GitHub Release 三平台资产齐全。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.8 ・ **Release Date / 发布日期**: 2026-09-09 ・ **Codename / 代号**: 发布工程收口 ｜ Release Engineering Closeout
+**Version / 版本**: v0.7.9 ・ **Release Date / 发布日期**: 2026-09-10 ・ **Codename / 代号**: 异步存储验证与 Node SDK 首发 ｜ Async Storage Verification & Node SDK
 
 ---
+
+## v0.7.9（2026-09-10，发布中）
+
+### 版本概述
+
+本版完成 asyncpg errors 链路的真实 PostgreSQL 验证和生命周期加固，并首次发布 Node.js 服务端 SDK。默认 memory 后端、公开 MCP 工具面和数据库 schema 保持不变。
+
+### 主要新增
+
+- 发布 `@lujoai/lujo-mcp-node-sdk@0.7.9`，支持 Node 18/20/22、CommonJS/ESM 根入口、显式错误与网络上报、批量发送、递归脱敏、有限重试、`flush()` 和 `close()`。
+- 使用隔离 PostgreSQL 数据库验证错误写入、factory 读取、Dashboard 历史查询、`session_id` 过滤和 `(fingerprint, session_id)` 节流键。
+
+### 主要修复与加固
+
+- async 错误写入通过 storage factory 获取 store；非法后端配置 fail-fast，查询失败继续以 `degraded=true` 和 warning 降级。
+- asyncpg pool 关闭后重建事件循环绑定锁，支持跨事件循环的关闭与重建流程。
+- 验证 stdio executor 关闭后协议轻量工具仍可执行，stdio executor getter 可自愈；保留现有双池与 heavy tool 子进程边界。
+- 集成测试子进程改用项目当前解释器，避免 Windows 系统 Python 造成环境假失败。
+
+### 已知边界
+
+`PG_ASYNC_ENABLED=true` 时 `app/main.py` 仍初始化同步 trace/session store。本版只宣称 errors asyncpg 读写链路已验证；全应用异步存储生命周期统一留待独立工作包。默认 `STORAGE_BACKEND=memory` 不变。
+
+### 验证基线
+
+本地 unit 1621 项（1615 passed / 6 skipped）、integration 120 项（79 passed / 41 skipped）、e2e 11 项（10 passed / 1 skipped）、PG async 5 passed、PG sync 17 passed / 1 skipped、executor 3 passed、Node SDK 11 passed；ruff、文档链接和差异检查通过。CI、npm 和 GitHub Release 的最终证据将在发布完成后补充。
 
 ## v0.7.8（2026-09-09，已发布）
 

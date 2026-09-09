@@ -1,6 +1,6 @@
 {
   "name": "@lujoai/lujo-mcp-node-sdk",
-  "version": "0.7.8",
+  "version": "0.7.9",
   "description": "Node.js SDK for reporting errors and network failures to lujo-mcp",
   "license": "MIT",
   "repository": {

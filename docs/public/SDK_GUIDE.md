@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前发布版本：v0.7.8（2026-09-09）。本文同时记录 v0.7.9 Unreleased 的 Node SDK 接线；正式 release-prepare 前仓库版本仍为 0.7.8。
+> 当前发布目标：v0.7.9（2026-09-10，发布中）。本文包含 Node SDK 首发接线与 Browser SDK 使用边界。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 
@@ -32,7 +32,7 @@ Browser SDK 依赖 DOM、浏览器网络对象、`localStorage` 和 `sendBeacon`
 
 ## Node SDK（服务端 Node.js）
 
-Node SDK 面向 Node.js 服务端的主动上报，当前接线目标为 v0.7.9，支持 Node 18、20、22，并提供 CommonJS 和 ESM 两种包根入口。当前仓库发布版本仍是 v0.7.8，正式发布前不要把示例中的版本号写入其他 manifest。
+Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支持 Node 18、20、22，并提供 CommonJS 和 ESM 两种包根入口。
 
 安装独立包：
 

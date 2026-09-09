@@ -6,7 +6,7 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
 元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。当前仓库发布
-版本仍为 v0.7.8，Node SDK 随 v0.7.9 正式 release-prepare 后发布。
+当前发布目标为 v0.7.9；Node SDK 与 MCP 元包、三平台包一起发布。
 
 ## 发布结构
 
