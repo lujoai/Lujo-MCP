@@ -1,14 +1,14 @@
 # Release Notes / 发布说明
 
-> 待发布版本：**v0.7.8（准备中，尚未发布）**。主题「发布工程收口 + 使用面文档」：修复平台包 `engines` 声明被发布流水线静默丢弃的问题，清理 CI 的 Node 20 弃用告警，README 补齐多项目「端口即隔离」示例。当前 npm `latest` 仍为 `@lujoai/lujo-mcp@0.7.7`（已发布）；本段描述在正式打 tag 发布后才能生效，发布状态以 npm registry 与 GitHub Release 为准。
+> 待发布版本：无（**v0.7.8 已发布**，2026-09-09，tag `v0.7.8` → `ecc789d`，npm 四包 0.7.8 / `latest`，GitHub Release 三平台资产齐全，发布流水线一次通过）。下一版立项前，本节顶部将随新版本更新。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.8（准备中） ・ **Codename / 代号**: 发布工程收口 ｜ Release Engineering Closeout
+**Version / 版本**: v0.7.8 ・ **Release Date / 发布日期**: 2026-09-09 ・ **Codename / 代号**: 发布工程收口 ｜ Release Engineering Closeout
 
 ---
 
-## v0.7.8（准备中，未发布）
+## v0.7.8（2026-09-09，已发布）
 
 ### 版本概述
 

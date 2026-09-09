@@ -23,6 +23,10 @@
 
 - README 新增「多项目同机调试：端口即隔离」小节：每个项目独立 `--http-port` + 各页面 SDK `endpoint` 指向各自端口；明确单用户、本地自用定位（数据不出本机，不承诺中央共享数据库隔离）；FAQ 与 TROUBLESHOOTING 端口占用条目同步呼应。
 
+### 验证
+
+- 本版不影响任何使用方式：零 Breaking、零新增配置，现有 stdio 配置无需修改。CI（run `34306109795`）四 job 全绿（unit 1599 passed / 6 skipped、integration 75 passed / 40 skipped、e2e 9 passed / 1 skipped、SDK 54/54），发布流水线（run `34307337631`）一次通过；发布后实查四包 tarball HEAD 200、三平台包 `engines` 均为 `>=18`、CI annotations 中 Node.js 20 弃用告警零出现。
+
 ## [0.7.7] - 2026-09-08
 
 > 主题「让宿主 AI 读对现场」：唯一新功能是 `diagnose_issue` 的 `missing_evidence` 证据缺口提示，让宿主 AI 主动补齐证据而不是基于残缺现场硬猜；其余为一批正确性修复（`verify`/`verify_ui` 结论被误标为失败、同指纹重复报错证据拼接、minified 堆栈错位、stdio 传输校验与并发门控缺失、npm 启动器孤儿进程），并把 integration 与 Playwright e2e 纳入发布门禁。
