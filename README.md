@@ -275,6 +275,10 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
   3. 打开浏览器 DevTools Network 面板，确认页面有发往 `endpoint` 的 `/ingest/batch` 请求；
   4. 可让 AI 调用 `diagnose_issue`（免 ID 自动定位最近错误）或 `list_recent_traces` 检索最近的运行日志。
 
+### Q4: 同一台机器调试多个项目，AI 查到了别的项目的现场？
+- **原因**：多个项目的 Lujo 实例争用同一个默认采集口 `127.0.0.1:8000`，浏览器 SDK 上报只会进占住该端口的那个实例。
+- **解决方案**：按「端口即隔离」给每个项目分配独立 `--http-port`，并将各页面 SDK 的 `endpoint` 指向各自端口。详见「🛠️ 进阶开发与私有化部署」中的**多项目同机调试**小节。
+
 ---
 
 ## 🛠️ 进阶开发与私有化部署
@@ -310,6 +314,48 @@ python -m app.main
 ```
 
 </details>
+
+### 多项目同机调试：「端口即隔离」
+
+Lujo-MCP 是**单机、开箱即用**的本地工具，不为多项目引入 project 维度。同一台机器上同时调试多个项目时，若都使用默认采集口 `127.0.0.1:8000`，两个项目的浏览器 SDK 上报只会进入「占住 8000 的那个实例」——另一个项目的 AI 查到的是别的项目的现场。**既定方案是「端口即隔离」**：每个项目用独立端口，互不串台。
+
+**1. 每个项目分配独立的 `--http-port`**（在各自宿主的 MCP 配置中，其余参数由 npm 启动器原样转发给服务）：
+
+```json
+{
+  "mcpServers": {
+    "lujo-project-a": {
+      "command": "npx",
+      "args": ["-y", "@lujoai/lujo-mcp", "--http-port", "8101"]
+    },
+    "lujo-project-b": {
+      "command": "npx",
+      "args": ["-y", "@lujoai/lujo-mcp", "--http-port", "8102"]
+    }
+  }
+}
+```
+
+**2. 各项目的页面 SDK `endpoint` 指向各自端口**：
+
+```html
+<!-- 项目 A 的页面 -->
+<script>
+  AiDebug.init({ endpoint: "http://127.0.0.1:8101" });
+</script>
+<!-- 项目 B 的页面 -->
+<script>
+  AiDebug.init({ endpoint: "http://127.0.0.1:8102" });
+</script>
+```
+
+**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
+
+**已知限制（如实说明）**：
+
+- 默认采集口是 `127.0.0.1:8000`；端口被另一个 Lujo 实例占用时，服务会在启动前明确报错并提示改用 `--http-port`（不是静默退出，也不是自动回退端口）。
+- 配置 PostgreSQL 持久化时，所有实例共写同一个库且无 project/namespace 维度：多项目请各自配置独立的 `pg_database`，或知情接受混存。
+- `diagnose_issue` 缺省取本服务跨页面/标签的最近一条错误（同类错误重复出现时返回最新一次现场）；用户明确在说某个页面/会话时，可给工具传 `session_id` 过滤（缺省 = 不过滤）。
 
 ---
 

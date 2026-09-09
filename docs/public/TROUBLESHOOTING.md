@@ -92,6 +92,8 @@ PORT=8001
 
 **验证 / Verify**: 服务启动成功，`curl http://localhost:<PORT>/health` 返回 200
 
+> **多项目同机调试提示 / Multi-project note**: 若占用 8000 端口的是另一个 Lujo-MCP 实例（同时调试多个项目），不要终止它——按「端口即隔离」为本项目改用独立端口（MCP 配置追加 `--http-port`，页面 SDK `endpoint` 指向同端口），详见 README「🛠️ 进阶开发与私有化部署」的「多项目同机调试」小节。
+
 ---
 
 ### A-3. 依赖缺失
