@@ -7,7 +7,16 @@
 
 ## [Unreleased]
 
-- 无（0.7.7 发布的变更已整理到下方版本段）。
+> 主题「发布工程收口 + 使用面文档」（v0.7.8 施工中）：零新增工具、零 Breaking、零 schema 变更。
+
+### 🧰 发布工程
+
+- CI/Release 工作流的 GitHub Actions 升级到消除「Node.js 20 is deprecated」告警的最低安全主版本（checkout v5 / setup-python v6 / setup-node v5 / upload-artifact v6 / download-artifact v7——后两者此前主版本仍默认跑在 Node 20 上）；测试运行时 Node 20 → 22。
+- 平台包生成器（`gen-platform-packages.js`）不再静默丢弃 `engines` 声明：覆写前读取现有 manifest 的 `engines` 带进发布产物（v0.7.6/v0.7.7 线上三平台包该字段为空），缺失时回退默认 `{"node": ">=18"}`；新增可选 `--out` 输出目录参数供本地验证，配套守卫测试进入 CI。
+
+### 📖 文档
+
+- README 新增「多项目同机调试：端口即隔离」小节：每个项目独立 `--http-port` + 各页面 SDK `endpoint` 指向各自端口；明确单用户、本地自用定位（数据不出本机，不承诺中央共享数据库隔离）；FAQ 与 TROUBLESHOOTING 端口占用条目同步呼应。
 
 ## [0.7.7] - 2026-09-08
 
