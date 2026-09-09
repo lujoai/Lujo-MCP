@@ -1,6 +1,6 @@
 # Release Notes / 发布说明
 
-> **v0.7.9 正在发布**（2026-09-10，版本与文档已准备；CI 和 release-npm 流水线完成后补入最终 run、tag、npm 与 Release 证据）。上一版 v0.7.8 已发布：tag `v0.7.8` → `ecc789d`，npm 四包 0.7.8 / `latest`，GitHub Release 三平台资产齐全。
+> **v0.7.9 已发布**（2026-09-10）：tag `v0.7.9` → `381182bc406c7b54cca3277141a2dd06b669891b`，普通 CI run `34382654373` 全绿，修正版 release-npm run `34383308343` 成功。npm 五个发布包均为 `0.7.9` / `latest`，Node 引擎均为 `>=18`；三平台资产已上传至 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9)。上一版 v0.7.8 已发布：tag `v0.7.8` → `ecc789d`，npm 四包 0.7.8 / `latest`，GitHub Release 三平台资产齐全。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
@@ -8,7 +8,7 @@
 
 ---
 
-## v0.7.9（2026-09-10，发布中）
+## v0.7.9（2026-09-10，已发布）
 
 ### 版本概述
 
@@ -32,7 +32,13 @@
 
 ### 验证基线
 
-本地 unit 1621 项（1615 passed / 6 skipped）、integration 120 项（79 passed / 41 skipped）、e2e 11 项（10 passed / 1 skipped）、PG async 5 passed、PG sync 17 passed / 1 skipped、executor 3 passed、Node SDK 11 passed；ruff、文档链接和差异检查通过。CI、npm 和 GitHub Release 的最终证据将在发布完成后补充。
+本地 unit 1621 项（1615 passed / 6 skipped）、integration 120 项（79 passed / 41 skipped）、e2e 11 项（10 passed / 1 skipped）、PG async 5 passed、PG sync 17 passed / 1 skipped、executor 3 passed、Node SDK 11 passed；ruff、文档链接和差异检查通过。
+
+### 发布验证
+
+- tag `v0.7.9` 指向 `381182bc406c7b54cca3277141a2dd06b669891b`；普通 CI run `34382654373` 全绿，修正版发布流水线 run `34383308343` 成功完成三平台构建、Node SDK 冒烟、三个平台包和元包发布。
+- npm 五个发布包均为 `0.7.9`，`latest` 指向 `0.7.9`，`engines.node` 均为 `>=18`。
+- GitHub Release 已发布三项资产：`lujo-mcp-0.7.9-win32-x64.zip`、`lujo-mcp-0.7.9-linux-x64.zip`、`lujo-mcp-0.7.9-osx-arm64.zip`。
 
 ## v0.7.8（2026-09-09，已发布）
 

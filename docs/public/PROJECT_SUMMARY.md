@@ -221,10 +221,10 @@ Verifier 验证
 - **v0.7.5**（2026-09-05）：主题「规范零手写」——`ingest_specs` 工具（OpenAPI 一键生成断言规范并入库，同 target 去重），激活静默失败自动校验闭环。unit **1508 tests / 0 failed**，SDK JS **54/54**。
 - **v0.7.6**（2026-09-07）：主题「本地调试链路稳定性与发行加固」——`error_id` / `caller_trace_id` / 网络-UI-控制台现场统一可关联、SDK 与服务端顶层 `session_id` 上报契约统一、sourcemap `column` 保留、诊断分支贯穿会话校验且存储回退 fail-closed、heavy 工具子进程超时 terminate/kill、HTTP 与 stdio 统一 `isError` 语义、npm 默认统一模式（stdio + localhost HTTP）、PyInstaller multiprocessing 分流。
 - **v0.7.7**（2026-09-08）：主题「让宿主 AI 读对现场」——`diagnose_issue` 新增 `missing_evidence` 证据缺口提示（按七个证据维度给出可执行补齐建议），其余为 7 项正确性修复（结论被误标失败、同指纹证据拼接、source map 缺列折叠、stdio 校验/门控/指标对齐、端口占用提前显式失败、启动器信号转发、描述归属口径），并把 integration 与真实 Chromium e2e 纳入 CI 门禁。unit **1599 passed / 6 skipped**。
-- **v0.7.9**（2026-09-10，发布中）：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，连接池跨事件循环关闭/重建生命周期加固，Node.js 服务端 SDK 首发（Node 18/20/22、CJS/ESM、显式错误与网络上报、flush/close）。默认 memory 后端、公开工具面和 schema 不变；`PG_ASYNC_ENABLED=true` 下 trace/session 仍有同步 factory 初始化边界，见 CHANGELOG。
+- **v0.7.9**（2026-09-10，已发布）：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，连接池跨事件循环关闭/重建生命周期加固，Node.js 服务端 SDK 首发（Node 18/20/22、CJS/ESM、显式错误与网络上报、flush/close）。默认 memory 后端、公开工具面和 schema 不变；`PG_ASYNC_ENABLED=true` 下 trace/session 仍有同步 factory 初始化边界，见 CHANGELOG。
 - **v0.7.8**（2026-09-09）：主题「发布工程收口 + 使用面文档」——GitHub Actions 升版消除 Node 20 弃用告警；平台包生成器保留 `engines` 声明（v0.7.6/0.7.7 线上三包为空 → 闭环）+ 严格参数校验；README 多项目「端口即隔离」示例与单用户、本地自用定位声明。零 Breaking、零 schema 变更。
 
-**当前路线**：**v0.7.9 正在发布**（2026-09-10，版本触点、Node SDK、asyncpg 真库验证与发布文档已准备）。产品定位为单用户、本地自用（npm 元包装完即用，数据不出本机，不承诺中央共享数据库隔离）。全应用 async PG 生命周期统一和真实宿主 GUI 全流程验证仍是独立长期工作面；当前无已确认 P0/P1 阻塞项。
+**当前路线**：**v0.7.9 已发布**（2026-09-10，tag `v0.7.9`；普通 CI run `34382654373` 全绿，修正版发布流水线 run `34383308343` 成功）。npm 五个发布包均为 `0.7.9` / `latest`，三平台资产见 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9)。产品定位为单用户、本地自用（npm 元包装完即用，数据不出本机，不承诺中央共享数据库隔离）。全应用 async PG 生命周期统一和真实宿主 GUI 全流程验证仍是独立长期工作面；当前无已确认 P0/P1 阻塞项。
 
 **已完成**：
 - Phase 0：项目标准化 ✅

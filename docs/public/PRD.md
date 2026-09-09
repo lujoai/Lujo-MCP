@@ -14,6 +14,8 @@
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
+> **v0.7.9 发布状态（2026-09-10）**：已发布。tag `v0.7.9` 指向 `381182bc406c7b54cca3277141a2dd06b669891b`；普通 CI run `34382654373` 全绿，修正版发布流水线 run `34383308343` 成功。npm 五个发布包均为 `0.7.9` / `latest`，三平台二进制见 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9)。默认 `STORAGE_BACKEND=memory`；产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
+
 ---
 
 ## 1. 修订记录
@@ -41,7 +43,7 @@
 | v6.2 | 2026-08-18 | 架构委员会 | **v0.5.4 发布 + 工程收口与文档补全交付**：(1) TST-3 测试资产收口——`tests/unit/test_distribution_smoke.py`（9 项分发链 smoke：PyInstaller spec / npm 元包与三平台包一致性 / bin 脚本）+ `browser-sdk/test/sdk-core.test.js`（7 项 SDK JS 契约单测）+ CI 新增 `sdk-js-smoke` job（防 SDK 演进失联）；(2) DOC-1/DOC-3 文档补全——新增 `docs/public/API_REFERENCE.md`（REST 5 组端点 + 18 个 MCP 工具 + RBAC + 字段速查）与 `docs/public/SDK_GUIDE.md`（接入 / 26 项配置 / 采集 / 脱敏 / V5 传输），README 文档导航挂入；(3) SEC-1 CSP 头统一移入 `SecurityHeadersMiddleware` 覆盖所有响应；(4) QC-1 修正 SDK 注释过时工具名。无新功能、无 Breaking Change，测试基线保持 1134 passed / 6 skipped / 0 failed。产品版本 v0.5.3 → v0.5.4。 |
 | v6.3 | 2026-08-19 | 架构委员会 | **v0.5.5 发布 + FR12 调试提示词端点交付**：(1) FR12 可选增强落地——新增 `GET /api/debug/prompt?request_id={id}`（viewer 可读）：基于完整调试上下文（异常帧/源码片段/运行时/git 归因/网络链等）脱敏 + 截断后套用提示词模板，返回可一键复制的纯文本提示词，补齐非 MCP 场景使用闭环；新增 `PROMPT_TEMPLATE_PATH` 配置（自定义模板，占位符 `$context` / `$request_id`，缺失回退内置，`safe_substitute` 容错）；(2) 单测存储后端隔离修复——`tests/unit/conftest.py` 强制 memory 后端（改写 `settings.storage_backend` + 重置 storage factory 缓存），修复 3 项本机预存失败（固定 request_id 在 PG 跨运行累积 / `_add_log` 注入 traces 表 vs PG 恢复走 specs 表），单测与 CI 一致；(3) 新增 `tests/unit/test_prompt_builder.py` 10 项。测试基线 1134 → 1153 passed / 6 skipped / 0 failed。产品版本 v0.5.4 → v0.5.5。 |
 | v6.9 | 2026-09-05 | 架构委员会 | **v0.7.2~v0.7.5 发布同步**：(1) v0.7.2 Browser SDK 随 npm 主包分发（CDN 一行引用成立）+ unhandledrejection 非标准拒因堆栈兜底 + README 面向新用户重构；(2) v0.7.3 统一诊断入口 `diagnose_issue`（免 request_id 自动定位最近错误）+ `list_recent_traces`/`search_logs` 注册为真 MCP 工具 + stacktrace 空参回退 + tools/list 隐藏 SDK 上报工具（agent_visible）；(3) v0.7.4 P0 修复 npm 启动器平台白名单前缀不匹配（v0.6.8 起 npm stdio 服务器 100% 启动失败）+ 双重防复发守卫；(4) v0.7.5 `ingest_specs` 工具（OpenAPI 一键生成断言规范并入库，规范自动生成最后一环）。注册工具 22 个 / 公开 18 个；测试基线 unit 1502 passed / 6 skipped、SDK JS 54/54。 |
-| v7.1 | 2026-09-10 | 架构委员会 | **v0.7.9 发布同步**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，连接池跨事件循环生命周期加固；Node.js 服务端 SDK 首发，支持 Node 18/20/22、CJS/ESM、显式错误与网络上报；验证 stdio executor 自愈和项目解释器隔离。默认 memory 后端、公开工具面、schema 不变；全应用 async PG 生命周期统一仍是独立工作项。测试基线 unit 1615/6、integration 79/41、e2e 10/1、PG async 5、Node SDK 11。产品版本 v0.7.8 → v0.7.9。 |
+| v7.1 | 2026-09-10 | 架构委员会 | **v0.7.9 发布完成同步**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，连接池跨事件循环生命周期加固；Node.js 服务端 SDK 首发，支持 Node 18/20/22、CJS/ESM、显式错误与网络上报；验证 stdio executor 自愈和项目解释器隔离。默认 memory 后端、公开工具面、schema 不变；全应用 async PG 生命周期统一仍是独立工作项。测试基线 unit 1615/6、integration 79/41、e2e 10/1、PG async 5、Node SDK 11。产品版本 v0.7.8 → v0.7.9。 |
 | v6.5 | 2026-08-25 | 架构委员会 | **v0.6.3 ~ v0.6.7 发布 + 全量代码审查三档 Major 清零交付**：(1) v0.6.3 稳定性维护补丁（2 Critical + 10 Major）；(2) v0.6.4 安全补丁（embedding 未脱敏外发、verify_loop 安全门失效、限流键绕过）；(3) v0.6.6 可用性补丁（stdio 坏输入、槽位竞态、事件循环阻塞、async 双池绕过）；(4) v0.6.7 正确性补丁（SDK 传输三件套、LLM 缓存指纹碰撞、流式绕熔断、smoke_test 死锁、sourcemap 版本键）。测试基线 1198 → 1231 passed / 6 skipped / 0 failed。产品版本 v0.6.2 → v0.6.7。 |
 
 ---

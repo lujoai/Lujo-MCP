@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前发布目标：v0.7.9（2026-09-10，发布中）。本文包含 Node SDK 首发接线与 Browser SDK 使用边界。
+> 当前发布版本：v0.7.9（2026-09-10，已发布）。本文包含 Node SDK 首发接线与 Browser SDK 使用边界；普通 CI run `34382654373` 与发布流水线 run `34383308343` 均已通过。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 

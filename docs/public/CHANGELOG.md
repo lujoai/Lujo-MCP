@@ -31,6 +31,7 @@
 
 - 本地 unit：1621 项，1615 passed / 6 skipped / 0 failed；integration：120 项，79 passed / 41 skipped；e2e：11 项，10 passed / 1 skipped。
 - PG async：5 passed；PG sync：18 项，17 passed / 1 skipped；executor：3 passed；Node SDK：11 passed；`ruff check .`、文档链接检查和 `git diff --check` 通过。
+- 发布验证：tag `v0.7.9` 指向 `381182bc406c7b54cca3277141a2dd06b669891b`；普通 CI run `34382654373` 全绿，修正版发布流水线 run `34383308343` 成功。npm 五个发布包均为 `0.7.9` 且 `latest=0.7.9`，Node 引擎均为 `>=18`；三平台资产已随 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9) 发布。
 
 ## [0.7.8] - 2026-09-09
 

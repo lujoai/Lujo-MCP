@@ -6,6 +6,8 @@
 
 > 💡 **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 
+> **当前版本：v0.7.9（2026-09-10，已发布）**：tag `v0.7.9` 指向提交 `381182bc406c7b54cca3277141a2dd06b669891b`；普通 CI run `34382654373` 与发布流水线 run `34383308343` 均已通过。npm 五个发布包的 `latest` 均为 `0.7.9`，Node 引擎要求为 `>=18`。详见 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9)。
+
 ---
 
 ## ⚡ 30 秒极速接入（Quick Start）
@@ -176,7 +178,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
-### Node 服务接入：使用 Node SDK（v0.7.9 Unreleased）
+### Node 服务接入：使用 Node SDK（v0.7.9 已发布）
 
 服务端 Node.js 使用独立包 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18/20/22 和 CJS/ESM。它只做显式错误与网络上报，不安装浏览器的 DOM、XHR/fetch、console 或 `localStorage` 钩子；浏览器页面继续使用上面的 Browser SDK。
 

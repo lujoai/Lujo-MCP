@@ -5,8 +5,9 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 浏览器 SDK 的 `/ingest` 数据会与 MCP 工具共享同一份内存状态。
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
-元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。当前仓库发布
-当前发布目标为 v0.7.9；Node SDK 与 MCP 元包、三平台包一起发布。
+元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。v0.7.9
+已于 2026-09-10 发布；Node SDK 与 MCP 元包、三平台包均已发布为 `0.7.9`，`latest`
+指向 `0.7.9`，且 `engines.node` 均为 `>=18`。发布流水线 run `34383308343` 成功。
 
 ## 发布结构
 

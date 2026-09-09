@@ -1,5 +1,7 @@
 # PostgreSQL 本地连接修复指南
 
+> **v0.7.9 已发布（2026-09-10）**：asyncpg errors 真库读写链路、`(fingerprint, session_id)` 节流键和跨事件循环 pool 生命周期已验证。默认 `STORAGE_BACKEND=memory`；PostgreSQL 需显式启用。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
+
 ## 结论
 
 本轮已确认，项目之前的 PostgreSQL 阻塞**不是服务端配置异常**，而是：
