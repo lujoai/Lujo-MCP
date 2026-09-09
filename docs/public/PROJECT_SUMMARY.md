@@ -179,7 +179,7 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **unit 1508 tests / 0 failed / 6 skipped**（1502 passed，junit 权威计数；v0.7.1 → 1479，v0.7.5 → 1508）+ **integration 115 tests / 0 failed**（首次全绿）；另有 Browser SDK JS 契约测试 54 项由 CI `sdk-js-smoke` job 守护
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **unit 1605 tests = 1599 passed / 6 skipped / 0 failed**（junit 权威计数；v0.7.1 → 1479，v0.7.5 → 1508，v0.7.8 → 1599 passed）+ **integration 115 tests = 75 passed / 40 skipped / 0 failed**（CI 口径；pg 标记用例按守卫自动 skip）+ **Playwright e2e 10 tests = 9 passed / 1 skipped / 0 failed**；另有 Browser SDK JS 契约测试 54 项由 CI `sdk-js-smoke` job 守护
 - ✅ ruff 硬门禁：仓库根 `ruff.toml` 显式锁定规则集（`E4/E7/E9/F` + `C4` + `PIE`），`ruff check .` = All checks passed；`requirements-dev.txt` 锁 `ruff>=0.16.4,<0.17.0` 防规则集随版本漂移
 
 ### v0.3.0 Release Audit 收口 ✅
@@ -219,8 +219,11 @@ Verifier 验证
 - **v0.7.3**（2026-09-05）：主题「让 AI 真正用起来工具」——统一诊断入口 `diagnose_issue`（免 request_id 自动定位最近错误）+ `list_recent_traces`/`search_logs` 注册为真 MCP 工具（修复会话隔离泄漏）+ `stacktrace` 空参回退 errors 存储 + tools/list 隐藏 SDK 上报工具（agent_visible）+ 13 个工具 description 补触发条件。
 - **v0.7.4**（2026-09-05）：主题「修复 npm 启动器 P0」——`lujo-mcp-server` 平台白名单前缀不匹配致 v0.6.8 起 npm stdio 服务器 100% 启动失败；修复 + 双重防复发守卫（白名单静态守卫 + 发布工作流启动器端到端冒烟）。
 - **v0.7.5**（2026-09-05）：主题「规范零手写」——`ingest_specs` 工具（OpenAPI 一键生成断言规范并入库，同 target 去重），激活静默失败自动校验闭环。unit **1508 tests / 0 failed**，SDK JS **54/54**。
+- **v0.7.6**（2026-09-07）：主题「本地调试链路稳定性与发行加固」——`error_id` / `caller_trace_id` / 网络-UI-控制台现场统一可关联、SDK 与服务端顶层 `session_id` 上报契约统一、sourcemap `column` 保留、诊断分支贯穿会话校验且存储回退 fail-closed、heavy 工具子进程超时 terminate/kill、HTTP 与 stdio 统一 `isError` 语义、npm 默认统一模式（stdio + localhost HTTP）、PyInstaller multiprocessing 分流。
+- **v0.7.7**（2026-09-08）：主题「让宿主 AI 读对现场」——`diagnose_issue` 新增 `missing_evidence` 证据缺口提示（按七个证据维度给出可执行补齐建议），其余为 7 项正确性修复（结论被误标失败、同指纹证据拼接、source map 缺列折叠、stdio 校验/门控/指标对齐、端口占用提前显式失败、启动器信号转发、描述归属口径），并把 integration 与真实 Chromium e2e 纳入 CI 门禁。unit **1599 passed / 6 skipped**。
+- **v0.7.8**（2026-09-09）：主题「发布工程收口 + 使用面文档」——GitHub Actions 升版消除 Node 20 弃用告警；平台包生成器保留 `engines` 声明（v0.7.6/0.7.7 线上三包为空 → 闭环）+ 严格参数校验；README 多项目「端口即隔离」示例与单用户、本地自用定位声明。零 Breaking、零 schema 变更。
 
-**当前路线**：**v0.7.1 发布执行**（Minor 债务批量清理 15 批次全部清零，78 项真 bug 修复；版本号已同步 bump 0.7.1，待打 tag `v0.7.1` + push + npm publish）。剩余：v0.8.0 待规划。当前无已确认 P0/P1 阻塞项。
+**当前路线**：**v0.7.8 已发布**（2026-09-09，tag `v0.7.8`，npm 四包 0.7.8 / `latest`，发布流水线一次通过；发布工程收口 + 使用面文档，见 CHANGELOG `[0.7.8]` 段）。产品定位为单用户、本地自用（npm 元包装完即用，数据不出本机，不承诺中央共享数据库隔离）。下一版未立项；剩余长期项为 PG/asyncpg 真库验证批次与真实宿主 GUI 全流程验证。当前无已确认 P0/P1 阻塞项。
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -260,7 +263,7 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1502 passed / 6 skipped / 0 failed / 0 errors**（v0.7.1 基线 1479；v0.7.5 → 1508；单测已强制 memory 后端与 CI 一致）。Browser SDK 另有 54 项 Node 契约测试（`browser-sdk/test/`，CI `sdk-js-smoke` job 守护，不计入 pytest 基线）。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **1599 passed / 6 skipped / 0 failed / 0 errors**（v0.7.1 基线 1479；v0.7.5 → 1508；v0.7.8 → 1599 passed；单测已强制 memory 后端与 CI 一致）。另有 integration（CI 75 passed / 40 skipped）与 Playwright e2e（9 passed / 1 skipped）两个 CI 测试 job。Browser SDK 另有 54 项 Node 契约测试（`browser-sdk/test/`，CI `sdk-js-smoke` job 守护，不计入 pytest 基线）。
 
 **当前优先级**：
 

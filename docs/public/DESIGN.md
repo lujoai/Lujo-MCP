@@ -627,7 +627,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
 | AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
-| **合计** | — | **1508 tests / 0 failed / 6 skipped**（1502 passed）| 当前 v0.7.5 单元基线；本节表格其余数字为历史快照，仅作演进记录 |
+| **合计** | — | **1605 tests = 1599 passed / 6 skipped / 0 failed** | 当前 v0.7.8 单元基线（另有 integration 115 项 / e2e 10 项 / SDK JS 54 项，见 CI 四 job）；本节表格其余数字为历史快照，仅作演进记录 |
 
 ### 11.2 测试执行
 
