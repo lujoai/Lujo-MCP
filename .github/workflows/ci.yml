@@ -111,6 +111,10 @@ jobs:
       - name: Install Playwright + Chromium
         run: |
           pip install "playwright==1.61.0"
+          # ubuntu-latest 预装的 Google Chrome apt 源偶发提供不一致索引，
+          # 会让 Playwright 的 apt 依赖安装在 runner 上因 Hash Sum mismatch 失败。
+          # 该源不是本项目依赖；移除后仍使用 Playwright 原有 --with-deps 安装路径。
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           playwright install --with-deps chromium
 
       - name: Run e2e tests
