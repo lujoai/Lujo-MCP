@@ -43,10 +43,15 @@ jobs:
             suffix: osx-arm64
             artifact: lujo-mcp-server
     steps:
-      - uses: actions/checkout@v4
+      # 2026-09-09 WP①：actions 升到消除 Node 20 弃用告警的最低安全主版本
+      # （checkout v5 / setup-python v6 = node24 运行时；breaking 均不影响本工作流
+      # ——checkout 收紧仅涉 pull_request_target/workflow_run，v7 的 pip-install
+      # 移除我们不使用。upload-artifact v6 / download-artifact v7 起才默认 node24，
+      # v5/v6 仍默认 Node 20，告警清不掉）。
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -98,7 +103,7 @@ jobs:
             --read-timeout 60
 
       - name: Upload platform binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lujo-mcp-${{ matrix.suffix }}
           path: dist/${{ matrix.artifact }}
@@ -110,12 +115,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
           scope: "@lujoai"
 
@@ -194,7 +199,7 @@ jobs:
         run: node npm/scripts/gen-platform-packages.js "$RELEASE_VERSION"
 
       - name: Download all platform binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
 

@@ -13,10 +13,13 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # 2026-09-09 WP①：actions 升到消除 Node 20 弃用告警的最低安全主版本。
+      # checkout v5 = node24；v5/v6 的 fork PR checkout 收紧仅涉
+      # pull_request_target / workflow_run，本仓库用普通 pull_request / tag push，不受影响。
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -59,10 +62,10 @@ jobs:
   integration-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -90,10 +93,10 @@ jobs:
   e2e-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -124,12 +127,15 @@ jobs:
   sdk-js-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
+      # setup-node v5：node24 运行时；其 breaking（packageManager 字段自动缓存）
+      # 对本仓库无影响——所有 package.json 均无 packageManager 字段。
+      # 测试运行时 node 20 → 22（与本机验证环境一致，SDK/launcher 测试已本地预验）。
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
 
       # 显式列出全部 SDK 测试文件（不用目录形式：node --test <dir> 在部分
       # Node 版本下按模块解析导致 MODULE_NOT_FOUND）。新增测试文件需在此登记，
