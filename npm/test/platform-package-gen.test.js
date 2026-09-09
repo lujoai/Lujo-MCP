@@ -9,7 +9,8 @@
  *   2. 输出目录已有 manifest 声明 engines 时必须继承（这是「仓库声明了
  *      engines 而产物没有」场景的守卫：若生成器丢字段或只留回退，本用例变红）。
  *
- * 全部用例经 --out 写进临时目录，测试结束清理，不污染仓库工作树。
+ * 全部用例运行临时目录中的生成器副本，默认与显式输出路径均在沙箱内。
+ * 异常参数逐次比较整个沙箱快照，测试结束清理，不污染仓库工作树。
  *
  * 运行：node --test npm/test/platform-package-gen.test.js
  */
@@ -27,7 +28,7 @@ const VERSION = "0.0.0-test";
 const PLATFORMS = ["win32-x64", "linux-x64", "osx-arm64"];
 
 function runGenerator(outDir) {
-  const res = spawnSync(process.execPath, [GEN, VERSION, "--out", outDir], {
+  const res = spawnSync(process.execPath, [generatorFor(outDir), VERSION, "--out", outDir], {
     encoding: "utf8",
   });
   assert.strictEqual(res.status, 0, `生成器应正常退出：${res.stderr}`);
@@ -41,11 +42,47 @@ function readPkg(outDir, suffix) {
 }
 
 function makeTempOut() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "lujo-pkggen-"));
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "lujo-pkggen-"));
+  const out = path.join(sandbox, "out");
+  const scriptDir = path.join(sandbox, "npm", "scripts");
+  fs.mkdirSync(out);
+  fs.mkdirSync(scriptDir, { recursive: true });
+  fs.copyFileSync(GEN, path.join(scriptDir, "gen-platform-packages.js"));
+  return out;
 }
 
-function cleanup(dir) {
-  fs.rmSync(dir, { recursive: true, force: true });
+function generatorFor(out) {
+  // 默认输出相对于 __dirname：只改 cwd 无法隔离仓库中的生成器。
+  return path.join(out, "..", "npm", "scripts", "gen-platform-packages.js");
+}
+
+function snapshotTree(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => {
+      const file = path.join(dir, entry.name);
+      return entry.isDirectory()
+        ? [entry.name, "directory", snapshotTree(file)]
+        : [entry.name, "file", fs.readFileSync(file).toString("base64")];
+    });
+}
+
+function seedOutputRoots(out) {
+  for (const outputRoot of [out, path.join(out, "..", "npm", "packages")]) {
+    for (const suffix of PLATFORMS) {
+      const pkgDir = path.join(outputRoot, `lujo-mcp-${suffix}`);
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(path.join(pkgDir, "package.json"),
+        JSON.stringify({ name: suffix, version: "0.0.0-untouched" }));
+    }
+  }
+}
+
+function cleanup(out) {
+  const sandbox = path.resolve(out, "..");
+  assert.strictEqual(path.dirname(sandbox), path.resolve(os.tmpdir()));
+  assert.ok(path.basename(sandbox).startsWith("lujo-pkggen-"));
+  fs.rmSync(sandbox, { recursive: true, force: true });
 }
 
 test("空输出目录：三平台产物均含非空 engines.node（回退默认 >=18），六项字段齐全", () => {
@@ -146,30 +183,29 @@ test("产物保持确定性格式：JSON 两空格缩进 + 末尾换行，engine
 test("异常参数（--out 缺值 / --out= 空值 / --out 后跟另一个参数 / 未知参数）非零退出且不产生任何写入", () => {
   const out = makeTempOut();
   try {
-    // 预置一个「已有 manifest」哨兵：异常参数不得改写它，也不得在输出目录生成新产物
-    const pkgDir = path.join(out, "lujo-mcp-win32-x64");
-    fs.mkdirSync(pkgDir, { recursive: true });
-    const sentinel = JSON.stringify(
-      { name: "sentinel", version: "0.0.0-untouched" },
-      null,
-      2,
-    );
-    const sentinelPath = path.join(pkgDir, "package.json");
-    fs.writeFileSync(sentinelPath, sentinel);
+    seedOutputRoots(out);
+    const sandbox = path.dirname(out);
+    const before = snapshotTree(sandbox);
 
     const badArgSets = [
       ["--out"],              // 缺值（行尾）
       ["--out="],             // 等号后空值
+      ["--out", ""],          // 独立空字符串值
       ["--out", "--out=x"],   // --out 的值是另一个参数 → 视为缺值
       ["--bogus"],            // 未知参数
       ["--out", out, "extra-positional"], // 未知位置参数
     ];
     for (const badArgs of badArgSets) {
-      const res = spawnSync(process.execPath, [GEN, VERSION, ...badArgs], {
+      const res = spawnSync(process.execPath, [generatorFor(out), VERSION, ...badArgs], {
         encoding: "utf8",
+        cwd: sandbox,
       });
+      assert.ifError(res.error);
+      assert.strictEqual(res.signal, null);
+      assert.deepStrictEqual(snapshotTree(sandbox), before,
+        `异常参数 ${JSON.stringify(badArgs)} 不得改写默认或显式输出目录，也不得创建文件或目录`);
       assert.ok(
-        res.status !== 0,
+        Number.isInteger(res.status) && res.status !== 0,
         `异常参数 ${JSON.stringify(badArgs)} 应非零退出（实际 status=${res.status}）`,
       );
       const message = `${res.stderr || ""}${res.stdout || ""}`;
@@ -179,22 +215,6 @@ test("异常参数（--out 缺值 / --out= 空值 / --out 后跟另一个参数 
       );
     }
 
-    // 哨兵 manifest 原封不动；输出目录除预置哨兵外无任何新文件
-    assert.strictEqual(
-      fs.readFileSync(sentinelPath, "utf8"),
-      sentinel,
-      "已有 manifest 不得被异常参数运行改写",
-    );
-    assert.ok(
-      !fs.existsSync(path.join(pkgDir, "bin")),
-      "异常参数运行不得创建 bin 目录",
-    );
-    for (const suffix of ["linux-x64", "osx-arm64"]) {
-      assert.ok(
-        !fs.existsSync(path.join(out, `lujo-mcp-${suffix}`)),
-        `异常参数运行不得创建 ${suffix} 包目录`,
-      );
-    }
   } finally {
     cleanup(out);
   }
@@ -203,7 +223,7 @@ test("异常参数（--out 缺值 / --out= 空值 / --out 后跟另一个参数 
 test("合法的 --out=<dir> 等号写法与 --out <dir> 等价", () => {
   const out = makeTempOut();
   try {
-    const res = spawnSync(process.execPath, [GEN, VERSION, `--out=${out}`], {
+    const res = spawnSync(process.execPath, [generatorFor(out), VERSION, `--out=${out}`], {
       encoding: "utf8",
     });
     assert.strictEqual(res.status, 0, `等号写法应正常退出：${res.stderr}`);
@@ -222,15 +242,25 @@ test("合法的 --out=<dir> 等号写法与 --out <dir> 等价", () => {
 test("version 位置误传参数（如 --out dir 但漏了 version）应报错退出", () => {
   const out = makeTempOut();
   try {
-    // `--out dir` 之外完全没给 version：argv[0]='--out' 被当成 version 是错的
-    const res = spawnSync(process.execPath, [GEN, "--out", out], {
-      encoding: "utf8",
-    });
-    assert.ok(res.status !== 0, "缺少 version 应非零退出");
+    seedOutputRoots(out);
+    const sandbox = path.dirname(out);
+    const before = snapshotTree(sandbox);
+    for (const args of [[], ["--out", out]]) {
+      const res = spawnSync(process.execPath, [generatorFor(out), ...args], {
+        encoding: "utf8",
+        cwd: sandbox,
+      });
+      assert.ifError(res.error);
+      assert.strictEqual(res.signal, null);
+      assert.deepStrictEqual(snapshotTree(sandbox), before,
+        "缺少 version 不得改写默认或显式输出目录");
+      assert.ok(Number.isInteger(res.status) && res.status !== 0, "缺少 version 应非零退出");
+      assert.match(res.stderr, /Usage|error/);
+    }
   } finally {
     cleanup(out);
   }
 });
 
 // 注：完全省略 --out 时默认写 npm/packages 的行为由发布流水线（CI）实际覆盖；
-// 本测试文件全部经 --out 写隔离临时目录，不在此验证默认输出路径（避免污染仓库工作树）。
+// 默认路径同样位于生成器副本旁的临时 npm/packages，异常参数回归不会污染仓库。
