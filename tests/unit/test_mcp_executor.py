@@ -38,3 +38,27 @@ def test_get_tool_executor_and_slots_uses_healed_executor():
 
     future = executor.submit(lambda: "ok")
     assert future.result() == "ok"
+
+
+def test_stdio_pool_shutdown_does_not_poison_protocol_pool():
+    """验证 stdio 关闭自己的池后，协议/HTTP 轻量池仍可执行。"""
+    import app.mcp_server as stdio
+
+    stdio_executor = stdio._get_tool_executor()
+    protocol_executor, _, pool_type = server._get_tool_executor_and_slots(
+        "get_debug_context"
+    )
+    assert pool_type == "light"
+    assert protocol_executor is not None
+    assert stdio_executor is not protocol_executor
+
+    # 模拟 stdio cleanup_resources() 关闭其独立池；随后直接调用协议层选出的
+    # 轻量执行器，等价于 HTTP/协议 tools/call 的实际执行对象。
+    stdio_executor.shutdown(wait=True)
+    assert stdio_executor._shutdown
+    assert protocol_executor.submit(lambda: "protocol-ok").result(timeout=2) == "protocol-ok"
+
+    # stdio 自身 getter 也必须保持原有自愈能力，避免该测试留下已关闭全局池。
+    healed_stdio = stdio._get_tool_executor()
+    assert healed_stdio is not stdio_executor
+    assert not healed_stdio._shutdown

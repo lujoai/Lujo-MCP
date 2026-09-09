@@ -13,6 +13,7 @@
 import asyncio
 import json
 import os
+import sys
 import time
 
 import pytest
@@ -504,7 +505,7 @@ class TestVerifyUiViaStdioSubprocess:
         # 强制子进程 stdout/stderr 走 UTF-8
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         server_params = StdioServerParameters(
-            command="python",
+            command=sys.executable,
             args=["-c", bootstrap],
             cwd=".",
             env=env,

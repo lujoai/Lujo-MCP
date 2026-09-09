@@ -219,6 +219,43 @@ async def test_pg_async_enabled_upsert_scheduling(monkeypatch):
     assert scheduled[0]["fingerprint"] == "fp-async-1"
 
 
+# 10b. Architecture Frozen 第 3 条：async 写路径必须经 storage factory
+@pytest.mark.asyncio
+async def test_pg_async_dispatch_gets_store_via_factory(monkeypatch):
+    """async errors 写入应从 storage factory 获取 store，而非直接实例化实现类。
+
+    修复前 _schedule_pg_upsert 直接构造 AsyncPGErrorStore，绕过工厂的后端/flag
+    校验。用两个独立的 fake 记录调用方，确保回归测试锁住的是路由而不是 mock 参数。
+    """
+    from app.config import settings
+    from app.runtime.core.storage import factory as factory_mod
+    from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+
+    monkeypatch.setattr(settings, "storage_backend", "postgresql")
+    monkeypatch.setattr(settings, "pg_async_enabled", True)
+    errors._last_scheduled.clear()
+
+    factory_calls = []
+    direct_calls = []
+
+    class FakeStore:
+        async def upsert_error(self, record_data):
+            factory_calls.append(record_data)
+
+    async def direct_upsert(self, record_data):
+        direct_calls.append(record_data)
+
+    monkeypatch.setattr(factory_mod, "get_error_store_async", lambda: FakeStore())
+    monkeypatch.setattr(AsyncPGErrorStore, "upsert_error", direct_upsert)
+
+    rec = {"fingerprint": "fp-factory", "session_id": "sess-factory", "type": "RuntimeError"}
+    errors._schedule_pg_upsert(rec)
+
+    await asyncio.sleep(0.05)
+    assert factory_calls == [rec]
+    assert direct_calls == []
+
+
 # 11. 回归：pg_async 分派块的非 RuntimeError 不得逃出 record()
 @pytest.mark.asyncio
 async def test_pg_async_dispatch_non_runtime_error_does_not_escape(monkeypatch):
@@ -274,5 +311,3 @@ def test_pg_async_dispatch_without_running_loop_warns_and_skips(monkeypatch, cap
 
     assert sync_upserted == [], "无 loop 时不得回落同步写（§2.2 已定性）"
     assert any("无运行中的事件循环" in r.getMessage() for r in caplog.records)
-
-

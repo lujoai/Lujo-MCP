@@ -508,6 +508,11 @@ async def get_errors_history(
     since_minutes = max(since_minutes, 1)
     limit = min(max(limit, 1), 1000)
 
+    # Validate before selecting a read path so an invalid STORAGE_BACKEND cannot
+    # silently look like an empty history response.
+    from app.runtime.core.storage.factory import _validate_backend
+    _validate_backend()
+
     degraded = False
     if settings.storage_backend == "postgresql" and settings.pg_async_enabled:
         # 架构冻结第 3 条：store 必须经工厂获取。工厂调用刻意放在 degraded 的

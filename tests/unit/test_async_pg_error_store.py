@@ -134,3 +134,20 @@ def test_dashboard_errors_history_async_pg_degraded_on_error(monkeypatch):
     assert data["total"] == 0
     assert data["errors"] == []
     assert data["degraded"] is True
+
+
+def test_dashboard_errors_history_rejects_invalid_backend(monkeypatch):
+    """非法 STORAGE_BACKEND 必须在 dashboard 入口 fail-fast。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.dashboard import router
+
+    monkeypatch.setattr(settings, "storage_backend", "postgres")
+    monkeypatch.setattr(settings, "pg_async_enabled", True)
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with pytest.raises(ValueError, match="Invalid STORAGE_BACKEND"):
+        client.get("/api/dashboard/errors/history?limit=5")

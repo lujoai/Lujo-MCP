@@ -121,8 +121,9 @@ def _schedule_pg_upsert(record_data: dict) -> None:
             )
             return
         try:
-            from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
-            asyncio.ensure_future(AsyncPGErrorStore().upsert_error(record_data), loop=loop)
+            from app.runtime.core.storage.factory import get_error_store_async
+            store = get_error_store_async()
+            asyncio.ensure_future(store.upsert_error(record_data), loop=loop)
         except Exception:
             # 兜底必须覆盖非 RuntimeError（如 async_pg_store 模块级 `import asyncpg`
             # 失败）：本函数在 record() 中是裸调用，异常逃逸会让 record() 抛出，

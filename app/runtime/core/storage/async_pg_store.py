@@ -111,7 +111,7 @@ async def _get_pool() -> asyncpg.Pool:
 
 async def close_pool() -> None:
     """优雅关闭连接池（在 lifespan shutdown 中调用）。"""
-    global _pool, _initialized
+    global _pool, _pool_lock, _init_lock, _initialized
     async with _pool_lock:
         if _pool is not None:
             try:
@@ -124,6 +124,12 @@ async def close_pool() -> None:
         # 同口径：池已关闭理应与「未初始化」一致，进程不退出时后续 _ensure_init
         # 不被短路、新池的 DDL 保障不失效。
         _initialized = False
+        # asyncpg pools and asyncio locks are loop-bound when concurrent
+        # initialization occurs.  Tests and embedded callers may explicitly
+        # close the pool and continue on a new event loop, so replace both
+        # lifecycle locks after shutdown to prevent cross-loop binding leaks.
+        _pool_lock = asyncio.Lock()
+        _init_lock = asyncio.Lock()
 
 
 def _parse_data(value):
