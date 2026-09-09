@@ -23,18 +23,37 @@ const path = require('path');
 
 const argv = process.argv.slice(2);
 const version = argv[0];
-if (!version) {
+if (!version || version.startsWith('--')) {
   console.error('Usage: node npm/scripts/gen-platform-packages.js <version> [--out <dir>]');
   process.exit(1);
 }
 
-// 解析可选 --out 参数（支持 --out <dir> 与 --out=<dir> 两种写法）
+// 解析并校验 --out 参数（支持 --out <dir> 与 --out=<dir> 两种写法）。
+// ⚠️ 全部参数校验必须在下方任何 mkdirSync / writeFileSync 之前完成：
+// 此前 --out 缺值/空值会被静默当作「未指定」回退默认输出根 npm/packages，
+// 本地验证一跑就覆写仓库内的平台包 manifest；未知参数也被静默忽略。
 let outRootArg = null;
 for (let i = 1; i < argv.length; i++) {
-  if (argv[i] === '--out') {
-    outRootArg = argv[++i];
-  } else if (argv[i].startsWith('--out=')) {
-    outRootArg = argv[i].slice('--out='.length);
+  const arg = argv[i];
+  if (arg === '--out') {
+    const next = argv[i + 1];
+    if (next === undefined || next === '' || next.startsWith('--')) {
+      console.error('error: --out requires a non-empty directory argument');
+      process.exit(1);
+    }
+    outRootArg = next;
+    i++;
+  } else if (arg.startsWith('--out=')) {
+    const value = arg.slice('--out='.length);
+    if (value === '') {
+      console.error('error: --out requires a non-empty directory argument');
+      process.exit(1);
+    }
+    outRootArg = value;
+  } else {
+    console.error(`error: unknown argument: ${arg}`);
+    console.error('Usage: node npm/scripts/gen-platform-packages.js <version> [--out <dir>]');
+    process.exit(1);
   }
 }
 
