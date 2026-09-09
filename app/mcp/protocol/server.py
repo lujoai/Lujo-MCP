@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from app import __version__
@@ -67,6 +68,23 @@ _heavy_tool_slots = asyncio.Semaphore(settings.tool_heavy_executor_workers)
 # 向后兼容旧版直接引用
 _TOOL_EXECUTOR = _LIGHT_TOOL_EXECUTOR
 _tool_slots = _light_tool_slots
+_executor_lock = threading.Lock()
+
+
+def _get_light_tool_executor() -> ThreadPoolExecutor:
+    """获取通用轻量工具专用线程池；已被 shutdown 时自愈重建同规格的有界池。
+
+    保证在同一进程内某处触发 shutdown（如 stdio 关闭或测试回收）后，
+    后续 HTTP/其它通道的工具调用仍可自愈恢复，避免被永久毒化。
+    """
+    global _LIGHT_TOOL_EXECUTOR, _TOOL_EXECUTOR
+    with _executor_lock:
+        if _LIGHT_TOOL_EXECUTOR._shutdown:
+            _LIGHT_TOOL_EXECUTOR = ThreadPoolExecutor(
+                max_workers=settings.tool_executor_workers
+            )
+            _TOOL_EXECUTOR = _LIGHT_TOOL_EXECUTOR
+        return _LIGHT_TOOL_EXECUTOR
 
 
 def is_heavy_tool(tool_name: str) -> bool:
@@ -86,7 +104,7 @@ def _get_tool_executor_and_slots(tool_name: str) -> tuple[ThreadPoolExecutor | N
     """
     if is_heavy_tool(tool_name):
         return None, _heavy_tool_slots, "heavy"
-    return _TOOL_EXECUTOR, _tool_slots, "light"
+    return _get_light_tool_executor(), _tool_slots, "light"
 
 
 async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: float) -> bool:

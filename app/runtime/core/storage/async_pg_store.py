@@ -626,6 +626,77 @@ class AsyncPGErrorStore(ErrorStorage):
                 now,
             )
 
+    async def query_errors(
+        self,
+        fingerprint: str | None = None,
+        session_id: str | None = None,
+        since_minutes: int = 1440,
+        limit: int = 100,
+    ) -> list[dict]:
+        """异步查询错误历史记录（按 last_seen 倒序）。"""
+        _check_async_context()
+        await _ensure_init()
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            sql = (
+                "SELECT error_id, fingerprint, exception_type, message, frames, "
+                "       frame_count, traceback, source, session_id, "
+                "       occurrence_count, first_seen, last_seen, created_at, updated_at "
+                "FROM errors"
+            )
+            conditions: list[str] = []
+            params: list = []
+            param_idx = 1
+
+            if fingerprint:
+                conditions.append(f"fingerprint = ${param_idx}")
+                params.append(fingerprint)
+                param_idx += 1
+
+            if session_id:
+                conditions.append(f"session_id = ${param_idx}")
+                params.append(session_id)
+                param_idx += 1
+
+            if since_minutes > 0:
+                cutoff = time.time() - since_minutes * 60
+                conditions.append(f"last_seen > ${param_idx}")
+                params.append(cutoff)
+                param_idx += 1
+
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+
+            sql += f" ORDER BY last_seen DESC LIMIT ${param_idx}"
+            params.append(min(max(limit, 1), 1000))
+
+            rows = await conn.fetch(sql, *params)
+            result = []
+            for row in rows:
+                frames_val = row["frames"]
+                if isinstance(frames_val, str):
+                    try:
+                        frames_val = json.loads(frames_val)
+                    except Exception:
+                        pass
+                result.append({
+                    "error_id": row["error_id"],
+                    "fingerprint": row["fingerprint"],
+                    "type": row["exception_type"],
+                    "message": row["message"],
+                    "frames": frames_val,
+                    "frame_count": row["frame_count"],
+                    "traceback": row["traceback"],
+                    "source": row["source"],
+                    "session_id": row["session_id"],
+                    "occurrence_count": row["occurrence_count"],
+                    "first_seen": row["first_seen"],
+                    "last_seen": row["last_seen"],
+                    "created_at": str(row["created_at"]) if row["created_at"] else None,
+                    "updated_at": str(row["updated_at"]) if row["updated_at"] else None,
+                })
+            return result
+
 
 # ════════════════════════════════════════════════════
 #  Phase 2.4：specs 表 CRUD（异步版，独立查询，消除 N+1）—— SpecStorage ABC 实现

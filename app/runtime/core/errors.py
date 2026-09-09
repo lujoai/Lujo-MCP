@@ -64,32 +64,54 @@ def _pg_upsert_error(record_data: dict) -> None:
         logger.debug("PG errors upsert 跳过", exc_info=True)
 
 
-# FIX: P1-9e 同 fingerprint 节流窗口内只调度一次 PG upsert，
-# 防止异常风暴下每错误无上限创建线程。
+# FIX: P1-9e 同 (fingerprint, session_id) 节流窗口内只调度一次 PG upsert，
+# 防止异常风暴下每错误无上限创建线程；同时保证跨会话同指纹错误不被相互误跳过。
 _PG_THROTTLE_SECONDS = 2.0
-_last_scheduled: dict[str, float] = {}
+_last_scheduled: dict[tuple[str, str], float] = {}
 _schedule_lock = threading.Lock()
 
 
 def _schedule_pg_upsert(record_data: dict) -> None:
     """异步调度 PG upsert，不阻塞 record() 主流程。
 
-    - 同 fingerprint 在节流窗口内只调度一次（重复错误聚合到内存层，
+    - 同 (fingerprint, session_id) 在节流窗口内只调度一次（重复错误聚合到内存层，
       PG 侧由 upsert 的 occurrence_count 逻辑收敛，不重复建线程）。
-    - 有运行中的事件循环（FastAPI/uvicorn）：用 asyncio.to_thread 包装。
+    - 有运行中的事件循环（FastAPI/uvicorn）：用 asyncio.to_thread / ensure_future 包装。
     - 无事件循环（同步上下文/异常钩子）：用守护线程。
     """
     fingerprint = str(record_data.get("fingerprint") or record_data.get("error_id") or "")
+    session_id = str(record_data.get("session_id") or "_global")
+    throttle_key = (fingerprint, session_id)
     with _schedule_lock:
         now = time.time()
-        last = _last_scheduled.get(fingerprint, 0.0)
+        last = _last_scheduled.get(throttle_key, 0.0)
         if now - last < _PG_THROTTLE_SECONDS:
             # FIX: P1-9e 节流丢弃必须打日志，避免静默丢更新
-            logger.debug("PG errors upsert 节流跳过 (fingerprint=%s)", fingerprint)
+            logger.debug(
+                "PG errors upsert 节流跳过 (fingerprint=%s, session_id=%s)",
+                fingerprint,
+                session_id,
+            )
             return
-        _last_scheduled[fingerprint] = now
+        _last_scheduled[throttle_key] = now
         if len(_last_scheduled) > 10000:  # 防止异常种类无限增长
             _last_scheduled.clear()
+
+    try:
+        from app.config import settings
+        if settings.storage_backend != "postgresql":
+            return
+        if settings.pg_async_enabled:
+            # Phase 3.1: pg_async_enabled=True 时直接调度 asyncpg 协程入队
+            try:
+                loop = asyncio.get_running_loop()
+                from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+                asyncio.ensure_future(AsyncPGErrorStore().upsert_error(record_data), loop=loop)
+            except RuntimeError:
+                pass
+            return
+    except Exception:
+        logger.debug("检查 PG async 配置失败", exc_info=True)
 
     try:
         loop = asyncio.get_running_loop()

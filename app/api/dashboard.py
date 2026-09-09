@@ -8,6 +8,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.config import settings
 from app.auth.rbac import require_role
 from app.observability import get_kb_metric_snapshot
 from app.runtime.core import errors, logs
@@ -494,7 +495,7 @@ def get_errors_ranked(
 
 
 @router.get("/errors/history", dependencies=[Depends(require_role("admin", "developer", "viewer"))])
-def get_errors_history(
+async def get_errors_history(
     fingerprint: str | None = None,
     session_id: str | None = None,
     since_minutes: int = 1440,
@@ -507,12 +508,25 @@ def get_errors_history(
     since_minutes = max(since_minutes, 1)
     limit = min(max(limit, 1), 1000)
 
-    history = errors.query_pg_errors(
-        fingerprint=fingerprint,
-        session_id=session_id,
-        since_minutes=since_minutes,
-        limit=limit,
-    )
+    if settings.storage_backend == "postgresql" and settings.pg_async_enabled:
+        from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+        try:
+            history = await AsyncPGErrorStore().query_errors(
+                fingerprint=fingerprint,
+                session_id=session_id,
+                since_minutes=since_minutes,
+                limit=limit,
+            )
+        except Exception as e:
+            logger.debug("AsyncPG errors query 失败: %s", e)
+            history = []
+    else:
+        history = errors.query_pg_errors(
+            fingerprint=fingerprint,
+            session_id=session_id,
+            since_minutes=since_minutes,
+            limit=limit,
+        )
 
     return {
         "errors": history,

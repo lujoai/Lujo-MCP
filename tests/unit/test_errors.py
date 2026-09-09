@@ -1,6 +1,7 @@
 """errors 模块会话隔离单元测试"""
+import asyncio
 import time
-
+import pytest
 
 from app.runtime.core import errors
 
@@ -158,3 +159,63 @@ def test_bucket_total_lru_cap(monkeypatch):
         assert "cap-3" not in errors._recent  # 队首最旧，被淘汰
     finally:
         errors._recent = saved_recent
+
+
+# 9. P1-9e: _schedule_pg_upsert 按 (fingerprint, session_id) 节流
+def test_pg_upsert_throttle_key_session_isolation(monkeypatch):
+    """验证 _schedule_pg_upsert 采用 (fingerprint, session_id) 双键节流：
+    - 同一 session 的同指纹错误在 2s 窗口内被节流跳过
+    - 不同 session 的同指纹错误相互隔离，不被跨会话静默丢弃
+    """
+    from app.config import settings
+    monkeypatch.setattr(settings, "storage_backend", "postgresql")
+    monkeypatch.setattr(settings, "pg_async_enabled", False)
+
+    scheduled = []
+
+    def fake_pg_upsert(record_data):
+        scheduled.append(record_data)
+
+    monkeypatch.setattr(errors, "_pg_upsert_error", fake_pg_upsert)
+    errors._last_scheduled.clear()
+
+    rec_a1 = {"fingerprint": "fp-shared", "session_id": "sess-alpha", "type": "ValueError"}
+    rec_a2 = {"fingerprint": "fp-shared", "session_id": "sess-alpha", "type": "ValueError"}
+    rec_b1 = {"fingerprint": "fp-shared", "session_id": "sess-beta", "type": "ValueError"}
+
+    errors._schedule_pg_upsert(rec_a1)
+    errors._schedule_pg_upsert(rec_a2)  # 同 session 节流
+    errors._schedule_pg_upsert(rec_b1)  # 不同 session 允许落库
+
+    time.sleep(0.1)
+    sessions = [r["session_id"] for r in scheduled]
+    assert sessions.count("sess-alpha") == 1
+    assert sessions.count("sess-beta") == 1
+
+
+# 10. Phase 3.1: pg_async_enabled=True 时调度 AsyncPGErrorStore
+@pytest.mark.asyncio
+async def test_pg_async_enabled_upsert_scheduling(monkeypatch):
+    """验证 pg_async_enabled=True 时 _schedule_pg_upsert 调度 AsyncPGErrorStore.upsert_error。"""
+    from app.config import settings
+    from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
+
+    monkeypatch.setattr(settings, "storage_backend", "postgresql")
+    monkeypatch.setattr(settings, "pg_async_enabled", True)
+
+    scheduled = []
+
+    async def fake_async_upsert(self, record_data):
+        scheduled.append(record_data)
+
+    monkeypatch.setattr(AsyncPGErrorStore, "upsert_error", fake_async_upsert)
+    errors._last_scheduled.clear()
+
+    rec = {"fingerprint": "fp-async-1", "session_id": "sess-async", "type": "RuntimeError"}
+    errors._schedule_pg_upsert(rec)
+
+    await asyncio.sleep(0.05)
+    assert len(scheduled) == 1
+    assert scheduled[0]["fingerprint"] == "fp-async-1"
+
+
