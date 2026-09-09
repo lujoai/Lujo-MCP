@@ -7,12 +7,17 @@
 
 ## [Unreleased]
 
-> 主题「发布工程收口 + 使用面文档」（v0.7.8 施工中）：零新增工具、零 Breaking、零 schema 变更。
+- 无（v0.7.8 准备中的变更已整理到下方版本段）。
+
+## [0.7.8] - 2026-09-09
+
+> 主题「发布工程收口 + 使用面文档」：零新增工具、零 Breaking、零 schema 变更。修复平台包 `engines` 声明被发布流水线静默丢弃的问题，清理 CI 的 Node 20 弃用告警，并在 README 补齐多项目「端口即隔离」使用示例。
 
 ### 🧰 发布工程
 
 - CI/Release 工作流的 GitHub Actions 升级到消除「Node.js 20 is deprecated」告警的最低安全主版本（checkout v5 / setup-python v6 / setup-node v5 / upload-artifact v6 / download-artifact v7——后两者此前主版本仍默认跑在 Node 20 上）；测试运行时 Node 20 → 22。
 - 平台包生成器（`gen-platform-packages.js`）不再静默丢弃 `engines` 声明：覆写前读取现有 manifest 的 `engines` 带进发布产物（v0.7.6/v0.7.7 线上三平台包该字段为空），缺失时回退默认 `{"node": ">=18"}`；新增可选 `--out` 输出目录参数供本地验证，配套守卫测试进入 CI。
+- 平台包生成器严格校验命令行参数：`--out` 缺值/空值、未知参数一律非零退出并给出错误提示，且校验在任何目录创建与文件写入之前完成——此前 `--out` 缺值会被静默当作「未指定」而覆写仓库内的平台包 manifest。
 
 ### 📖 文档
 

@@ -1,14 +1,43 @@
 # Release Notes / 发布说明
 
-> 待发布版本：**v0.7.7（准备中）**。主题「让宿主 AI 读对现场」：`diagnose_issue` 新增 `missing_evidence` 证据缺口提示，宿主 AI 能看到「缺什么证据、怎么补」；一批正确性修复让诊断结论不再被污染、结论型工具不再被误判为失败；integration 与 Playwright e2e 正式纳入发布门禁。发布前 npm `latest` 仍为 `@lujoai/lujo-mcp@0.7.6`。
+> 待发布版本：**v0.7.8（准备中，尚未发布）**。主题「发布工程收口 + 使用面文档」：修复平台包 `engines` 声明被发布流水线静默丢弃的问题，清理 CI 的 Node 20 弃用告警，README 补齐多项目「端口即隔离」示例。当前 npm `latest` 仍为 `@lujoai/lujo-mcp@0.7.7`（已发布）；本段描述在正式打 tag 发布后才能生效，发布状态以 npm registry 与 GitHub Release 为准。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.7 ・ **Release Date / 发布日期**: 2026-09-08 ・ **Codename / 代号**: 读对现场 ｜ Evidence-Gap Awareness
+**Version / 版本**: v0.7.8（准备中） ・ **Codename / 代号**: 发布工程收口 ｜ Release Engineering Closeout
 
 ---
 
-## v0.7.7（2026-09-08）
+## v0.7.8（准备中，未发布）
+
+### 版本概述
+
+发布工程收口 + 使用面文档：零新增工具、零 Breaking Change、零 schema 变更。修复 v0.7.6/v0.7.7 起线上三平台包 `engines` 声明被生成器静默丢弃的问题，CI 与 Release 工作流的 GitHub Actions 升级到消除 Node 20 弃用告警的最低安全主版本，README 补齐多项目「端口即隔离」使用示例并明确单用户、本地自用定位。
+
+### 主要修复
+
+- 平台包生成器不再静默丢弃 `engines` 声明：覆写前读取现有 manifest 的 `engines` 带进发布产物，缺失时回退默认 `{"node": ">=18"}`；配套守卫测试进入 CI。
+- 平台包生成器严格校验命令行参数：`--out` 缺值/空值、未知参数一律非零退出并在任何文件写入之前拒绝（此前 `--out` 缺值会静默回退默认目录，本地验证即覆写仓库 manifest）。
+- GitHub Actions 升级到消除 Node 20 弃用告警的最低安全主版本（checkout v5 / setup-python v6 / setup-node v5 / upload-artifact v6 / download-artifact v7）；测试运行时 Node 20 → 22。
+
+### 使用文档
+
+- README 新增「多项目同机调试：端口即隔离」：每项目独立 `--http-port` + 各页面 SDK `endpoint` 指向各自端口；明确单用户、本地自用定位（数据不出本机，不承诺中央共享数据库隔离）。
+
+### 升级说明
+
+- 零 Breaking Change、零新增配置；现有 stdio 配置无需修改。
+- npm 平台包将开始声明 `engines: {"node": ">=18"}`：Node 18 以下环境安装平台包时 npm 会给出不满足引擎的提示（行为更诚实，无兼容性影响）。
+
+### 验证基线（发布前以 CI 实跑为准）
+
+本地（Windows / Python 3.12.5 / Node 22）：unit **1605 项 = 1599 passed / 6 skipped / 0 failed**、integration+e2e `-m "not pg"` **88 passed / 18 skipped / 0 failed**、SDK（Node 22）**54/54**、npm 启动器 + 生成器守卫 **19 项 = 18 passed / 1 skipped**、ruff 全绿、doc-links 166/0/0。CI 四 job 与发布流水线结果待发布后补充。
+
+---
+
+## v0.7.7（2026-09-08，已发布）
+
+### 版本概述
 
 ### 版本概述
 
