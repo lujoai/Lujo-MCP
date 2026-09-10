@@ -31,6 +31,12 @@ test-results.xml
 test_result.txt
 test_api_result.txt
 
+# KB 经验本地「笔记本」（v0.8.0：默认在进程工作目录生成，含 WAL 伴生文件，不入库）
+lujo-kb.sqlite3*
+
+# Node 依赖目录（node-sdk 等本地 npm install 产物；发布产物不入库）
+node_modules/
+
 # Codex 本地计划目录（不入库）
 .zcode/
 t.txt
