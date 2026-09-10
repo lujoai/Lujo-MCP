@@ -6,7 +6,7 @@
 设计要点：
 - 表结构对齐 PG 的 kb_entries（fingerprint 主键 + analysis JSON 文本 + 两个索引键），
   使 PG 与 SQLite 两种实现的回灌产物完全一致；
-- 每次操作使用短连接（open/close）+ WAL 模式：单用户低写入频率下开销可忽略，
+- 每次操作使用短连接 + WAL 模式：单用户低写入频率下开销可忽略，
   且天然线程安全（连接不跨线程共享，写穿可能来自 asyncio.to_thread 的工作线程）；
 - 与 PG 实现相同的失败语义：异常向上抛，由调用方降级——
   工厂初始化失败时降级 NoOp，运行期写穿失败由 KnowledgeBaseStore 的
@@ -19,7 +19,9 @@ import json
 import logging
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from app.config import settings
 from app.runtime.core.storage.base import KnowledgeBaseStorage
@@ -57,24 +59,40 @@ class SQLiteKnowledgeBaseStore(KnowledgeBaseStorage):
     """KB 持久化的本地 SQLite 单文件实现（v0.8.0「笔记本」）。"""
 
     def __init__(self, db_path: str | None = None) -> None:
-        raw_path = db_path or settings.kb_persist_path or "lujo-kb.sqlite3"
-        # 相对路径解析到当前工作目录（单用户本地自用：工作目录即数据目录）
-        self.db_path = str(Path(raw_path).expanduser())
-        if self.db_path != ":memory:":
-            Path(self.db_path).resolve().parent.mkdir(parents=True, exist_ok=True)
+        raw_path = str(db_path or settings.kb_persist_path or "lujo-kb.sqlite3").strip()
+        # 显式拒绝 :memory:：本实现用短连接，而 SQLite 的内存库是「每连接独立」的，
+        # 建表与后续操作会落在不同的空库上（恒 no such table），无法持久化。
+        if raw_path == ":memory:":
+            raise ValueError(
+                "kb_persist_path 不支持 ':memory:'：SQLiteKnowledgeBaseStore 使用短连接，"
+                "每连接独立的内存库无法承载持久化。请改用文件路径，"
+                "或设置 KB_PERSIST_ENABLED=false 关闭持久化。"
+            )
+        # 解析为绝对路径：相对路径按「构造时」的工作目录定格，避免运行期 cwd 变化导致落库位置漂移
+        self.db_path = str(Path(raw_path).expanduser().resolve())
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
     # ── 连接与建表 ──
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        """短连接上下文：提交/回滚后**显式关闭**（sqlite3 的 `with conn` 只管事务不关闭连接）。"""
         conn = sqlite3.connect(self.db_path, timeout=5.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        return conn
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _ensure_schema(self) -> None:
         try:
-            with self._connect() as conn:
+            with self._connection() as conn:
                 conn.executescript(_SCHEMA)
         except Exception:
             logger.warning("SQLite KB schema 初始化失败 (path=%s)", self.db_path, exc_info=True)
@@ -86,7 +104,7 @@ class SQLiteKnowledgeBaseStore(KnowledgeBaseStorage):
         """upsert 一条 KB entry（按 fingerprint 去重）。"""
         analysis_json = json.dumps(entry.get("analysis") or {}, ensure_ascii=False, default=str)
         now = entry.get("updated_at") or time.time()
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO kb_entries
@@ -126,7 +144,7 @@ class SQLiteKnowledgeBaseStore(KnowledgeBaseStorage):
         updated_at: float,
     ) -> bool:
         """回写验证统计，返回是否命中。"""
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE kb_entries
@@ -139,7 +157,7 @@ class SQLiteKnowledgeBaseStore(KnowledgeBaseStorage):
 
     def delete_kb_entry(self, fingerprint: str) -> bool:
         """删除一条 entry（LRU 驱逐同步删除），返回是否删除成功。"""
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 "DELETE FROM kb_entries WHERE fingerprint = ?", (fingerprint,)
             )
@@ -147,13 +165,13 @@ class SQLiteKnowledgeBaseStore(KnowledgeBaseStorage):
 
     def delete_all_kb_entries(self) -> int:
         """清空表（clear 同步），返回删除条数。"""
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute("DELETE FROM kb_entries")
             return cursor.rowcount
 
     def list_recent_kb_entries(self, limit: int = 100) -> list[dict]:
         """按 updated_at 倒序列出最近 limit 条（启动回灌用）。"""
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT {_SELECT_COLUMNS}

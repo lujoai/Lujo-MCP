@@ -10,7 +10,7 @@
 注：tests/unit/conftest.py 已显式关闭 kb_persist_enabled（保持既有用例行为不变），
 需要开启的用例在用例内 monkeypatch 并指向临时路径。
 """
-import json
+from pathlib import Path
 
 import pytest
 
@@ -229,15 +229,54 @@ def test_write_through_eviction_and_clear_sync_to_sqlite(monkeypatch, db_path):
 
 
 def test_default_path_from_settings(monkeypatch, tmp_path):
-    """未显式传路径时读 settings.kb_persist_path（相对路径解析到 cwd）。"""
+    """未显式传路径时读 settings.kb_persist_path，并解析为绝对路径。"""
     target = tmp_path / "from-settings.sqlite3"
     monkeypatch.setattr("app.config.settings.kb_persist_path", str(target))
 
     store = SQLiteKnowledgeBaseStore()
 
-    assert store.db_path == str(target)
+    assert Path(store.db_path) == target.resolve()
     store.upsert_kb_entry(_entry("fp-1"))
     assert target.exists()
+
+
+def test_relative_path_resolved_against_constructor_cwd(monkeypatch, tmp_path):
+    """相对路径在构造时定格为绝对路径（运行期 cwd 变化不影响落库位置）。"""
+    import os
+
+    monkeypatch.chdir(tmp_path)
+    store = SQLiteKnowledgeBaseStore(db_path="relative-kb.sqlite3")
+
+    assert Path(store.db_path).is_absolute()
+    assert Path(store.db_path) == (tmp_path / "relative-kb.sqlite3").resolve()
+    # 切到别处后写入仍落在构造时的位置
+    other = tmp_path / "other"
+    other.mkdir()
+    os.chdir(other)
+    try:
+        store.upsert_kb_entry(_entry("fp-1"))
+    finally:
+        os.chdir(tmp_path)
+    assert (tmp_path / "relative-kb.sqlite3").exists()
+
+
+def test_memory_path_rejected_explicitly(tmp_path):
+    """':memory:' 必须显式拒绝（短连接下每连接独立内存库，无法持久化）。"""
+    with pytest.raises(ValueError, match=":memory:"):
+        SQLiteKnowledgeBaseStore(db_path=":memory:")
+
+
+def test_connections_released_after_operations(db_path, tmp_path):
+    """操作后连接应已显式关闭：Windows 下未关闭的连接会阻止文件删除。"""
+    store = SQLiteKnowledgeBaseStore(db_path=db_path)
+    store.upsert_kb_entry(_entry("fp-1"))
+    store.list_recent_kb_entries()
+    store.update_kb_verification("fp-1", 1, 0.5, 2000.0)
+    store.delete_all_kb_entries()
+
+    # 能删除主文件（及 WAL 伴生文件）即证明连接未悬挂
+    Path(db_path).unlink()
+    assert not Path(db_path).exists()
 
 
 # ── 4. 工厂分发 ──────────────────────────────────────────────────────
@@ -252,7 +291,7 @@ def test_factory_returns_sqlite_store_when_enabled(monkeypatch, db_path):
     store = storage_factory.get_knowledge_store()
 
     assert isinstance(store, SQLiteKnowledgeBaseStore)
-    assert store.db_path == db_path
+    assert Path(store.db_path) == Path(db_path).resolve()
 
 
 def test_factory_returns_noop_when_disabled(monkeypatch, db_path):
@@ -265,19 +304,23 @@ def test_factory_returns_noop_when_disabled(monkeypatch, db_path):
 
     assert isinstance(store, NoOpKnowledgeBaseStore)
     # 关闭时不产生任何文件（含 WAL 伴生文件）
-    from pathlib import Path
-
     assert not Path(db_path).exists()
 
 
-def test_factory_degrades_to_noop_on_sqlite_init_failure(monkeypatch):
+def test_factory_degrades_to_noop_on_sqlite_init_failure(monkeypatch, db_path):
     """SQLite 初始化失败（如路径不可写）→ 降级 NoOp，不阻断启动。"""
     monkeypatch.setattr("app.config.settings.storage_backend", "memory")
     monkeypatch.setattr("app.config.settings.kb_persist_enabled", True)
+    # 显式指向临时路径：即便将来实现改为模块级 import 使 monkeypatch 失效，
+    # 也不会在仓库工作目录落盘（防自产物）
+    monkeypatch.setattr("app.config.settings.kb_persist_path", db_path)
     monkeypatch.setattr(storage_factory, "_knowledge_store", None)
+
+    attempts = {"count": 0}
 
     class _Boom(SQLiteKnowledgeBaseStore):
         def __init__(self, db_path=None):  # noqa: ARG002
+            attempts["count"] += 1
             raise OSError("path not writable")
 
     monkeypatch.setattr(
@@ -287,6 +330,46 @@ def test_factory_degrades_to_noop_on_sqlite_init_failure(monkeypatch):
     store = storage_factory.get_knowledge_store()
 
     assert isinstance(store, NoOpKnowledgeBaseStore)
+    # 防假阴性：必须真的尝试过 SQLite 初始化（否则「整段分支被删」也会绿）
+    assert attempts["count"] == 1, "工厂应尝试 SQLite 初始化后才能降级"
+    assert not Path(db_path).exists()
+
+
+def test_factory_wired_end_to_end_write_through_and_reload(monkeypatch, db_path):
+    """真实工厂分发链路的端到端：工厂返回的 store 落盘 → 模拟重启回灌命中。
+
+    与 test_write_through_then_reload_restores_hit 的区别：本用例**不 monkeypatch
+    kb_module.get_knowledge_store**，完全经真实 factory 分发（monkeypatch 仅用于
+    配置与单例重置）。若工厂的 KB_PERSIST 分支被删/写反，本用例必红。
+    """
+    monkeypatch.setattr("app.config.settings.storage_backend", "memory")
+    monkeypatch.setattr("app.config.settings.kb_persist_enabled", True)
+    monkeypatch.setattr("app.config.settings.kb_persist_path", db_path)
+    monkeypatch.setattr(storage_factory, "_knowledge_store", None)
+
+    # 第一次运行：经真实工厂拿 store 写穿
+    first = KnowledgeBaseStore(max_entries=10)
+    first.upsert(
+        fingerprint="fp-factory-e2e",
+        analysis={
+            "exception_type": "TypeError",
+            "message": "unsupported operand type(s)",
+            "root_cause": "类型不匹配",
+        },
+        fix_suggestion="先做类型转换",
+        source="llm",
+    )
+    assert Path(db_path).exists(), "工厂分发的 SQLite store 应真实落盘"
+
+    # 模拟进程重启：重置工厂单例与 KB 实例，从同一文件回灌
+    monkeypatch.setattr(storage_factory, "_knowledge_store", None)
+    second = KnowledgeBaseStore(max_entries=10)
+
+    assert second.load_from_persistent() == 1
+    hit = second.get("fp-factory-e2e")
+    assert hit is not None
+    assert hit["fix_suggestion"] == "先做类型转换"
+    assert second.get_by_normalized_fingerprint(hit["normalized_fingerprint"]) is not None
 
 
 def test_pg_backend_branch_untouched(monkeypatch):
