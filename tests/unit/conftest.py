@@ -18,6 +18,12 @@ from app.runtime.core.storage import factory as _storage_factory
 # 需要真实 PG 行为的测试用 monkeypatch 显式覆盖（如 test_factory / test_storage）。
 os.environ["STORAGE_BACKEND"] = "memory"
 settings.storage_backend = "memory"
+# v0.8.0 KB 持久化「笔记本」测试隔离：默认开启会往工作目录写 lujo-kb.sqlite3，
+# 这里显式关闭，保持既有用例行为与 v0.7.x 完全一致（不写任何文件）。
+# 同时写入 env：子进程类测试（spawn）继承 env，只改单例挡不住子进程。
+# SQLite store 自身与其工厂分发由 tests/unit/test_sqlite_kb_store.py 用临时路径覆盖。
+os.environ["KB_PERSIST_ENABLED"] = "false"
+settings.kb_persist_enabled = False
 _storage_factory._trace_store = None
 _storage_factory._session_store = None
 _storage_factory._error_store = None

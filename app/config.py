@@ -371,6 +371,14 @@ class Settings(BaseSettings):
     # L2 类型级匹配的 Jaccard 相似度阈值，低于该值不返回
     kb_seed_jaccard_min_score: float = 0.5
 
+    # ── KB 经验本地持久化「笔记本」（v0.8.0）──
+    # 默认开启：memory 后端下 KB 自有经验写穿到本地 SQLite 单文件，跨重启保留；
+    # 关闭时退回纯内存行为（与 v0.7.x 完全一致）。本组开关仅在
+    # STORAGE_BACKEND != postgresql 时生效（postgresql 下 KB 走 PG 持久化，行为不变）。
+    kb_persist_enabled: bool = True
+    # SQLite 单文件路径：相对路径解析到当前工作目录（单用户本地自用，工作目录即数据目录）
+    kb_persist_path: str = "lujo-kb.sqlite3"
+
     # ── Agent Verify Loop（v0.4.0 M4）──
     # 迭代修复模式开关：开启后 Coordinator 按 DAG 迭代修复（修复→审查→验证→重试，最多 N 轮）
     # 关闭时走 Phase 2 单次 DAG（向后兼容）

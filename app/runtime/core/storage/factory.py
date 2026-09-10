@@ -231,11 +231,16 @@ def get_spec_store() -> SpecStorage:
 
 
 def get_knowledge_store() -> KnowledgeBaseStorage:
-    """返回知识库持久化实例（v0.5.3：PG 真实持久化，memory no-op）。
+    """返回知识库持久化实例。
+
+    - `STORAGE_BACKEND=postgresql`：PG 真实持久化（v0.5.3 行为，一行不变）；
+    - 其余（默认 memory）：v0.8.0「笔记本」——`KB_PERSIST_ENABLED=true`
+      （默认）时写穿到本地 SQLite 单文件，跨重启保留自有经验；
+      显式关闭时退回历史 no-op 行为。
 
     KB 主存仍是进程内 KnowledgeBaseStore；本实例承担写穿持久化
     （upsert/record_verification/驱逐/clear 同步落库）与启动回灌
-    （list_recent_kb_entries）。PG 失败时降级 no-op（KB 退回纯内存行为，
+    （list_recent_kb_entries）。初始化失败时降级 no-op（KB 退回纯内存行为，
     不阻断启动）。
     """
     global _knowledge_store
@@ -266,7 +271,33 @@ def get_knowledge_store() -> KnowledgeBaseStorage:
                         else:
                             raise
                 else:
-                    from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
-                    _knowledge_store = NoOpKnowledgeBaseStore()
-                    logger.info("knowledge_store initialized: backend=%s (no-op)", settings.storage_backend)
+                    # v0.8.0「笔记本」：memory 后端下 KB 经验写穿到本地 SQLite 单文件
+                    # （零安装、单文件、跨重启保留）；显式关闭时退回历史 no-op 行为。
+                    if settings.kb_persist_enabled:
+                        try:
+                            from app.runtime.core.storage.sqlite_kb_store import (
+                                SQLiteKnowledgeBaseStore,
+                            )
+
+                            _knowledge_store = SQLiteKnowledgeBaseStore()
+                            logger.info(
+                                "knowledge_store initialized: backend=sqlite "
+                                "(local notebook, path=%s)",
+                                settings.kb_persist_path,
+                            )
+                        except Exception as e:
+                            logger.warning("SQLite KB store 初始化失败，降级 no-op: %s", e)
+                            from app.runtime.core.storage.noop_store import (
+                                NoOpKnowledgeBaseStore,
+                            )
+
+                            _knowledge_store = NoOpKnowledgeBaseStore()
+                    else:
+                        from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
+
+                        _knowledge_store = NoOpKnowledgeBaseStore()
+                        logger.info(
+                            "knowledge_store initialized: backend=%s (no-op)",
+                            settings.storage_backend,
+                        )
     return _knowledge_store

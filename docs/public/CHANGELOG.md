@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### ✨ 新增
+
+- **KB 调试经验本地「笔记本」**：默认开启，自有经验写穿到本机 SQLite 单文件（`KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`），进程重启自动回灌，同类问题下次直接复用历史结论；内置 45 条常见异常经验本就不依赖持久化。`KB_PERSIST_ENABLED=false` 可退回纯内存行为；`STORAGE_BACKEND=postgresql` 行为完全不变。零新依赖（Python 标准库 `sqlite3`）、数据不出本机。
+
 ### 🔒 修复与加固
 
 - 平台 npm 包（`@lujoai/lujo-mcp-win32-x64` / `-linux-x64` / `-osx-arm64`）不再声明与元包同名的 `bin`：npm 在同一安装树遇到同名 bin 冲突会跳过全部链接，导致项目内安装后 `node_modules/.bin` 缺失 `lujo-mcp-server`。启动入口仍唯一由元包 `bin/cli.js` 提供（平台二进制按固定路径 `bin/lujo-mcp-server(.exe)` 定位，不依赖该字段）；生成器与分发守卫测试同步更新。生效于下一个发布版本。

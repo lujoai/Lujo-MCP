@@ -24,6 +24,11 @@ from app.config import settings  # noqa: E402
 from app.runtime.core.storage import factory as _storage_factory  # noqa: E402
 
 settings.storage_backend = _FORCED_BACKEND
+# v0.8.0 KB 持久化「笔记本」测试隔离：与 unit/integration 同口径显式关闭
+# （含 env——子进程/子服务继承 env 时同样生效），避免 e2e 全链路往工作目录写
+# lujo-kb.sqlite3。
+os.environ["KB_PERSIST_ENABLED"] = "false"
+settings.kb_persist_enabled = False
 for _name in ("_trace_store", "_session_store", "_error_store", "_spec_store", "_knowledge_store"):
     setattr(_storage_factory, _name, None)
 
