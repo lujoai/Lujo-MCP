@@ -116,20 +116,23 @@ def test_npm_meta_bin_scripts_exist():
 
 
 @pytest.mark.parametrize(
-    ("pkg_dir", "name_suffix", "os_", "cpu", "bin_key", "exe"),
+    ("pkg_dir", "name_suffix", "os_", "cpu"),
     [
-        ("lujo-mcp-win32-x64", "lujo-mcp-win32-x64", "win32", "x64", "bin/lujo-mcp-server.exe", ".exe"),
-        ("lujo-mcp-linux-x64", "lujo-mcp-linux-x64", "linux", "x64", "bin/lujo-mcp-server", ""),
-        ("lujo-mcp-osx-arm64", "lujo-mcp-osx-arm64", "darwin", "arm64", "bin/lujo-mcp-server", ""),
+        ("lujo-mcp-win32-x64", "lujo-mcp-win32-x64", "win32", "x64"),
+        ("lujo-mcp-linux-x64", "lujo-mcp-linux-x64", "linux", "x64"),
+        ("lujo-mcp-osx-arm64", "lujo-mcp-osx-arm64", "darwin", "arm64"),
     ],
 )
-def test_npm_platform_package_structure(pkg_dir, name_suffix, os_, cpu, bin_key, exe):
+def test_npm_platform_package_structure(pkg_dir, name_suffix, os_, cpu):
     pkg = _load_pkg_json(pkg_dir)
     assert pkg["name"] == f"@lujoai/{name_suffix}"
     assert pkg["version"] == _version()
     assert pkg["os"] == [os_]
     assert pkg["cpu"] == [cpu]
-    assert pkg["bin"] == {"lujo-mcp-server": bin_key}
+    # 平台包不得声明 bin：与元包同名（lujo-mcp-server）会让 npm 在同一安装树
+    # 跳过全部同名 bin 链接，项目内安装后 node_modules/.bin 为空。二进制由
+    # 元包 cli.js 按固定路径 bin/lujo-mcp-server(.exe) 定位，不需要 bin 字段。
+    assert "bin" not in pkg
     assert pkg["files"] == ["bin"]
     # 平台包骨架脚本必须能重新生成该包的 package.json（避免手改漂移）
     assert (NPM / "scripts" / "gen-platform-packages.js").is_file()

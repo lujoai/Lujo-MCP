@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 🔒 修复与加固
+
+- 平台 npm 包（`@lujoai/lujo-mcp-win32-x64` / `-linux-x64` / `-osx-arm64`）不再声明与元包同名的 `bin`：npm 在同一安装树遇到同名 bin 冲突会跳过全部链接，导致项目内安装后 `node_modules/.bin` 缺失 `lujo-mcp-server`。启动入口仍唯一由元包 `bin/cli.js` 提供（平台二进制按固定路径 `bin/lujo-mcp-server(.exe)` 定位，不依赖该字段）；生成器与分发守卫测试同步更新。生效于下一个发布版本。
+
 ## [0.7.9] - 2026-09-10
 
 > 主题「异步 PostgreSQL 验证 + Node SDK 首发」：补齐 asyncpg 错误读写链路的真实数据库验证，修复跨事件循环重建连接池时的生命周期问题，并发布 Node.js 服务端 SDK。默认 memory 后端、公开工具面和数据库 schema 保持不变。

@@ -2,8 +2,13 @@
 // Generates the per-platform npm packages that ship the PyInstaller binary.
 //
 // Each platform package (lujo-mcp-<platform>-<arch>) contains exactly two files:
-//   package.json   — declares the binary path
+//   package.json   — package metadata (name/version/os/cpu/engines/files)
 //   bin/lujo-mcp-server(.exe)  — the actual binary (added at build time)
+//
+// package.json 故意不声明 "bin"：bin 名与元包的 lujo-mcp-server 相同，npm 在同一
+// 安装树遇到同名 bin 冲突时会全部跳过链接，导致项目内安装后 node_modules/.bin
+// 为空。启动器入口只保留元包 bin/cli.js 一处（cli.js 按固定路径 bin/lujo-mcp-server
+// 定位平台二进制，不依赖本字段）。
 //
 // Usage:
 //   node npm/scripts/gen-platform-packages.js 0.7.6 [--out <dir>]
@@ -110,10 +115,6 @@ for (const p of platforms) {
     license: 'MIT',
     os: [p.platform === 'osx' ? 'darwin' : p.platform],
     cpu: [p.arch],
-    bin: {
-      // 统一用正斜杠（跨平台：Windows 上 path.join 会产出反斜杠，导致发布 manifest 非确定性）
-      'lujo-mcp-server': ['bin', p.exe].join('/'),
-    },
     files: ['bin'],
   };
 

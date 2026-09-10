@@ -5,7 +5,8 @@
  * manifest 声明的 "engines" 在发布产物中被静默丢弃（v0.7.6 / v0.7.7 线上
  * 三包 npm view engines 实证为空，见 CODE_REVIEW §9 与 PLAN_v0.7.8.md §3）。
  * 本文件守住两件事：
- *   1. 产物必须含非空 engines.node（回退默认 >=18）且 name/version/os/cpu/bin/files 齐全；
+ *   1. 产物必须含非空 engines.node（回退默认 >=18）且 name/version/os/cpu/engines/files
+ *      齐全，且不得声明 bin（与元包同名 bin 会让 npm 跳过全部 bin 链接）；
  *   2. 输出目录已有 manifest 声明 engines 时必须继承（这是「仓库声明了
  *      engines 而产物没有」场景的守卫：若生成器丢字段或只留回退，本用例变红）。
  *
@@ -103,11 +104,10 @@ test("空输出目录：三平台产物均含非空 engines.node（回退默认 
       assert.strictEqual(pkg.engines.node, ">=18");
       assert.ok(Array.isArray(pkg.os) && pkg.os.length > 0, `${suffix} 产物应含 os`);
       assert.ok(Array.isArray(pkg.cpu) && pkg.cpu.length > 0, `${suffix} 产物应含 cpu`);
-      assert.ok(
-        typeof pkg.bin === "object" &&
-          typeof pkg.bin["lujo-mcp-server"] === "string" &&
-          pkg.bin["lujo-mcp-server"].length > 0,
-        `${suffix} 产物应含 bin 入口`,
+      assert.strictEqual(
+        pkg.bin,
+        undefined,
+        `${suffix} 产物不得声明 bin：与元包同名 bin 会让 npm 跳过全部同名链接（.bin 为空）`,
       );
       assert.deepStrictEqual(pkg.files, ["bin"]);
     }

@@ -12,9 +12,6 @@
   "cpu": [
     "x64"
   ],
-  "bin": {
-    "lujo-mcp-server": "bin/lujo-mcp-server.exe"
-  },
   "files": [
     "bin"
   ]
