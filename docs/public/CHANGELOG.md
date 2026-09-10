@@ -7,13 +7,26 @@
 
 ## [Unreleased]
 
+- 无（v0.8.0 的变更已整理到下方版本段）。
+
+## [0.8.0] - 2026-09-11
+
+> 主题「KB 经验本地「笔记本」+ 安装修复」：为单用户本地自用定位补上经验跨重启沉淀能力（SQLite 单文件、零安装、数据不出本机），并修复平台包同名 bin 导致项目内安装后 `node_modules/.bin` 缺失启动入口的问题。零 Breaking、零新依赖、零 schema 变更。
+
 ### ✨ 新增
 
-- **KB 调试经验本地「笔记本」**：默认开启，自有经验写穿到本机 SQLite 单文件（`KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`），进程重启自动回灌，同类问题下次直接复用历史结论；内置 45 条常见异常经验本就不依赖持久化。`KB_PERSIST_ENABLED=false` 可退回纯内存行为；`STORAGE_BACKEND=postgresql` 行为完全不变。零新依赖（Python 标准库 `sqlite3`）、数据不出本机。
+- **KB 调试经验本地「笔记本」**：默认开启，自有经验写穿到本机 SQLite 单文件（`KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`），进程重启自动回灌，同类问题下次直接复用历史结论；内置 45 条常见异常经验本就不依赖持久化。`KB_PERSIST_ENABLED=false` 可退回纯内存行为（与 v0.7.x 一致）；`STORAGE_BACKEND=postgresql` 行为完全不变。零新依赖（Python 标准库 `sqlite3`）、数据不出本机。用户提示：默认开启后会在 Lujo 进程工作目录生成 `lujo-kb.sqlite3`（删除即重置经验库，可用 `KB_PERSIST_PATH` 指定固定位置）。
 
 ### 🔒 修复与加固
 
-- 平台 npm 包（`@lujoai/lujo-mcp-win32-x64` / `-linux-x64` / `-osx-arm64`）不再声明与元包同名的 `bin`：npm 在同一安装树遇到同名 bin 冲突会跳过全部链接，导致项目内安装后 `node_modules/.bin` 缺失 `lujo-mcp-server`。启动入口仍唯一由元包 `bin/cli.js` 提供（平台二进制按固定路径 `bin/lujo-mcp-server(.exe)` 定位，不依赖该字段）；生成器与分发守卫测试同步更新。生效于下一个发布版本。
+- 平台 npm 包（`@lujoai/lujo-mcp-win32-x64` / `-linux-x64` / `-osx-arm64`）不再声明与元包同名的 `bin`：npm 在同一安装树遇到同名 bin 冲突会跳过全部链接，导致项目内安装后 `node_modules/.bin` 缺失 `lujo-mcp-server`（v0.7.7 起预存）。启动入口仍唯一由元包 `bin/cli.js` 提供（平台二进制按固定路径 `bin/lujo-mcp-server(.exe)` 定位，不依赖该字段）；生成器与分发守卫测试同步更新。**本版生效**。
+- 「笔记本」持久层健壮性加固：SQLite 短连接显式关闭（不依赖 GC）、显式拒绝 `:memory:`（短连接下无法持久化）、相对路径在构造时定格为绝对路径（避免运行期工作目录变化导致落库位置漂移）；新增「真实工厂分发 → 写穿 → 模拟重启回灌命中」端到端回归与降级非假阴性断言。
+
+### 验证
+
+- CI（七 job）全绿：unit 1636 passed / 6 skipped / 0 failed；integration 75 passed / 45 skipped / 0 failed；Playwright e2e 10 passed / 1 skipped / 0 failed；Browser SDK 54/54；Node SDK（Node 18/20/22）11/11；`ruff` 与 `check_doc_links.py`（177 正常 / 0 错误 / 0 警告）通过。
+- 「笔记本」能力本地实测：种子 45 条开箱命中（同模式错误经 L1.5 归一化指纹命中，零 LLM 调用）；写穿 → 模拟进程重启 → 回灌 → 经验命中端到端验证通过；全量测试前后本机数据库行数不变（测试不写真实库）。
+- 发布前云端预演：手动触发 release-npm（`version=0.7.9`，未打 tag）三平台构建 + launcher 端到端冒烟全部通过、各包幂等 skip、npm 与 GitHub Release 零副作用。
 
 ## [0.7.9] - 2026-09-10
 

@@ -1,9 +1,9 @@
 # 启动前检查清单 / Pre-flight Checklist
 
-**适用版本 / Applicable Version**: v0.7.9
-**最后更新 / Last Updated**: 2026-09-10
+**适用版本 / Applicable Version**: v0.8.0
+**最后更新 / Last Updated**: 2026-09-11
 
-> **发布状态**：v0.7.9 已发布。tag `v0.7.9`、普通 CI、release-npm、npm 五个发布包和 GitHub Release 均已完成；默认 `STORAGE_BACKEND=memory`。
+> **发布状态**：v0.8.0 准备发布。默认 `STORAGE_BACKEND=memory`；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。上一版 v0.7.9 的发布证据见 GitHub Release。
 
 ---
 
@@ -612,7 +612,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | Lujo-MCP v0.7.9 | ..."
+#   - 日志输出 "服务启动 | Lujo-MCP v0.8.0 | ..."
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -632,7 +632,7 @@ curl http://localhost:8000/health
 #   {
 #     "status": "ok",              ← 或 "degraded"（LLM 未配置时）
 #     "service": "Lujo-MCP",
-#     "version": "0.7.9",
+#     "version": "0.8.0",
 #     "storage": "memory",         ← 或 "postgresql (connected)"
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

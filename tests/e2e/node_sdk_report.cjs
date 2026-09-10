@@ -15,7 +15,7 @@ async function main() {
     apiKey,
     traceId,
     sessionId,
-    release: "node-sdk-e2e@0.7.9",
+    release: "node-sdk-e2e@0.8.0",
     batchIntervalMs: 60000,
     retryDelayMs: 10,
   });

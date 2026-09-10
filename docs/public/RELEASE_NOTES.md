@@ -1,10 +1,37 @@
 # Release Notes / 发布说明
 
-> **v0.7.9 已发布**（2026-09-10）：tag `v0.7.9` → `381182bc406c7b54cca3277141a2dd06b669891b`，普通 CI run `34382654373` 全绿，修正版 release-npm run `34383308343` 成功。npm 五个发布包均为 `0.7.9` / `latest`，Node 引擎均为 `>=18`；三平台资产已上传至 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9)。上一版 v0.7.8 已发布：tag `v0.7.8` → `ecc789d`，npm 四包 0.7.8 / `latest`，GitHub Release 三平台资产齐全。
+> **v0.8.0（当前版本，准备发布）**：为单用户本地自用定位补上 KB 经验跨重启沉淀能力（本地 SQLite「笔记本」，零安装、数据不出本机），并修复平台包同名 `bin` 导致项目内安装后 `node_modules/.bin` 缺失启动入口的问题。发布状态以 npm registry 与 GitHub Release 为准；上一版 v0.7.9 已发布：tag `v0.7.9` → `381182b`，npm 五包 0.7.9 / `latest`，三平台资产齐全。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.7.9 ・ **Release Date / 发布日期**: 2026-09-10 ・ **Codename / 代号**: 异步存储验证与 Node SDK 首发 ｜ Async Storage Verification & Node SDK
+**Version / 版本**: v0.8.0 ・ **Release Date / 发布日期**: 2026-09-11 ・ **Codename / 代号**: 本地经验笔记本与安装修复 ｜ Local Experience Notebook & Install Fix
+
+---
+
+## v0.8.0（2026-09-11）
+
+### 版本概述
+
+本版围绕两件事：**让调试经验留在本机** 与 **修复 npm 安装入口**。KB 经验持久化从「仅 PostgreSQL 可选」扩展为「默认本地 SQLite 单文件」——单用户本地自用场景无需任何外部服务即可跨重启保留自有经验；同时修复平台包与元包同名的 `bin` 声明导致项目内安装后启动入口缺失的问题。零 Breaking Change、零新依赖、零 schema 变更，公开工具面不变。
+
+### 主要新增
+
+- **KB 调试经验本地「笔记本」（默认开启）**：自有调试经验（启用 LLM 分析后产生）写穿到本机 SQLite 单文件（默认工作目录下 `lujo-kb.sqlite3`），进程重启自动回灌，同类问题下次直接复用历史结论；内置 45 条常见异常经验本就开箱可用、不依赖持久化。零安装（Python 标准库 `sqlite3`）、数据不出本机。
+
+### 主要修复
+
+- 平台 npm 包不再声明与元包同名的 `bin`：此前 npm 在同一安装树遇到同名 bin 冲突会跳过全部链接，导致项目内安装后 `node_modules/.bin` 缺少 `lujo-mcp-server`（v0.7.7 起预存）。启动入口仍唯一由元包 `bin/cli.js` 提供，平台二进制按固定路径定位，不受影响。
+- 「笔记本」持久层健壮性：短连接显式关闭、显式拒绝 `:memory:`、相对路径构造时定格为绝对路径。
+
+### 升级说明
+
+- 零 Breaking Change；现有 stdio 配置无需修改，公开工具面与数据库 schema 不变。
+- **行为变化（预期）**：默认开启「笔记本」后，Lujo 进程会在其工作目录生成 `lujo-kb.sqlite3`（含 WAL 伴生文件，已在仓库 `.gitignore` 忽略）。删除该文件即重置经验库；用 `KB_PERSIST_PATH` 指定固定位置（多工作目录场景建议如此）；用 `KB_PERSIST_ENABLED=false` 退回纯内存行为（与 v0.7.x 一致）。
+- `STORAGE_BACKEND=postgresql` 用户行为**完全不变**（KB 仍走 PG 持久化，本开关不生效）。
+
+### 验证基线（发布前本地实测，发布后以 CI/流水线为准）
+
+本地（Windows / Python 3.12.5 / Node 22）：unit **1636 passed / 6 skipped / 0 failed**；integration 79 passed / 41 skipped / 0 failed；Playwright e2e 10 passed / 1 skipped / 0 failed；Browser SDK 54/54；Node SDK 11/11；`ruff` 与 `check_doc_links.py`（177/0/0）通过；写穿→重启回灌→经验命中端到端验证通过；全量测试前后本机 PostgreSQL 行数不变（测试不写真实库）。
 
 ---
 

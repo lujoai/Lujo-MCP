@@ -1,6 +1,8 @@
 # PostgreSQL 本地连接修复指南
 
-> **v0.7.9 已发布（2026-09-10）**：asyncpg errors 真库读写链路、`(fingerprint, session_id)` 节流键和跨事件循环 pool 生命周期已验证。默认 `STORAGE_BACKEND=memory`；PostgreSQL 需显式启用。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
+> **v0.8.0（2026-09-11）**：KB 经验默认走本地 SQLite「笔记本」，不再依赖 PostgreSQL 即可跨重启沉淀。`STORAGE_BACKEND=memory` 仍为默认；PostgreSQL 需显式启用，其 KB 持久化行为不变。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
+>
+> 上一版 v0.7.9 已发布（2026-09-10）：asyncpg errors 真库读写链路、`(fingerprint, session_id)` 节流键和跨事件循环 pool 生命周期已验证。
 
 ## 结论
 

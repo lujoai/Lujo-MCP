@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前发布版本：v0.7.9（2026-09-10，已发布）。本版包含 Node SDK 首发；普通 CI run `34382654373`、发布流水线 run `34383308343`、npm 与 GitHub Release 证据已落定。
+> 当前版本：v0.8.0（2026-09-11）。本版新增 KB 调试经验本地「笔记本」（默认开启，详见 KNOWLEDGE_BASE 文档）并修复平台包安装入口；公开工具面与数据库 schema 不变。上一版 v0.7.9（Node SDK 首发）的发布证据见 GitHub Release。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 

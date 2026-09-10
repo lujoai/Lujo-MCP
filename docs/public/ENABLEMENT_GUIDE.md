@@ -1,6 +1,6 @@
 # Lujo-MCP 环境部署与功能启用指南
 
-> **当前版本：v0.7.9（2026-09-10，已发布）**。默认 `STORAGE_BACKEND=memory`；PostgreSQL/asyncpg、Redis、Playwright、熔断器和 OpenTelemetry 均需按场景显式启用。asyncpg errors 真库链路已验证；`PG_ASYNC_ENABLED=true` 时全应用 trace/session 存储生命周期统一仍是独立工作项。
+> **当前版本：v0.8.0（2026-09-11）**。默认 `STORAGE_BACKEND=memory`；KB 调试经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED`/`KB_PERSIST_PATH` 可调）；PostgreSQL/asyncpg、Redis、Playwright、熔断器和 OpenTelemetry 均需按场景显式启用。`PG_ASYNC_ENABLED=true` 时全应用 trace/session 存储生命周期统一仍是独立工作项。
 
 > 目标：把“代码已存在的能力”转换成“团队可复现启用、可验证交付的能力”。  
 > 功能完成度与当前验证状态以内部文档为准。

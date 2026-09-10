@@ -1,6 +1,6 @@
 # Lujo-MCP 知识库：经验积累与置信度进化
 
-> **当前版本：v0.7.9（2026-09-10，已发布）**。默认 `STORAGE_BACKEND=memory`；PostgreSQL 为显式可选后端。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
+> **当前版本：v0.8.0（2026-09-11）**。KB 自有经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）——零安装、数据不出本机、进程重启自动回灌；`KB_PERSIST_ENABLED=false` 退回纯内存。`STORAGE_BACKEND=memory` 为默认；PostgreSQL 为显式可选后端（其 KB 持久化行为不变）。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
 >
 > Lujo-MCP 不只是「看到 Bug 现场」——它把每次调试的结论**沉淀为可复用的经验**，并且这些经验**跨重启保留、越验证越可信**。这是 Lujo-MCP 与常见无状态 MCP 调试工具的本质差异。
 

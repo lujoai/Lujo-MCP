@@ -2,11 +2,13 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.7.9｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.8.0｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
-> **v0.7.9 已发布（2026-09-10）**：asyncpg errors 读写链路已通过隔离 PostgreSQL 真库验证，Node.js 服务端 SDK 已首发；普通 CI run `34382654373` 全绿，修正版发布流水线 run `34383308343` 成功。默认 `STORAGE_BACKEND=memory`，产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL；`PG_ASYNC_ENABLED=true` 下全应用 trace/session 存储生命周期统一仍是独立工作项。
+> **v0.8.0（2026-09-11）**：KB 调试经验本地「笔记本」（SQLite 单文件写穿 + 启动回灌，`KB_PERSIST_ENABLED` 默认 true，`STORAGE_BACKEND != postgresql` 时生效；PG 分支行为不变）；平台包同名 bin 安装修复。默认 `STORAGE_BACKEND=memory`，产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL；`PG_ASYNC_ENABLED=true` 下全应用 trace/session 存储生命周期统一仍是独立工作项。
+>
+> 上一版 **v0.7.9 已发布（2026-09-10）**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，Node.js 服务端 SDK 首发。
 >
 > **v0.6.0 更新（2026-08-21，测试基线 1161 passed / 6 skipped / 0 failed）**：
 > - **God Object 彻底拆解**：`pg_store.py` 拆解为 `pg_executor.py` + 5 个分治 Store + `pg_partitions.py`；`analyzer.py` 拆解为 `app/llm/` 6 个单一职责子模块，消除所有隐式跨模块调用与连接管理样板代码。
@@ -629,7 +631,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
 | AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
-| **合计** | — | **1621 tests = 1615 passed / 6 skipped / 0 failed** | 当前 v0.7.9 单元基线（另有 integration 120 项 / e2e 11 项 / PG async 5 项 / Node SDK 11 项）；本节表格其余数字为历史快照，仅作演进记录 |
+| **合计** | — | **1642 tests = 1636 passed / 6 skipped / 0 failed** | 当前 v0.8.0 单元基线（另有 integration 120 项 / e2e 11 项 / PG async 5 项 / Node SDK 11 项）；本节表格其余数字为历史快照，仅作演进记录 |
 
 ### 11.2 测试执行
 

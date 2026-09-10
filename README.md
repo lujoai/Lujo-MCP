@@ -6,7 +6,7 @@
 
 > 💡 **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 
-> **当前版本：v0.7.9（2026-09-10，已发布）**：tag `v0.7.9` 指向提交 `381182bc406c7b54cca3277141a2dd06b669891b`；普通 CI run `34382654373` 与发布流水线 run `34383308343` 均已通过。npm 五个发布包的 `latest` 均为 `0.7.9`，Node 引擎要求为 `>=18`。详见 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9)。
+> **当前版本：v0.8.0（2026-09-11）**：KB 调试经验本地「笔记本」默认开启（跨重启保留自有经验，数据不出本机），并修复平台包同名 `bin` 导致的安装入口缺失问题。npm 最新已发布版本见 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp)；上一版 v0.7.9 的发布证据见 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases)。
 
 ---
 
