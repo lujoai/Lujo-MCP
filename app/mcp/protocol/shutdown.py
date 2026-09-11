@@ -225,7 +225,9 @@ def wrap_uvicorn_handle_exit(server) -> None:
     """
     if getattr(server, "_intent_wrapped", False):
         return
-    original = server.handle_exit
+    original = getattr(server, "handle_exit", None)
+    if original is None:
+        return  # 无 handle_exit 的替身（测试 fake）：无可适配的 serve 路径
 
     def _handle_exit(signum, frame):
         signal_handler_stub(signum, frame)
