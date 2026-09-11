@@ -310,3 +310,94 @@ class TestStdioRecordsToolMetrics:
             assert ("parity_metric_busy", "heavy") in busy
         finally:
             _tool_registry.pop("parity_metric_busy", None)
+
+
+class TestB08DispatchConsistency:
+    """B08（C2 §6.1）：heavy 判定先于 async 判定——两传输同构派发。"""
+
+    @pytest.mark.asyncio
+    async def test_async_heavy_routes_through_subprocess_on_both_transports(
+        self, monkeypatch
+    ):
+        """async heavy 在 stdio 与 HTTP 两侧都派发到 run_heavy_tool_blocking，
+        进程内协程不执行（闭包断言守卫）。"""
+        import app.mcp_server as stdio
+
+        calls = {"stdio": 0, "http": 0}
+
+        def _spy(which):
+            def _run(module, name, arguments, timeout):
+                calls[which] += 1
+                return {"routed": which}
+
+            return _run
+
+        monkeypatch.setattr(stdio, "run_heavy_tool_blocking", _spy("stdio"))
+        monkeypatch.setattr(protocol, "run_heavy_tool_blocking", _spy("http"))
+        monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
+
+        async def _closure_async_heavy(_arguments):
+            raise AssertionError("async heavy 不得在进程内执行")
+
+        register_tool(
+            "parity_async_heavy",
+            description="test-only async heavy tool",
+            handler=_closure_async_heavy,
+            inputSchema={"type": "object"},
+            heavy=True,
+        )
+        try:
+            dumped = await _stdio_call("parity_async_heavy", {})
+            payload = _stdio_payload(dumped)
+            assert dumped["isError"] is False
+            assert payload == {"routed": "stdio"}
+            http = await _http_call("parity_async_heavy", {})
+            assert http["result"]["isError"] is False
+            assert json.loads(http["result"]["content"][0]["text"]) == {
+                "routed": "http"
+            }
+            assert calls == {"stdio": 1, "http": 1}
+        finally:
+            _tool_registry.pop("parity_async_heavy", None)
+
+    @pytest.mark.asyncio
+    async def test_async_light_stays_in_process_on_both_transports(self, monkeypatch):
+        """async **轻量**（repair_async 同形态）在两传输都留进程内，不进子进程。"""
+        import app.mcp_server as stdio
+
+        calls = {"stdio": 0, "http": 0}
+
+        def _spy(which):
+            def _run(module, name, arguments, timeout):
+                calls[which] += 1
+                return {"routed": which}
+
+            return _run
+
+        monkeypatch.setattr(stdio, "run_heavy_tool_blocking", _spy("stdio"))
+        monkeypatch.setattr(protocol, "run_heavy_tool_blocking", _spy("http"))
+        monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
+
+        async def _closure_async_light(_arguments):
+            return {"inprocess": True}
+
+        register_tool(
+            "parity_async_light",
+            description="test-only async light tool",
+            handler=_closure_async_light,
+            inputSchema={"type": "object"},
+            heavy=False,
+        )
+        try:
+            dumped = await _stdio_call("parity_async_light", {})
+            payload = _stdio_payload(dumped)
+            assert dumped["isError"] is False
+            assert payload == {"inprocess": True}
+            http = await _http_call("parity_async_light", {})
+            assert http["result"]["isError"] is False
+            assert json.loads(http["result"]["content"][0]["text"]) == {
+                "inprocess": True
+            }
+            assert calls == {"stdio": 0, "http": 0}
+        finally:
+            _tool_registry.pop("parity_async_light", None)

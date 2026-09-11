@@ -410,10 +410,10 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     _tool_start = time.monotonic()
     handler = tool["handler"]
 
-    if asyncio.iscoroutinefunction(handler):
-        # FIX: v0.6.6 async 工具绕过双池 —— 此前 async handler 直接 await 执行，
-        # 完全绕过 light/heavy 双池槽位门控：无并发上限，重型 async 工具
-        # （auto_test 等）可打满事件循环并与同步工具互相影响。现按同一
+    if asyncio.iscoroutinefunction(handler) and not is_heavy_tool(tool_name):
+        # async **轻量**：留进程内（C2 §6.1 B08——heavy 判定先于 async 判定，
+        # async heavy 落入下方 heavy 分支进子进程；repair_async 等异步轻量
+        # 必须留在进程内）。FIX: v0.6.6 async 工具绕过双池 —— 按同一
         # heavy 判定获取对应池槽位（async 无需线程池，仅信号量门控），
         # 超时同样走 TOOL_BUSY fast-fail，保持双池隔离语义。
         _, slots, pool_type = _get_tool_executor_and_slots(tool_name)
@@ -481,7 +481,8 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": "TOOL_INTERNAL",
             })
     else:
-        # 同步工具：获取执行槽位，带等待超时，防止线程池排队堆积与饥饿
+        # 同步工具 / **heavy 工具（sync 与 async 都进子进程，C2 §6.1 B08）**：
+        # 获取执行槽位，带等待超时，防止线程池排队堆积与饥饿
         executor, slots, pool_type = _get_tool_executor_and_slots(tool_name)
         busy_timeout = settings.tool_busy_queue_timeout
         wait_start = time.perf_counter()

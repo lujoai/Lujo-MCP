@@ -377,8 +377,10 @@ async def _run_registered_tool(name: str, tool: dict, arguments: dict, *, token=
         if token is not None and pool is not None:
             pool.attach(done_obj, token)
 
-    if asyncio.iscoroutinefunction(handler):
-        # async 轻量的真实任务即 Task：在 task 上挂结算
+    if asyncio.iscoroutinefunction(handler) and not is_heavy_tool(name):
+        # async **轻量**（repair_async 等）留进程内：真实任务即 Task，在 task
+        # 上挂结算。heavy 判定先于 async 判定——async heavy 落入下方 heavy
+        # 分支进子进程（C2 §6.1 B08，与 HTTP 侧同构）。
         task = asyncio.ensure_future(handler(arguments))
         if token is not None and pool is not None:
             task.add_done_callback(lambda _t: pool.settle(token))

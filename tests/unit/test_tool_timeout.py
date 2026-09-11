@@ -8,6 +8,7 @@ import pytest
 
 from app.config import settings
 import app.mcp.protocol.server as server_module
+from app.mcp.protocol import _heavy_selftest
 from app.mcp.protocol.executor_lifecycle import SlotPool
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
 from app.mcp.protocol.server import _handle_tools_call, _tool_registry, register_tool
@@ -193,10 +194,17 @@ async def test_async_tool_gated_by_light_pool(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
-    """FIX: v0.6.6 async 工具绕过双池 —— 重型 async 工具走 heavy 池。
+async def test_async_heavy_tool_routed_through_subprocess(monkeypatch):
+    """B08（C2 §6.1）：async heavy 工具经子进程执行，双池隔离语义不变。
 
-    light 池被同步工具占满时，heavy 池的 async 工具不受影响（双池隔离）。
+    **改断言三件套（W2-4）**：
+    - 原断言（test_async_heavy_tool_uses_heavy_pool）：closure async handler
+      + heavy=True 在**进程内**经 ensure_future 执行并返回。
+    - 新断言：heavy 判定先于 async 判定——async heavy 经
+      ``run_heavy_tool_blocking`` 进**子进程**执行并返回（可导入的
+      ``_heavy_selftest.async_ok`` 目标真子进程往返）；light 池占满不影响。
+    - 为什么：原断言编码了「async 就留进程内」的旧路径——正是 B08 要消除的
+      旁路；且 closure 不可 pickle，改造后必然走子进程。
     """
     monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
     monkeypatch.setattr(server_module, "_heavy_pool", SlotPool("heavy", 2))
@@ -206,11 +214,11 @@ async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
         time.sleep(0.3)
         return {"light": "slow"}
 
-    async def _fast_heavy_async(args):
-        return {"heavy": "async"}
-
     register_tool("light_sync_occ", "Light sync occupier", _slow_light_sync, heavy=False)
-    register_tool("heavy_async_tool", "Heavy async tool", _fast_heavy_async, heavy=True)
+    register_tool(
+        "heavy_async_tool", "Heavy async tool",
+        _heavy_selftest.async_ok, heavy=True,
+    )
 
     occ = asyncio.create_task(_handle_tools_call(
         JSONRPCRequest(id=310, method="tools/call", params={"name": "light_sync_occ", "arguments": {}})
@@ -218,13 +226,74 @@ async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
     await asyncio.sleep(0.02)
 
     resp = await _handle_tools_call(
-        JSONRPCRequest(id=311, method="tools/call", params={"name": "heavy_async_tool", "arguments": {}})
+        JSONRPCRequest(id=311, method="tools/call", params={
+            "name": "heavy_async_tool", "arguments": {"x": 5}})
     )
     assert resp["result"]["isError"] is False
     heavy_content = json.loads(resp["result"]["content"][0]["text"])
-    assert heavy_content["heavy"] == "async"
+    assert heavy_content == {"ok": True, "heavy": "async-subprocess", "echo": 5}
 
     await occ
+
+
+@pytest.mark.asyncio
+async def test_async_heavy_dispatch_spies_subprocess_and_skips_inprocess(monkeypatch):
+    """B08 派发断言：async heavy 派发到 run_heavy_tool_blocking（子进程），
+    进程内协程**不执行**（闭包副作用不发生）。"""
+    called = []
+    monkeypatch.setattr(
+        server_module, "run_heavy_tool_blocking",
+        lambda module, name, arguments, timeout: called.append((module, name))
+        or {"routed": True},
+    )
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
+
+    inprocess_ran = {"n": 0}
+
+    async def _closure_async_heavy(args):
+        inprocess_ran["n"] += 1
+        return {"inprocess": True}
+
+    register_tool("heavy_async_closure", "Heavy async closure",
+                  _closure_async_heavy, heavy=True)
+
+    resp = await _handle_tools_call(
+        JSONRPCRequest(id=312, method="tools/call", params={
+            "name": "heavy_async_closure", "arguments": {}})
+    )
+    assert resp["result"]["isError"] is False
+    assert json.loads(resp["result"]["content"][0]["text"]) == {"routed": True}
+    assert len(called) == 1
+    module, name = called[0]
+    assert name == "_closure_async_heavy"
+    assert module == __name__  # 派发以 module/name 字符串进子进程
+    assert inprocess_ran["n"] == 0  # 进程内协程未执行
+
+
+@pytest.mark.asyncio
+async def test_async_light_tool_stays_in_process(monkeypatch):
+    """B08 反例：async **轻量**（repair_async 同形态）留进程内——不进子进程。"""
+    called = []
+    monkeypatch.setattr(
+        server_module, "run_heavy_tool_blocking",
+        lambda module, name, arguments, timeout: called.append((module, name))
+        or {"routed": True},
+    )
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
+
+    async def _fast_async_light(args):
+        return {"async": "inprocess"}
+
+    register_tool("async_light_tool", "Async light tool",
+                  _fast_async_light, heavy=False)
+
+    resp = await _handle_tools_call(
+        JSONRPCRequest(id=313, method="tools/call", params={
+            "name": "async_light_tool", "arguments": {}})
+    )
+    assert resp["result"]["isError"] is False
+    assert json.loads(resp["result"]["content"][0]["text"]) == {"async": "inprocess"}
+    assert called == []  # 未派发到子进程
 
 
 @pytest.mark.asyncio

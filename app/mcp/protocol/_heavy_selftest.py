@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 
@@ -34,3 +35,12 @@ def big_result(arguments: dict) -> dict:
 def unserializable_result(arguments: dict) -> dict:
     """返回不可 pickle 的结果，验证父进程收到结构化错误而非挂死。"""
     return {"ok": True, "fn": lambda: 1}
+
+
+async def async_ok(arguments: dict) -> dict:
+    """async heavy 目标（B08）：验证 async heavy 经子进程往返。
+
+    必须是**可导入**的模块级函数（闭包不可 pickle，无法进子进程）。
+    """
+    await asyncio.sleep(0)
+    return {"ok": True, "heavy": "async-subprocess", "echo": arguments.get("x")}
