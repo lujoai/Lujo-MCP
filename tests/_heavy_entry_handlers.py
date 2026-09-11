@@ -23,3 +23,11 @@ def boom(arguments):
 def unserializable(arguments):
     """返回不可 pickle 对象（threading.Lock 不可序列化）→ 子进程退化结构化错误。"""
     return threading.Lock()
+
+
+def slow_sync(arguments):
+    """模拟阻塞 heavy handler（sleep 0.3s）→ 结构化成功回传。"""
+    import time
+
+    time.sleep(0.3)
+    return {"matched": True, "diffs": [], "silent_failure": False}

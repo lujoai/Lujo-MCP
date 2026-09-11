@@ -56,6 +56,42 @@ def main() -> int:
         time.sleep(120)
         return 0
 
+    if mode == "half_result":
+        # 结果半帧停住：R 之后只写半个帧头（4 字节）然后挂住
+        import struct as _struct
+        request_bytes = read_request_frame(sys.stdin.buffer)
+        write_frame(wfd, READY_BYTE, header_len=0)
+        go = sys.stdin.buffer.read(1)
+        if go != GO_BYTE:
+            os._exit(9)
+        os.write(wfd, _struct.pack("<Q", 64)[:4])
+        time.sleep(120)
+        return 0
+
+    if mode == "grandchild_then_exit":
+        # 孙进程收容边界：拉起孙进程后发结果帧并退出；孙进程**不得**持有
+        # 结果写端（takeover 已清继承属性）——父侧读取器必须能立即结束，
+        # 不得依赖杀孙进程才读到 EOF。回传孙进程 pid 供测试清理。
+        import pickle as _pickle
+        import subprocess as _subprocess
+        gc = _subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=_subprocess.DEVNULL, stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+        )
+        request_bytes = read_request_frame(sys.stdin.buffer)
+        write_frame(wfd, READY_BYTE, header_len=0)
+        go = sys.stdin.buffer.read(1)
+        if go != GO_BYTE:
+            gc.kill()
+            os._exit(9)
+        payload = _pickle.dumps(
+            ("ok", {"gc_pid": gc.pid}), protocol=_pickle.HIGHEST_PROTOCOL
+        )
+        write_frame(wfd, payload, header_len=RESULT_HEADER_LEN)
+        close_result_write_end(wfd)
+        return 0
+
     # 以下模式都需要读请求帧
     request_bytes = read_request_frame(sys.stdin.buffer)
     write_frame(wfd, READY_BYTE, header_len=0)

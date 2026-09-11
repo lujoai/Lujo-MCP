@@ -371,15 +371,23 @@ class TestVerifyUiDoesNotBlockEventLoop:
 
         # 用 monkeypatch.setitem 替换 handler —— pytest 自动还原，不污染后续测试
         # （test_process_boundary 等后续测试调 verify_ui 时仍是原 handler）
-        # 模块级 _fake_slow_sync_handler 保证子进程可按名导入
+        # W2-4 后 heavy 派发按 handler.__module__/__name__ 在子进程动态导入：
+        # 载体必须是子进程可导入的模块（tests/integration/test_mcp_verify_ui
+        # 对子进程不可导入），故改用 tests/_heavy_entry_handlers.slow_sync。
+        # 改断言三件套：原断言=「模块级 _fake_slow_sync_handler 可按名导入」
+        # （mp.Pipe 时代以 closure 序列化，无模块导入）；新断言=「handler 载体
+        # 位于子进程 sys.path 可达的 tests/_heavy_entry_handlers」；为什么=
+        # heavy_spawn 子进程以 `python -m` 引导按模块名导入 handler（C2 §1.1），
+        # 测试文件模块不在子进程 sys.path。
+        from tests._heavy_entry_handlers import slow_sync as _slow_sync_handler
         monkeypatch.setitem(
             protocol_server._tool_registry["verify_ui"],
             "handler",
-            _fake_slow_sync_handler,
+            _slow_sync_handler,
         )
 
         # 假 handler 必须是同步的（否则走 await handler 路径，不验证进程隔离）
-        assert not asyncio.iscoroutinefunction(_fake_slow_sync_handler)
+        assert not asyncio.iscoroutinefunction(_slow_sync_handler)
 
         async def scenario():
             # 启动一个并发计数任务 —— 若事件循环被阻塞，计数不会推进
@@ -541,3 +549,88 @@ class TestVerifyUiViaStdioSubprocess:
             asyncio.run(asyncio.wait_for(scenario(), timeout=30.0))
         except asyncio.TimeoutError:
             pytest.skip("stdio 子进程响应超时（>30s），可能环境异常")
+
+
+class TestU04RealStdioHeavyChain:
+    """W2-5 · U04：真实 stdio 传输 + heavy 子进程链路（stdout 全量逐帧解析）。
+
+    经 mcp SDK stdio_client + ClientSession 完整链路（initialize → tools/call）
+    调用被 TOOL_HEAVY_NAMES 环境变量置为 heavy 的真实工具 ``context``——
+    验证成功与超时两态下父 stdout 仍是纯协议帧（SDK 逐帧解析失败即红）。
+    异常态（handler 异常 → 结构化 error → TOOL_INTERNAL）已在单元层由
+    test_heavy_process.test_handler_exception_propagates 经同一 heavy 子进程
+    链路覆盖。
+    """
+
+    @staticmethod
+    def _server_params(extra_env: dict):
+        from mcp.client.stdio import StdioServerParameters
+
+        bootstrap = (
+            "import pydantic_settings; "
+            "pydantic_settings.BaseSettings.model_config['extra']='ignore'; "
+            "import runpy; runpy.run_module('app.mcp_server', run_name='__main__')"
+        )
+        env = {
+            **os.environ,
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
+            "STORAGE_BACKEND": "memory",
+            "API_KEY": "",
+            "TOOL_HEAVY_NAMES": "ingest_console",
+            **extra_env,
+        }
+        return StdioServerParameters(
+            command=sys.executable,
+            args=["-c", bootstrap],
+            cwd=".",
+            env=env,
+        )
+
+    def test_success_via_heavy_subprocess_chain(self):
+        """成功态：ingest_console（被 TOOL_HEAVY_NAMES 置为 heavy）经子进程
+        链路返回确定成功载荷，stdout 纯协议帧。"""
+        from mcp.client.session import ClientSession
+        from mcp.client.stdio import stdio_client
+
+        async def scenario():
+            async with stdio_client(self._server_params({})) as (read, write):
+                async with ClientSession(read, write) as session:
+                    assert await session.initialize() is not None
+                    # ingest_console 为 SDK 上报类工具（agent_visible=False），
+                    # 不进 tools/list，但 tools/call 可直接调用
+                    result = await session.call_tool(
+                        "ingest_console",
+                        {"message": "u04 heavy chain", "level": "info"},
+                    )
+                    assert result.isError is False, result.content
+                    payload = json.loads(result.content[0].text)
+                    assert payload.get("saved") is True
+
+        try:
+            asyncio.run(asyncio.wait_for(scenario(), timeout=60.0))
+        except asyncio.TimeoutError:
+            pytest.skip("stdio 子进程响应超时（>60s），可能环境异常")
+
+    def test_timeout_via_tiny_deadline_still_pure_stdout(self):
+        """超时态：TOOL_TIMEOUT_SECONDS=0（子进程 spawn 开销必然超限）→
+        TOOL_TIMEOUT 结构化响应，stdout 无非协议字节。"""
+        from mcp.client.session import ClientSession
+        from mcp.client.stdio import stdio_client
+
+        async def scenario():
+            async with stdio_client(self._server_params({"TOOL_TIMEOUT_SECONDS": "0"})) as (read, write):
+                async with ClientSession(read, write) as session:
+                    assert await session.initialize() is not None
+                    result = await session.call_tool(
+                        "ingest_console",
+                        {"message": "u04 timeout probe", "level": "info"},
+                    )
+                    assert result.isError is True
+                    text = result.content[0].text
+                    assert ("timed out" in text) or ("超时" in text) or ("timeout" in text)
+
+        try:
+            asyncio.run(asyncio.wait_for(scenario(), timeout=60.0))
+        except asyncio.TimeoutError:
+            pytest.skip("stdio 子进程响应超时（>60s），可能环境异常")
