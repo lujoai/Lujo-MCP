@@ -7,6 +7,7 @@ import pytest
 
 from app.config import settings
 import app.mcp.protocol.server as server_module
+from app.mcp.protocol.executor_lifecycle import SlotPool
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
 from app.mcp.protocol.server import _handle_tools_call, _tool_registry, register_tool
 
@@ -98,7 +99,7 @@ async def test_async_tool_timeout(monkeypatch):
 @pytest.mark.asyncio
 async def test_sync_tool_busy_queue_fast_fail(monkeypatch):
     """测试并发槽位占满时，新同步调用在 tool_busy_queue_timeout 内快速拒绝并返回 TOOL_BUSY。"""
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(2))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 2))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 5.0)
 
@@ -134,7 +135,7 @@ async def test_sync_tool_busy_queue_fast_fail(monkeypatch):
 @pytest.mark.asyncio
 async def test_sync_tool_slots_released_after_completion(monkeypatch):
     """测试同步工具执行完毕后槽位正常释放，后续调用可正常获取槽位执行。"""
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
 
     def _fast_sync(args):
@@ -162,7 +163,7 @@ async def test_async_tool_gated_by_light_pool(monkeypatch):
     新行为：async 轻量工具与同步轻量工具共享 light 池槽位，池满时同样
     按 TOOL_BUSY fast-fail。
     """
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
 
     def _slow_sync(args):
@@ -196,8 +197,8 @@ async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
 
     light 池被同步工具占满时，heavy 池的 async 工具不受影响（双池隔离）。
     """
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
-    monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(2))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
+    monkeypatch.setattr(server_module, "_heavy_pool", SlotPool("heavy", 2))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
 
     def _slow_light_sync(args):
@@ -228,7 +229,7 @@ async def test_async_heavy_tool_uses_heavy_pool(monkeypatch):
 @pytest.mark.asyncio
 async def test_async_tool_releases_slot_after_completion(monkeypatch):
     """FIX: v0.6.6 —— async 工具执行完毕后释放槽位，连续调用不会耗尽池。"""
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
 
     async def _fast_async(args):
@@ -373,7 +374,7 @@ async def test_slot_acquire_cancelled_while_waiting_releases_slot(monkeypatch):
 @pytest.mark.asyncio
 async def test_busy_queue_timeout_zero_fast_fail(monkeypatch, caplog):
     """测试 tool_busy_queue_timeout=0 时，槽位被占满后发起新调用立即可靠返回 TOOL_BUSY，不阻塞。"""
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 10.0)
 
@@ -414,7 +415,7 @@ async def test_busy_queue_timeout_zero_fast_fail(monkeypatch, caplog):
 @pytest.mark.asyncio
 async def test_busy_queue_timeout_positive_logs_wait_duration(monkeypatch, caplog):
     """测试 tool_busy_queue_timeout>0 时，背压拒绝日志必须包含实际等待时长语义，而非「立即拒绝」。"""
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 10.0)
 
@@ -456,11 +457,11 @@ async def test_sync_busy_log_prints_actual_wait_not_config(monkeypatch, caplog):
     与事实不符，误导排障。
     """
 
-    async def _fail_immediately(slots, busy_timeout):
+    async def _fail_immediately(slots, busy_timeout, pool=None):
         return False
 
     monkeypatch.setattr(server_module, "_acquire_slot_or_fastfail", _fail_immediately)
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 5.0)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 10.0)
 
@@ -517,8 +518,8 @@ async def test_async_tool_records_wait_metric(monkeypatch):
 @pytest.mark.asyncio
 async def test_heavy_tool_saturation_does_not_block_light_tools(monkeypatch):
     """测试重型工具池打满时，轻量级工具依然享有独立槽位并立即执行（不被饿死）。"""
-    monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(1))
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(5))
+    monkeypatch.setattr(server_module, "_heavy_pool", SlotPool("heavy", 1))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 5))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 5.0)
 
@@ -571,8 +572,8 @@ async def test_heavy_tool_saturation_does_not_block_light_tools(monkeypatch):
 @pytest.mark.asyncio
 async def test_light_tool_saturation_does_not_block_heavy_tools(monkeypatch):
     """测试轻量工具池打满时，重型工具池独立运作不受干扰。"""
-    monkeypatch.setattr(server_module, "_tool_slots", asyncio.Semaphore(1))
-    monkeypatch.setattr(server_module, "_heavy_tool_slots", asyncio.Semaphore(2))
+    monkeypatch.setattr(server_module, "_light_pool", SlotPool("light", 1))
+    monkeypatch.setattr(server_module, "_heavy_pool", SlotPool("heavy", 2))
     monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.05)
     monkeypatch.setattr(settings, "tool_timeout_seconds", 5.0)
 

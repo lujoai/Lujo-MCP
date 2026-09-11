@@ -125,11 +125,11 @@ class TestHeavySlotGating:
         )
         monkeypatch.setattr(stdio.settings, "tool_busy_queue_timeout", 0.0)
         try:
-            free = protocol._heavy_tool_slots._value
+            free = protocol._heavy_pool.semaphore._value
             assert free > 0, "前置条件：需有空闲重型槽位"
             held = []
             for _ in range(free):
-                await protocol._heavy_tool_slots.acquire()
+                await protocol._heavy_pool.semaphore.acquire()
                 held.append(1)
             try:
                 dumped = await _stdio_call("parity_heavy_tool", {})
@@ -145,7 +145,7 @@ class TestHeavySlotGating:
                 assert http["result"]["error_code"] == "TOOL_BUSY"
             finally:
                 for _ in held:
-                    protocol._heavy_tool_slots.release()
+                    protocol._heavy_pool.semaphore.release()
         finally:
             _tool_registry.pop("parity_heavy_tool", None)
 
@@ -169,16 +169,16 @@ class TestHeavySlotGating:
         )
         monkeypatch.setattr(stdio.settings, "tool_busy_queue_timeout", 0.0)
         try:
-            free = protocol._heavy_tool_slots._value
+            free = protocol._heavy_pool.semaphore._value
             for _ in range(free):
-                await protocol._heavy_tool_slots.acquire()
+                await protocol._heavy_pool.semaphore.acquire()
             try:
                 dumped = await _stdio_call("parity_async_tool", {})
                 assert _stdio_payload(dumped)["error_code"] == "TOOL_BUSY"
                 assert runs == []
             finally:
                 for _ in range(free):
-                    protocol._heavy_tool_slots.release()
+                    protocol._heavy_pool.semaphore.release()
         finally:
             _tool_registry.pop("parity_async_tool", None)
 
@@ -197,10 +197,10 @@ class TestSlotAccounting:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while loop.time() < deadline:
-            if protocol._light_tool_slots._value >= before:
+            if protocol._light_pool.semaphore._value >= before:
                 return True
             await asyncio.sleep(0.01)
-        return protocol._light_tool_slots._value >= before
+        return protocol._light_pool.semaphore._value >= before
 
     @pytest.mark.parametrize(
         "case",
@@ -236,7 +236,7 @@ class TestSlotAccounting:
         if case == "timeout":
             monkeypatch.setattr(stdio.settings, "tool_timeout_seconds", 0.05)
         try:
-            before = protocol._light_tool_slots._value
+            before = protocol._light_pool.semaphore._value
             dumped = await _stdio_call(name, {})
             payload = _stdio_payload(dumped)
             if case == "ok":
@@ -255,7 +255,7 @@ class TestSlotAccounting:
                 #   待真实线程终结（handler 睡 1.0s）后槽位才恢复。
                 # 为什么：归还权从「awaiter 返回」移到「真实任务终结」（结算与归还分离）。
                 await asyncio.sleep(0)
-                assert protocol._light_tool_slots._value < before, (
+                assert protocol._light_pool.semaphore._value < before, (
                     "超时后槽位被提前归还：真实线程仍在运行，槽位必须继续记账"
                 )
                 assert await self._wait_slot_restored(before), "真实线程终结后槽位必须恢复"
@@ -298,14 +298,14 @@ class TestStdioRecordsToolMetrics:
                       inputSchema={"type": "object"}, heavy=True)
         monkeypatch.setattr(stdio.settings, "tool_busy_queue_timeout", 0.0)
         try:
-            free = protocol._heavy_tool_slots._value
+            free = protocol._heavy_pool.semaphore._value
             for _ in range(free):
-                await protocol._heavy_tool_slots.acquire()
+                await protocol._heavy_pool.semaphore.acquire()
             try:
                 await _stdio_call("parity_metric_busy", {})
             finally:
                 for _ in range(free):
-                    protocol._heavy_tool_slots.release()
+                    protocol._heavy_pool.semaphore.release()
             assert ("parity_metric_busy", "busy") in calls
             assert ("parity_metric_busy", "heavy") in busy
         finally:

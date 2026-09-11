@@ -127,6 +127,12 @@ class SlotPool:
         }
         # 归还回调投递失败的累计次数（仅诊断用；义务不丢，仍留在 Q）
         self._delivery_failures = 0
+        # acquire 等待者登记表（B20 条件 4 的可观察面）：waiter_id -> (loop, task)。
+        # 仅登记「正在等待 acquire 完成」的任务；取得 / 取消 / 超时后必须注销。
+        self._waiters: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Future]] = {}
+        self._next_waiter_id = 1
+        # 关闭流程已请求取消的等待者（区别于调用方自身被取消）
+        self._waiters_cancel_requested: set[int] = set()
 
     # ------------------------------------------------------------------ 只读
 
@@ -159,6 +165,7 @@ class SlotPool:
                 "counters": {g: c.as_dict() for g, c in self._counters.items()},
                 "active_tokens": len(self._tokens),
                 "delivery_failures": self._delivery_failures,
+                "waiters": len(self._waiters),
             }
 
     def assert_conservation(self, generation: int | None = None) -> None:
@@ -289,6 +296,59 @@ class SlotPool:
 
         real_future.add_done_callback(_on_done)
 
+    # ------------------------------------------------------------ 等待者登记
+
+    def register_waiter(self, task: asyncio.Future) -> int:
+        """登记一个正在等待 acquire 的任务（``_acquire_slot_or_fastfail`` 的
+        ``ensure_future`` acquire 任务）。
+
+        返回 waiter id；调用方必须在退出路径（取得 / 取消 / 超时）``unregister_waiter``。
+        登记表是 B20 新代创建条件 4「等待者全部取消或结算」的可观察面。
+        """
+        with self._lock:
+            waiter_id = self._next_waiter_id
+            self._next_waiter_id += 1
+            self._waiters[waiter_id] = (task.get_loop(), task)
+            return waiter_id
+
+    def unregister_waiter(self, waiter_id: int) -> None:
+        with self._lock:
+            self._waiters.pop(waiter_id, None)
+            self._waiters_cancel_requested.discard(waiter_id)
+
+    def waiter_cancel_requested(self, waiter_id: int) -> bool:
+        """该等待者的取消是否来自代际关闭（而非调用方自身被取消）。"""
+        with self._lock:
+            return waiter_id in self._waiters_cancel_requested
+
+    def cancel_waiters(self) -> int:
+        """代际关闭步骤：取消**当前代**全部已登记 acquire 等待者。
+
+        DESIGN C1 §5 规则 2：等待者统一取消、按「传输关闭 / TOOL_BUSY」失败；
+        **绝不**把等待者重新排入新代信号量（迁移 = 两代容量叠加 = 容量翻倍）。
+
+        取消经 ``loop.call_soon_threadsafe(task.cancel)`` 投递（任意线程可调）；
+        loop 已关闭的等待者随 loop 消亡，跳过即可。返回成功投递取消的个数。
+        """
+        with self._lock:
+            counters = self._counters[self._generation]
+            if not counters.closing:
+                raise RuntimeError(
+                    f"容量池 {self.name}：cancel_waiters 只能在 begin_close 之后调用"
+                )
+            entries = list(self._waiters.items())
+            self._waiters_cancel_requested.update(wid for wid, _ in entries)
+
+        delivered = 0
+        for _waiter_id, (loop, task) in entries:
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+                delivered += 1
+            except RuntimeError:
+                # loop 已关闭：等待者随之消亡，无需取消
+                pass
+        return delivered
+
     # ---------------------------------------------------------------- 代际
 
     def begin_close(self) -> list[SlotToken]:
@@ -337,7 +397,10 @@ class SlotPool:
                 return False
             if counters.P != 0 or counters.Q != 0:
                 return False
-            # 等待者全部取消或结算由调用方保证（无法在本类内观察）
+            # 条件 4 的可观察面：等待者必须全部取消或结算（注销），
+            # 仍有登记中的 acquire 等待者时不得换代——它们还可能取得旧代许可
+            if self._waiters:
+                return False
             return True
 
     def start_new_generation(self) -> int:

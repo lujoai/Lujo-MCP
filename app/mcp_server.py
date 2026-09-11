@@ -455,10 +455,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         ))
 
     # 与 HTTP 侧同一套轻/重分池信号量：async 工具不需要线程池，仅取槽位门控。
+    # B20：槽位信号量经代际属主 getter 获取（_get_tool_executor_and_slots 内部
+    # 每次重读当前代）；等待者登记进同一属主，代际关闭时统一取消（TOOL_BUSY）。
     _, slots, pool_type = _get_tool_executor_and_slots(name)
     busy_timeout = settings.tool_busy_queue_timeout
     wait_start = time.perf_counter()
-    if not await _acquire_slot_or_fastfail(slots, busy_timeout):
+    if not await _acquire_slot_or_fastfail(slots, busy_timeout, pool=_pool_for(pool_type)):
         wait_sec = time.perf_counter() - wait_start
         record_mcp_tool_busy(name, pool_type, wait_sec)
         record_mcp_tool_call(name, "busy", wait_sec)

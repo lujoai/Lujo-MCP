@@ -58,23 +58,23 @@ _tool_registry: dict[str, dict] = {}
 # FIX P3-12 / v0.6.2: 轻重型同步工具双池隔离执行架构
 # 1. 通用/轻量同步工具专用池（如 stacktrace / get_debug_context / blame 等）
 _LIGHT_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_executor_workers)
-_light_tool_slots = asyncio.Semaphore(settings.tool_executor_workers)
 
 # 2. 重型工具（FIX: C2 —— 由线程池改为「每次调用独立子进程」）：
 #    旧实现用 ThreadPoolExecutor，超时后 cancel() 无法中断已运行线程 → 僵尸线程
 #    占满仅 2 个 worker 的 heavy 池、恒 TOOL_BUSY。现改为 heavy_process 子进程
 #    执行 + 超时 terminate() 强杀（进程可杀），故不再需要重型线程池，仅保留
 #    信号量做并发门控（限制同时运行的重活子进程数，避免无界拉起浏览器）。
-_heavy_tool_slots = asyncio.Semaphore(settings.tool_heavy_executor_workers)
+#    （B20 / DESIGN C1 §5：原先模块级裸 `_light_tool_slots` / `_heavy_tool_slots`
+#    Semaphore 已删除——「import 即永生」跨 loop 复用会绑定旧 loop、等待者悬挂、
+#    许可泄漏或容量翻倍。槽位信号量改由下方代际属主持有。）
 
 # 向后兼容旧版直接引用
 _TOOL_EXECUTOR = _LIGHT_TOOL_EXECUTOR
-_tool_slots = _light_tool_slots
 _executor_lock = threading.Lock()
 
 # DESIGN C1 §3.4/§5.1：容量代际属主 + token 状态机（**结算**与**许可归还**分离）。
-# 池对象只负责账目与代际；信号量仍由本模块持有（「槽位共享、池分立」不变，
-# 不统一 _TOOL_EXECUTOR 与 _LIGHT_TOOL_EXECUTOR）。
+# 信号量由代际属主持有并按代际替换；本模块不再持有任何裸 Semaphore
+# （「槽位共享、池分立」不变，不统一 _TOOL_EXECUTOR 与 _LIGHT_TOOL_EXECUTOR）。
 _light_pool = _slot_lifecycle.pool("light", settings.tool_executor_workers)
 _heavy_pool = _slot_lifecycle.pool("heavy", settings.tool_heavy_executor_workers)
 
@@ -82,6 +82,16 @@ _heavy_pool = _slot_lifecycle.pool("heavy", settings.tool_heavy_executor_workers
 def _pool_for(pool_type: str) -> SlotPool:
     """按池类型取代际属主（light/heavy 分立）。"""
     return _heavy_pool if pool_type == "heavy" else _light_pool
+
+
+def _get_tool_slots(pool_type: str) -> asyncio.Semaphore:
+    """B20（DESIGN C1 §5）：返回 pool_type 池**当前代际**的信号量句柄。
+
+    每次调用都从代际属主重读当前代，禁止缓存裸对象——代际重建
+    （begin_close → retire → start_new_generation）后旧对象随旧代废弃，
+    新调用自然拿到新代信号量（容量恢复、等待者不迁移）。
+    """
+    return _pool_for(pool_type).semaphore
 
 
 def _get_light_tool_executor() -> ThreadPoolExecutor:
@@ -123,11 +133,15 @@ def _get_tool_executor_and_slots(tool_name: str) -> tuple[ThreadPoolExecutor | N
     门控；轻量工具仍用专用线程池。
     """
     if is_heavy_tool(tool_name):
-        return None, _heavy_tool_slots, "heavy"
-    return _get_light_tool_executor(), _tool_slots, "light"
+        return None, _get_tool_slots("heavy"), "heavy"
+    return _get_light_tool_executor(), _get_tool_slots("light"), "light"
 
 
-async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: float) -> bool:
+async def _acquire_slot_or_fastfail(
+    slots: asyncio.Semaphore,
+    busy_timeout: float,
+    pool: SlotPool | None = None,
+) -> bool:
     """竞态安全地获取执行槽位；超时/无槽位 fast-fail 返回 False。
 
     FIX: v0.6.6 超时背压竞态 —— 原 ``asyncio.wait_for(slots.acquire(), timeout)``
@@ -142,7 +156,11 @@ async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: floa
     - 快路径：有空位时 ``acquire`` 内部不挂起（事件循环单线程，locked()
       检查到获取之间无 await、无竞态），避免 ensure_future 包一层任务后
       timeout=0 的定时器把"有空位的快路径获取"误杀成 TOOL_BUSY；
-    - ``busy_timeout <= 0``：无可用槽位时立即拒绝（Fast-Fail 文档语义）。
+    - ``busy_timeout <= 0``：无可用槽位时立即拒绝（Fast-Fail 文档语义）；
+    - B20（DESIGN C1 §5 规则 2）：传入 ``pool`` 时，等待中的 acquire 任务
+      登记进代际属主；代际关闭（``pool.cancel_waiters()``）统一取消等待者，
+      按「传输关闭 / TOOL_BUSY」失败（返回 False，走既有 TOOL_BUSY 响应）。
+      等待者**绝不**迁移到新代信号量（迁移 = 两代容量叠加 = 容量翻倍）。
     """
     if not slots.locked():
         # 有空位：acquire 走 Semaphore 快路径（不挂起、不进等待队列）
@@ -154,6 +172,7 @@ async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: floa
         return False
 
     task = asyncio.ensure_future(slots.acquire())
+    waiter_id = pool.register_waiter(task) if pool is not None else None
     try:
         await asyncio.wait_for(task, timeout=busy_timeout)
         return True
@@ -165,12 +184,24 @@ async def _acquire_slot_or_fastfail(slots: asyncio.Semaphore, busy_timeout: floa
         # 传播取消。
         if task.done() and not task.cancelled() and task.exception() is None:
             slots.release()
+        # B20：取消来自代际关闭而非调用方自身（外层任务 cancelling() == 0
+        # 说明不是 HTTP 断连等自身取消）→ 按 TOOL_BUSY 失败，不再向上传播。
+        if (
+            waiter_id is not None
+            and pool is not None
+            and asyncio.current_task().cancelling() == 0
+            and pool.waiter_cancel_requested(waiter_id)
+        ):
+            return False
         raise
     except asyncio.TimeoutError:
         if task.done() and not task.cancelled() and task.exception() is None:
             # 完成与超时同拍：槽位已实际取得，归还防泄漏
             slots.release()
         return False
+    finally:
+        if waiter_id is not None:
+            pool.unregister_waiter(waiter_id)
 
 
 def register_tool(
@@ -388,7 +419,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         _, slots, pool_type = _get_tool_executor_and_slots(tool_name)
         busy_timeout = settings.tool_busy_queue_timeout
         wait_start = time.perf_counter()
-        if not await _acquire_slot_or_fastfail(slots, busy_timeout):
+        if not await _acquire_slot_or_fastfail(slots, busy_timeout, pool=_pool_for(pool_type)):
             wait_sec = time.perf_counter() - wait_start
             record_mcp_tool_busy(tool_name, pool_type, wait_sec)
             record_mcp_tool_call(tool_name, "busy", wait_sec)
@@ -454,7 +485,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         executor, slots, pool_type = _get_tool_executor_and_slots(tool_name)
         busy_timeout = settings.tool_busy_queue_timeout
         wait_start = time.perf_counter()
-        if not await _acquire_slot_or_fastfail(slots, busy_timeout):
+        if not await _acquire_slot_or_fastfail(slots, busy_timeout, pool=_pool_for(pool_type)):
             wait_sec = time.perf_counter() - wait_start
             record_mcp_tool_busy(tool_name, pool_type, wait_sec)
             record_mcp_tool_call(tool_name, "busy", wait_sec)
