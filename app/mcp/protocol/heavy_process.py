@@ -29,6 +29,7 @@ import time
 
 from app.mcp.protocol import heavy_spawn
 from app.mcp.protocol.termination import backend as termination_backend
+from app.mcp.protocol.termination.probe import CAPABILITY_PROBE as capability_probe
 
 logger = logging.getLogger("lujo-mcp.mcp.heavy")
 
@@ -138,6 +139,16 @@ def run_heavy_tool_blocking(
     except Exception as exc:
         raise RuntimeError("heavy tool arguments not serializable") from exc
 
+    # C3 §3.2：调用绝对截止覆盖「准备、探测、创建、握手、业务」——探测预算
+    # 只能使用剩余时间，不重置截止。gate 恒真（注册表四条件闸门自 W4 接入）。
+    call_deadline = time.monotonic() + float(timeout)
+    try:
+        capability_probe.ensure_probed(gate=lambda: True, deadline=call_deadline)
+    except TimeoutError as exc:
+        raise asyncio.TimeoutError(
+            f"heavy tool {handler_name} timed out after {timeout}s (subprocess killed)"
+        ) from exc
+
     attempt, backend_decision = termination_backend.spawn_with_backend(0, command)
     logger.info(
         "heavy worker %s 派发：attempt_id=%s backend=%s pid=%s",
@@ -145,7 +156,7 @@ def run_heavy_tool_blocking(
     )
     try:
         payload = heavy_spawn.handshake(
-            attempt, request, deadline=time.monotonic() + float(timeout),
+            attempt, request, deadline=call_deadline,
             allow_commit=lambda: True,  # 注册表四条件闸门自 W4 接入
         )
         status, detail = pickle.loads(payload)
