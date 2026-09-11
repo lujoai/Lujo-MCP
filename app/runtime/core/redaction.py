@@ -8,6 +8,7 @@
 - 额外正则由 settings.redaction_extra_patterns（换行分隔）提供，
   无效正则静默跳过不阻断主流程；编译结果按配置签名缓存，避免重复编译。
 """
+import json
 import re
 import logging
 import threading
@@ -217,5 +218,15 @@ def redact_nested(value: Any) -> Any:
     if isinstance(value, tuple):
         return [redact_nested(item) for item in value]
     if isinstance(value, str):
+        stripped = value.lstrip()
+        if stripped.startswith(("{", "[")):
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError):
+                pass
+            else:
+                return json.dumps(
+                    redact_nested(parsed), ensure_ascii=False, separators=(",", ":")
+                )
         return redact(value) or value
     return value

@@ -9,6 +9,7 @@ import json
 
 from app.config import settings
 from app.runtime.core.logs import create_request_id, add_log, get_logs
+from app.runtime.core.redaction import redact_nested
 from app.runtime.core.session import session_manager
 from app.runtime.context.builder import build_context, build_debug_context
 from app.runtime.collectors.runtime import collect_runtime_snapshot
@@ -43,7 +44,7 @@ def debug_run(req: DebugRequest) -> DebugResponse:
     error_info = None
     try:
         add_log(request_id, "processing", {"metadata": req.metadata})
-        result = {"echo": req.payload, "status": "success"}
+        result = {"echo": redact_nested(req.payload), "status": "success"}
         add_log(request_id, "response_ready", result)
     except Exception as e:
         error_info = capture_exception(e)
@@ -75,12 +76,13 @@ def debug_run(req: DebugRequest) -> DebugResponse:
         except Exception:
             context["exception"] = {"type": "Unknown", "message": str(error_info)}
 
-    return DebugResponse(
-        request_id=request_id,
-        result=result,
-        trace=trace,
-        context=context,
-    )
+    response = {
+        "request_id": request_id,
+        "result": result,
+        "trace": trace,
+        "context": context,
+    }
+    return DebugResponse(**redact_nested(response))
 
 
 @router.post("/analyze", dependencies=[Depends(require_role("admin", "developer"))])
@@ -406,7 +408,7 @@ def debug_echo(body: dict):
     """回显接口，返回请求体"""
     if not settings.debug_endpoints_enabled:
         raise HTTPException(status_code=404, detail="Not found")
-    return {"status": "ok", "received": body}
+    return {"status": "ok", "received": redact_nested(body)}
 
 
 @router.get("/token", dependencies=[Depends(require_role("admin"))])

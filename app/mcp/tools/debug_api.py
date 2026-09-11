@@ -4,6 +4,7 @@ import logging
 import time
 
 from app.runtime.core.logs import create_request_id, add_log, get_logs
+from app.runtime.core.redaction import redact_nested
 from app.runtime.context.builder import build_context, build_debug_context
 from app.runtime.collectors.runtime import collect_runtime_snapshot
 from app.llm.analyzer import analyze
@@ -33,7 +34,7 @@ def handler(arguments: dict) -> dict:
     request_id = create_request_id()
     add_log(request_id, "mcp_debug_start", payload)
     add_log(request_id, "mcp_processing", {"metadata": metadata})
-    result = {"echo": payload, "status": "success"}
+    result = {"echo": redact_nested(payload), "status": "success"}
     add_log(request_id, "mcp_response_ready", result)
 
     trace = get_logs(request_id)
@@ -54,7 +55,7 @@ def handler(arguments: dict) -> dict:
         context_build_duration=build_duration,
         response_duration=time.perf_counter() - start,
     )
-    return attach_metadata(output, trace_obs)
+    return attach_metadata(redact_nested(output), trace_obs)
 
 
 # 兼容旧调用方式

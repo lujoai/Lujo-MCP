@@ -9,12 +9,13 @@
 
 脱敏占位符（grep 确认）：
 - dict-key 路径（敏感键名）：locals["password"] → "***REDACTED***"
-- 字符串正则路径（redact()）：
+- 普通字符串正则路径（redact()）：
   - 'password = "x"' → 'password="***"'
   - '?token=secret' → '?token="***"'
-  - '{"password":"123"}' → '{"password":"***"}'
   - 'token: abc.def.ghi' → 'token="***"'
   - 'Authorization: Bearer xxx' → 'Authorization: Bearer ***'
+- 合法 JSON 字符串先解析再走 redact_nested()：
+  - '{"password":"123"}' → '{"password":"***REDACTED***"}'
 
 注意：ingest_api._parse_frames 仅保留 file/line/function/code 字段，丢弃 locals。
 因此 ingest 路径只能验证 code 字段脱敏（code 是字符串，走 redact() 正则路径）。
@@ -308,10 +309,21 @@ class TestIngestErrorHandlerRedactsCodeField:
 
 
 class TestSaveNetworkRecordRedacts:
-    """save_network_record 入库前对 url/request_body/response_body 走 redact()。"""
+    """save_network_record 在存储边界统一脱敏 URL 与请求/响应体。
+
+    URL 和普通文本仍走 redact()，合法 JSON 字符串先解析再走
+    redact_nested()，所以结构化敏感键使用 "***REDACTED***"。这与本文件
+    TestAddLogRedactsPayload.test_add_log_string_payload_regex_redacted 的
+    R8 口径更正一致：结构化路径不再依赖 PG 偶然产生的 "***"。
+    """
 
     def test_url_and_body_with_secrets_masked(self):
-        """network 记录 url 含 token、body 含 password → 入库后脱敏。"""
+        """network 记录 url 含 token、body 含 password → 入库后脱敏。
+
+        原断言是 '"password":"***"' / '"token":"***"'；新断言是
+        '"password":"***REDACTED***"' / '"token":"***REDACTED***"'。
+        原因是合法 JSON 现在先解析再走结构化脱敏，沿用本文件 R8 先例。
+        """
         trace_id = _unique_trace_id()
         save_network_record(
             record={
@@ -332,13 +344,13 @@ class TestSaveNetworkRecordRedacts:
         assert "super-secret" not in rec["url"]
         assert 'token="***"' in rec["url"], f"url 未按预期脱敏: {rec['url']!r}"
 
-        # request_body 中 "password":"xxx" → "password":"***"
+        # 原断言："password":"***"；新断言：结构化路径统一为 "***REDACTED***"。
         assert "super-secret-123" not in rec["request_body"]
-        assert '"password":"***"' in rec["request_body"]
+        assert '"password":"***REDACTED***"' in rec["request_body"]
 
-        # response_body 中 "token": "xxx" → "token":"***"
+        # 原断言："token":"***"；新断言：结构化路径统一为 "***REDACTED***"。
         assert "eyJxyz" not in rec["response_body"]
-        assert '"token":"***"' in rec["response_body"]
+        assert '"token":"***REDACTED***"' in rec["response_body"]
 
         # 非敏感字段保留
         assert rec["method"] == "POST"
@@ -346,10 +358,19 @@ class TestSaveNetworkRecordRedacts:
 
 
 class TestSaveUiEventRedacts:
-    """save_ui_event 入库前对 payload_json 走 redact()。"""
+    """save_ui_event 在存储边界统一脱敏 payload_json。
+
+    合法 JSON 字符串先解析再走 redact_nested()，结构化敏感键使用
+    "***REDACTED***"；规则沿用本文件 R8 先例。
+    """
 
     def test_payload_json_with_secret_masked(self):
-        """ui 事件 payload_json 含 token → 入库后脱敏。"""
+        """ui 事件 payload_json 含 token → 入库后脱敏。
+
+        原断言是 '"token":"***"'，新断言是
+        '"token":"***REDACTED***"'，因为 JSON 字符串现在先解析再走
+        结构化脱敏，和 R8 更正保持一致。
+        """
         trace_id = _unique_trace_id()
         save_ui_event(
             event={
@@ -365,7 +386,8 @@ class TestSaveUiEventRedacts:
         ev = events[0]
 
         assert "abc.def.ghi" not in ev["payload_json"]
-        assert '"token":"***"' in ev["payload_json"], (
+        # 原断言："token":"***"；新断言：结构化路径统一为 "***REDACTED***"。
+        assert '"token":"***REDACTED***"' in ev["payload_json"], (
             f"payload_json 未按预期脱敏: {ev['payload_json']!r}"
         )
 

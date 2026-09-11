@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
+from app.runtime.core.redaction import is_sensitive_key, redact, redact_nested
 
 
 # logging.LogRecord 标准属性（不应作为 extra 字段注入 JSON）
@@ -27,23 +28,34 @@ class JSONFormatter(logging.Formatter):
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact(record.getMessage()) or "",
         }
 
         # 注入全部 extra 字段（trace_id / elapsed_ms / method / path / status / model 等）
         for key, value in record.__dict__.items():
             if key not in _LOGRECORD_STANDARD_FIELDS and key not in log_entry:
-                log_entry[key] = value
+                log_entry[key] = (
+                    "***REDACTED***"
+                    if is_sensitive_key(key)
+                    else redact_nested(value)
+                )
 
         # 注入 exception 信息（含 traceback，旧实现丢失 traceback 行）
         if record.exc_info and record.exc_info[1]:
             log_entry["exception"] = {
                 "type": type(record.exc_info[1]).__name__,
-                "message": str(record.exc_info[1]),
-                "traceback": self.formatException(record.exc_info),
+                "message": redact(str(record.exc_info[1])) or "",
+                "traceback": redact(self.formatException(record.exc_info)) or "",
             }
 
         return json.dumps(log_entry, ensure_ascii=False, default=str)
+
+
+class RedactingFormatter(logging.Formatter):
+    """文本日志格式器：格式化后再脱敏，避免异常堆栈绕过边界。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record)) or ""
 
 
 def setup_logging() -> None:
@@ -64,7 +76,7 @@ def setup_logging() -> None:
         handler.setFormatter(JSONFormatter())
     else:
         handler.setFormatter(
-            logging.Formatter(
+            RedactingFormatter(
                 "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                 datefmt="%Y-%m-%dT%H:%M:%S",
             )

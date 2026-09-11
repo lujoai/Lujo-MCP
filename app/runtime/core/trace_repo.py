@@ -114,6 +114,7 @@ def save_trace(
     """
     extra = extra or {}
     frames = redact_nested(frames or [])
+    redacted_source = redact(source)
     exc_data = {
         "type": exc_type,
         "message": redact(message) or "",
@@ -128,7 +129,7 @@ def save_trace(
         # compute_fingerprint 同一算法，保持两路指纹一致）。
         "fingerprint": compute_fingerprint(exc_type, frames),
     }
-    error_id = _record_error(exc_data, source=source, session_id=session_id)
+    error_id = _record_error(exc_data, source=redacted_source, session_id=session_id)
 
     # SEC-13：commit-marker 模式 —— 写入顺序调整为 META → LINK → DATA，
     # DATA 作为提交标记最后写入。这样 trace_data 存在即保证 META（及 LINK）已落库；
@@ -158,7 +159,7 @@ def save_trace(
     try:
         add_log(error_id, _STEP_DATA, {
             **exc_data,
-            "source": source,
+            "source": redacted_source,
             "ts": time.time(),
         })
     except Exception:

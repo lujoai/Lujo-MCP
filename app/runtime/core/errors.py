@@ -18,6 +18,8 @@ import logging
 import threading
 from collections import deque, OrderedDict
 
+from app.runtime.core.redaction import redact, redact_nested
+
 # 最多保留最近 200 条，超出丢弃最旧的
 _MAX = 200
 
@@ -151,8 +153,12 @@ def record(exc_data: dict, source: str = "unknown", session_id: str | None = Non
 
     Phase 2.3：内存聚合后异步 upsert 到 PG errors 表（双写，内存优先读）。
     """
-    frames = exc_data.get("frames", []) or []
-    fingerprint = compute_fingerprint(exc_data.get("type"), frames)
+    # Storage boundary: copy and redact the complete payload so direct callers
+    # cannot bypass the trace_repo boundary. Keep the caller-owned object intact.
+    safe_exc_data = redact_nested(exc_data)
+    safe_source = redact(source)
+    frames = safe_exc_data.get("frames", []) or []
+    fingerprint = compute_fingerprint(safe_exc_data.get("type"), frames)
     now = time.time()
     key = _get_bucket(session_id)
 
@@ -178,21 +184,21 @@ def record(exc_data: dict, source: str = "unknown", session_id: str | None = Non
                 e["occurrence_count"] += 1
                 e["last_seen"] = now
                 e["timestamp"] = now  # 向后兼容，等价于 last_seen
-                e["message"] = exc_data.get("message") or e["message"]
+                e["message"] = safe_exc_data.get("message") or e["message"]
                 e["frames"] = frames or e["frames"]
                 e["frame_count"] = len(e["frames"])
-                e["source"] = source
-                e["traceback"] = exc_data.get("traceback") or e["traceback"]
+                e["source"] = safe_source
+                e["traceback"] = safe_exc_data.get("traceback") or e["traceback"]
                 err_id = e["error_id"]
                 pg_record = {
                     "error_id": err_id,
                     "fingerprint": fingerprint,
-                    "type": exc_data.get("type"),
+                    "type": safe_exc_data.get("type"),
                     "message": e["message"],
                     "frames": e["frames"],
                     "frame_count": e["frame_count"],
                     "traceback": e["traceback"],
-                    "source": source,
+                    "source": safe_source,
                     "session_id": session_id,
                     "first_seen": e.get("first_seen", now),
                     "last_seen": now,
@@ -203,27 +209,27 @@ def record(exc_data: dict, source: str = "unknown", session_id: str | None = Non
             bucket.append({
                 "error_id": err_id,
                 "fingerprint": fingerprint,
-                "source": source,
+                "source": safe_source,
                 "timestamp": now,
                 "first_seen": now,
                 "last_seen": now,
                 "occurrence_count": 1,
-                "type": exc_data.get("type"),
-                "message": exc_data.get("message"),
+                "type": safe_exc_data.get("type"),
+                "message": safe_exc_data.get("message"),
                 "frames": frames,
                 "frame_count": len(frames),
-                "traceback": exc_data.get("traceback"),
+                "traceback": safe_exc_data.get("traceback"),
                 "session_id": session_id,
             })
             pg_record = {
                 "error_id": err_id,
                 "fingerprint": fingerprint,
-                "type": exc_data.get("type"),
-                "message": exc_data.get("message"),
+                "type": safe_exc_data.get("type"),
+                "message": safe_exc_data.get("message"),
                 "frames": frames,
                 "frame_count": len(frames),
-                "traceback": exc_data.get("traceback"),
-                "source": source,
+                "traceback": safe_exc_data.get("traceback"),
+                "source": safe_source,
                 "session_id": session_id,
                 "first_seen": now,
                 "last_seen": now,
