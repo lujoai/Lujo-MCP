@@ -233,6 +233,13 @@ def _parse_runtime_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def _run_stdio_transport() -> None:
     """运行官方 MCP stdio transport。单独抽出以便统一模式复用。"""
+    try:
+        from app.rag.knowledge_base import bootstrap_knowledge_base
+
+        bootstrap_knowledge_base()
+    except Exception:
+        logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
+
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
@@ -492,6 +499,14 @@ async def main(argv: list[str] | None = None):
     if not unified:
         _register_signal_handlers()
     try:
+        # ── B05: 统一知识库启动初始化（回灌 + 种子加载，stdio/HTTP 共享）──
+        try:
+            from app.rag.knowledge_base import bootstrap_knowledge_base
+
+            bootstrap_knowledge_base()
+        except Exception:
+            logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
+
         if unified:
             # app.main 的安全校验读取同一个 settings 对象。统一模式默认只绑
             # 回环地址，即使用户的 .env 没写 HOST，也不会触发 0.0.0.0 无鉴权拒绝。

@@ -124,6 +124,61 @@ def test_upsert_eviction_deletes_from_persistent_store(fake_store):
     assert store.size() == len(fake_store.rows) == 2
 
 
+def test_upsert_failure_does_not_evict_old_entry(fake_store):
+    """B03: 写穿失败时不得删除被驱逐旧条目，旧条目必须仍在内存与持久层。"""
+    store = KnowledgeBaseStore(max_entries=2)
+    _upsert(store, "fp-1")
+    _upsert(store, "fp-2")
+    # 此时 LRU 顺序: fp-1 (最旧), fp-2 (最新)
+
+    # 注入写入失败：仅持久化新条目失败，delete 正常可用
+    def _fail_upsert(entry):
+        raise RuntimeError("disk write error")
+    fake_store.upsert_kb_entry = _fail_upsert
+
+    _upsert(store, "fp-3")
+
+    # 必须满足：只有新条目持久化成功才允许删除被驱逐条目；持久化失败时旧条目必须仍在内存与持久层
+    assert "fp-1" not in fake_store.delete_calls
+    assert "fp-1" in fake_store.rows
+    assert store.get("fp-1") is not None
+
+
+def test_sqlite_upsert_failure_keeps_old_entry_on_restart(tmp_path, monkeypatch):
+    """B03 红绿验证：临时 SQLite 故障注入 + 重启回灌，新条目写穿失败不得删除旧条目。"""
+    from app.runtime.core.storage.sqlite_kb_store import SQLiteKnowledgeBaseStore
+
+    db_path = str(tmp_path / "b03_test.sqlite3")
+    sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
+    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
+
+    store = KnowledgeBaseStore(max_entries=2)
+    _upsert(store, "fp-1")
+    _upsert(store, "fp-2")
+    assert len(sqlite_store.list_recent_kb_entries(limit=10)) == 2
+
+    # 注入故障：让 sqlite_store.upsert_kb_entry 抛错
+    def _faulty_upsert(entry):
+        raise RuntimeError("simulated sqlite fault")
+
+    monkeypatch.setattr(sqlite_store, "upsert_kb_entry", _faulty_upsert)
+
+    _upsert(store, "fp-3")
+
+    # 1. 运行时内存检查：旧条目 fp-1 仍保留在内存中
+    assert store.get("fp-1") is not None
+    # 2. 持久层检查：旧条目 fp-1 仍在持久层中未被删除
+    raw_rows = [r["fingerprint"] for r in sqlite_store.list_recent_kb_entries(limit=10)]
+    assert "fp-1" in raw_rows
+
+    # 3. 模拟重启回灌：新实例从持久层恢复，fp-1 完好无损
+    store_restart = KnowledgeBaseStore(max_entries=2)
+    loaded = store_restart.load_from_persistent()
+    assert loaded == 2
+    assert store_restart.get("fp-1") is not None
+    assert store_restart.get("fp-2") is not None
+
+
 def test_record_verification_writes_through(fake_store):
     store = KnowledgeBaseStore(max_entries=10)
     _upsert(store, "fp-1")
@@ -147,10 +202,21 @@ def test_clear_deletes_all_from_persistent_store(fake_store):
     _upsert(store, "fp-1")
     _upsert(store, "fp-2")
 
-    store.clear()
+    assert store.clear() is True
 
     assert fake_store.delete_all_calls == 1
     assert fake_store.rows == {}
+    assert store.size() == 0
+
+
+def test_clear_noop_memory_backend_returns_true(monkeypatch):
+    """约束 1：无持久层（memory 后端，get_knowledge_store 返回 None）时，clear() 返回 True。"""
+    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: None)
+    store = KnowledgeBaseStore(max_entries=10)
+    _upsert(store, "fp-1")
+    assert store.size() == 1
+
+    assert store.clear() is True
     assert store.size() == 0
 
 
@@ -177,8 +243,23 @@ def test_persist_failure_degrades_gracefully(fake_store):
     store.record_verification("fp-1", 0.9)  # 同样不抛
     assert store.get("fp-1")["verify_count"] == 1
 
-    store.clear()  # clear 也不抛
-    assert store.size() == 0
+
+def test_clear_persist_failure_refuses_clear_and_keeps_memory(fake_store, caplog):
+    """决策 6 (U12)：持久层删除失败时，clear() 必须返回 False 且不得清空内存，防止重启复活。"""
+    store = KnowledgeBaseStore(max_entries=2)
+    _upsert(store, "fp-1")
+    assert store.size() == 1
+
+    fake_store.fail_on_write = RuntimeError("storage disk failure")
+    with caplog.at_level("WARNING"):
+        res = store.clear()
+
+    # 失败必须显式返回 False
+    assert res is False
+    # 内存必须保留，防止重启死灰复燃
+    assert store.size() == 1
+    assert store.get("fp-1") is not None
+    assert "KB clear failed on persistent store" in caplog.text or "failed" in caplog.text
 
 
 def test_load_failure_degrades_gracefully(fake_store):
@@ -266,8 +347,8 @@ def test_load_from_persistent_respects_max_entries(fake_store):
     assert store.get("fp-0") is None
 
 
-def test_load_from_persistent_preserves_lru_order(fake_store):
-    """回灌后 LRU 队首应是最久未更新条目（继续写入时优先驱逐它）。"""
+def test_load_from_persistent_orders_eviction_by_updated_at(fake_store):
+    """回灌按 updated_at 恢复顺序；无后续访问调整时，继续写入优先驱逐最久未更新条目。本测试不验证跨重启保留访问顺序。"""
     now = time.time()
     for i, updated_at in enumerate([now - 30, now - 10, now - 20]):
         fake_store.rows[f"fp-{i}"] = {

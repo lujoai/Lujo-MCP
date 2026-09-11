@@ -90,6 +90,20 @@ class KnowledgeBaseStore:
         # 类型指纹 → 精确指纹集合（L2）
         self._type_index: dict[str, set[str]] = {}
         self._lock = threading.Lock()
+        # B04 并发一致性控制：单调递增代数、指纹级串行化锁
+        self._generation: int = 0
+        self._clear_generation: int = 0
+        self._persisted_generations: dict[str, int] = {}
+        self._fp_locks: dict[str, threading.Lock] = {}
+        self._fp_locks_guard = threading.Lock()
+
+    def _get_fp_lock(self, fingerprint: str) -> threading.Lock:
+        with self._fp_locks_guard:
+            lock = self._fp_locks.get(fingerprint)
+            if lock is None:
+                lock = threading.Lock()
+                self._fp_locks[fingerprint] = lock
+            return lock
 
     # ── 精确指纹（L1）──
 
@@ -179,7 +193,11 @@ class KnowledgeBaseStore:
 
         now = time.time()
         evicted_fingerprint: str | None = None
+        evicted: KnowledgeBaseEntry | None = None
         with self._lock:
+            self._generation += 1
+            current_gen = self._generation
+            snap_clear_gen = self._clear_generation
             existing = self._entries.get(fingerprint)
             if existing is not None:
                 # 更新旧索引
@@ -236,17 +254,47 @@ class KnowledgeBaseStore:
         if settings.kb_vector_index_autosync and not _skip_autosync:
             self._sync_entry_to_vector_store(result)
 
-        # FIX: R7-T4 —— LRU 驱逐同步删除向量条目，避免被淘汰条目的向量点
-        # 永久残留、_try_vector_rag 继续召回已淘汰的历史结论
-        if evicted_fingerprint and settings.kb_vector_index_autosync:
-            self._delete_from_vector_store([evicted_fingerprint])
+        # 持久化写穿（锁外；B03 只有新条目成功落库才允许删除被驱逐条目）
+        persist_ok = self._persist_upsert(
+            result,
+            evicted_fingerprint,
+            gen=current_gen,
+            snap_clear_gen=snap_clear_gen,
+        )
 
-        # PG 写穿持久化（锁外；LRU 驱逐同步删除，失败 warning 降级）
-        self._persist_upsert(result, evicted_fingerprint)
+        if not persist_ok and evicted is not None:
+            # 补偿机制：新条目持久化失败时，旧条目必须仍在内存与持久层
+            with self._lock:
+                if evicted_fingerprint not in self._entries:
+                    self._entries[evicted_fingerprint] = evicted
+                    self._entries.move_to_end(evicted_fingerprint, last=False)
+                    self._add_to_index(evicted)
+
+        # FIX: R7-T4 —— 仅在新条目成功持久化后（或纯内存模式），才从向量库删除被驱逐条目
+        if persist_ok and evicted_fingerprint and settings.kb_vector_index_autosync:
+            self._delete_from_vector_store([evicted_fingerprint])
 
         return result
 
-    def clear(self) -> None:
+    def clear(self) -> bool:
+        """清空知识库所有条目（内存、向量库与持久层）。
+
+        决策 6 (U12) 语义：
+        - 成功必须表示持久删除已完成，失败显式返回 False；
+        - NoOp 边界：_persistent_store() 返回 None（memory / KB_PERSIST_ENABLED=false）时，
+          直接返回 True —— 无持久层承诺，内存清空即视为全部成功；
+        - 持久层开启时，新时序固定为：持久层 delete_all_kb_entries()（锁外） → 持锁清内存与索引 → 删向量（尽力而为）；
+        - 持久层删除失败时记录 warning 并返回 False，内存不予清空，防止重启后旧条目死灰复燃；
+        - 向量库删除不纳入成功判定（保持 R7-T4 失败静默降级语义）。
+        """
+        with self._lock:
+            self._generation += 1
+            self._clear_generation = self._generation
+            self._persisted_generations.clear()
+
+        if not self._persist_clear():
+            return False
+
         with self._lock:
             # FIX: R7-T4 —— 清空前收集指纹，同步删除向量条目（否则向量点
             # 永久残留，_try_vector_rag 继续召回已清空的历史结论）
@@ -254,10 +302,11 @@ class KnowledgeBaseStore:
             self._entries.clear()
             self._norm_index.clear()
             self._type_index.clear()
+
         if settings.kb_vector_index_autosync and fingerprints:
             self._delete_from_vector_store(fingerprints)
-        # PG 写穿：同步清空持久层（锁外执行）
-        self._persist_clear()
+
+        return True
 
     def record_verification(
         self, fingerprint: str, confidence: float
@@ -273,6 +322,9 @@ class KnowledgeBaseStore:
             entry = self._entries.get(fingerprint)
             if entry is None:
                 return None
+            self._generation += 1
+            current_gen = self._generation
+            snap_clear_gen = self._clear_generation
             entry.verify_count += 1
             entry.case_confidence = max(entry.case_confidence, float(confidence))
             entry.updated_at = time.time()
@@ -283,7 +335,11 @@ class KnowledgeBaseStore:
             self._sync_entry_to_vector_store(result)
 
         # PG 写穿：同步回写验证统计（锁外执行）
-        self._persist_verification(result)
+        self._persist_verification(
+            result,
+            gen=current_gen,
+            snap_clear_gen=snap_clear_gen,
+        )
         return result
 
     def size(self) -> int:
@@ -383,72 +439,147 @@ class KnowledgeBaseStore:
             return None
 
     def _persist_upsert(
-        self, entry: dict[str, Any], evicted_fingerprint: str | None
-    ) -> None:
-        """upsert 写穿落库 + LRU 驱逐同步删除（失败 warning 降级，不阻断主流程）。"""
+        self,
+        entry: dict[str, Any],
+        evicted_fingerprint: str | None,
+        *,
+        gen: int = 0,
+        snap_clear_gen: int = 0,
+    ) -> bool:
+        """upsert 写穿落库 + 仅在成功落库后执行 LRU 驱逐同步删除。返回新条目是否落库成功。"""
         store = self._persistent_store()
         if store is None:
-            return
-        try:
-            store.upsert_kb_entry(entry)
-        except Exception:
-            logger.warning(
-                "KB→PG upsert failed (fingerprint=%s)",
-                entry.get("fingerprint"),
-                exc_info=True,
-            )
-        if evicted_fingerprint:
+            return True
+
+        fp = entry.get("fingerprint", "")
+        fp_lock = self._get_fp_lock(fp)
+        with fp_lock:
+            with self._lock:
+                if snap_clear_gen < self._clear_generation:
+                    logger.info("Discarding in-flight KB upsert superseded by clear (fp=%s)", fp)
+                    return True
+                if gen > 0 and gen <= self._persisted_generations.get(fp, 0):
+                    logger.info(
+                        "Skipping outdated KB upsert (fp=%s, gen=%d <= %d)",
+                        fp,
+                        gen,
+                        self._persisted_generations.get(fp, 0),
+                    )
+                    return True
+
+            upsert_ok = False
             try:
-                store.delete_kb_entry(evicted_fingerprint)
+                store.upsert_kb_entry(entry)
+                upsert_ok = True
+                with self._lock:
+                    if snap_clear_gen < self._clear_generation:
+                        # 写入执行期间被 clear 超越：立即撤销写入，防止幽灵数据
+                        try:
+                            store.delete_kb_entry(fp)
+                        except Exception:
+                            pass
+                        return True
+                    self._persisted_generations[fp] = max(
+                        self._persisted_generations.get(fp, 0), gen
+                    )
             except Exception:
                 logger.warning(
-                    "KB→PG evict delete failed (fingerprint=%s)",
-                    evicted_fingerprint,
+                    "KB persistent upsert failed (fingerprint=%s)",
+                    fp,
                     exc_info=True,
                 )
+                return False
 
-    def _persist_verification(self, entry: dict[str, Any]) -> None:
+            if evicted_fingerprint and upsert_ok:
+                try:
+                    store.delete_kb_entry(evicted_fingerprint)
+                except Exception:
+                    logger.warning(
+                        "KB persistent evict delete failed (fingerprint=%s)",
+                        evicted_fingerprint,
+                        exc_info=True,
+                    )
+            return True
+
+    def _persist_verification(
+        self,
+        entry: dict[str, Any],
+        *,
+        gen: int = 0,
+        snap_clear_gen: int = 0,
+    ) -> None:
         """验证统计写穿回写（失败 warning 降级）。"""
         store = self._persistent_store()
         if store is None:
             return
-        try:
-            hit = store.update_kb_verification(
-                entry.get("fingerprint", ""),
-                entry.get("verify_count", 0),
-                entry.get("case_confidence", 0.0),
-                entry.get("updated_at", time.time()),
-            )
-            if not hit:
-                # 记录在持久层缺失（如未持久化或冷启动），回退执行全量 upsert 保证经验不丢失
-                logger.info(
-                    "KB→PG verification update miss; falling back to upsert (fingerprint=%s)",
-                    entry.get("fingerprint"),
-                )
-                store.upsert_kb_entry(entry)
-        except Exception:
-            logger.warning(
-                "KB→PG verification update failed (fingerprint=%s)",
-                entry.get("fingerprint"),
-                exc_info=True,
-            )
 
-    def _persist_clear(self) -> None:
-        """clear 写穿清空持久层（失败 warning 降级）。"""
+        fp = entry.get("fingerprint", "")
+        fp_lock = self._get_fp_lock(fp)
+        with fp_lock:
+            with self._lock:
+                if snap_clear_gen < self._clear_generation:
+                    logger.info("Discarding in-flight verification update superseded by clear (fp=%s)", fp)
+                    return
+                if gen > 0 and gen <= self._persisted_generations.get(fp, 0):
+                    logger.info(
+                        "Skipping outdated verification update (fp=%s, gen=%d <= %d)",
+                        fp,
+                        gen,
+                        self._persisted_generations.get(fp, 0),
+                    )
+                    return
+
+            try:
+                hit = store.update_kb_verification(
+                    fp,
+                    entry.get("verify_count", 0),
+                    entry.get("case_confidence", 0.0),
+                    entry.get("updated_at", time.time()),
+                )
+                if not hit:
+                    # 记录在持久层缺失（如未持久化或冷启动），回退执行全量 upsert 保证经验不丢失
+                    logger.info(
+                        "KB→PG verification update miss; falling back to upsert (fingerprint=%s)",
+                        fp,
+                    )
+                    store.upsert_kb_entry(entry)
+                with self._lock:
+                    if snap_clear_gen < self._clear_generation:
+                        try:
+                            store.delete_kb_entry(fp)
+                        except Exception:
+                            pass
+                        return
+                    self._persisted_generations[fp] = max(
+                        self._persisted_generations.get(fp, 0), gen
+                    )
+            except Exception:
+                logger.warning(
+                    "KB→PG verification update failed (fingerprint=%s)",
+                    fp,
+                    exc_info=True,
+                )
+
+    def _persist_clear(self) -> bool:
+        """清空持久层（锁外执行）。成功返回 True，失败 warning 降级并返回 False。"""
         store = self._persistent_store()
         if store is None:
-            return
+            return True
         try:
             deleted = store.delete_all_kb_entries()
-            logger.info("KB→PG cleared, deleted %d entries", deleted)
+            logger.info("KB persistent clear succeeded, deleted %d entries", deleted)
+            return True
         except Exception:
-            logger.warning("KB→PG clear failed", exc_info=True)
+            logger.warning(
+                "KB clear failed on persistent store; keeping memory to prevent resurrection",
+                exc_info=True,
+            )
+            return False
 
     def load_from_persistent(self) -> int:
         """启动回灌：从持久层加载最近 max_entries 条重建内存条目。
 
-        - 按 updated_at 倒序取回，再按时间正序插入 OrderedDict（保证 LRU
-          驱逐语义：最久未更新的条目位于队首）；
+        - 按 updated_at 倒序取回，再按更新时间正序插入 OrderedDict，队首为最久未更新条目；进程内按访问顺序调整，重启不恢复上次访问顺序。
         - 保留 created_at/updated_at/verify_count/case_confidence 原值；
         - memory 后端（NoOp）返回 0，行为与历史版本一致；
         - 失败 warning 降级并返回 0，不阻断启动。
@@ -506,7 +637,11 @@ class KnowledgeBaseStore:
     def load_seed_cases(self, cases: list[dict[str, Any]]) -> int:
         """批量导入种子知识（DebugCase.to_kb_entry 格式），返回导入条数。
 
-        幂等：相同 fingerprint 覆盖更新；导入后自动重建向量索引（若开启）。
+        B06 语义约束：
+        1. seed 只补缺失项：若内存已存在该 fingerprint，跳过不覆盖；
+        2. 不覆盖已有验证统计：已有条目的 verify_count / case_confidence 完整保留；
+        3. 不强行恢复已被淘汰的 seed：若当前容量已达上限（len >= max_entries），不再插入新种子，防止挤掉既有学习经验；
+        4. 首次冷启动仍正常加载种子：当库为空且未达上限时正常加载种子。
         """
         if not cases:
             return 0
@@ -515,6 +650,15 @@ class KnowledgeBaseStore:
             fingerprint = case.get("fingerprint")
             if not fingerprint:
                 continue
+
+            with self._lock:
+                # 规则 1 & 2: 内存中已有该条目，跳过不覆盖，保留验证统计
+                if fingerprint in self._entries:
+                    continue
+                # 规则 3: 若容量已达上限，不强行恢复已被淘汰的种子，防止挤掉既有学习经验
+                if len(self._entries) >= self.max_entries:
+                    continue
+
             analysis = case.get("analysis") or {}
             self.upsert(
                 fingerprint=fingerprint,
@@ -526,7 +670,7 @@ class KnowledgeBaseStore:
                 _skip_autosync=True,
             )
             count += 1
-        if settings.kb_vector_index_autosync:
+        if settings.kb_vector_index_autosync and count > 0:
             self._sync_all_to_vector_store()
         return count
 
@@ -561,8 +705,8 @@ def upsert_knowledge_entry(
     )
 
 
-def clear_knowledge_base() -> None:
-    _knowledge_base.clear()
+def clear_knowledge_base() -> bool:
+    return _knowledge_base.clear()
 
 
 def get_entry_by_normalized_fingerprint(
@@ -631,3 +775,51 @@ def retrieve_similar_with_scores(
     """
     effective_top_k = top_k if top_k is not None else settings.vector_store_top_k
     return get_vector_store().search(query_text, effective_top_k)
+
+
+# ── B05: 统一知识库启动初始化（HTTP 与 stdio 共享）──
+
+_bootstrap_lock = threading.Lock()
+_bootstrap_done = False
+
+
+def bootstrap_knowledge_base() -> dict[str, int]:
+    """统一知识库启动初始化（回灌 + 种子加载）。
+
+    保证单进程内只执行一次（幂等）。
+    供 HTTP lifespan 与 stdio transport 传输入口共享。
+    """
+    global _bootstrap_done
+    if _bootstrap_done:
+        return {"persisted": 0, "seed": 0}
+
+    with _bootstrap_lock:
+        if _bootstrap_done:
+            return {"persisted": 0, "seed": 0}
+
+        persisted_count = 0
+        try:
+            persisted_count = load_knowledge_base_from_persistent()
+            if persisted_count > 0:
+                logger.info("知识库持久化回灌完成: %d 条", persisted_count)
+        except Exception:
+            logger.warning("知识库持久化回灌失败，跳过（不影响启动）", exc_info=True)
+
+        seed_count = 0
+        try:
+            from app.rag.seed_data import load_seed_data
+
+            seed_count = load_seed_data()
+            logger.info("知识库种子加载完成: %d 条", seed_count)
+        except Exception:
+            logger.warning("知识库种子加载失败，跳过（不影响启动）", exc_info=True)
+
+        _bootstrap_done = True
+        return {"persisted": persisted_count, "seed": seed_count}
+
+
+def _reset_bootstrap_state() -> None:
+    """内部辅助：重置 bootstrap 状态（仅供单元测试隔离）。"""
+    global _bootstrap_done
+    with _bootstrap_lock:
+        _bootstrap_done = False

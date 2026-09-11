@@ -408,7 +408,7 @@ def save_console_log(
         "level": level or "info",
         # FIX: P1-6 message 可能含敏感键值，统一递归脱敏
         "message": redact_nested(message),
-        "source": source,
+        "source": redact(source),
     }
     if session_id is not None:
         payload["session_id"] = session_id
