@@ -179,16 +179,13 @@ def cleanup_resources() -> None:
 
 
 def _signal_handler(signum, frame):
-    """SIGINT/SIGTERM 兜底：触发清理后退出。
+    """SIGINT/SIGTERM（C4 §1.1 / W4-3）：回调只发布退出意图与首次触发时间。
 
-    在 asyncio 主循环运行时被调用，sys.exit(0) 抛 SystemExit，
-    会被 asyncio 捕获并终止主循环，finally 仍会执行 cleanup_resources（幂等）。
+    清理**不在回调内**执行（旧实现在信号上下文运行清理，阻塞即挂死）——
+    SystemExit 交给主循环 unwind，finally 中的清理在可调度上下文执行（幂等）。
     """
-    try:
-        cleanup_resources()
-    except Exception:
-        pass
-    sys.exit(0)
+    shutdown_mod.signal_handler_stub(signum, frame)
+    raise SystemExit(0)
 
 
 def _register_signal_handlers() -> None:
@@ -327,6 +324,7 @@ async def _run_unified_transport(host: str, port: int) -> None:
     http_server = uvicorn.Server(config)
     logger.info("本地 HTTP 已启用: http://%s:%d（MCP: /mcp，采集: /ingest）", host, port)
 
+    shutdown_mod.wrap_uvicorn_handle_exit(http_server)  # C4 §1.1：serve 路径信号适配
     http_task = asyncio.create_task(http_server.serve(), name="lujo-http")
     stdio_task = asyncio.create_task(_run_stdio_transport(), name="lujo-stdio")
     try:

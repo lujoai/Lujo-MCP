@@ -95,6 +95,22 @@ def deadline_remaining() -> float | None:
         return _deadline - time.monotonic()
 
 
+def _intent_observed() -> bool:
+    """监督线程视角：正式记账 **或** 信号薄发布任一成立即视为意图已观察。"""
+    with _intent_lock:
+        return _intent_t0 is not None or _signal_t0 is not None
+
+
+def _effective_deadline() -> float | None:
+    """监督线程视角的生效 deadline：正式记账优先，信号 t0 亦可独立成立。"""
+    with _intent_lock:
+        if _deadline is not None:
+            return _deadline
+        if _signal_t0 is not None:
+            return _signal_t0 + EXIT_DEADLINE_SECONDS
+    return None
+
+
 # ── 看门狗（监督线程；W4-2 的实现体） ────────────────────────────────────
 
 
@@ -150,10 +166,12 @@ class ExitSupervisor:
             self.ready = True
             while True:
                 _watch_now()  # 时钟读数失败 → 内部异常 → 同一最后防线
-                if self._stop.is_set() and not exit_intent_recorded():
+                if self._stop.is_set() and not _intent_observed():
                     return
-                if exit_intent_recorded():
-                    remaining = deadline_remaining()
+                if _intent_observed():
+                    # §1.3.2：监督线程独立识别截止时间（含仅信号薄发布的情形）
+                    effective = _effective_deadline()
+                    remaining = effective - _watch_now()
                     if remaining is None or remaining <= 0:
                         self._fired = True
                         os._exit(0)  # 无阻塞最后防线：之前禁止任何 IO/锁/join
@@ -161,7 +179,8 @@ class ExitSupervisor:
                     # 到点前小步等待：唤醒（新原因）或到点（先查剩余再退）
                     if self._wake.wait(timeout=min(remaining, 0.1)):
                         self._wake.clear()
-                    if deadline_remaining() is not None and deadline_remaining() <= 0:
+                    effective = _effective_deadline()
+                    if effective is not None and effective - _watch_now() <= 0:
                         self._fired = True
                         os._exit(0)
                         return
@@ -192,6 +211,28 @@ def ensure_exit_supervisor() -> ExitSupervisor:
     if _supervisor is None:
         _supervisor = ExitSupervisor.create()
     return _supervisor
+
+
+# ── uvicorn serve 路径的信号适配（W4-3；覆盖统一模式与独立 HTTP 入口） ────
+
+
+def wrap_uvicorn_handle_exit(server) -> None:
+    """包装 uvicorn ``Server.handle_exit``：原语义前先发布退出意图与 t0。
+
+    - 薄、无锁、无日志（signal_handler_stub 语义）；
+    - 原 handle_exit（uvicorn should_exit 语义）**原样保留并调用**；
+    - 幂等：``_intent_wrapped`` 标记防重复包装（避免递归链）。
+    """
+    if getattr(server, "_intent_wrapped", False):
+        return
+    original = server.handle_exit
+
+    def _handle_exit(signum, frame):
+        signal_handler_stub(signum, frame)
+        original(signum, frame)
+
+    server.handle_exit = _handle_exit
+    server._intent_wrapped = True
 
 
 # ── EOF 感知流代理（接在唯一 stdin 输入生产者上；透传，无第二读取线程） ───

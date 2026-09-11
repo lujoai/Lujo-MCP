@@ -87,8 +87,11 @@ def test_unified_and_http_entries_create_supervisor():
 
     http_src = inspect.getsource(main_mod)
     assert "ensure_exit_supervisor()" in http_src
-    # HTTP 入口在 uvicorn.run 之前接线（独立入口接纳前）
-    assert http_src.index("ensure_exit_supervisor()") < http_src.index("uvicorn.run(")
+    # HTTP 入口在 serve 之前接线（独立入口接纳前）；uvicorn.run 已替换为
+    # 显式 Server + handle_exit 包装
+    assert "wrap_uvicorn_handle_exit" in http_src
+    assert "uvicorn.run(" not in http_src
+    assert http_src.index("ensure_exit_supervisor()") < http_src.index("http_server.run()")
 
 
 def test_supervisor_record_arms_deadline_once(monkeypatch):

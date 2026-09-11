@@ -521,9 +521,18 @@ if __name__ == "__main__":
 
     ensure_exit_supervisor()
     validate_startup_configuration()
-    uvicorn.run(
+    import uvicorn
+
+    from app.mcp.protocol.shutdown import wrap_uvicorn_handle_exit
+
+    # C4 §1.1 / W4-3：显式 Server + handle_exit 包装（保留 uvicorn 原语义，
+    # 其前先发布退出意图与首次触发时间；uvicorn.run 黑盒无法接线）
+    config = uvicorn.Config(
         "app.main:app",
         host=settings.host,
         port=settings.port,
         reload=settings.debug,
     )
+    http_server = uvicorn.Server(config)
+    wrap_uvicorn_handle_exit(http_server)
+    http_server.run()
