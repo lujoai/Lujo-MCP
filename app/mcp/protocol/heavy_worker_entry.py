@@ -29,23 +29,16 @@ tools 等）。
 
 from __future__ import annotations
 
-import importlib
 import pickle
 import sys
 
 from app.mcp.protocol import heavy_spawn
-from app.mcp.protocol.heavy_process import _FROZEN_WORKER_FLAG as WORKER_FLAG
+from app.mcp.protocol.heavy_process import (
+    _FROZEN_WORKER_FLAG as WORKER_FLAG,
+    resolve_and_run,
+)
 
 _PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
-
-
-def _execute(handler_module: str, handler_name: str, arguments):
-    """go 后执行：导入 handler 并同步执行（W2-3 将抽为共享 resolve_and_run，
-    届时源码入口 / 冻结入口 / 本入口三处共用同一份 sync/async 判定与
-    R11 协程单次执行规则；当前世界 heavy handler 仅同步）。"""
-    module = importlib.import_module(handler_module)
-    handler = getattr(module, handler_name)
-    return handler(arguments)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         try:
-            result = _execute(handler_module, handler_name, arguments)
+            result = resolve_and_run(handler_module, handler_name, arguments)
             try:
                 payload = pickle.dumps(("ok", result), _PICKLE_PROTOCOL)
             except Exception:
