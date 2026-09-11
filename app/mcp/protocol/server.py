@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app import __version__
 from app.config import settings
+from app.mcp.protocol.executor_lifecycle import SlotPool
+from app.mcp.protocol.executor_lifecycle import lifecycle as _slot_lifecycle
 from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
 from app.mcp.protocol.tool_errors import is_tool_failure_result
 from app.observability import (
@@ -69,6 +71,17 @@ _heavy_tool_slots = asyncio.Semaphore(settings.tool_heavy_executor_workers)
 _TOOL_EXECUTOR = _LIGHT_TOOL_EXECUTOR
 _tool_slots = _light_tool_slots
 _executor_lock = threading.Lock()
+
+# DESIGN C1 §3.4/§5.1：容量代际属主 + token 状态机（**结算**与**许可归还**分离）。
+# 池对象只负责账目与代际；信号量仍由本模块持有（「槽位共享、池分立」不变，
+# 不统一 _TOOL_EXECUTOR 与 _LIGHT_TOOL_EXECUTOR）。
+_light_pool = _slot_lifecycle.pool("light", settings.tool_executor_workers)
+_heavy_pool = _slot_lifecycle.pool("heavy", settings.tool_heavy_executor_workers)
+
+
+def _pool_for(pool_type: str) -> SlotPool:
+    """按池类型取代际属主（light/heavy 分立）。"""
+    return _heavy_pool if pool_type == "heavy" else _light_pool
 
 
 def _get_light_tool_executor() -> ThreadPoolExecutor:
@@ -397,42 +410,45 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         # FIX(v0.7.1-b1-5): async 工具取得槽位后补记 record_mcp_tool_wait，
         # 与同步分支口径一致（此前 async 排队耗时是指标盲区）。
         record_mcp_tool_wait(tool_name, pool_type, time.perf_counter() - wait_start)
+        # DESIGN C1 §3.2 / §3.4：async 轻量的真实任务即 asyncio Task。
+        # 在 **task** 上挂结算，槽位跟随「真实任务终结」归还；超时与取消都
+        # **不再**由 awaiter 直接释放许可（旧实现 finally 无条件 release 是 B07 根因）。
+        _async_pool = _pool_for(pool_type)
+        _token = _async_pool.acquire_token(loop=asyncio.get_running_loop(), semaphore=slots)
+        _task = asyncio.ensure_future(handler(arguments))
+        _task.add_done_callback(
+            lambda _t, _tok=_token, _p=_async_pool: _p.settle(_tok)
+        )
         try:
-            try:
-                result = await asyncio.wait_for(
-                    handler(arguments),
-                    timeout=timeout,
-                )
-                record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
-            except asyncio.TimeoutError:
-                record_mcp_tool_call(tool_name, "timeout", timeout)
-                logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
-                return make_response(req.id, {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"工具执行超时(>{timeout}s)，已中止",
-                        }
-                    ],
-                    "isError": True,
-                    "error_code": "TOOL_TIMEOUT",
-                    "_timed_out": True,
-                })
-            except Exception:
-                record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
-                logger.exception("工具 %s 执行失败", tool_name)
-                return make_response(req.id, {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "工具执行失败，详情见服务端日志",
-                        }
-                    ],
-                    "isError": True,
-                    "error_code": "TOOL_INTERNAL",
-                })
-        finally:
-            slots.release()
+            result = await asyncio.wait_for(_task, timeout=timeout)
+            record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
+        except asyncio.TimeoutError:
+            record_mcp_tool_call(tool_name, "timeout", timeout)
+            logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"工具执行超时(>{timeout}s)，已中止",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_TIMEOUT",
+                "_timed_out": True,
+            })
+        except Exception:
+            record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
+            logger.exception("工具 %s 执行失败", tool_name)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "工具执行失败，详情见服务端日志",
+                    }
+                ],
+                "isError": True,
+                "error_code": "TOOL_INTERNAL",
+            })
     else:
         # 同步工具：获取执行槽位，带等待超时，防止线程池排队堆积与饥饿
         executor, slots, pool_type = _get_tool_executor_and_slots(tool_name)
@@ -473,14 +489,19 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 except Exception:
                     logger.exception("工具 %s prepare_args 预处理失败，沿用原入参", tool_name)
 
+        # DESIGN C1 §3.1 / §3.4：结算挂到**真实任务**上，槽位跟随真实执行终结归还。
+        _sync_pool = _pool_for(pool_type)
+        _sync_loop = asyncio.get_running_loop()
+        _sync_token = _sync_pool.acquire_token(loop=_sync_loop, semaphore=slots)
         sync_future: asyncio.Future | None = None
+        real_future = None
         try:
-            loop = asyncio.get_running_loop()
             if pool_type == "heavy":
                 # FIX: C2 —— 重活进程隔离：子进程执行 + 超时 terminate() 强杀。
                 # 等待动作放在默认线程池的一个线程里（内部按 timeout 自限并强杀子进程），
                 # 事件循环只 await 该线程结果，不阻塞；超时后无僵尸、不打满任何池。
-                sync_future = loop.run_in_executor(
+                # W1 阶段：结算挂在「收割线程返回」上；W2 将改为由条目 REAPED 驱动。
+                sync_future = _sync_loop.run_in_executor(
                     None,
                     run_heavy_tool_blocking,
                     handler.__module__,
@@ -488,14 +509,28 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                     arguments,
                     float(timeout),
                 )
+                sync_future.add_done_callback(
+                    lambda _f, _tok=_sync_token, _p=_sync_pool: _p.settle(_tok)
+                )
                 result = await sync_future
             else:
-                sync_future = loop.run_in_executor(executor, handler, arguments)
-                result = await asyncio.wait_for(sync_future, timeout=timeout)
+                # 关键：用 executor.submit 拿到**真实 concurrent.futures.Future**，
+                # 回调挂它上面（不是 asyncio 包装 future）。这样「超时响应早已返回、
+                # 线程后来才终于跑完」时才会结算——旧实现在 finally 里无条件
+                # slots.release() 正是 B07「超发」的根因。
+                real_future = executor.submit(handler, arguments)
+                _sync_pool.attach(real_future, _sync_token)
+                result = await asyncio.wait_for(
+                    asyncio.wrap_future(real_future), timeout=timeout
+                )
             record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
         except asyncio.TimeoutError:
             record_mcp_tool_call(tool_name, "timeout", timeout)
-            if sync_future is not None:
+            # 「停止等待」的善意尝试，**不是记账事件**：对运行中线程 cancel()
+            # 返回 False，槽位继续由真实 future 的回调在任务真正终结时归还。
+            if real_future is not None:
+                real_future.cancel()
+            elif sync_future is not None:
                 sync_future.cancel()
             if pool_type == "heavy":
                 logger.warning(
@@ -521,9 +556,18 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": "TOOL_TIMEOUT",
                 "_timed_out": True,
             })
+        except asyncio.CancelledError:
+            # DESIGN C1 §1.4a/b：仅「从未运行」的任务可补偿结算；已运行/已完成
+            # 的交给真实 future 回调。两条路径由同一 token 闸门互斥，不会双结算。
+            if real_future is not None and real_future.cancel():
+                _sync_pool.settle(_sync_token)
+            raise
         except Exception:
             record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
             logger.exception("工具 %s 执行失败", tool_name)
+            # submit 抛错（executor 已关闭）等「任务从未入队」路径需补偿结算；
+            # handler 自身抛错时 real_future 已完成、回调已结算，此处幂等空转。
+            _sync_pool.settle(_sync_token)
             return make_response(req.id, {
                 "content": [
                     {
@@ -534,8 +578,6 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "isError": True,
                 "error_code": "TOOL_INTERNAL",
             })
-        finally:
-            slots.release()
 
     _elapsed = time.monotonic() - _tool_start
     try:

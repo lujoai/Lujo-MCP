@@ -191,6 +191,17 @@ class TestSlotAccounting:
         register_tool(name, description="test-only", handler=handler,
                       inputSchema={"type": "object"}, **kwargs)
 
+    @staticmethod
+    async def _wait_slot_restored(before: int, timeout: float = 5.0) -> bool:
+        """轮询等待槽位恢复（归还回调是异步的，不能只 sleep(0) 一次就断言）。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if protocol._light_tool_slots._value >= before:
+                return True
+            await asyncio.sleep(0.01)
+        return protocol._light_tool_slots._value >= before
+
     @pytest.mark.parametrize(
         "case",
         ["ok", "business_failure", "handler_exception", "timeout"],
@@ -234,9 +245,24 @@ class TestSlotAccounting:
                 assert dumped["isError"] is True
                 if case == "timeout":
                     assert payload["_timed_out"] is True
-            # 归还后（含并发等待中的瞬时值）不得低于进入前
-            await asyncio.sleep(0)
-            assert protocol._light_tool_slots._value == before
+
+            if case == "timeout":
+                # ── 改断言三件套（DESIGN C1 §0 / §3.1）──
+                # 原断言：超时响应返回后 `await asyncio.sleep(0)` 即断言 `_value == before`。
+                #   该断言通过恰恰依赖 mcp_server.py finally 里的**无条件 release**，
+                #   即它编码了 B07「超时提前归还槽位 → 实际并发超发」这一缺陷本身。
+                # 新断言：超时响应返回时槽位**仍被真实线程占用**（不得提前归还）；
+                #   待真实线程终结（handler 睡 1.0s）后槽位才恢复。
+                # 为什么：归还权从「awaiter 返回」移到「真实任务终结」（结算与归还分离）。
+                await asyncio.sleep(0)
+                assert protocol._light_tool_slots._value < before, (
+                    "超时后槽位被提前归还：真实线程仍在运行，槽位必须继续记账"
+                )
+                assert await self._wait_slot_restored(before), "真实线程终结后槽位必须恢复"
+            else:
+                # ok / business_failure / handler_exception：线程同步终结，
+                # 归还回调异步执行，轮询等待即可（不改变「必须归还」的语义）。
+                assert await self._wait_slot_restored(before), "结束后槽位必须归还"
         finally:
             _tool_registry.pop(name, None)
 

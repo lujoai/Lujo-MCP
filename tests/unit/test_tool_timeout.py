@@ -21,7 +21,17 @@ def _restore_registry():
 
 @pytest.mark.asyncio
 async def test_sync_tool_timeout_cancels_future(monkeypatch):
-    """验证同步工具超时时，封装的 Future 会被调用 cancel()，且返回结构正确。"""
+    """同步工具超时时，**真实** concurrent.futures.Future 会被调用 cancel()，且返回结构正确。
+
+    **改断言三件套（DESIGN C1 §3.1）**：
+    - 原断言：spy ``loop.run_in_executor`` 返回的 future，断言 ``mock_future.cancel.called``。
+      它锁住的是「轻量同步走 run_in_executor」这一**实现路径**，而非行为。
+    - 新断言：spy ``executor.submit`` 返回的**真实** future，断言超时时 ``cancel()``
+      被调用；响应结构（isError / TOOL_TIMEOUT / _timed_out / 文本）逐项不变。
+    - 为什么：新设计要求结算回调挂在真实 future 上（``run_in_executor`` 只返回 asyncio
+      包装 future，拿不到真实对象），故捕获点必须前移到 ``executor.submit``。
+      另：``cancel()`` 对运行中线程无效，**不再作为记账事件**——槽位由真实任务终结归还。
+    """
     monkeypatch.setattr(settings, "tool_timeout_seconds", 0.05)
 
     def slow_sync_handler(args):
@@ -30,33 +40,35 @@ async def test_sync_tool_timeout_cancels_future(monkeypatch):
 
     register_tool("slow_sync_test", "slow sync tool", slow_sync_handler, inputSchema={"type": "object"})
 
-    mock_future = None
-    orig_run_in_executor = asyncio.get_running_loop().run_in_executor
+    captured: list = []
+    real_executor = server_module._get_light_tool_executor()
+    real_submit = real_executor.submit
 
-    def wrapped_run_in_executor(executor, func, *args):
-        nonlocal mock_future
-        fut = orig_run_in_executor(executor, func, *args)
-        real_cancel = fut.cancel
-        spy_cancel = MagicMock(side_effect=real_cancel)
-        fut.cancel = spy_cancel
-        mock_future = fut
+    def spy_submit(fn, *args, **kwargs):
+        fut = real_submit(fn, *args, **kwargs)
+        spy = MagicMock(side_effect=fut.cancel)
+        fut.cancel = spy
+        captured.append((fut, spy))
         return fut
 
-    with patch.object(asyncio.get_running_loop(), "run_in_executor", side_effect=wrapped_run_in_executor):
-        req = JSONRPCRequest(
-            id="req-timeout-1",
-            method="tools/call",
-            params={"name": "slow_sync_test", "arguments": {}},
-        )
-        resp = await _handle_tools_call(req)
+    monkeypatch.setattr(real_executor, "submit", spy_submit)
+
+    req = JSONRPCRequest(
+        id="req-timeout-1",
+        method="tools/call",
+        params={"name": "slow_sync_test", "arguments": {}},
+    )
+    resp = await _handle_tools_call(req)
 
     result = resp.get("result", {})
     assert result.get("isError") is True
     assert result.get("error_code") == "TOOL_TIMEOUT"
     assert result.get("_timed_out") is True
     assert "已中止" in result.get("content", [{}])[0].get("text", "")
-    assert mock_future is not None
-    assert mock_future.cancel.called
+
+    assert captured, "轻量同步路径必须经 executor.submit 提交真实任务"
+    _fut, spy_cancel = captured[0]
+    assert spy_cancel.called, "超时必须对真实 future 调用 cancel()（善意停止等待）"
 
 
 @pytest.mark.asyncio

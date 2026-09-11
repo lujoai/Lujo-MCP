@@ -49,6 +49,7 @@ from app.runtime.hooks.exception_hook import install_global_hook, uninstall_glob
 from app.mcp.protocol.server import (
     _acquire_slot_or_fastfail,
     _get_tool_executor_and_slots,
+    _pool_for,
     _tool_registry,
     _validate_tool_arguments,
     get_agent_visible_tools,
@@ -350,11 +351,24 @@ async def _run_unified_transport(host: str, port: int) -> None:
             await stdio_task
 
 
-async def _run_registered_tool(name: str, tool: dict, arguments: dict):
+async def _run_registered_tool(name: str, tool: dict, arguments: dict, *, token=None, pool=None):
+    """执行工具。``token``/``pool`` 给定时，把**结算**挂到真实任务上（DESIGN C1 §3.1/§3.2）。
+
+    槽位归还跟随「真实任务终结」，不再由调用方的 finally 无条件释放（B07 根因）。
+    """
     timeout = settings.tool_timeout_seconds
     handler = tool["handler"]
+
+    def _bind(done_obj) -> None:
+        if token is not None and pool is not None:
+            pool.attach(done_obj, token)
+
     if asyncio.iscoroutinefunction(handler):
-        return await asyncio.wait_for(handler(arguments), timeout=timeout)
+        # async 轻量的真实任务即 Task：在 task 上挂结算
+        task = asyncio.ensure_future(handler(arguments))
+        if token is not None and pool is not None:
+            task.add_done_callback(lambda _t: pool.settle(token))
+        return await asyncio.wait_for(task, timeout=timeout)
 
     # FIX: C2 —— 重型同步工具（如 verify_ui）改在子进程执行 + 超时 terminate()
     # 强杀（进程可杀，无僵尸）；父进程内存态入参先经 prepare_args 预处理。
@@ -366,7 +380,8 @@ async def _run_registered_tool(name: str, tool: dict, arguments: dict):
             except Exception:
                 logger.warning("工具 %s prepare_args 失败，沿用原入参", name, exc_info=True)
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        # W1 阶段：结算挂在「收割线程返回」上；W2 将改为由条目 REAPED 驱动。
+        fut = loop.run_in_executor(
             None,
             run_heavy_tool_blocking,
             handler.__module__,
@@ -374,14 +389,17 @@ async def _run_registered_tool(name: str, tool: dict, arguments: dict):
             arguments,
             float(timeout),
         )
+        if token is not None and pool is not None:
+            fut.add_done_callback(lambda _f: pool.settle(token))
+        return await fut
 
     # FIX P3-12: 轻量同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
     # 超时只取消 await，线程继续运行但池有界不增长。
-    loop = asyncio.get_running_loop()
-    return await asyncio.wait_for(
-        loop.run_in_executor(_get_tool_executor(), handler, arguments),
-        timeout=timeout,
-    )
+    # 关键：用 executor.submit 拿**真实** concurrent.futures.Future，回调挂它上面，
+    # 线程真正结束时才结算并归还许可。
+    real_future = _get_tool_executor().submit(handler, arguments)
+    _bind(real_future)
+    return await asyncio.wait_for(asyncio.wrap_future(real_future), timeout=timeout)
 
 
 @server.list_tools()
@@ -451,25 +469,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         ))
     record_mcp_tool_wait(name, pool_type, time.perf_counter() - wait_start)
 
+    # DESIGN C1 §3.1/§3.4：登记 ACTIVE token，把**结算**挂到真实任务上；
+    # 删除运行期无条件 slots.release()（B07「超发」根因）。
+    _pool = _pool_for(pool_type)
+    _token = _pool.acquire_token(loop=asyncio.get_running_loop(), semaphore=slots)
     try:
-        try:
-            result = await _run_registered_tool(name, tool, arguments)
-            record_mcp_tool_call(name, "ok", time.monotonic() - _tool_start)
-        except asyncio.TimeoutError:
-            record_mcp_tool_call(name, "timeout", settings.tool_timeout_seconds)
-            logger.warning("工具 %s 执行超时（>%ss），已中止", name, settings.tool_timeout_seconds)
-            raise ToolExecutionError(json.dumps(
-                {"error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。", "_timed_out": True},
-                ensure_ascii=False,
-            ))
-        except ToolExecutionError:
-            raise
-        except Exception as e:
-            record_mcp_tool_call(name, "error", time.monotonic() - _tool_start)
-            logger.error(str(e), exc_info=True)
-            raise ToolExecutionError(json.dumps({"error": "Tool execution failed"}, ensure_ascii=False))
-    finally:
-        slots.release()
+        result = await _run_registered_tool(name, tool, arguments, token=_token, pool=_pool)
+        record_mcp_tool_call(name, "ok", time.monotonic() - _tool_start)
+    except asyncio.TimeoutError:
+        # 不结算：真实任务可能仍在运行，槽位由真实 future/task 的回调在终结时归还
+        record_mcp_tool_call(name, "timeout", settings.tool_timeout_seconds)
+        logger.warning("工具 %s 执行超时（>%ss），已中止", name, settings.tool_timeout_seconds)
+        raise ToolExecutionError(json.dumps(
+            {"error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。", "_timed_out": True},
+            ensure_ascii=False,
+        ))
+    except ToolExecutionError:
+        # 工具已实际执行并产出失败结果：结算已由回调完成，此处不重复
+        raise
+    except asyncio.CancelledError:
+        # 取消传播：真实任务可能仍在运行，交由回调结算（不在此处归还）
+        raise
+    except Exception as e:
+        record_mcp_tool_call(name, "error", time.monotonic() - _tool_start)
+        logger.error(str(e), exc_info=True)
+        # submit 抛错（池已关闭）等「任务从未入队」路径需补偿结算；
+        # handler 自身抛错时真实 future/task 已完成、回调已结算，此处幂等空转。
+        _pool.settle(_token)
+        raise ToolExecutionError(json.dumps({"error": "Tool execution failed"}, ensure_ascii=False))
 
     if tool_failure_predicate(tool)(result):
         raise ToolExecutionError(json.dumps(result, ensure_ascii=False, indent=2))
