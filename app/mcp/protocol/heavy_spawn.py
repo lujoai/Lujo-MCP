@@ -391,11 +391,17 @@ def spawn_attempt(
     command: list[str],
     env: dict | None = None,
     cwd: str | None = None,
+    *,
+    extra_creationflags: int = 0,
+    start_new_session: bool = False,
 ) -> SpawnedAttempt:
     """按 §1.1 全参数启动一个 worker 尝试，创建其独立结果通道。
 
-    失败路径（Popen 抛错等）：收口全部已取得资源（读端文件、可继承写句柄），
-    不留半开句柄。
+    ``extra_creationflags``：Windows 附加 creationflags（如
+    CREATE_BREAKAWAY_FROM_JOB / CREATE_NO_WINDOW——C3 §2.1 降级链与能力快照）；
+    ``start_new_session``：POSIX 新会话/新进程组（pgid==pid，终止后端按出生
+    pgid 两级 killpg，W3-2）。失败路径（Popen 抛错等）：收口全部已取得资源
+    （读端文件、可继承写句柄），不留半开句柄。
     """
     child_env = dict(os.environ if env is None else env)
     read_file = None
@@ -417,6 +423,7 @@ def spawn_attempt(
             read_file = os.fdopen(read_fd, "rb", buffering=0)
             child_env[_ENV_RESULT_FD] = str(write_fd)
             popen_kwargs["pass_fds"] = (write_fd,)
+            popen_kwargs["start_new_session"] = start_new_session
             parent_write_objects = [write_fd]
 
         proc = subprocess.Popen(  # noqa: S603 —— 固定命令行，非用户输入
@@ -426,7 +433,7 @@ def spawn_attempt(
             stderr=None,  # stderr 继承：日志通道，不进结果流
             cwd=cwd if cwd is not None else os.getcwd(),
             env=child_env,
-            creationflags=_CREATE_NEW_PROCESS_GROUP,
+            creationflags=_CREATE_NEW_PROCESS_GROUP | extra_creationflags,
             **popen_kwargs,
         )
     except BaseException:

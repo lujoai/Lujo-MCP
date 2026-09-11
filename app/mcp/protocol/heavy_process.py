@@ -28,6 +28,7 @@ import sys
 import time
 
 from app.mcp.protocol import heavy_spawn
+from app.mcp.protocol.termination import backend as termination_backend
 
 logger = logging.getLogger("lujo-mcp.mcp.heavy")
 
@@ -137,11 +138,15 @@ def run_heavy_tool_blocking(
     except Exception as exc:
         raise RuntimeError("heavy tool arguments not serializable") from exc
 
-    attempt = heavy_spawn.spawn_attempt(0, command)
+    attempt, backend_decision = termination_backend.spawn_with_backend(0, command)
+    logger.info(
+        "heavy worker %s 派发：attempt_id=%s backend=%s pid=%s",
+        handler_name, attempt.attempt_id, backend_decision.backend, attempt.proc.pid,
+    )
     try:
         payload = heavy_spawn.handshake(
             attempt, request, deadline=time.monotonic() + float(timeout),
-            allow_commit=lambda: True,  # 注册表四条件闸门自 W3/W4 接入
+            allow_commit=lambda: True,  # 注册表四条件闸门自 W4 接入
         )
         status, detail = pickle.loads(payload)
         if status == "ok":
@@ -165,4 +170,5 @@ def run_heavy_tool_blocking(
             f"heavy tool {handler_name} worker handshake broken: {exc}"
         ) from exc
     finally:
-        heavy_spawn.terminate_and_reap(attempt, grace=_KILL_JOIN_GRACE)
+        # 三级终止（协作级按条目快照）→ Job 整树兜底；关闭 Job 不等于结算（C1 §4.3）
+        termination_backend.terminate_attempt(attempt, backend_decision, grace=_KILL_JOIN_GRACE)
