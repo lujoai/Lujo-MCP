@@ -3,7 +3,7 @@
  *
  * 背景：生成器此前按内嵌 8 字段 schema 整体覆写平台包 package.json，仓库
  * manifest 声明的 "engines" 在发布产物中被静默丢弃（v0.7.6 / v0.7.7 线上
- * 三包 npm view engines 实证为空，见 CODE_REVIEW §9 与 PLAN_v0.7.8.md §3）。
+ * 三包 npm view engines 实证为空，见 CODE_REVIEW §9 与 DEV_PLAN.md 附录 C §3）。
  * 本文件守住两件事：
  *   1. 产物必须含非空 engines.node（回退默认 >=18）且 name/version/os/cpu/engines/files
  *      齐全，且不得声明 bin（与元包同名 bin 会让 npm 跳过全部 bin 链接）；

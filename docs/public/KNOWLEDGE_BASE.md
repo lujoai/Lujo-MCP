@@ -68,7 +68,7 @@ AI 检索经验时可按置信度排序：**反复验证过的修复方案优先
 
 ### 方式一：自动建表（显式启用 PG；实验性路径，默认零配置无需此步）
 
-配置 `STORAGE_BACKEND=postgresql` 启动服务后，`_ensure_init` 会在**首次访问时**自动执行建表（幂等，`IF NOT EXISTS`）。注意 PG 为实验性后端：建表属于延迟初始化阶段，该阶段失败可能直接报错而不是自动降级，不承诺「服务照常启动」，已知失败模式见本文末「可靠性设计」与 POSTGRESQL_FIX_GUIDE.md：
+配置 `STORAGE_BACKEND=postgresql` 启动服务后，`_ensure_init` 会在**首次访问时**自动执行建表（幂等，`IF NOT EXISTS`）。注意 PG 为实验性后端：建表属于延迟初始化阶段，该阶段失败可能直接报错而不是自动降级，不承诺「服务照常启动」，已知失败模式见本文末「可靠性设计」与 TROUBLESHOOTING.md L 节：
 
 ```env
 STORAGE_BACKEND=postgresql
@@ -118,7 +118,7 @@ psql -h 127.0.0.1 -U postgres -d lujo_mcp -f migrations/20260817_create_kb_entri
 PG_PASSWORD=你的密码 API_KEY=你的key docker-compose up -d
 ```
 
-容器内自动建表（含 kb_entries），数据落在 `pgdata` 卷，重启不丢。PostgreSQL 连接排障见 [POSTGRESQL_FIX_GUIDE.md](./POSTGRESQL_FIX_GUIDE.md)。
+容器内自动建表（含 kb_entries），数据落在 `pgdata` 卷，重启不丢。PostgreSQL 连接排障见 [TROUBLESHOOTING.md L 节](./TROUBLESHOOTING.md)。
 
 ## 部署模式
 
@@ -131,6 +131,6 @@ PG_PASSWORD=你的密码 API_KEY=你的key docker-compose up -d
 ## 可靠性设计
 
 - **PostgreSQL 为实验性后端，不承诺支持**：推荐使用默认组合——运行现场 `STORAGE_BACKEND=memory`、KB 经验写穿本地 SQLite「笔记本」。PG 路径的部分已知写入失败会记录 warning，但延迟初始化（首次读写时 `_ensure_init`）失败可能无法自动降级、KB 持续抛错，不能承诺「主流程零影响」
-- **PG 初始化/首次访问可能直接失败**：工厂只在 store 构造期处理部分异常；延迟初始化与首次访问阶段的具体失败可能直接抛出，不保证降级为 no-op 或服务照常启动。已知失败模式、推荐默认配置与迁移/退役说明见 [POSTGRESQL_FIX_GUIDE.md](./POSTGRESQL_FIX_GUIDE.md#postgresql-实验性后端与已知限制)
+- **PG 初始化/首次访问可能直接失败**：工厂只在 store 构造期处理部分异常；延迟初始化与首次访问阶段的具体失败可能直接抛出，不保证降级为 no-op 或服务照常启动。已知失败模式、推荐默认配置与迁移/退役说明见 [TROUBLESHOOTING.md L 节](./TROUBLESHOOTING.md#l-postgresql-实验性后端--experimental-postgresql)
 - **驱逐顺序与持久删除**：进程内按访问顺序淘汰；重启回灌后、尚无新的访问调整时，优先淘汰最久未更新的经验。不承诺跨重启保留访问顺序；持久删除失败的风险见已知问题说明。
 - **幂等迁移**：全部 `CREATE TABLE / INDEX IF NOT EXISTS`，重复执行安全

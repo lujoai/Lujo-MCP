@@ -171,7 +171,7 @@ def _check_async_context() -> None:
         raise RuntimeError(
             "AsyncPG store 方法必须在 async 上下文中调用。"
             "当 pg_async_enabled=True 时，请确保所有调用路径已改为 async。"
-            "详见 docs/internal/ROADMAP.md Phase 3 迁移指南。"
+            "详见 docs/internal/DEV_PLAN.md Phase 3 迁移指南。"
         )
 
 

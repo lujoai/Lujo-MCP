@@ -265,6 +265,6 @@ SDK 通过 monkey-patch 拦截浏览器网络请求，**两者同源捕获**（V
 
 - [API_REFERENCE.md](./API_REFERENCE.md) — REST API 与 MCP 工具参考
 - [DEMO.md](./DEMO.md) — 完整调试场景演示
-- [DEMO_GUIDE.md](./DEMO_GUIDE.md) — 演示操作步骤（含 SDK 各特性测试区）
+- [DEMO.md 演示指南](./DEMO.md) — 演示操作步骤（含 SDK 各特性测试区）
 - [README.md](../../README.md) — 项目总览
 - [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — 异常排查

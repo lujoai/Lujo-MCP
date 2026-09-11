@@ -213,7 +213,7 @@ cp .env.example .env
 # 异常处理 / Contingency:
 #   - 拼写错误会导致启动失败（fail-fast 设计）
 #   - PG 为实验性后端：仅 store 构造期不可达且 STORAGE_FALLBACK_TO_MEMORY=true 时自动降级；
-#     延迟初始化（首次读写）失败可能直接报错而不降级（见 POSTGRESQL_FIX_GUIDE.md）
+#     延迟初始化（首次读写）失败可能直接报错而不降级（见 TROUBLESHOOTING.md L 节）
 ```
 
 ### 3.4 安全配置
@@ -830,7 +830,7 @@ Write-Host "=== Check Complete ==="
 | Redis 不可达 + STATE_BACKEND=redis | 限流功能异常 | 恢复 Redis 连接或切换为 `STATE_BACKEND=memory` |
 | OTel Collector 不可达 | 指标导出失败，不影响主服务 | 恢复 OTel Collector 或关闭 `OTEL_ENABLED` |
 
-> 注：PostgreSQL 为实验性后端，上表 PG 相关的自动降级仅覆盖 store 构造期；延迟初始化（首次读写）失败可能直接报错而非降级，已知限制见 POSTGRESQL_FIX_GUIDE.md。
+> 注：PostgreSQL 为实验性后端，上表 PG 相关的自动降级仅覆盖 store 构造期；延迟初始化（首次读写）失败可能直接报错而非降级，已知限制见 TROUBLESHOOTING.md L 节。
 
 ---
 
