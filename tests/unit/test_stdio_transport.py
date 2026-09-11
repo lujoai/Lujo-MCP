@@ -118,11 +118,15 @@ def test_cleanup_resources_shuts_down_tool_executor(monkeypatch):
     """
     import app.mcp_server as mcp_server
 
-    mcp_server._cleanup_done = False
+    # B23：幂等状态从 `_cleanup_done` 布尔改为「executor 实例 + 槽位池代际」，
+    # 测试隔离改为重置新状态（语义不变：允许本用例重新执行一次完整清理）。
+    mcp_server._cleaned_executor = None
+    mcp_server._cleaned_pool_generations = None
     monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
 
     mcp_server.cleanup_resources()
-    mcp_server._cleanup_done = False  # 恢复，避免影响其他用例的幂等语义
+    mcp_server._cleaned_executor = None
+    mcp_server._cleaned_pool_generations = None  # 恢复，避免影响其他用例的幂等语义
 
     assert mcp_server._TOOL_EXECUTOR._shutdown is True
 

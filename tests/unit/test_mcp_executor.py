@@ -62,3 +62,44 @@ def test_stdio_pool_shutdown_does_not_poison_protocol_pool():
     healed_stdio = stdio._get_tool_executor()
     assert healed_stdio is not stdio_executor
     assert not healed_stdio._shutdown
+
+
+def test_stdio_cleanup_releases_both_executor_generations(monkeypatch):
+    """B23：cleanup → getter 自愈重建 → 再次 cleanup，两代资源都释放。
+
+    场景链（DESIGN_C1_SLOT_ACCOUNTING.md §6 表 #6）：
+    1. 同代重复 cleanup 幂等——不重复清理已清理资源；
+    2. 异代（getter 已自愈重建）cleanup 清理**新**实例——两代资源都释放。
+
+    红灯形态（旧实现）：`_cleanup_done` 自持布尔置位后第二次 cleanup 永久
+    短路（该布尔无任何调用路径能翻转），自愈重建出的第二代 executor 永远
+    不会被 shutdown（B23 报告 #21：重建后的池不会被再次清理）。
+    """
+    import app.mcp_server as stdio
+
+    # 隔离进程级副作用（本用例只关心 executor 生命周期）
+    monkeypatch.setattr(stdio.settings, "storage_backend", "memory")
+    monkeypatch.setattr(stdio, "_periodic_cleanup_task", None)
+    monkeypatch.setattr(stdio, "uninstall_global_hook", lambda: None)
+    monkeypatch.setattr(stdio, "shutdown_observability", lambda: None)
+
+    first = stdio._get_tool_executor()
+    stdio.cleanup_resources()
+    assert first._shutdown, "第一代 executor 必须被 cleanup 释放"
+
+    # 工具调用路径经 getter 自愈重建出第二代
+    second = stdio._get_tool_executor()
+    assert second is not first
+    assert not second._shutdown
+
+    # 异代再次 cleanup：必须清理第二代（旧布尔实现在此短路 → 红灯）
+    stdio.cleanup_resources()
+    assert second._shutdown, (
+        "B23：自愈重建后的第二代 executor 必须被再次 cleanup 释放"
+    )
+
+    # 第三代自愈后同代重复 cleanup：幂等且无残留
+    third = stdio._get_tool_executor()
+    stdio.cleanup_resources()
+    stdio.cleanup_resources()
+    assert third._shutdown

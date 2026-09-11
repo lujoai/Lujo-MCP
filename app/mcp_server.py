@@ -49,6 +49,8 @@ from app.runtime.hooks.exception_hook import install_global_hook, uninstall_glob
 from app.mcp.protocol.server import (
     _acquire_slot_or_fastfail,
     _get_tool_executor_and_slots,
+    _heavy_pool,
+    _light_pool,
     _pool_for,
     _tool_registry,
     _validate_tool_arguments,
@@ -100,7 +102,14 @@ def _get_tool_executor() -> ThreadPoolExecutor:
 
 # ── stdio 生命周期资源回收 ──
 # 由 finally / atexit / signal handler 触发，幂等。
-_cleanup_done = False
+# B23（DESIGN_C1_SLOT_ACCOUNTING.md §6 表 #6）：幂等键改绑「executor 实例 +
+# 槽位池代际」。原自持布尔 `_cleanup_done` 无任何调用路径能翻转——getter
+# （_get_tool_executor）自愈重建出新实例后，第二次 cleanup 永久短路，第二代
+# 资源泄漏。现在：同实例同代重复调用短路；实例被自愈重建或任一槽位池代际
+# 推进后重新执行清理（两代资源都释放）。保存**实例引用**而非裸 id() 比较，
+# 避免 CPython id 复用造成的假幂等。
+_cleaned_executor: ThreadPoolExecutor | None = None
+_cleaned_pool_generations: tuple[int, int] | None = None
 _periodic_cleanup_task: asyncio.Task | None = None
 _cleanup_lock = threading.Lock()
 
@@ -108,7 +117,9 @@ _cleanup_lock = threading.Lock()
 def cleanup_resources() -> None:
     """stdio 退出路径统一资源回收。
 
-    幂等：多次调用（finally / atexit / signal）只执行一次。
+    幂等：幂等键为「当前 executor 实例 + 槽位池代际 id」——同实例同代多次
+    调用（finally / atexit / signal）只执行一次；getter 自愈重建出新实例
+    （或代际重建）后再次调用会清理**新**资源（B23：两代都释放）。
     回收内容：
       1) 取消 periodic_cleanup 后台任务（若存在；当前 stdio 未启动，预留兜底）
       2) 关闭 PG 连接池（仅当 storage_backend == "postgresql"）
@@ -116,11 +127,14 @@ def cleanup_resources() -> None:
       4) 关闭 OTel 指标导出器（工具埋点惰性创建的后台导出线程）
       5) 关闭同步工具专用线程池
     """
-    global _cleanup_done, _periodic_cleanup_task
+    global _cleaned_executor, _cleaned_pool_generations, _periodic_cleanup_task
     with _cleanup_lock:
-        if _cleanup_done:
+        executor = _TOOL_EXECUTOR
+        generations = (_light_pool.generation, _heavy_pool.generation)
+        if _cleaned_executor is executor and _cleaned_pool_generations == generations:
             return
-        _cleanup_done = True
+        _cleaned_executor = executor
+        _cleaned_pool_generations = generations
 
         # 1) 取消后台 periodic_cleanup（防御性：当前 stdio 未启动该任务）
         task = _periodic_cleanup_task

@@ -545,22 +545,52 @@ class TestCleanupResources:
     """N3：验证 mcp_server.cleanup_resources 行为"""
 
     def test_cleanup_is_idempotent(self, monkeypatch):
-        import app.mcp_server as mcp_server
+        """同实例同代重复 cleanup 幂等（B23 改造三件套）：
 
-        monkeypatch.setattr(mcp_server, "_cleanup_done", False)
+        - 原断言：三次 cleanup 后 ``mcp_server._cleanup_done is True``。
+          它锁住的是「自持布尔被置位」这一实现细节；该布尔与真实资源身份
+          脱钩且无任何调用路径能翻转，正是 B23 缺陷载体（getter 自愈重建后
+          第二次 cleanup 永久短路，第二代资源泄漏）。
+        - 新断言：同实例同代三次 cleanup 幂等——当前 executor 的 shutdown
+          恰好执行一次，且清理状态记录当前实例与当前槽位池代际。
+        - 为什么：幂等必须跟随**资源身份**（executor 实例 + 槽位池代际）
+          而非进程级布尔；同代重复调用短路，异代（重建/换代）允许重新清理。
+        """
+        import app.mcp_server as mcp_server
+        from app.mcp.protocol.server import _heavy_pool, _light_pool
+
+        monkeypatch.setattr(mcp_server, "_cleaned_executor", None)
+        monkeypatch.setattr(mcp_server, "_cleaned_pool_generations", None)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
         monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
 
+        executor = mcp_server._get_tool_executor()
+        shutdown_calls = {"n": 0}
+        real_shutdown = executor.shutdown
+
+        def _spy_shutdown(*args, **kwargs):
+            shutdown_calls["n"] += 1
+            return real_shutdown(*args, **kwargs)
+
+        monkeypatch.setattr(executor, "shutdown", _spy_shutdown)
+
         mcp_server.cleanup_resources()
         mcp_server.cleanup_resources()
         mcp_server.cleanup_resources()
-        assert mcp_server._cleanup_done is True
+
+        assert shutdown_calls["n"] == 1, "同实例同代重复 cleanup 必须幂等"
+        assert mcp_server._cleaned_executor is executor
+        assert mcp_server._cleaned_pool_generations == (
+            _light_pool.generation,
+            _heavy_pool.generation,
+        )
 
     def test_cleanup_closes_pg_pool_when_postgresql(self, monkeypatch):
         import app.mcp_server as mcp_server
         from app.runtime.core.storage import pg_executor
 
-        monkeypatch.setattr(mcp_server, "_cleanup_done", False)
+        monkeypatch.setattr(mcp_server, "_cleaned_executor", None)
+        monkeypatch.setattr(mcp_server, "_cleaned_pool_generations", None)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
         monkeypatch.setattr(mcp_server.settings, "storage_backend", "postgresql")
 
@@ -583,7 +613,8 @@ class TestCleanupResources:
         import app.mcp_server as mcp_server
         from app.runtime.core.storage import pg_executor
 
-        monkeypatch.setattr(mcp_server, "_cleanup_done", False)
+        monkeypatch.setattr(mcp_server, "_cleaned_executor", None)
+        monkeypatch.setattr(mcp_server, "_cleaned_pool_generations", None)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
         monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
 
@@ -608,7 +639,8 @@ class TestCleanupResources:
                 return False
 
         task = _FakeTask()
-        monkeypatch.setattr(mcp_server, "_cleanup_done", False)
+        monkeypatch.setattr(mcp_server, "_cleaned_executor", None)
+        monkeypatch.setattr(mcp_server, "_cleaned_pool_generations", None)
         monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", task)
         monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
         monkeypatch.setattr(mcp_server, "uninstall_global_hook", lambda: None)
