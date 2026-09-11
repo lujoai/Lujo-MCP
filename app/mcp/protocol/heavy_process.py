@@ -25,16 +25,43 @@ import importlib
 import logging
 import pickle
 import sys
+import threading
 import time
 
 from app.mcp.protocol import heavy_spawn
 from app.mcp.protocol.termination import backend as termination_backend
+from app.mcp.protocol.termination.backend import terminate_attempt
 from app.mcp.protocol.termination.probe import CAPABILITY_PROBE as capability_probe
 
 logger = logging.getLogger("lujo-mcp.mcp.heavy")
 
 # 强杀后等待子进程真正退出的宽限（秒）
 _KILL_JOIN_GRACE = 5.0
+
+# M1 ③（C4 §3）：进程内在途 heavy 尝试注册表（attempt_id → (attempt, decision, tool)）。
+# spawn 后注册、确认收割后注销；terminate_active_processes 的快照源。
+class _LiveAttemptStore:
+    """进程内在途尝试注册表（锁内登记/注销；快照锁内、终止等待锁外——C1 §5）。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._d: dict[int, tuple] = {}
+
+    def register(self, attempt_id: int, attempt, decision, tool_name: str) -> None:
+        with self._lock:
+            self._d[attempt_id] = (attempt, decision, tool_name)
+
+    def unregister(self, attempt_id: int) -> None:
+        with self._lock:
+            self._d.pop(attempt_id, None)
+
+    @property
+    def attempts(self) -> list[tuple]:
+        with self._lock:
+            return list(self._d.values())
+
+
+_live_attempts = _LiveAttemptStore()
 
 # PyInstaller 的 Windows spawn 子进程会重新启动冻结的可执行文件。对单文件
 # console 程序，multiprocessing 的内部 ``--multiprocessing-fork`` 启动路径
@@ -150,6 +177,7 @@ def run_heavy_tool_blocking(
         ) from exc
 
     attempt, backend_decision = termination_backend.spawn_with_backend(0, command)
+    _live_attempts.register(attempt.attempt_id, attempt, backend_decision, handler_name)
     logger.info(
         "heavy worker %s 派发：attempt_id=%s backend=%s pid=%s",
         handler_name, attempt.attempt_id, backend_decision.backend, attempt.proc.pid,
@@ -183,3 +211,48 @@ def run_heavy_tool_blocking(
     finally:
         # 三级终止（协作级按条目快照）→ Job 整树兜底；关闭 Job 不等于结算（C1 §4.3）
         termination_backend.terminate_attempt(attempt, backend_decision, grace=_KILL_JOIN_GRACE)
+        _live_attempts.unregister(attempt.attempt_id)
+
+
+def terminate_active_processes() -> int:
+    """M1 ③：全量终止在途 heavy 尝试（C4 §3，10s 并行硬上限）。
+
+    快照注册表（锁内）→ 每条目并行三级终止（terminate_attempt，锁外）→
+    join 受 10s 硬上限约束 → 确认收割的条目注销。返回发起终止的条目数。
+    空注册表（服务从未接纳 / 已清空）快速返回。
+    """
+    store = _live_attempts
+    entries = store["attempts"] if isinstance(store, dict) else store.attempts
+    if not entries:
+        return 0
+
+    threads: list[tuple[threading.Thread, object]] = []
+
+    def _terminate_one(attempt, decision):
+        terminate_attempt(attempt, decision, grace=10.0)
+
+    for entry in entries:
+        if isinstance(entry, tuple):
+            attempt = entry[0]
+            decision = entry[1] if len(entry) > 1 else None
+        else:
+            attempt, decision = entry, None
+        t = threading.Thread(
+            target=_terminate_one, args=(attempt, decision),
+            name="lujo-heavy-terminator", daemon=True,
+        )
+        t.start()
+        threads.append((t, attempt))
+
+    deadline = time.monotonic() + 10.0  # 并行硬上限（§2.1）
+    for t, attempt in threads:
+        remaining = max(deadline - time.monotonic(), 0.0)
+        t.join(timeout=remaining)
+
+    # 确认收割的条目注销（deadline-exceeded 条目由 OS 兜底：KILL_ON_JOB_CLOSE /
+    # SIGKILL 已发；保持注册直至进程退出不算错误）
+    for entry in entries:
+        attempt = entry[0] if isinstance(entry, tuple) else entry
+        if attempt.proc.poll() is not None and not isinstance(store, dict):
+            store.unregister(attempt.attempt_id)
+    return len(entries)
