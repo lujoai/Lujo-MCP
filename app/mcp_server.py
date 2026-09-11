@@ -58,6 +58,7 @@ from app.mcp.protocol.server import (
     is_heavy_tool,
     tool_failure_predicate,
 )
+from app.mcp.protocol import shutdown as shutdown_mod
 from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
 from app.mcp.protocol.tool_errors import ToolExecutionError
 from app.mcp.tools import register_all_tools
@@ -255,6 +256,11 @@ async def _run_stdio_transport() -> None:
     except Exception:
         logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
 
+    # C4 §1.1：EOF 感知接在唯一 stdin 输入生产者上——包装 sys.stdin.buffer
+    # （不新增第二个读取线程、不缓冲），观察到 EOF 即记录退出意图与 t0。
+    sys.stdin = shutdown_mod.wrap_stdin_with_eof_awareness(
+        sys.stdin, lambda: shutdown_mod.record_exit_intent("stdio_eof")
+    )
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
@@ -534,6 +540,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 async def main(argv: list[str] | None = None):
+    # C4 §1.1：独立入口（纯 stdio / 统一模式）在接纳调用前创建并确认就绪
+    # 进程级监督线程；创建失败即启动失败（嵌入式宿主不经过本入口，只有
+    # 代际关闭权限）。
+    _exit_supervisor = shutdown_mod.ensure_exit_supervisor()
     options = _parse_runtime_args(argv)
     unified = options.http and not options.no_http
     install_global_hook()

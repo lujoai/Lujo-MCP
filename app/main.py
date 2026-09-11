@@ -516,6 +516,10 @@ def debug(req: dict):
 
 
 if __name__ == "__main__":
+    # C4 §1.1：独立 HTTP 入口在接纳请求前创建并确认就绪进程级监督线程
+    from app.mcp.protocol.shutdown import ensure_exit_supervisor
+
+    ensure_exit_supervisor()
     validate_startup_configuration()
     uvicorn.run(
         "app.main:app",

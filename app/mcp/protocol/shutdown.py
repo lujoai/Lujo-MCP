@@ -155,12 +155,16 @@ class ExitSupervisor:
                 if exit_intent_recorded():
                     remaining = deadline_remaining()
                     if remaining is None or remaining <= 0:
+                        self._fired = True
                         os._exit(0)  # 无阻塞最后防线：之前禁止任何 IO/锁/join
+                        return  # 生产中 os._exit 不返回；测试替身返回时线程收尾
                     # 到点前小步等待：唤醒（新原因）或到点（先查剩余再退）
                     if self._wake.wait(timeout=min(remaining, 0.1)):
                         self._wake.clear()
                     if deadline_remaining() is not None and deadline_remaining() <= 0:
+                        self._fired = True
                         os._exit(0)
+                        return
                     continue
                 # 未武装：等待意图或停止信号（不消耗 CPU 自旋）
                 if self._wake.wait(timeout=0.2):
@@ -168,7 +172,26 @@ class ExitSupervisor:
                     if self._stop.is_set():
                         return
         except BaseException:  # noqa: BLE001 —— 监督错误进入同一最后防线
+            self._fired = True
             os._exit(0)
+            return
+
+
+# 独立入口的进程级监督者（每进程一个；ensure_exit_supervisor 幂等创建）
+_supervisor: ExitSupervisor | None = None
+
+
+def ensure_exit_supervisor() -> ExitSupervisor:
+    """独立入口**接纳调用前**调用：创建并确认就绪（幂等）。
+
+    创建失败向上传播 = 启动失败（不得吞掉后继续接纳调用）；已创建则返回
+    同一实例（单监督线程）。嵌入式宿主（TestClient 等）**不得**调用本函数
+    ——它们只有代际关闭权限（§1.1 分账）。
+    """
+    global _supervisor
+    if _supervisor is None:
+        _supervisor = ExitSupervisor.create()
+    return _supervisor
 
 
 # ── EOF 感知流代理（接在唯一 stdin 输入生产者上；透传，无第二读取线程） ───
@@ -216,6 +239,23 @@ def create_eof_aware_stdin_proxy(underlying, on_eof):
             return getattr(self._stream, name)
 
     return _EofAwareProxy(underlying, on_eof)
+
+
+class _StdinShim:
+    """sys.stdin 替身：text 层透传；``.buffer`` 为 EOF 感知二进制代理。"""
+
+    def __init__(self, text, buffer):
+        self._text = text
+        self.buffer = buffer
+
+    def __getattr__(self, name):
+        return getattr(self._text, name)
+
+
+def wrap_stdin_with_eof_awareness(stdin_text, on_eof):
+    """把 sys.stdin 替换为带 EOF 感知 buffer 的替身（sys.stdin.buffer 只读，
+    不可直接赋值——故整体替换 stdin，text 层原样透传）。"""
+    return _StdinShim(stdin_text, create_eof_aware_stdin_proxy(stdin_text.buffer, on_eof))
 
 
 # ── M1 ①–⑥ 序编排（§3；stdio cleanup 与 HTTP lifespan 共用同一实现） ─────
