@@ -1,8 +1,26 @@
 # PostgreSQL 本地连接修复指南
 
-> **v0.8.0（2026-09-11）**：KB 经验默认走本地 SQLite「笔记本」，不再依赖 PostgreSQL 即可跨重启沉淀。`STORAGE_BACKEND=memory` 仍为默认；PostgreSQL 需显式启用，其 KB 持久化行为不变。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
+> **v0.8.0（2026-09-11）**：KB 经验默认走本地 SQLite「笔记本」，不再依赖 PostgreSQL 即可跨重启沉淀。`STORAGE_BACKEND=memory` 仍为默认；PostgreSQL 需显式启用，现为**实验性后端：不承诺支持，存在已知未修问题**（见下节）。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
 >
-> 上一版 v0.7.9 已发布（2026-09-10）：asyncpg errors 真库读写链路、`(fingerprint, session_id)` 节流键和跨事件循环 pool 生命周期已验证。
+> 上一版 v0.7.9 已发布（2026-09-10）：asyncpg errors 真库读写链路、`(fingerprint, session_id)` 节流键和跨事件循环 pool 生命周期已验证（范围限于当时的 errors 链路，不代表全部 PG 路径已验证）。
+
+## PostgreSQL 实验性后端与已知限制
+
+PostgreSQL 是**显式可选的实验性后端，不承诺支持**。单用户本地自用的推荐配置是零配置默认组合：
+
+- 运行现场：`STORAGE_BACKEND=memory`（默认），traces/errors/sessions/specs 在进程内采集；
+- KB 调试经验：默认写穿工作目录下的本地 SQLite「笔记本」（`lujo-kb.sqlite3`，可用 `KB_PERSIST_ENABLED=false` 关闭），零安装、进程重启自动回灌。
+
+SQLite 笔记本**只持久化 KB 经验**，不持久化 traces/errors/sessions/specs，不是全量运行现场的持久化替代。
+
+选择 `STORAGE_BACKEND=postgresql` 即表示接受该实验性路径；后续版本会在进程启动时输出一条实验性 warning（当前版本尚未实现该提示，使用前请先通读本节）。已知未修问题包括：
+
+1. **KB 延迟初始化失败可能无法降级**：存储工厂仅在 store 构造期处理部分异常；`_ensure_init` 延迟到首次读写才建表/连库，该阶段失败不再经过工厂 fallback，KB 可能持续抛错——不能保证「自动降级纯内存、主流程零影响、服务照常启动」。
+2. **错误计数可能偏低**：同指纹/同会话短时间窗口内的重复错误经节流只发送一次快照，PG 历史中的 `occurrence_count` 可能低于真实发生次数。
+3. **调度失败后的节流记账可能抑制有效写入**：无事件循环或调度任务创建失败后仍可能记录节流时间，随后的有效写入会被错误跳过。
+4. **stdio 模式 asyncpg 连接池关闭路径尚未验证**：极端情况下可能影响进程退出或连接回收。
+
+迁移与退役：PG → SQLite 笔记本的迁移工具与正式移除 PG 的计划在后续版本提供；当前版本**不会自动迁移** PG 中的 KB 数据，也不会删除或忽略既有 PG 配置。继续使用 PG 前请自行备份数据。连接、凭据与认证排障见下文各节。
 
 ## 结论
 

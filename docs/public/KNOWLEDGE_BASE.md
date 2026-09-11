@@ -1,6 +1,6 @@
 # Lujo-MCP 知识库：经验积累与置信度进化
 
-> **当前版本：v0.8.0（2026-09-11）**。KB 自有经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）——零安装、数据不出本机、进程重启自动回灌；`KB_PERSIST_ENABLED=false` 退回纯内存。`STORAGE_BACKEND=memory` 为默认；PostgreSQL 为显式可选后端（其 KB 持久化行为不变）。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
+> **当前版本：v0.8.0（2026-09-11）**。KB 自有经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）——零安装、数据不出本机、进程重启自动回灌；`KB_PERSIST_ENABLED=false` 退回纯内存。`STORAGE_BACKEND=memory` 为默认；PostgreSQL 为显式可选的**实验性**后端（不承诺支持、存在已知未修问题，见下文「可靠性设计」）。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
 >
 > Lujo-MCP 不只是「看到 Bug 现场」——它把每次调试的结论**沉淀为可复用的经验**，并且这些经验**跨重启保留、越验证越可信**。这是 Lujo-MCP 与常见无状态 MCP 调试工具的本质差异。
 
@@ -12,7 +12,7 @@ MCP 服务器按「记忆能力」分三档：
 |------|------|------|--------|----------|
 | 无状态工具 | Playwright MCP、桌面自动化类 MCP | 无 | 一切从零开始 | 无经验概念 |
 | 单人记忆 | 官方 `server-memory` | 本地 JSON 文件 | 保留（单机） | 不共享 |
-| **本地持久知识库** | **Lujo-MCP** | **memory 默认；PostgreSQL 可选** | **memory 进程内；PG 保留（回灌最近条目）** | **单用户本地使用；不承诺中央多人共享** |
+| **本地持久知识库** | **Lujo-MCP** | **memory 默认；SQLite KB 笔记本默认开启；PostgreSQL 可选（实验性、不承诺支持）** | **运行现场在 memory 进程内；KB 经验由 SQLite 笔记本（默认）或 PG 保留（回灌最近条目）** | **单用户本地使用；不承诺中央多人共享** |
 
 常见 MCP 自动化工具的价值是「代替人操作」，Lujo-MCP 的价值是「**积累调试经验、越用越准**」。
 
@@ -32,7 +32,7 @@ KnowledgeBaseStore.upsert()          ← 进程内主存（毫秒级命中）
     │  └── fingerprint（错误指纹，主键去重）
     │
     ▼ 同步写穿
-kb_entries 表（PostgreSQL）          ← 持久层（跨重启）
+kb_entries（本地 SQLite 笔记本 / PostgreSQL）← 持久层（跨重启，仅 KB 经验）
 ```
 
 ### 三级指纹检索
@@ -66,9 +66,9 @@ AI 检索经验时可按置信度排序：**反复验证过的修复方案优先
 
 ## 数据库初始化
 
-### 方式一：自动建表（推荐）
+### 方式一：自动建表（显式启用 PG；实验性路径，默认零配置无需此步）
 
-配置 `STORAGE_BACKEND=postgresql` 启动服务即可，`_ensure_init` 会自动执行建表（幂等，`IF NOT EXISTS`）：
+配置 `STORAGE_BACKEND=postgresql` 启动服务后，`_ensure_init` 会在**首次访问时**自动执行建表（幂等，`IF NOT EXISTS`）。注意 PG 为实验性后端：建表属于延迟初始化阶段，该阶段失败可能直接报错而不是自动降级，不承诺「服务照常启动」，已知失败模式见本文末「可靠性设计」与 POSTGRESQL_FIX_GUIDE.md：
 
 ```env
 STORAGE_BACKEND=postgresql
@@ -124,13 +124,13 @@ PG_PASSWORD=你的密码 API_KEY=你的key docker-compose up -d
 
 | 模式 | 做法 | 经验归属 |
 |------|------|----------|
-| 单人使用 | 本地 memory 或自带 PG | 自己的经验；PG 模式重启保留 |
+| 单人使用 | 默认本地 memory + SQLite KB 笔记本，或显式启用自带 PG（实验性） | 自己的经验；笔记本/PG 模式重启保留 |
 | 中央多人共享 | 不在当前产品承诺内 | 不提供租户隔离或项目隔离 |
 | 多租户 SaaS | —— | 当前版本不含租户隔离（表无 `tenant_id` 字段），一个库内经验互通 |
 
 ## 可靠性设计
 
-- **写穿失败不阻断调试**：PG 故障时仅记录 warning，KB 自动退回纯内存行为，主流程零影响
-- **PG 初始化失败自动降级**：knowledge_store 降级为 no-op，服务照常启动
+- **PostgreSQL 为实验性后端，不承诺支持**：推荐使用默认组合——运行现场 `STORAGE_BACKEND=memory`、KB 经验写穿本地 SQLite「笔记本」。PG 路径的部分已知写入失败会记录 warning，但延迟初始化（首次读写时 `_ensure_init`）失败可能无法自动降级、KB 持续抛错，不能承诺「主流程零影响」
+- **PG 初始化/首次访问可能直接失败**：工厂只在 store 构造期处理部分异常；延迟初始化与首次访问阶段的具体失败可能直接抛出，不保证降级为 no-op 或服务照常启动。已知失败模式、推荐默认配置与迁移/退役说明见 [POSTGRESQL_FIX_GUIDE.md](./POSTGRESQL_FIX_GUIDE.md#postgresql-实验性后端与已知限制)
 - **驱逐顺序与持久删除**：进程内按访问顺序淘汰；重启回灌后、尚无新的访问调整时，优先淘汰最久未更新的经验。不承诺跨重启保留访问顺序；持久删除失败的风险见已知问题说明。
 - **幂等迁移**：全部 `CREATE TABLE / INDEX IF NOT EXISTS`，重复执行安全

@@ -270,7 +270,8 @@ psql -h localhost -p 5432 -U postgres -d lujo_mcp -c "SELECT 1"
 # PG_USER=postgres
 # PG_PASSWORD=<correct_password>
 
-# 4. 如果 PG 确实不可用，可临时降级
+# 4. 如果 PG 确实不可用，可临时降级（注意 PG 为实验性后端：fallback 只覆盖
+#    store 构造期，延迟初始化/首次访问失败可能仍报错，详见 POSTGRESQL_FIX_GUIDE.md）
 # .env:
 STORAGE_BACKEND=memory
 # 或保持 postgresql 但确保:

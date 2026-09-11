@@ -68,8 +68,8 @@ Verifier 验证
 | 规范存储 | [app/runtime/verifier/spec_store.py](../../app/runtime/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
 | 异常钩子 | [app/runtime/hooks/exception_hook.py](../../app/runtime/hooks/exception_hook.py) | sys.excepthook + asyncio |
 | LLM 分析 | [app/llm/analyzer.py](../../app/llm/analyzer.py) | 重试/超时/fallback/流式 |
-| 指纹知识库 | [app/rag/knowledge_base.py](../../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀）；v0.5.3 起 PostgreSQL 写穿持久化（kb_entries 表 + 启动回灌，learned 经验跨重启保留） |
-| 知识库存储后端 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) + [base.py](../../app/runtime/core/storage/base.py) | `get_knowledge_store()` 分发（PG 真实持久化 / NoOp 降级，PG 不可用自动降级纯内存） |
+| 指纹知识库 | [app/rag/knowledge_base.py](../../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀）；v0.5.3 起 PostgreSQL 写穿持久化（kb_entries 表 + 启动回灌，learned 经验跨重启保留）；v0.8.0 起默认改为本地 SQLite「笔记本」，PG 转为实验性可选后端 |
+| 知识库存储后端 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) + [base.py](../../app/runtime/core/storage/base.py) | `get_knowledge_store()` 分发（默认本地 SQLite 笔记本；PG 为实验性可选，仅构造期异常按 `storage_fallback_to_memory` 降级，延迟初始化失败可能不降级——详见 POSTGRESQL_FIX_GUIDE.md「PostgreSQL 实验性后端与已知限制」） |
 | Debug 经验记录 | [app/rag/experience.py](../../app/rag/experience.py) | `DebugExperienceRecord` 输出 DTO/View（纯 View，不建存储、不替代 DebugCase） |
 | 经验检索器 | [app/rag/retriever.py](../../app/rag/retriever.py) | 三层检索：fingerprint 精确 → message normalize → vector（默认关闭） |
 | 向量检索抽象 | [app/rag/vector_store.py](../../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
@@ -109,7 +109,7 @@ Verifier 验证
 - ✅ **P3-1 数据分区**（traces 表按月 RANGE 分区，自动预创建 + 惰性检查，默认关闭）
 - ✅ **P3-2 归档策略**（>N 天数据自动归档到 traces_archive，cleanup_expired 先归档再删除，默认关闭）
 - ✅ **P3-3 批量写入**（save_entries + add_logs_batch，trace_repo META+LINK 批量）
-- ✅ **P3-5 优雅降级**（PG 不可用时自动降级到 memory，默认开启）
+- ✅ **P3-5 优雅降级**（PG **构造期**不可用且 fallback 开启时降级到 memory，默认开启；PG 现为实验性后端，延迟初始化/首次访问失败可能不降级，见 POSTGRESQL_FIX_GUIDE.md）
 - ✅ **P3-8 熔断器**（pybreaker，LLM/PG 调用熔断保护）
 
 ### 传输能力 ✅
@@ -128,7 +128,7 @@ Verifier 验证
 - ✅ **异步分析削峰队列**（P3-6）：有界 `asyncio.Queue(maxsize=N)` + K 常驻消费协程 + `asyncio.Semaphore(K)` 对齐 LLM RPM/TPM；队列满返回 429；优雅停机 drain
 - ✅ **LLM/PG 熔断器**（P3-8）：pybreaker 包装 LLM 和 PG 调用，熔断时返回结构化 fallback；`open → half-open → close` 恢复链路已验证
 - ✅ **OpenTelemetry 集成**（P3-4）：双模式 OTel SDK + Prometheus `/metrics` 文本端点向后兼容；OTLP gRPC 导出；惰性初始化 + 失败降级
-- ✅ **PG 不可用自动降级 memory**（P3-5）：`storage_fallback_to_memory` 控制，默认开启
+- ✅ **PG 构造期失败降级 memory**（P3-5）：`storage_fallback_to_memory` 控制，默认开启；仅覆盖 store 构造期，延迟初始化（首次读写）失败不在降级范围（PG 实验性、不承诺支持）
 
 ### 安全能力 ✅
 
