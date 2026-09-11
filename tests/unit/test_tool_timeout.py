@@ -1,6 +1,7 @@
 """工具超时与背压处理测试：验证同步/异步工具超时响应结构、背压并发控制、快速失败及 sync_future.cancel() 取消调度行为"""
 import asyncio
 import json
+import threading
 import time
 from unittest.mock import MagicMock, patch
 import pytest
@@ -627,3 +628,192 @@ def test_heavy_tool_identification():
     assert is_heavy_tool("verify_ui") is True
     assert is_heavy_tool("get_debug_context") is False
     assert is_heavy_tool("resolve_stack") is False
+
+
+# ---------------------------------------------------------------------------
+# W1-9 · B07 专项验收：超时响应已返回、真实线程仍在运行期间，槽位仍被占用
+# （DESIGN C1 §3.1；观察时点纪律：响应已决定 / 真实执行已结束 / 许可已归还
+#   三者分开——len(registry)==0 不等于 semaphore 已恢复，容量恢复须等 RETURNED）
+# ---------------------------------------------------------------------------
+
+
+class _CountingSemaphore(asyncio.Semaphore):
+    """用例 3 的计数 spy：统计 acquire 成功 / release 次数（继承原语义）。"""
+
+    def __init__(self, value: int):
+        super().__init__(value)
+        self.acquire_count = 0
+        self.release_count = 0
+
+    async def acquire(self):
+        await super().acquire()
+        self.acquire_count += 1
+
+    def release(self):
+        self.release_count += 1
+        super().release()
+
+
+def _make_blocking_handler():
+    """started / allow_finish / finished 三个**独立**同步点（用例 4 纪律）。
+
+    只检查 started 仍为 True 不能证明线程还在执行；handler 只有在
+    allow_finish 放行后才可能置位 finished，故「finished 未成立」即可证
+    真实线程尚未结束。
+    """
+    started = threading.Event()
+    allow_finish = threading.Event()
+    finished = threading.Event()
+
+    def handler(_arguments):
+        started.set()
+        allow_finish.wait(timeout=15)
+        finished.set()
+        return {"done": True}
+
+    return handler, started, allow_finish, finished
+
+
+async def _wait_until(predicate, timeout: float = 10.0, interval: float = 0.05) -> bool:
+    """轮询等待 predicate 成立（W1-9 纪律：上限 10s，禁止无限期挂起）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return predicate()
+
+
+async def _call_tool(request_id: int, name: str) -> dict:
+    return await _handle_tools_call(
+        JSONRPCRequest(id=request_id, method="tools/call", params={"name": name, "arguments": {}})
+    )
+
+
+@pytest.mark.asyncio
+async def test_b07_six_timeout_rounds_slot_occupied_until_reaped(monkeypatch):
+    """用例 1 + 2：1 worker 连续 6 轮 timeout=0.5——每轮先等条目 REAPED
+    （轮询上限 10s）再断言活动表清空；占用窗口内立即重试必须 TOOL_BUSY，
+    REAPED 后必须成功。
+
+    红灯含义（B07 旧实现已由 W1-3…W1-6 修复）：旧实现 finally 无条件
+    release 会在超时响应返回的瞬间归还槽位 → 重试不会 TOOL_BUSY。
+    """
+    pool = SlotPool("light", 1)
+    monkeypatch.setattr(server_module, "_light_pool", pool)
+    monkeypatch.setattr(settings, "tool_timeout_seconds", 0.5)
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
+
+    next_id = 900
+
+    for _round in range(6):
+        handler, started, allow_finish, finished = _make_blocking_handler()
+        register_tool("b07_round_tool", "B07 acceptance round tool", handler)
+
+        # 超时响应返回；真实线程仍在运行
+        next_id += 1
+        resp = await _call_tool(next_id, "b07_round_tool")
+        assert resp["result"]["isError"] is True
+        assert resp["result"]["error_code"] == "TOOL_TIMEOUT"
+        assert await _wait_until(started.is_set, timeout=5), "真实线程必须已启动"
+        assert not finished.is_set(), "allow_finish 未放行，真实线程必须尚未结束"
+
+        # 槽位仍被占用（活动表 1 条、P==1、容量 0）
+        assert pool.snapshot()["active_tokens"] == 1
+        assert pool.counters().P == 1
+        assert pool.semaphore._value == 0
+
+        # 占用窗口内立即重试 → TOOL_BUSY（B07：超时不得提前归还槽位）
+        next_id += 1
+        resp_busy = await _call_tool(next_id, "b07_round_tool")
+        assert resp_busy["result"]["isError"] is True
+        assert resp_busy["result"]["error_code"] == "TOOL_BUSY"
+
+        # 放行真实线程 → 等 REAPED（活动表清空）→ 容量恢复（两个观察点分开）
+        allow_finish.set()
+        assert await _wait_until(finished.is_set, timeout=10)
+        assert await _wait_until(
+            lambda: pool.snapshot()["active_tokens"] == 0, timeout=10
+        ), "真实任务终结后活动表必须清空（REAPED）"
+        assert await _wait_until(
+            lambda: pool.semaphore._value == 1, timeout=10
+        ), "容量恢复必须等到 RETURNED 之后"
+
+        # REAPED 后调用必须成功
+        next_id += 1
+        resp_ok = await _call_tool(next_id, "b07_round_tool")
+        assert resp_ok["result"]["isError"] is False
+
+
+@pytest.mark.asyncio
+async def test_b07_slot_ledger_acquire_matches_release_after_real_end(monkeypatch):
+    """用例 3：计数器 spy ``slots.acquire/release``——整轮后 acquire == release
+    且 ``_value`` 回到初始；超时响应已返回、真实线程仍在运行时
+    中途在途并发 == 1（acquire 已计数、release 未发生）。"""
+    pool = SlotPool("light", 1)
+    counting = _CountingSemaphore(1)
+    monkeypatch.setattr(server_module, "_light_pool", pool)
+    monkeypatch.setattr(pool, "_semaphore", counting)
+    monkeypatch.setattr(settings, "tool_timeout_seconds", 0.5)
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
+
+    handler, _started, allow_finish, finished = _make_blocking_handler()
+    register_tool("b07_ledger_tool", "B07 ledger tool", handler)
+
+    resp = await _call_tool(950, "b07_ledger_tool")
+    assert resp["result"]["error_code"] == "TOOL_TIMEOUT"
+    assert await _wait_until(finished.is_set, timeout=0.1) is False
+
+    # B07 本体：响应已返回、真实线程仍运行 → acquire 已发生、release 未发生
+    assert counting.acquire_count == 1
+    assert counting.release_count == 0
+    assert counting._value == 0
+    assert counting.acquire_count - counting.release_count <= 1
+
+    # 占用窗口内重试不消耗 acquire（未取得许可即被取消）
+    resp_busy = await _call_tool(951, "b07_ledger_tool")
+    assert resp_busy["result"]["error_code"] == "TOOL_BUSY"
+    assert counting.acquire_count == 1, "TOOL_BUSY 拒绝不得计入 acquire"
+    assert counting.release_count == 0
+
+    # 真实任务终结后：acquire == release，_value 回到初始
+    allow_finish.set()
+    assert await _wait_until(
+        lambda: counting.acquire_count == counting.release_count, timeout=10
+    )
+    assert await _wait_until(lambda: counting._value == 1, timeout=10)
+    assert counting.acquire_count == 1 and counting.release_count == 1
+
+
+@pytest.mark.asyncio
+async def test_b07_thread_still_running_proven_by_three_sync_points(monkeypatch):
+    """用例 4：轻量超时反例必须用 started / allow_finish / finished 三个
+    独立同步点——响应超时后保持 allow_finish 未放行，确认 finished 未成立，
+    再断言第二次调用 TOOL_BUSY。只检查 started 为 True 不构成执行中证据。"""
+    pool = SlotPool("light", 1)
+    monkeypatch.setattr(server_module, "_light_pool", pool)
+    monkeypatch.setattr(settings, "tool_timeout_seconds", 0.5)
+    monkeypatch.setattr(settings, "tool_busy_queue_timeout", 0.1)
+
+    handler, started, allow_finish, finished = _make_blocking_handler()
+    register_tool("b07_syncpoint_tool", "B07 sync-point tool", handler)
+
+    resp = await _call_tool(960, "b07_syncpoint_tool")
+    assert resp["result"]["error_code"] == "TOOL_TIMEOUT"
+
+    # 同步点 1：线程已启动
+    assert await _wait_until(started.is_set, timeout=5)
+    # 同步点 2：allow_finish 未放行 + finished 未成立 → handler 只能在
+    # allow_finish 之后退出，故真实线程必然仍在执行（结构性证明）
+    assert not allow_finish.is_set()
+    assert not finished.is_set()
+
+    # 第二次调用必须 TOOL_BUSY
+    resp_busy = await _call_tool(961, "b07_syncpoint_tool")
+    assert resp_busy["result"]["error_code"] == "TOOL_BUSY"
+    assert pool.semaphore._value == 0
+
+    # 同步点 3：放行后 finished 才成立，随后槽位恢复
+    allow_finish.set()
+    assert await _wait_until(finished.is_set, timeout=10)
+    assert await _wait_until(lambda: pool.semaphore._value == 1, timeout=10)
