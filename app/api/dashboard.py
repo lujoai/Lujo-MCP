@@ -4,6 +4,7 @@ import logging
 import time
 import json
 import asyncio
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -25,6 +26,11 @@ _cache: dict = {}  # key -> (timestamp, data)
 # 计算前快照、写回前校验；若计算期间发生失效（新 trace 持久化），则丢弃本次
 # 旧快照写回，避免把失效窗口的旧数据重新写进 L1/L2（新 trace 最多 30s 不可见）。
 _generation = 0
+# FIX(B19-atomic): 代际临界区锁。invalidate_cache 的「清 L1 + generation++」
+# 与缓存写路径的「generation 校验 + 写 L1」必须互斥，否则失效可在校验与写回
+# 之间整体完成——旧 L2 值 / 旧计算快照仍会写进 L1 并被返回。
+# 锁内只做内存操作；Redis GET/DELETE/SETEX 与存储查询一律在锁外。
+_cache_lock = threading.Lock()
 _REDIS_CACHE_KEY = "ai-debug:dashboard:all_traces"
 # FIX: R7-A4 —— 缓存按 limit 分档：Dashboard 常态请求（limit≤100）只按
 # 100 条档计算，避免每个 TTL 周期恒按 1000 条全量算（此前每 error 两次
@@ -49,12 +55,15 @@ def invalidate_cache(source: str | None = None) -> None:
     DASH-SSE-001：同时广播 SSE 变更信号，订阅了 /api/dashboard/stream 的前端
     收到后即时 re-fetch（叠加在轮询之上）。无订阅者或功能关闭时为 no-op。
     """
-    for tier in _CACHE_TIERS:
-        _cache.pop(_cache_key(tier), None)
-    # FIX(v0.7.1-b13-1): 递增代际，使并发在途的 _collect_all_traces 计算
-    # 检测到失效并丢弃其旧快照写回（防失效窗口被旧数据回填）。
-    global _generation
-    _generation += 1
+    # FIX(B19-atomic): L1 清理与代际递增在同一临界区，与写路径的
+    # 「校验 + 写 L1」互斥——失效要么完整先于写回、要么完整后于写回。
+    with _cache_lock:
+        for tier in _CACHE_TIERS:
+            _cache.pop(_cache_key(tier), None)
+        # FIX(v0.7.1-b13-1): 递增代际，使并发在途的 _collect_all_traces 计算
+        # 检测到失效并丢弃其旧快照写回（防失效窗口被旧数据回填）。
+        global _generation
+        _generation += 1
     redis_client = _get_redis_cache()
     if redis_client is not None:
         try:
@@ -217,9 +226,15 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
             raw = redis_client.get(_redis_cache_key(tier))
             if raw:
                 result = json.loads(raw)
-                if _generation == gen_l2:
-                    # L2 命中 → 回填 L1
-                    _cache[key] = (now, result)
+                # FIX(B19-atomic): 代际校验与 L1 回填必须同一临界区，否则
+                # invalidate_cache 可在两者之间整体完成（清 L1 + generation++），
+                # 旧值仍会被写进 L1 并返回。锁内只做内存操作。
+                with _cache_lock:
+                    promoted = _generation == gen_l2
+                    if promoted:
+                        # L2 命中 → 回填 L1
+                        _cache[key] = (now, result)
+                if promoted:
                     return result[:limit]
         except Exception:
             logger.warning("Dashboard L2 Redis 缓存读取失败", exc_info=True)
@@ -249,17 +264,21 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
     # ── 写 L1 + L2（完整 cache_limit 长度）──
     # FIX(v0.7.1-b13-1): 代际未变才写回——计算期间发生失效则丢弃旧快照，
     # 让下一次请求重新计算（新 trace 不再被旧快照遮蔽最多 30s）。
-    if _generation == gen:
-        _cache[key] = (now, result)
-        if redis_client is not None:
-            try:
-                redis_client.setex(
-                    _redis_cache_key(tier),
-                    _CACHE_TTL,
-                    json.dumps(result, ensure_ascii=False, default=str),
-                )
-            except Exception:
-                logger.warning("Dashboard L2 Redis 缓存写入失败", exc_info=True)
+    # FIX(B19-atomic): 校验与 L1 写回同一临界区，避免失效在两者之间完成；
+    # L2 setex 在锁外执行，锁内不含 I/O。
+    with _cache_lock:
+        write_back = _generation == gen
+        if write_back:
+            _cache[key] = (now, result)
+    if write_back and redis_client is not None:
+        try:
+            redis_client.setex(
+                _redis_cache_key(tier),
+                _CACHE_TTL,
+                json.dumps(result, ensure_ascii=False, default=str),
+            )
+        except Exception:
+            logger.warning("Dashboard L2 Redis 缓存写入失败", exc_info=True)
 
     return result[:limit]
 

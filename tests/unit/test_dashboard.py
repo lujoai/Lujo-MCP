@@ -448,6 +448,29 @@ def _trace_summary(trace_id: str) -> dict:
     }
 
 
+class _PromotionWatchingL1Cache(dict):
+    """测试用 L1 替身：在真实写入前阻塞，并记录提交瞬间的 generation。
+
+    只在 ``__setitem__``（生产代码的 ``_cache[key] = ...``）前提供一个确定性
+    同步点，不改变 dict 语义；其他读写（get/pop/clear）沿用 dict 行为。
+    """
+
+    def __init__(self, write_entered: threading.Event, allow_write: threading.Event):
+        super().__init__()
+        self._write_entered = write_entered
+        self._allow_write = allow_write
+        self.commit_generations: list = []
+
+    def __setitem__(self, key, value):
+        self._write_entered.set()
+        if not self._allow_write.wait(timeout=10):
+            raise AssertionError("测试未放行 L1 回填")
+        # 记录真实提交瞬间的 generation：若「校验」与「提交」不在同一临界区，
+        # 两者观察到的 generation 会不一致。
+        self.commit_generations.append(dashboard_module._generation)
+        super().__setitem__(key, value)
+
+
 class TestDashboardCacheInvalidationGenerationRace:
     """B19：失效竞争中被读出的旧 L2 值既不得返回，也不得回填 L1。
 
@@ -674,3 +697,159 @@ class TestDashboardCacheInvalidationGenerationRace:
 
         assert dashboard_module._collect_all_traces(limit=10) == [fresh]
         assert dashboard_module._cache[dashboard_module._cache_key(100)][1] == [fresh]
+
+    @staticmethod
+    def _race_l1_commit_with_invalidation(monkeypatch):
+        """让请求阻塞在 L1 提交处，并发执行 invalidate_cache()。
+
+        精确交错（Event + 锁探测，无 sleep）：
+        1. worker 已通过 generation 校验，进入 L1 回填；
+        2. 回填被测试缓存阻塞（``write_entered`` 置位后等待放行）；
+        3. 另一线程执行 invalidate_cache()（清 L1 + generation++ + 删 L2）；
+        4. 探测 worker 是否正持有临界区锁：持锁则失效必须排队（修复后），
+           无锁则失效会先于回填提交完成（修复前）；
+        5. 放行回填，等待两侧结束。
+
+        返回 (outcome, cache, lock_free_during_promotion)。
+        """
+        write_entered = threading.Event()
+        allow_write = threading.Event()
+        cache = _PromotionWatchingL1Cache(write_entered, allow_write)
+        monkeypatch.setattr(dashboard_module, "_cache", cache)
+
+        invalidation_done = threading.Event()
+        outcome: dict = {}
+
+        def _worker():
+            try:
+                outcome["result"] = dashboard_module._collect_all_traces(limit=10)
+            except BaseException as exc:  # noqa: BLE001 - 测试需捕获实现抛出的任何异常
+                outcome["error"] = exc
+
+        def _invalidate():
+            try:
+                dashboard_module.invalidate_cache(source="b19-atomic")
+            finally:
+                invalidation_done.set()
+
+        worker = threading.Thread(target=_worker, name="b19-promotion")
+        invalidator = None
+        worker.start()
+        try:
+            assert write_entered.wait(timeout=5), "worker 未进入 L1 回填阶段"
+
+            invalidator = threading.Thread(target=_invalidate, name="b19-invalidate")
+            invalidator.start()
+
+            lock = getattr(dashboard_module, "_cache_lock", None)
+            lock_free = True
+            if lock is not None:
+                if lock.acquire(blocking=False):
+                    lock.release()
+                else:
+                    lock_free = False
+            if lock_free:
+                # 修复前：失效不受临界区阻塞，会在回填提交前整体完成
+                assert invalidation_done.wait(timeout=5), "失效未在期限内完成"
+        finally:
+            allow_write.set()
+            worker.join(timeout=10)
+            if invalidator is not None:
+                invalidator.join(timeout=10)
+
+        assert not worker.is_alive(), "worker 未在期限内结束"
+        assert invalidator is not None and not invalidator.is_alive(), "失效线程未在期限内结束"
+        assert "error" not in outcome, f"请求不应抛异常: {outcome.get('error')!r}"
+        return outcome, cache, lock_free
+
+    def _l2_promotion_race(self, monkeypatch):
+        """L2 命中路径残留竞态现场：L2 返回旧值，计算路径无数据。"""
+        stale = [_trace_summary("stale-l2-trace")]
+
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(dashboard_module.logs, "list_request_ids", lambda limit=100: [])
+
+        class _Redis:
+            def __init__(self):
+                self.deleted = []
+
+            def get(self, key):
+                return json.dumps(stale)
+
+            def delete(self, key):
+                self.deleted.append(key)
+
+            def setex(self, key, ttl, value):
+                pass
+
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: _Redis())
+        return self._race_l1_commit_with_invalidation(monkeypatch)
+
+    def _compute_writeback_race(self, monkeypatch):
+        """计算路径残留竞态现场：L2 miss，计算得到 fresh-trace。"""
+        fresh = _trace_summary("fresh-trace")
+
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["fresh-trace"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: fresh)
+
+        class _Redis:
+            def __init__(self):
+                self.setex_calls = []
+
+            def get(self, key):
+                return None
+
+            def delete(self, key):
+                pass
+
+            def setex(self, key, ttl, value):
+                self.setex_calls.append((key, ttl, value))
+
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: _Redis())
+        return self._race_l1_commit_with_invalidation(monkeypatch)
+
+    def test_l2_promotion_commit_is_atomic_with_generation_check(self, monkeypatch):
+        """残留竞态：L2 命中的 generation 校验与 L1 回填必须在同一临界区。
+
+        修复前 invalidate_cache() 可在「校验通过」与「写 L1」之间整体完成，
+        提交瞬间的 generation（1）已不等于校验时的值（0）。
+        """
+        _outcome, cache, _lock_free = self._l2_promotion_race(monkeypatch)
+
+        assert cache.commit_generations == [0]
+
+    def test_l2_promotion_after_invalidation_does_not_pollute_l1(self, monkeypatch):
+        """残留竞态：失效先完成时，旧 L2 值不得被写进失效后的 L1。"""
+        _outcome, cache, _lock_free = self._l2_promotion_race(monkeypatch)
+
+        entry = cache.get(dashboard_module._cache_key(100))
+        assert entry is None or all(t["trace_id"] != "stale-l2-trace" for t in entry[1])
+
+    def test_l2_promotion_after_invalidation_does_not_return_old_value(self, monkeypatch):
+        """残留竞态：失效先完成时，旧 L2 值不得作为本次请求结果返回。"""
+        outcome, cache, lock_free = self._l2_promotion_race(monkeypatch)
+
+        if lock_free:
+            # 修复前：失效不受临界区阻塞，在回填提交前整体完成 → 不得返回旧值
+            assert all(t["trace_id"] != "stale-l2-trace" for t in outcome["result"])
+        else:
+            # 修复后：失效只能排在回填之后，本次返回旧值属「读取先于失效」的
+            # 合法线性化；此时仍要求校验与提交同代际。
+            assert cache.commit_generations == [0]
+
+    def test_compute_writeback_commit_is_atomic_with_generation_check(self, monkeypatch):
+        """同类残留竞态：计算路径的 generation 校验与 L1 写回必须在同一临界区。"""
+        _outcome, cache, _lock_free = self._compute_writeback_race(monkeypatch)
+
+        assert cache.commit_generations == [0]
+
+    def test_compute_writeback_after_invalidation_does_not_pollute_l1(self, monkeypatch):
+        """同类残留竞态：失效先完成时，计算的旧快照不得被写进失效后的 L1。"""
+        _outcome, cache, _lock_free = self._compute_writeback_race(monkeypatch)
+
+        assert cache.get(dashboard_module._cache_key(100)) is None
