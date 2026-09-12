@@ -186,6 +186,24 @@ class TestStdioIsErrorSemantics:
 # ── R8：结论型工具（verify / verify_ui）的失败判定 ────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _fresh_pools_for_heavy(monkeypatch):
+    """隔离池状态：W4-4 后 cleanup_resources 会 begin_close 共享池（生产正确
+    语义：进程退出后不再接纳）。本文件的重活调用需要未 closing 的池，故
+    每用例注入全新池（light/heavy），避免同进程内测试顺序污染。"""
+    from app.mcp.protocol.executor_lifecycle import SlotPool
+    import app.mcp.protocol.server as protocol_server
+    import app.mcp_server as stdio
+
+    light = SlotPool("light", 8)
+    heavy = SlotPool("heavy", 2)
+    monkeypatch.setattr(protocol_server, "_light_pool", light)
+    monkeypatch.setattr(protocol_server, "_heavy_pool", heavy)
+    monkeypatch.setattr(stdio, "_light_pool", light)
+    monkeypatch.setattr(stdio, "_heavy_pool", heavy)
+    yield
+
+
 class TestConclusionToolContract:
     """验证结论不是工具失败。
 

@@ -270,6 +270,51 @@ async def lifespan(app: FastAPI):
         drain_stats = await drain_analysis_queue(settings.llm_queue_drain_timeout)
         logger.info("analysis queue drain stats: %s", drain_stats)
 
+    # ── C4 §3 / W4-4：M1 ①–⑥（进程终止先于池关闭；与 stdio cleanup 共用
+    # 同一编排实现）。嵌入式 lifespan 只有代际关闭权限：不武装看门狗、不
+    # 记录进程退出意图（§1.1 分账）。──
+    import time as _time
+
+    from app.mcp.protocol import shutdown as _shutdown_mod
+    from app.mcp.protocol.heavy_process import close_all_jobs, terminate_active_processes
+    from app.mcp.protocol.server import (
+        _heavy_pool as _proto_heavy_pool,
+        _light_pool as _proto_light_pool,
+        _LIGHT_TOOL_EXECUTOR as _proto_light_executor,
+    )
+
+    def _m1_1():
+        _proto_light_pool.begin_close()
+        _proto_heavy_pool.begin_close()
+
+    def _m1_2():
+        _proto_light_pool.cancel_waiters()
+        _proto_heavy_pool.cancel_waiters()
+
+    def _m1_4():
+        close_all_jobs()
+
+    def _m1_5():
+        # HTTP 侧新增关协议池（现状无关池动作）；stdio 侧 _TOOL_EXECUTOR 由
+        # 其自身 cleanup 关闭（两池分别 shutdown，仍不统一双池）
+        _proto_light_executor.shutdown(wait=False, cancel_futures=True)
+
+    try:
+        _shutdown_mod.run_m1_sequence(
+            t0=_time.monotonic(),
+            hooks={
+                "step1_stop_accepting": _m1_1,
+                "step2_cancel_waiters": _m1_2,
+                "step3_terminate_active": terminate_active_processes,
+                "step4_close_jobs": _m1_4,
+                "step5_shutdown_pools": _m1_5,
+                "step6_b23_idempotent": lambda: True,
+            },
+            over_budget_events=lambda ev: logger.warning("M1 步骤超预算: %s", ev),
+        )
+    except Exception as e:
+        logger.warning(f"HTTP lifespan M1 序执行失败: {e}")
+
     # 优雅关闭：关闭 PG 连接池（同步 psycopg2）
     if settings.storage_backend == "postgresql":
         try:

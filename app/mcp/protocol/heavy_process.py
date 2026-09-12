@@ -167,16 +167,28 @@ def run_heavy_tool_blocking(
         raise RuntimeError("heavy tool arguments not serializable") from exc
 
     # C3 §3.2：调用绝对截止覆盖「准备、探测、创建、握手、业务」——探测预算
-    # 只能使用剩余时间，不重置截止。gate 恒真（注册表四条件闸门自 W4 接入）。
+    # 只能使用剩余时间，不重置截止。gate：closing/kill_due（M1 ① 停止接纳）
+    # 时不接纳新探测/新 spawn。
     call_deadline = time.monotonic() + float(timeout)
+    from app.mcp.protocol.server import _light_pool, _heavy_pool
+
+    def _accepting() -> bool:
+        return not (_light_pool.is_closing or _heavy_pool.is_closing)
+
     try:
-        capability_probe.ensure_probed(gate=lambda: True, deadline=call_deadline)
+        capability_probe.ensure_probed(gate=_accepting, deadline=call_deadline)
     except TimeoutError as exc:
         raise asyncio.TimeoutError(
             f"heavy tool {handler_name} timed out after {timeout}s (subprocess killed)"
         ) from exc
 
-    attempt, backend_decision = termination_backend.spawn_with_backend(0, command)
+    if not _accepting():
+        raise asyncio.TimeoutError(
+            f"heavy tool {handler_name} rejected: service is closing"
+        )
+    attempt, backend_decision = termination_backend.spawn_with_backend(
+        0, command, gate=_accepting,
+    )
     _live_attempts.register(attempt.attempt_id, attempt, backend_decision, handler_name)
     logger.info(
         "heavy worker %s 派发：attempt_id=%s backend=%s pid=%s",
@@ -212,6 +224,22 @@ def run_heavy_tool_blocking(
         # 三级终止（协作级按条目快照）→ Job 整树兜底；关闭 Job 不等于结算（C1 §4.3）
         termination_backend.terminate_attempt(attempt, backend_decision, grace=_KILL_JOIN_GRACE)
         _live_attempts.unregister(attempt.attempt_id)
+
+
+def close_all_jobs() -> int:
+    """M1 ④：对在途条目的 Job 句柄幂等 close_once（整树兜底，C4 §3 ④）。
+
+    已被 terminate_attempt 关闭的 Job（close_once 幂等）为空操作；
+    deadline-exceeded 条目此刻关闭交 OS 杀树。POSIX 无 Job 为空操作。
+    """
+    closed = 0
+    for entry in _live_attempts.attempts:
+        decision = entry[1] if isinstance(entry, tuple) and len(entry) > 1 else None
+        job = getattr(decision, "job", None) if decision is not None else None
+        if job is not None and not getattr(job, "closed", True):
+            job.close_once()
+            closed += 1
+    return closed
 
 
 def terminate_active_processes() -> int:

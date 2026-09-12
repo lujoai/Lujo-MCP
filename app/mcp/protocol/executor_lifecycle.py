@@ -147,6 +147,12 @@ class SlotPool:
             return self._semaphore
 
     @property
+    def is_closing(self) -> bool:
+        """当前代是否已置 closing（① 停止接纳的可观察判据，C4 M1 ①）。"""
+        with self._lock:
+            return self._counters[self._generation].closing
+
+    @property
     def delivery_failures(self) -> int:
         with self._lock:
             return self._delivery_failures

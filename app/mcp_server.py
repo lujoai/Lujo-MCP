@@ -59,7 +59,12 @@ from app.mcp.protocol.server import (
     tool_failure_predicate,
 )
 from app.mcp.protocol import shutdown as shutdown_mod
-from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
+from app.mcp.protocol import server as protocol_server
+from app.mcp.protocol.heavy_process import (
+    close_all_jobs,
+    run_heavy_tool_blocking,
+    terminate_active_processes,
+)
 from app.mcp.protocol.tool_errors import ToolExecutionError
 from app.mcp.tools import register_all_tools
 from app.observability import (
@@ -121,12 +126,14 @@ def cleanup_resources() -> None:
     幂等：幂等键为「当前 executor 实例 + 槽位池代际 id」——同实例同代多次
     调用（finally / atexit / signal）只执行一次；getter 自愈重建出新实例
     （或代际重建）后再次调用会清理**新**资源（B23：两代都释放）。
-    回收内容：
-      1) 取消 periodic_cleanup 后台任务（若存在；当前 stdio 未启动，预留兜底）
-      2) 关闭 PG 连接池（仅当 storage_backend == "postgresql"）
-      3) 卸载全局 excepthook
-      4) 关闭 OTel 指标导出器（工具埋点惰性创建的后台导出线程）
-      5) 关闭同步工具专用线程池
+    回收顺序（C4 §3 / W4-4：M1 ①–⑥ 序，进程终止先于池关闭）：
+      M1 ① 停止接纳（双池 begin_close：closing 置位，新 spawn/submit fastfail）
+      M1 ② 取消旧 semaphore 等待者（禁止迁移）
+      M1 ③ terminate_active_processes（10s 并行硬上限，进程终止）
+      M1 ④ 关 Job 句柄（close_once，整树兜底）
+      M1 ⑤ 最后才关池（两个池分别 shutdown(wait=False, cancel_futures=True)）
+      其余既有职责（periodic/PG/excepthook/OTel）保留在 ⑤ 之后
+      B23 幂等键（executor 实例 + 代际 id）保持在函数最前
     """
     global _cleaned_executor, _cleaned_pool_generations, _periodic_cleanup_task
     with _cleanup_lock:
@@ -144,6 +151,47 @@ def cleanup_resources() -> None:
                 task.cancel()
             except Exception as e:
                 logger.warning(f"stdio 退出取消 periodic_cleanup 失败: {e}")
+
+    # ── M1 ①–⑥（C4 §3；W4-4）：进程终止永远先于池关闭 ──
+    def _m1_1():
+        _light_pool.begin_close()
+        _heavy_pool.begin_close()
+
+    def _m1_2():
+        _light_pool.cancel_waiters()
+        _heavy_pool.cancel_waiters()
+
+    def _m1_4():
+        close_all_jobs()
+
+    def _m1_5():
+        # 两个池**分别** shutdown，仍不统一双池（硬禁区）；wait=False 不等
+        # 运行中任务——被阻塞线程交看门狗收口（§2.2）
+        for executor in (_TOOL_EXECUTOR, protocol_server._LIGHT_TOOL_EXECUTOR):
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception as e:
+                logger.warning(f"stdio 退出关闭线程池失败: {e}")
+
+    try:
+        shutdown_mod.run_m1_sequence(
+            t0=time.monotonic(),
+            hooks={
+                "step1_stop_accepting": _m1_1,
+                "step2_cancel_waiters": _m1_2,
+                "step3_terminate_active": terminate_active_processes,
+                "step4_close_jobs": _m1_4,
+                "step5_shutdown_pools": _m1_5,
+                "step6_b23_idempotent": lambda: True,  # 幂等键已在函数最前生效
+            },
+            over_budget_events=lambda ev: logger.warning(
+                "M1 步骤超预算: %s", ev
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"stdio 退出 M1 序执行失败: {e}")
+
+    # ── 其余既有职责（保留在 ⑤ 之后）──
 
     # 2) 关闭 PG 连接池（仅 postgresql 后端）
     if settings.storage_backend == "postgresql":
@@ -168,14 +216,8 @@ def cleanup_resources() -> None:
     except Exception as e:
         logger.warning(f"stdio 退出关闭指标导出器失败: {e}")
 
-    # 5) FIX: R7-A5 —— 关闭同步工具专用线程池。ThreadPoolExecutor 非 daemon，
-    # 此前退出从不 shutdown：超时仍在跑的工具线程在解释器退出时被
-    # concurrent.futures 的 _python_exit join → 进程无法退出直至宿主强杀。
-    # wait=False 不等运行中任务；cancel_futures 撤掉排队未启动的任务。
-    try:
-        _TOOL_EXECUTOR.shutdown(wait=False, cancel_futures=True)
-    except Exception as e:
-        logger.warning(f"stdio 退出关闭工具线程池失败: {e}")
+    # （池关闭已由 M1 ⑤ 承接：两个池分别 shutdown(wait=False, cancel_futures=True)，
+    # 且进程终止（M1 ③）永远先于池关闭——B15 现状错误序已修正）
 
 
 def _signal_handler(signum, frame):
