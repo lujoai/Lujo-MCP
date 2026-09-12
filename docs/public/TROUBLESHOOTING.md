@@ -3,7 +3,7 @@
 **适用版本 / Applicable Version**: v0.8.0
 **最后更新 / Last Updated**: 2026-09-11
 
-> **发布状态**：v0.8.0 准备发布。默认 `STORAGE_BACKEND=memory`；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。启用 `PG_ASYNC_ENABLED=true` 时，errors asyncpg 链路已验证，但 trace/session 仍有同步存储初始化边界。
+> **发布状态**：v0.8.0 已发布。默认 `STORAGE_BACKEND=memory`；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。启用 `PG_ASYNC_ENABLED=true` 时，errors asyncpg 链路已验证，但 trace/session 仍有同步存储初始化边界。
 
 ---
 

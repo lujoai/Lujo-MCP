@@ -178,7 +178,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
-### Node 服务接入：使用 Node SDK（v0.7.9 已发布）
+### Node 服务接入：使用 Node SDK（v0.8.0 已发布）
 
 服务端 Node.js 使用独立包 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18/20/22 和 CJS/ESM。它只做显式错误与网络上报，不安装浏览器的 DOM、XHR/fetch、console 或 `localStorage` 钩子；浏览器页面继续使用上面的 Browser SDK。
 

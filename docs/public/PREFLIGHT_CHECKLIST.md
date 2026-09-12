@@ -3,7 +3,7 @@
 **适用版本 / Applicable Version**: v0.8.0
 **最后更新 / Last Updated**: 2026-09-11
 
-> **发布状态**：v0.8.0 准备发布。默认 `STORAGE_BACKEND=memory`；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。上一版 v0.7.9 的发布证据见 GitHub Release。
+> **发布状态**：v0.8.0 已发布。默认 `STORAGE_BACKEND=memory`；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。发布页：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
 
 ---
 

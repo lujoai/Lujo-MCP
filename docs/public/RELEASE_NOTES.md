@@ -1,6 +1,6 @@
 # Release Notes / 发布说明
 
-> **v0.8.0（当前版本，准备发布）**：为单用户本地自用定位补上 KB 经验跨重启沉淀能力（本地 SQLite「笔记本」，零安装、数据不出本机），并修复平台包同名 `bin` 导致项目内安装后 `node_modules/.bin` 缺失启动入口的问题。发布状态以 npm registry 与 GitHub Release 为准；上一版 v0.7.9 已发布：tag `v0.7.9` → `381182b`，npm 五包 0.7.9 / `latest`，三平台资产齐全。
+> **v0.8.0（当前版本，已发布）**：为单用户本地自用定位补上 KB 经验跨重启沉淀能力（本地 SQLite「笔记本」，零安装、数据不出本机），并修复平台包同名 `bin` 导致项目内安装后 `node_modules/.bin` 缺失启动入口的问题。GitHub Release：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0；发布流水线已成功。发布后 C 批生命周期加固已进入 `main` 并通过 GitHub CI run 34675974282，尚未绑定新的版本号；上一版 v0.7.9 的历史证据保留在下方版本段。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 

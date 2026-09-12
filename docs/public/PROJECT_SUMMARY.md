@@ -4,6 +4,8 @@
 
 > 项目功能完成度、待开发项、稳定性验证状态以内部文档为准（不对外公开）。
 
+> **当前公开快照（2026-09-12）**：v0.8.0 已发布（[GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0)）。发布后 C 批生命周期修复已推送到 `main`，最新 CI run [34675974282](https://github.com/lujoai/Lujo-MCP/actions/runs/34675974282) 全绿；CI 口径为 unit 1766 passed / 18 skipped、integration 89 passed / 47 skipped、e2e 10 passed / 1 skipped，Node SDK 18/20/22 与 SDK smoke 全部通过。默认 `STORAGE_BACKEND=memory`，KB 本地 SQLite「笔记本」默认开启；PG 专属实验路径和真实宿主 GUI 流程仍属独立边界。
+
 ---
 
 ## 1. 项目一句话介绍
@@ -179,7 +181,7 @@ Verifier 验证
 - ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
 - ✅ migrations/ 目录（6 个 SQL 文件）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；当前 **unit 1642 tests = 1636 passed / 6 skipped / 0 failed**（junit 权威计数；v0.7.1 → 1479，v0.7.5 → 1508，v0.7.8 → 1599 passed，v0.8.0 → 1636 passed）+ **integration 120 tests = 79 passed / 41 skipped / 0 failed**（CI 口径；pg 标记用例按守卫自动 skip）+ **Playwright e2e 11 tests = 10 passed / 1 skipped / 0 failed**；Browser SDK JS 54 项、Node SDK 11 项由 CI 与本地契约测试守护
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；最新 GitHub CI 为 **unit 1784 tests = 1766 passed / 18 skipped / 0 failed**、**integration 136 tests = 89 passed / 47 skipped / 0 failed**、**Playwright e2e 11 tests = 10 passed / 1 skipped / 0 failed**；Browser SDK JS、Node SDK 18/20/22 与 SDK smoke 均由 CI 守护。历史 v0.8.0 发布基线保留在版本记录中。
 - ✅ ruff 硬门禁：仓库根 `ruff.toml` 显式锁定规则集（`E4/E7/E9/F` + `C4` + `PIE`），`ruff check .` = All checks passed；`requirements-dev.txt` 锁 `ruff>=0.16.4,<0.17.0` 防规则集随版本漂移
 
 ### v0.3.0 Release Audit 收口 ✅
@@ -225,7 +227,7 @@ Verifier 验证
 - **v0.8.0**（2026-09-11）：主题「本地经验笔记本与安装修复」——KB 调试经验默认写穿本机 SQLite 单文件（跨重启回灌、零安装、数据不出本机、`KB_PERSIST_ENABLED`/`KB_PERSIST_PATH` 可调）；平台 npm 包不再声明与元包同名的 `bin`（修复项目内安装后 `node_modules/.bin` 缺失启动入口）；持久层健壮性加固（短连接显式关闭、拒绝 `:memory:`、路径绝对化）。零 Breaking、零新依赖、零 schema 变更。
 - **v0.7.8**（2026-09-09）：主题「发布工程收口 + 使用面文档」——GitHub Actions 升版消除 Node 20 弃用告警；平台包生成器保留 `engines` 声明（v0.7.6/0.7.7 线上三包为空 → 闭环）+ 严格参数校验；README 多项目「端口即隔离」示例与单用户、本地自用定位声明。零 Breaking、零 schema 变更。
 
-**当前路线**：**v0.8.0 准备发布**（2026-09-11）——KB 调试经验本地「笔记本」默认开启（跨重启保留自有经验，数据不出本机），平台包同名 `bin` 安装入口修复。上一版 v0.7.9 已发布（2026-09-10，tag `v0.7.9`），npm 五个发布包均为 `0.7.9` / `latest`，三平台资产见 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.7.9)。产品定位为单用户、本地自用（npm 元包装完即用，数据不出本机，不承诺中央共享数据库隔离）。全应用 async PG 生命周期统一和真实宿主 GUI 全流程验证仍是独立长期工作面；当前无已确认 P0/P1 阻塞项。
+**当前路线**：**v0.8.0 已发布**（2026-09-11）——KB 调试经验本地「笔记本」默认开启（跨重启保留自有经验，数据不出本机），平台包同名 `bin` 安装入口修复。发布后 C 批生命周期修复已合入 `main` 并通过 [GitHub CI](https://github.com/lujoai/Lujo-MCP/actions/runs/34675974282)。产品定位为单用户、本地自用（npm 元包装完即用，数据不出本机，不承诺中央共享数据库隔离）。PG 专属实验路径与真实宿主 GUI 全流程验证仍是独立长期工作面。
 
 **已完成**：
 - Phase 0：项目标准化 ✅
@@ -265,7 +267,7 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；当前 **unit 1636 passed / 6 skipped / 0 failed / 0 errors**（v0.7.1 基线 1479；v0.7.5 → 1508；v0.7.8 → 1599 passed；v0.8.0 → 1636 passed；单测已强制 memory 后端与 CI 一致）。另有 integration（79 passed / 41 skipped）与 Playwright e2e（10 passed / 1 skipped）测试，PG async 5 项真库回归、PG sync 17 passed / 1 skipped、executor 3 passed，以及 Node SDK 11 项契约测试。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；最新 GitHub CI run 34675974282 的 unit 为 **1766 passed / 18 skipped / 0 failed / 0 errors**，integration 为 **89 passed / 47 skipped / 0 failed / 0 errors**，Playwright e2e 为 **10 passed / 1 skipped / 0 failed / 0 errors**。历史 v0.8.0 发布基线与 PG 专项数字保留在版本记录中；单测已强制 memory 后端与 CI 一致。
 
 **当前优先级**：
 
