@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import signal
 import subprocess
 import sys
 import time
@@ -88,8 +89,14 @@ def test_grandchild_does_not_inherit_result_write_end():
     # 测试清理：仅回收本测试制造的孙进程（此刻孙进程应仍存活——它从未持有
     # 结果写端，进程存活与否不影响父侧收口）
     if gc_pid is not None:
-        subprocess.run(["taskkill", "/F", "/PID", str(gc_pid)],
-                       capture_output=True, timeout=10)
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/PID", str(gc_pid)],
+                           capture_output=True, timeout=10)
+        else:
+            try:
+                os.kill(gc_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_big_request_to_non_reading_worker_respects_deadline():
