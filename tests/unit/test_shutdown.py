@@ -94,7 +94,9 @@ def test_signal_t0_earlier_than_formal_record_is_adopted():
 # ── 看门狗（§2.1：绝对 deadline + 无阻塞最后防线） ────────────────────────
 
 
-def test_supervisor_ready_before_return_and_never_disarmed():
+def test_supervisor_ready_before_return_and_never_disarmed(monkeypatch):
+    # 真实武装 25s deadline——必须打补丁，否则套件运行 25s 后被真 os._exit 杀掉
+    monkeypatch.setattr(sh.os, "_exit", lambda code: None)
     sup = sh.ExitSupervisor.create()
     assert sup.ready is True
     sup.record("stdio_eof")  # 武装

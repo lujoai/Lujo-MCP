@@ -12,11 +12,24 @@
 from __future__ import annotations
 
 import inspect
+import threading
 import time
 
 import pytest
 
 from app.mcp.protocol import shutdown as sh
+
+@pytest.fixture(autouse=True)
+def _fresh_watchdog_state(monkeypatch):
+    """隔离进程级看门狗状态，避免单测中的真实 deadline 触发 pytest 进程退出。"""
+    monkeypatch.setattr(sh.os, "_exit", lambda code: None)
+    monkeypatch.setattr(sh, "_intent_lock", threading.Lock())
+    monkeypatch.setattr(sh, "_intent_t0", None)
+    monkeypatch.setattr(sh, "_intent_reasons", frozenset())
+    monkeypatch.setattr(sh, "_deadline", None)
+    monkeypatch.setattr(sh, "_signal_t0", None)
+    monkeypatch.setattr(sh, "_signal_reason", None)
+    yield
 
 
 def test_ensure_exit_supervisor_is_idempotent(monkeypatch):
@@ -100,6 +113,13 @@ def test_supervisor_record_arms_deadline_once(monkeypatch):
     打补丁 os._exit：本用例真实武装了 deadline（25s），不打补丁会真的
     杀掉 pytest 进程（看门狗工作正常的副作用）。"""
     monkeypatch.setattr(sh.os, "_exit", lambda code: None)
+    # 意图全局态也挂 monkeypatch：teardown 恢复为未武装（否则 25s 后本用例
+    # 创建的监督者会以真实 os._exit 杀掉 pytest 进程）
+    monkeypatch.setattr(sh, "_intent_t0", None)
+    monkeypatch.setattr(sh, "_intent_reasons", frozenset())
+    monkeypatch.setattr(sh, "_deadline", None)
+    monkeypatch.setattr(sh, "_signal_t0", None)
+    monkeypatch.setattr(sh, "_signal_reason", None)
     sup = sh.ExitSupervisor.create()
     try:
         t1 = sup.record("stdio_eof")

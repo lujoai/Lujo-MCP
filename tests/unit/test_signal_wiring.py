@@ -21,6 +21,7 @@ from app.mcp.protocol import shutdown as sh
 
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch):
+    monkeypatch.setattr(sh.os, "_exit", lambda code: None)
     monkeypatch.setattr(sh, "_intent_lock", threading.Lock())
     monkeypatch.setattr(sh, "_intent_t0", None)
     monkeypatch.setattr(sh, "_intent_reasons", frozenset())

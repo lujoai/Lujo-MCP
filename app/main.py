@@ -101,8 +101,14 @@ async def lifespan(app: FastAPI):
     # 修复前该校验仅在 __main__ 分支调用，uvicorn 直启会绕过防护。
     validate_startup_configuration()
 
+    from app.mcp.protocol.heavy_process import close_all_jobs, terminate_active_processes
+    from app.mcp.protocol.shutdown import run_m1_sequence
+    from app.llm.analysis_queue import drain_analysis_queue
+    from app.agent.repair_queue import drain_repair_queue
+
     # 启动定时清理任务
     import asyncio
+    import time
     import uuid
     from app.runtime.core.storage.factory import get_trace_store, get_session_store
     from app.state.store import get_state_store, RedisStateStore
@@ -212,37 +218,97 @@ async def lifespan(app: FastAPI):
                     if _local_lock.locked():
                         _local_lock.release()
 
-    task = asyncio.create_task(periodic_cleanup())
+    # ── B22 / W4-6：创建段带清理栈的顺序块——每成功一个资源即注册逆序回收
+    # 动作；启动异常时按已注册栈逆序回收（代际关闭作用域：不武装看门狗、
+    # 不记进程退出意图），并安全调用 M1 序（空表快速返回）。
+    startup_cleanup_stack: list[tuple[str, object]] = []
 
-    # ── P3-6 异步分析队列：启动 K 常驻消费协程 ──
-    if settings.llm_async_analysis_enabled:
-        from app.llm.analysis_queue import start_analysis_queue
-        await start_analysis_queue()
+    async def _run_startup_unwind() -> None:
+        for name, undo in reversed(startup_cleanup_stack):
+            logger.warning("B22 启动失败逆序回收: %s", name)
+            try:
+                result = undo()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.warning("B22 逆序回收失败（忽略继续）: %s", name, exc_info=True)
 
-    # ── P3-7 L3 缓存预热：启动期一次性回填 L1 + 启动定时任务 ──
-    if settings.llm_cache_prewarm_enabled:
-        from app.llm.cache_prewarm import (
-            prewarm_once_with_timeout,
-            start_prewarm_task,
-        )
-        prewarm_stats = await prewarm_once_with_timeout(
-            settings.llm_cache_prewarm_top_n
-        )
-        logger.info("L3 cache prewarm (startup): %s", prewarm_stats)
-        start_prewarm_task()
-
-    # ── AI Debug Agent：启动 K 常驻消费协程（Phase 1）──
-    if settings.is_agent_active:
-        from app.agent.repair_queue import start_repair_queue
-        await start_repair_queue()
-
-    # ── B05: 统一知识库启动初始化（回灌 + 种子加载，失败降级不阻断）──
+    # C4 §1.1：启动失败路径先记录退出意图的钩子由**独立入口**负责；嵌入式
+    # lifespan 失败只做代际关闭（不武装看门狗、不记进程退出意图）。
     try:
-        from app.rag.knowledge_base import bootstrap_knowledge_base
+        task = asyncio.create_task(periodic_cleanup())
 
-        bootstrap_knowledge_base()
-    except Exception:
-        logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
+        async def _undo_periodic_task():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        startup_cleanup_stack.append(("periodic_task", _undo_periodic_task))
+
+        # ── P3-6 异步分析队列：启动 K 常驻消费协程 ──
+        if settings.llm_async_analysis_enabled:
+            from app.llm.analysis_queue import start_analysis_queue
+            await start_analysis_queue()
+
+            async def _undo_analysis_queue():
+                await drain_analysis_queue(settings.llm_queue_drain_timeout)
+
+            startup_cleanup_stack.append(("analysis_queue", _undo_analysis_queue))
+
+        # ── P3-7 L3 缓存预热：启动期一次性回填 L1 + 启动定时任务 ──
+        if settings.llm_cache_prewarm_enabled:
+            from app.llm.cache_prewarm import (
+                prewarm_once_with_timeout,
+                start_prewarm_task,
+                stop_prewarm_task,
+            )
+            prewarm_stats = await prewarm_once_with_timeout(
+                settings.llm_cache_prewarm_top_n
+            )
+            logger.info("L3 cache prewarm (startup): %s", prewarm_stats)
+            start_prewarm_task()
+
+            async def _undo_prewarm():
+                await stop_prewarm_task()
+
+            startup_cleanup_stack.append(("prewarm_task", _undo_prewarm))
+
+        # ── AI Debug Agent：启动 K 常驻消费协程（Phase 1）──
+        if settings.is_agent_active:
+            from app.agent.repair_queue import start_repair_queue
+            await start_repair_queue()
+
+            async def _undo_repair_queue():
+                await drain_repair_queue(settings.agent_queue_drain_timeout)
+
+            startup_cleanup_stack.append(("repair_queue", _undo_repair_queue))
+
+        # ── B05: 统一知识库启动初始化（回灌 + 种子加载，失败降级不阻断）──
+        try:
+            from app.rag.knowledge_base import bootstrap_knowledge_base
+
+            bootstrap_knowledge_base()
+        except Exception:
+            logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
+    except BaseException:
+        # B22：创建段异常 → 逆序回收已注册资源（代际关闭）+ M1 安全调用
+        # （空注册表快速返回；不武装看门狗、不记进程退出意图——§1.1 分账）
+        await _run_startup_unwind()
+        run_m1_sequence(
+            t0=time.monotonic(),
+            hooks={
+                "step1_stop_accepting": lambda: None,
+                "step2_cancel_waiters": lambda: None,
+                "step3_terminate_active": terminate_active_processes,
+                "step4_close_jobs": close_all_jobs,
+                "step5_shutdown_pools": lambda: None,
+                "step6_b23_idempotent": lambda: True,
+            },
+            over_budget_events=lambda ev: logger.warning("B22 M1 超预算: %s", ev),
+        )
+        raise
 
     yield
     # FIX R3-3: cancel 后 await 任务结束（抑制 CancelledError），
