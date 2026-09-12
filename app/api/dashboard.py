@@ -31,6 +31,17 @@ _generation = 0
 # 之间整体完成——旧 L2 值 / 旧计算快照仍会写进 L1 并被返回。
 # 锁内只做内存操作；Redis GET/DELETE/SETEX 与存储查询一律在锁外。
 _cache_lock = threading.Lock()
+# FIX(B19-l2): 失效与 L2 读写之间的协调状态（全部在 _cache_lock 内更新）：
+# - _l2_invalidating > 0：失效已清 L1 / 递增代际，但 Redis 键尚未删除完成。
+#   此窗口内从 Redis 读到的值可能仍是失效前的旧值，L2 命中一律不接受；
+#   写路径也不再登记新的 setex，保证下面的等待集合有限且必然收敛。
+# - _l2_writes_inflight：已登记、尚未完成的 L2 setex 数。失效在删除 Redis 键
+#   之前等待它归零，否则旧计算结果会在 delete 之后写回，被下一请求从 L2 读走。
+# - _l2_drain_cond：与 _cache_lock 共用同一把锁的等待/唤醒原语；wait() 期间
+#   释放 _cache_lock，因此等待在途 setex 不会阻塞其他线程进出临界区。
+_l2_invalidating = 0
+_l2_writes_inflight = 0
+_l2_drain_cond = threading.Condition(_cache_lock)
 _REDIS_CACHE_KEY = "ai-debug:dashboard:all_traces"
 # FIX: R7-A4 —— 缓存按 limit 分档：Dashboard 常态请求（limit≤100）只按
 # 100 条档计算，避免每个 TTL 周期恒按 1000 条全量算（此前每 error 两次
@@ -57,20 +68,35 @@ def invalidate_cache(source: str | None = None) -> None:
     """
     # FIX(B19-atomic): L1 清理与代际递增在同一临界区，与写路径的
     # 「校验 + 写 L1」互斥——失效要么完整先于写回、要么完整后于写回。
+    # FIX(B19-l2): 同一临界区内宣布「L2 失效进行中」：本窗口内开始的 L2 读
+    # 命中一律拒绝（Redis 键可能尚未删除），写路径也不再登记新的 setex。
+    global _generation, _l2_invalidating
     with _cache_lock:
         for tier in _CACHE_TIERS:
             _cache.pop(_cache_key(tier), None)
         # FIX(v0.7.1-b13-1): 递增代际，使并发在途的 _collect_all_traces 计算
         # 检测到失效并丢弃其旧快照写回（防失效窗口被旧数据回填）。
-        global _generation
         _generation += 1
-    redis_client = _get_redis_cache()
-    if redis_client is not None:
-        try:
-            for tier in _CACHE_TIERS:
-                redis_client.delete(_redis_cache_key(tier))
-        except Exception:
-            logger.warning("Dashboard L2 Redis 缓存清除失败", exc_info=True)
+        _l2_invalidating += 1
+
+    # FIX(B19-l2): 先等已登记的 L2 setex 结束，再删除 Redis 键——否则旧计算
+    # 结果会在 delete 之后写回，下一请求又从 L2 读到旧值。失效标记已阻止新的
+    # 登记，等待集合有限；setex 受 Redis 客户端 socket 超时约束，且 finally
+    # 必减计数，因此不会永久阻塞。
+    try:
+        redis_client = _get_redis_cache()
+        with _l2_drain_cond:
+            while _l2_writes_inflight:
+                _l2_drain_cond.wait()
+        if redis_client is not None:
+            try:
+                for tier in _CACHE_TIERS:
+                    redis_client.delete(_redis_cache_key(tier))
+            except Exception:
+                logger.warning("Dashboard L2 Redis 缓存清除失败", exc_info=True)
+    finally:
+        with _cache_lock:
+            _l2_invalidating -= 1
 
     # SSE 实时推送：通知 Dashboard 客户端数据已变更
     try:
@@ -229,8 +255,11 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
                 # FIX(B19-atomic): 代际校验与 L1 回填必须同一临界区，否则
                 # invalidate_cache 可在两者之间整体完成（清 L1 + generation++），
                 # 旧值仍会被写进 L1 并返回。锁内只做内存操作。
+                # FIX(B19-l2): 失效进行中（_l2_invalidating>0）时 Redis 键可能
+                # 尚未删除（或删除失败），此窗口读到的值一律不接受，落空到
+                # miss 路径重新计算。
                 with _cache_lock:
-                    promoted = _generation == gen_l2
+                    promoted = _generation == gen_l2 and _l2_invalidating == 0
                     if promoted:
                         # L2 命中 → 回填 L1
                         _cache[key] = (now, result)
@@ -266,11 +295,18 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
     # 让下一次请求重新计算（新 trace 不再被旧快照遮蔽最多 30s）。
     # FIX(B19-atomic): 校验与 L1 写回同一临界区，避免失效在两者之间完成；
     # L2 setex 在锁外执行，锁内不含 I/O。
+    # FIX(B19-l2): 失效进行中不写回、不 setex；setex 前登记在途计数，使
+    # invalidate_cache 能先等它结束再删除 Redis 键（防 delete 后回写旧值）。
+    global _l2_writes_inflight
+    registered = False
     with _cache_lock:
-        write_back = _generation == gen
+        write_back = _generation == gen and _l2_invalidating == 0
         if write_back:
             _cache[key] = (now, result)
-    if write_back and redis_client is not None:
+            if redis_client is not None:
+                _l2_writes_inflight += 1
+                registered = True
+    if registered:
         try:
             redis_client.setex(
                 _redis_cache_key(tier),
@@ -279,6 +315,10 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
             )
         except Exception:
             logger.warning("Dashboard L2 Redis 缓存写入失败", exc_info=True)
+        finally:
+            with _cache_lock:
+                _l2_writes_inflight -= 1
+                _l2_drain_cond.notify_all()
 
     return result[:limit]
 

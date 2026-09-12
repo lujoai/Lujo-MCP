@@ -853,3 +853,205 @@ class TestDashboardCacheInvalidationGenerationRace:
         _outcome, cache, _lock_free = self._compute_writeback_race(monkeypatch)
 
         assert cache.get(dashboard_module._cache_key(100)) is None
+
+    def test_l2_hit_rejected_while_invalidation_delete_pending(self, monkeypatch):
+        """终审问题一：generation 已递增、Redis delete 未完成时，旧 L2 不得被接受。
+
+        修复前：请求在 delete 完成前读到旧 L2，因 gen_l2 已是新代际而通过检查，
+        旧值被写进 L1 并返回（L2 尚未删除的窗口被当成有效命中）。
+
+        精确交错（Event 控制，无 sleep）：
+        1. invalidate_cache() 进入 fake Redis delete() 并阻塞（delete_entered 置位）；
+        2. 此时 generation 已递增、L1 已清空；
+        3. 主线程调用 _collect_all_traces()，fake get() 返回旧 L2 payload；
+        4. 断言旧值不返回、不写 L1；
+        5. 放行 delete、join 失效线程，确认随后缓存恢复健康。
+        """
+        stale = [_trace_summary("stale-l2")]
+        fresh = _trace_summary("fresh-trace")
+
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        # 失效后的存储现场只有 fresh-trace
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["fresh-trace"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: fresh)
+
+        delete_entered = threading.Event()
+        release_delete = threading.Event()
+        l2 = {
+            dashboard_module._redis_cache_key(100): json.dumps(stale),
+            dashboard_module._redis_cache_key(1000): json.dumps(stale),
+        }
+
+        class _Redis:
+            def get(self, key):
+                return l2.get(key)
+
+            def delete(self, key):
+                delete_entered.set()
+                if not release_delete.wait(timeout=10):
+                    raise AssertionError("测试未放行 Redis delete")
+                l2.pop(key, None)
+
+            def setex(self, key, ttl, value):
+                l2[key] = value
+
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: _Redis())
+
+        def _invalidate():
+            dashboard_module.invalidate_cache(source="b19-l2-delete-window")
+
+        invalidator = threading.Thread(target=_invalidate, name="b19-invalidate")
+        invalidator.start()
+        try:
+            assert delete_entered.wait(timeout=5), "invalidate 未进入 Redis delete"
+            # delete 阻塞期间 generation 已递增（清 L1 + gen++ 已完成）
+            assert dashboard_module._generation == 1
+
+            returned = dashboard_module._collect_all_traces(limit=10)
+        finally:
+            release_delete.set()
+            invalidator.join(timeout=10)
+
+        assert not invalidator.is_alive(), "失效线程未在期限内结束"
+
+        # 旧值不得作为本次结果返回
+        assert [t["trace_id"] for t in returned] == ["fresh-trace"]
+        # 旧值不得写入 L1（任何档位）
+        for tier in dashboard_module._CACHE_TIERS:
+            entry = dashboard_module._cache.get(dashboard_module._cache_key(tier))
+            if entry is not None:
+                assert all(t["trace_id"] != "stale-l2" for t in entry[1]), (
+                    f"档位 {tier} 的 L1 被旧 L2 值污染"
+                )
+
+        # 失效结束后缓存恢复健康：下一次请求按 miss 路径重算并回填
+        again = dashboard_module._collect_all_traces(limit=10)
+        assert [t["trace_id"] for t in again] == ["fresh-trace"]
+        assert dashboard_module._cache[dashboard_module._cache_key(100)][1] == [fresh]
+
+    @staticmethod
+    def _race_setex_with_invalidation(monkeypatch):
+        """让计算线程阻塞在 L2 setex，并发执行 invalidate_cache()。
+
+        精确交错（Event + 有界探测，无 sleep）：
+        1. 首次请求完成计算并进入 setex（fake setex 阻塞，setex_entered 置位）；
+        2. 另一线程执行 invalidate_cache()（清 L1、generation++、删 L2）；
+        3. 探测失效是否在放行 setex 前完成：修复前不等待在途 setex，
+           会在期限内完成；修复后必须等 setex 结束，期限内不可能完成；
+        4. 放行 setex 并 join 两侧。
+
+        返回 (outcome, l2, state, invalidation_finished_before_release)。
+        """
+        old_compute = _trace_summary("old-compute")
+
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["trace-1"]
+        )
+        state = {"summary": old_compute}
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: state["summary"])
+
+        setex_entered = threading.Event()
+        release_setex = threading.Event()
+        l2: dict = {}
+
+        class _Redis:
+            def get(self, key):
+                return l2.get(key)
+
+            def delete(self, key):
+                l2.pop(key, None)
+
+            def setex(self, key, ttl, value):
+                payload = json.loads(value)
+                if payload and payload[0]["trace_id"] == "old-compute":
+                    setex_entered.set()
+                    if not release_setex.wait(timeout=10):
+                        raise AssertionError("测试未放行 L2 setex")
+                l2[key] = value
+
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: _Redis())
+
+        outcome: dict = {}
+
+        def _worker():
+            try:
+                outcome["result"] = dashboard_module._collect_all_traces(limit=10)
+            except BaseException as exc:  # noqa: BLE001 - 测试需捕获实现抛出的任何异常
+                outcome["error"] = exc
+
+        invalidator_done = threading.Event()
+
+        def _invalidate():
+            try:
+                dashboard_module.invalidate_cache(source="b19-l2-setex")
+            finally:
+                invalidator_done.set()
+
+        worker = threading.Thread(target=_worker, name="b19-compute")
+        invalidator = None
+        worker.start()
+        try:
+            assert setex_entered.wait(timeout=5), "计算线程未进入 L2 setex"
+
+            invalidator = threading.Thread(target=_invalidate, name="b19-invalidate")
+            invalidator.start()
+            # 有界探测：修复后失效必须等在途 setex，期限内不可能完成；
+            # 修复前无等待，会在放行 setex 之前整体完成（含 Redis 删除）。
+            invalidation_finished_before_release = invalidator_done.wait(timeout=2)
+        finally:
+            release_setex.set()
+            worker.join(timeout=10)
+            if invalidator is not None:
+                invalidator.join(timeout=10)
+
+        assert not worker.is_alive(), "计算线程未在期限内结束"
+        assert invalidator is not None and not invalidator.is_alive(), "失效线程未在期限内结束"
+        assert "error" not in outcome, f"请求不应抛异常: {outcome.get('error')!r}"
+        return outcome, l2, state, invalidation_finished_before_release
+
+    def test_invalidation_waits_for_inflight_setex(self, monkeypatch):
+        """终审问题二（协调机制）：invalidate_cache 必须等已登记的 setex 结束再删 L2。
+
+        修复前失效不等待在途 setex，会在 setex 完成前结束（旧值随后写回 L2）。
+        """
+        _outcome, _l2, _state, invalidation_finished_before_release = (
+            self._race_setex_with_invalidation(monkeypatch)
+        )
+
+        assert not invalidation_finished_before_release, (
+            "invalidate_cache 不得在在途 setex 完成前结束（否则旧值会在 delete 后写回 L2）"
+        )
+
+    def test_old_compute_setex_cannot_resurrect_l2_after_invalidation(self, monkeypatch):
+        """终审问题二（后果）：失效完成后，旧计算结果不得重新进入 L1/L2 或返回。
+
+        修复前：delete 先执行、旧 setex 后写回 → 下一请求从 L2 读回 old-compute。
+        """
+        outcome, l2, state, _finished = self._race_setex_with_invalidation(monkeypatch)
+
+        assert [t["trace_id"] for t in outcome["result"]] == ["old-compute"]
+
+        # 旧计算结果不得残留在 L2（修复前：setex 在 delete 之后写回）
+        for tier in dashboard_module._CACHE_TIERS:
+            raw = l2.get(dashboard_module._redis_cache_key(tier))
+            if raw:
+                assert all(t["trace_id"] != "old-compute" for t in json.loads(raw)), (
+                    f"L2 档位 {tier} 残留失效前的旧计算结果"
+                )
+        # 旧值不得残留在 L1
+        for tier in dashboard_module._CACHE_TIERS:
+            entry = dashboard_module._cache.get(dashboard_module._cache_key(tier))
+            if entry is not None:
+                assert all(t["trace_id"] != "old-compute" for t in entry[1]), (
+                    f"L1 档位 {tier} 残留失效前的旧计算结果"
+                )
+
+        # 失效后的数据源已变化：下一次请求不得从 L2/缓存拿到 old-compute
+        state["summary"] = _trace_summary("new-data")
+        again = dashboard_module._collect_all_traces(limit=10)
+        assert [t["trace_id"] for t in again] == ["new-data"]
