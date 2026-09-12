@@ -228,10 +228,16 @@ async def start_repair_queue() -> None:
 
 
 async def drain_repair_queue(timeout: float) -> dict[str, int]:
-    """lifespan 关闭钩子：排空队列并返回 drain 统计。"""
+    """lifespan 关闭钩子：排空队列、确认 worker 收尾后复位单例（W4-5/B21）。
+
+    复位前提：类 :meth:`RepairQueue.drain` 内部已对 worker cancel 并 await
+    完成（先确认收尾再复位）。不启用 Repair Loop 的口径不变。
+    """
     global _repair_queue
     if _repair_queue is None:
         return {"drained": 0, "unfinished": 0}
-    stats = await _repair_queue.drain(timeout=timeout)
+    q = _repair_queue
+    stats = await q.drain(timeout=timeout)  # worker cancel + await 已完成
+    _repair_queue = None  # B21：drain 后复位单例，防旧 loop 绑定延续
     logger.info("repair queue drained: %s", stats)
     return stats

@@ -226,10 +226,17 @@ async def start_analysis_queue() -> None:
 
 
 async def drain_analysis_queue(timeout: float) -> dict[str, int]:
-    """lifespan 关闭钩子：排空队列并返回 drain 统计。"""
+    """lifespan 关闭钩子：排空队列、确认 worker 收尾后复位单例（W4-5/B21）。
+
+    复位前提：类 :meth:`AnalysisQueue.drain` 内部已对 worker cancel 并 await
+    完成（先确认收尾再复位，不得先复位再取消）。复位后下一轮 lifespan 经
+    :func:`start_analysis_queue` 重建全新队列（不绑旧 loop）。
+    """
     global _analysis_queue
     if _analysis_queue is None:
         return {"drained": 0, "unfinished": 0}
-    stats = await _analysis_queue.drain(timeout=timeout)
+    q = _analysis_queue
+    stats = await q.drain(timeout=timeout)  # worker cancel + await 已完成
+    _analysis_queue = None  # B21：drain 后复位单例，防旧 loop 绑定延续
     logger.info("analysis queue drained: %s", stats)
     return stats
