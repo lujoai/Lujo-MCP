@@ -1055,3 +1055,107 @@ class TestDashboardCacheInvalidationGenerationRace:
         state["summary"] = _trace_summary("new-data")
         again = dashboard_module._collect_all_traces(limit=10)
         assert [t["trace_id"] for t in again] == ["new-data"]
+
+    def test_l2_read_started_during_invalidation_rejected_after_delete(self, monkeypatch):
+        """终审遗漏交错：GET 始于失效期间、最终判定晚于 delete 完成时，旧值仍须拒绝。
+
+        修复前：reader 在失效期间快照到新代际，GET 在 delete 前取到旧值；等
+        invalidate_cache() 完成（_l2_invalidating 归零）后 promotion 判定只看
+        当前状态，于是「代际相等 + 当前不在失效中」成立 → 旧值被回填 L1 并返回。
+
+        精确交错（Event 控制，无 sleep）：
+        1. fake delete() 阻塞（delete_entered 置位）；
+        2. 启动 invalidate_cache()；
+        3. 确认 generation 已递增、_l2_invalidating > 0（reader 尚未开始）；
+        4. 启动 reader；
+        5. reader 的 fake get() 阻塞（get_entered 置位），旧值已在途；
+        6. 放行 delete，等 invalidate_cache() 完全结束（_l2_invalidating 归零）；
+        7. 此时 reader 仍停在 GET 内；
+        8. 放行 get，返回旧 L2 payload，等待 reader 结束；
+        9. 断言旧值不返回、不回填 L1，且按既有 miss 路径重算。
+        """
+        stale = [_trace_summary("stale-during-invalidation")]
+        fresh = _trace_summary("fresh-trace")
+
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        # 重算数据源：失效后的存储现场只有 fresh-trace
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["fresh-trace"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: fresh)
+
+        delete_entered = threading.Event()
+        release_delete = threading.Event()
+        get_entered = threading.Event()
+        release_get = threading.Event()
+
+        class _Redis:
+            def get(self, key):
+                get_entered.set()
+                if not release_get.wait(timeout=10):
+                    raise AssertionError("测试未放行 Redis GET")
+                return json.dumps(stale)
+
+            def delete(self, key):
+                delete_entered.set()
+                if not release_delete.wait(timeout=10):
+                    raise AssertionError("测试未放行 Redis delete")
+
+            def setex(self, key, ttl, value):
+                pass
+
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: _Redis())
+
+        outcome: dict = {}
+
+        def _reader():
+            try:
+                outcome["result"] = dashboard_module._collect_all_traces(limit=10)
+            except BaseException as exc:  # noqa: BLE001 - 测试需捕获实现抛出的任何异常
+                outcome["error"] = exc
+
+        def _invalidate():
+            dashboard_module.invalidate_cache(source="b19-l2-late-read")
+
+        invalidator = threading.Thread(target=_invalidate, name="b19-invalidate")
+        reader = None
+        invalidator.start()
+        try:
+            assert delete_entered.wait(timeout=5), "invalidate 未进入 Redis delete"
+            assert dashboard_module._generation == 1, "generation 应已递增"
+            assert dashboard_module._l2_invalidating > 0, "读取开始前应处于失效期间"
+
+            reader = threading.Thread(target=_reader, name="b19-reader")
+            reader.start()
+            assert get_entered.wait(timeout=5), "reader 未进入 L2 GET"
+
+            # 放行 delete，等失效完全结束（_l2_invalidating 归零），GET 仍未放行
+            release_delete.set()
+            invalidator.join(timeout=10)
+            assert not invalidator.is_alive(), "失效线程未在期限内结束"
+            assert dashboard_module._l2_invalidating == 0
+        finally:
+            release_delete.set()
+            release_get.set()
+            invalidator.join(timeout=10)
+            if reader is not None:
+                reader.join(timeout=10)
+
+        assert reader is not None and not reader.is_alive(), "reader 未在期限内结束"
+        assert "error" not in outcome, f"请求不应抛异常: {outcome.get('error')!r}"
+
+        # 旧值不得作为本次结果返回
+        assert [t["trace_id"] for t in outcome["result"]] == ["fresh-trace"]
+        # 旧值不得回填 L1（任何档位）
+        for tier in dashboard_module._CACHE_TIERS:
+            entry = dashboard_module._cache.get(dashboard_module._cache_key(tier))
+            if entry is not None:
+                assert all(t["trace_id"] != "stale-during-invalidation" for t in entry[1]), (
+                    f"档位 {tier} 的 L1 被失效期间读到的旧值污染"
+                )
+
+        # 读取按既有 miss 路径继续：重算并回填新值
+        assert dashboard_module._cache[dashboard_module._cache_key(100)][1] == [fresh]
+        again = dashboard_module._collect_all_traces(limit=10)
+        assert [t["trace_id"] for t in again] == ["fresh-trace"]

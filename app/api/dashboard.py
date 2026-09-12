@@ -247,7 +247,13 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
         # （invalidate_cache 递增 _generation）。此时读到的旧值既不得作为本次
         # 结果返回，也不得回填 L1（否则旧数据会遮蔽新 trace 最多 30s）；
         # generation 已变则落空到下方 miss 路径重新计算。
-        gen_l2 = _generation
+        # FIX(B19-l2-late-read): 快照必须在锁内同时记录「本次读取开始时是否
+        # 处于失效期间」——若读取始于失效期间，即使最终 delete 已完成、
+        # _l2_invalidating 已归零，该值也可能是在删除前取到的旧值，不得接受；
+        # 只看最终状态无法区分这种请求。
+        with _cache_lock:
+            gen_l2 = _generation
+            l2_read_started_ok = _l2_invalidating == 0
         try:
             raw = redis_client.get(_redis_cache_key(tier))
             if raw:
@@ -258,8 +264,14 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
                 # FIX(B19-l2): 失效进行中（_l2_invalidating>0）时 Redis 键可能
                 # 尚未删除（或删除失败），此窗口读到的值一律不接受，落空到
                 # miss 路径重新计算。
+                # FIX(B19-l2-late-read): 三个条件同时成立才接受——读取开始时
+                # 不在失效期间、代际未变、当前也不在失效中。
                 with _cache_lock:
-                    promoted = _generation == gen_l2 and _l2_invalidating == 0
+                    promoted = (
+                        l2_read_started_ok
+                        and _generation == gen_l2
+                        and _l2_invalidating == 0
+                    )
                     if promoted:
                         # L2 命中 → 回填 L1
                         _cache[key] = (now, result)
