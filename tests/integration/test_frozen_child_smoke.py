@@ -4,10 +4,10 @@
 冻结 exe 作为 heavy worker 子进程（entry_stdio 分流 → heavy_worker_entry
 同一 bootstrap），经 heavy_spawn 的 HANDLE→CRT fd 接管完成握手与结果回传。
 
-环境理由（计数纪律）：冻结产物不入库（git 忽略 outputs/）；产物缺失时
+环境理由（计数纪律）：冻结产物不入库（docs/internal/ 为 git 忽略目录）；产物缺失时
 skip 并注明构建命令。构建：
     pyinstaller --clean -y packaging/lujo-mcp-server.spec \
-        --distpath outputs/frozen_smoke/dist --workpath outputs/frozen_smoke/build
+        --distpath docs/internal/c_batch/frozen_smoke/dist --workpath docs/internal/c_batch/frozen_smoke/build
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import app.mcp.protocol.heavy_spawn as hs
 
 _FROZEN_EXE = os.path.join(
     os.path.dirname(__file__), "..", "..",
-    "outputs", "frozen_smoke", "dist", "lujo-mcp-server.exe",
+    "docs", "internal", "c_batch", "frozen_smoke", "dist", "lujo-mcp-server.exe",
 )
 
 pytestmark = [

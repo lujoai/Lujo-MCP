@@ -8,7 +8,7 @@
 - ``chromium user-data-dir`` 锁：本链路 chromium 为非持久化（headless 无
   ``--user-data-dir``），锁核对如实记录为 n/a。
 
-取证输出：``outputs/c_batch/evidence/w3_5/u09_evidence.json``（可复现命令 =
+取证输出：``docs/internal/c_batch/evidence/w3_5/u09_evidence.json``（可复现命令 =
 本文件的 pytest 运行）。
 """
 
@@ -36,7 +36,7 @@ pytestmark = [
 ]
 
 _EVIDENCE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "outputs", "c_batch", "evidence", "w3_5"
+    os.path.dirname(__file__), "..", "..", "docs", "internal", "c_batch", "evidence", "w3_5"
 )
 
 _BROWSER_IMAGES = {
@@ -88,7 +88,7 @@ def _page_server():
 def test_u09_real_playwright_tree_reclaim(tmp_path):
     """U09：真实 auto_test（chromium headless）超时终止 → 整树回收取证。
 
-    样本 N=3；取证 JSON 落 outputs/c_batch/evidence/w3_5/。定级纪律：
+    样本 N=3；取证 JSON 落 docs/internal/c_batch/evidence/w3_5/。定级纪律：
     残留以快照差集为准，不定级为「未看到」。
     """
     from app.runtime.verifier import ui_runner
