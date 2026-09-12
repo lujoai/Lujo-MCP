@@ -104,7 +104,9 @@ def test_dashboard_cache_roundtrip_via_redis_l2(require_redis, monkeypatch):
     result1 = dashboard_module._collect_all_traces(limit=10)
     assert result1 == sample
 
-    raw = require_redis.get(dashboard_module._REDIS_CACHE_KEY)
+    # 生产按 limit 档位写 key：首次调用 limit=10 → tier=100 → _redis_cache_key(100)
+    # （此前误读不带档位后缀的 _REDIS_CACHE_KEY，真实 Redis 下必然为 None）
+    raw = require_redis.get(dashboard_module._redis_cache_key(100))
     assert raw is not None
 
     # 清空 L1，第二次调用应可从 L2 回读
