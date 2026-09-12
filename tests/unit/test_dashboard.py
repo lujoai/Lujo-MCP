@@ -1,4 +1,8 @@
 """单元测试：Dashboard API 端点"""
+import json
+import threading
+import time
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -423,3 +427,250 @@ class TestExtractErrorSummarySinglePass:
             )
 
         assert calls["n"] == 1  # 旧实现为 2 次
+
+
+# ---------------------------------------------------------------------------
+# B19 —— L2 命中路径与 invalidate_cache 的代际竞态
+# ---------------------------------------------------------------------------
+
+
+def _trace_summary(trace_id: str) -> dict:
+    """构造一条 trace 摘要（与 _collect_all_traces 返回结构一致）"""
+    return {
+        "trace_id": trace_id,
+        "timestamp": 1.0,
+        "type": "ERROR",
+        "message": trace_id,
+        "trace_kind": "exception",
+        "occurrence_count": 1,
+        "has_silent_failure": False,
+        "verify_count": 0,
+    }
+
+
+class TestDashboardCacheInvalidationGenerationRace:
+    """B19：失效竞争中被读出的旧 L2 值既不得返回，也不得回填 L1。
+
+    同步手段全部使用 ``threading.Event``（GET 进入点 / 放行点），
+    不使用 sleep 猜测交错顺序。
+    """
+
+    @staticmethod
+    def _run_l2_read_raced_by_invalidation(monkeypatch):
+        """执行「阻塞 L2 GET → 并发 invalidate → 放行旧值」的精确交错。
+
+        交错顺序（Event 精确控制，不用 sleep）：
+        1. 请求线程进入 L2 GET（``get_entered`` 置位后阻塞，L1 此时为空）；
+        2. 主线程调用 ``invalidate_cache()`` 完成失效（generation 递增、L2 键删除）；
+        3. 主线程放行 GET，请求线程拿到旧 L2 值并继续走完。
+
+        返回 (outcome, fake, stale, fresh)：outcome 含请求线程的 result/error。
+        """
+        stale = [_trace_summary("stale-l2-trace")]
+        fresh = _trace_summary("fresh-trace")
+
+        dashboard_module._cache.clear()
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+
+        # 重算数据源：失效后的存储现场只有 fresh-trace
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["fresh-trace"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: fresh)
+
+        get_entered = threading.Event()
+        release_get = threading.Event()
+
+        class _BlockingRedis:
+            def __init__(self):
+                self.get_calls = 0
+                self.deleted = []
+                self.setex_calls = []
+
+            def get(self, key):
+                self.get_calls += 1
+                get_entered.set()
+                if not release_get.wait(timeout=10):
+                    raise AssertionError("测试未在期限内放行 Redis GET")
+                return json.dumps(stale)
+
+            def delete(self, key):
+                self.deleted.append(key)
+
+            def setex(self, key, ttl, value):
+                self.setex_calls.append((key, ttl, value))
+
+        fake = _BlockingRedis()
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: fake)
+
+        outcome: dict = {}
+
+        def _worker():
+            try:
+                outcome["result"] = dashboard_module._collect_all_traces(limit=10)
+            except BaseException as exc:  # noqa: BLE001 - 测试需捕获实现抛出的任何异常
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=_worker, name="b19-l2-reader")
+        worker.start()
+        try:
+            # 1) 请求已完成 L2 读取（阻塞在 GET 内），尚未写入 L1 / 返回
+            assert get_entered.wait(timeout=5), "请求未进入 L2 读取阶段"
+            gen_before = dashboard_module._generation
+
+            # 2) 另一侧完成缓存失效，generation 已变化
+            dashboard_module.invalidate_cache(source="b19-test")
+            assert dashboard_module._generation == gen_before + 1
+            assert fake.deleted == [
+                dashboard_module._redis_cache_key(100),
+                dashboard_module._redis_cache_key(1000),
+            ]
+
+            # 3) 放行原请求
+            release_get.set()
+            worker.join(timeout=10)
+            assert not worker.is_alive(), "L2 读取请求未在期限内结束"
+        finally:
+            release_get.set()
+            worker.join(timeout=10)
+
+        assert "error" not in outcome, f"请求不应抛异常: {outcome.get('error')!r}"
+        return outcome, fake, stale, fresh
+
+    def test_l2_hit_during_invalidation_not_returned(self, monkeypatch):
+        """失效竞争中被读出的旧 L2 值不得作为本次结果返回。"""
+        outcome, _fake, _stale, _fresh = self._run_l2_read_raced_by_invalidation(monkeypatch)
+
+        assert [t["trace_id"] for t in outcome["result"]] == ["fresh-trace"]
+
+        # 竞争结束后下一次请求按既有语义取得新值
+        again = dashboard_module._collect_all_traces(limit=10)
+        assert [t["trace_id"] for t in again] == ["fresh-trace"]
+
+    def test_l2_hit_during_invalidation_not_promoted_to_l1(self, monkeypatch):
+        """失效竞争中的旧 L2 值不得回填 L1；L1 只能是重算后的新值。"""
+        _outcome, _fake, _stale, fresh = self._run_l2_read_raced_by_invalidation(monkeypatch)
+
+        for tier in dashboard_module._CACHE_TIERS:
+            entry = dashboard_module._cache.get(dashboard_module._cache_key(tier))
+            if entry is not None:
+                assert all(t["trace_id"] != "stale-l2-trace" for t in entry[1]), (
+                    f"档位 {tier} 的 L1 被旧 L2 值污染"
+                )
+        entry = dashboard_module._cache.get(dashboard_module._cache_key(100))
+        assert entry is not None, "竞态后应走既有 miss 路径重新计算并回填 L1"
+        assert entry[1] == [fresh]
+
+    def test_l2_hit_without_invalidation_still_promotes_l1(self, monkeypatch):
+        """无竞争的 L2 命中行为保持不变：返回值 + 回填 L1 + 不刷新 L2 TTL。"""
+        payload = [_trace_summary("l2-only-trace")]
+
+        dashboard_module._cache.clear()
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        # 计算路径若被触发只会得到空结果，用于区分「命中」与「重算」
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(dashboard_module.logs, "list_request_ids", lambda limit=100: [])
+
+        class _Redis:
+            def __init__(self):
+                self.get_calls = []
+                self.setex_calls = []
+
+            def get(self, key):
+                self.get_calls.append(key)
+                return json.dumps(payload)
+
+            def delete(self, key):
+                pass
+
+            def setex(self, key, ttl, value):
+                self.setex_calls.append((key, ttl, value))
+
+        fake = _Redis()
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: fake)
+
+        result = dashboard_module._collect_all_traces(limit=10)
+
+        assert result == payload
+        assert fake.get_calls == [dashboard_module._redis_cache_key(100)]
+        assert dashboard_module._cache[dashboard_module._cache_key(100)][1] == payload
+        assert fake.setex_calls == []  # 命中不刷新 L2 TTL
+
+    def test_l1_hit_short_circuits_before_l2(self, monkeypatch):
+        """无竞争的 L1 命中行为保持不变：不访问 L2。"""
+        dashboard_module._cache.clear()
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        payload = [_trace_summary("cached-l1")]
+        dashboard_module._cache[dashboard_module._cache_key(100)] = (
+            time.monotonic(),
+            payload,
+        )
+
+        class _Redis:
+            def __init__(self):
+                self.get_calls = []
+
+            def get(self, key):
+                self.get_calls.append(key)
+                raise AssertionError("L1 命中不应访问 L2")
+
+        fake = _Redis()
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: fake)
+
+        assert dashboard_module._collect_all_traces(limit=10) == payload
+        assert fake.get_calls == []
+
+    def test_l2_read_failure_degrades_to_recompute(self, monkeypatch):
+        """L2 GET 异常沿用既有降级：不抛错，走计算路径。"""
+        fresh = _trace_summary("fresh-trace")
+
+        dashboard_module._cache.clear()
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["fresh-trace"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: fresh)
+
+        class _Redis:
+            def get(self, key):
+                raise ConnectionError("redis down")
+
+            def delete(self, key):
+                pass
+
+            def setex(self, key, ttl, value):
+                pass
+
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: _Redis())
+
+        assert dashboard_module._collect_all_traces(limit=10) == [fresh]
+        assert dashboard_module._cache[dashboard_module._cache_key(100)][1] == [fresh]
+
+    def test_l2_write_failure_does_not_break_response(self, monkeypatch):
+        """L2 写回异常沿用既有降级：请求仍正常返回并填充 L1。"""
+        fresh = _trace_summary("fresh-trace")
+
+        dashboard_module._cache.clear()
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["fresh-trace"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: fresh)
+
+        class _Redis:
+            def get(self, key):
+                return None
+
+            def delete(self, key):
+                pass
+
+            def setex(self, key, ttl, value):
+                raise ConnectionError("redis down")
+
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: _Redis())
+
+        assert dashboard_module._collect_all_traces(limit=10) == [fresh]
+        assert dashboard_module._cache[dashboard_module._cache_key(100)][1] == [fresh]

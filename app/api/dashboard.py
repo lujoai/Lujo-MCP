@@ -208,13 +208,19 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
     # ── L2: Redis 缓存 ──
     redis_client = _get_redis_cache()
     if redis_client is not None:
+        # FIX(B19): GET 前快照代际——Redis 读取期间可能发生失效
+        # （invalidate_cache 递增 _generation）。此时读到的旧值既不得作为本次
+        # 结果返回，也不得回填 L1（否则旧数据会遮蔽新 trace 最多 30s）；
+        # generation 已变则落空到下方 miss 路径重新计算。
+        gen_l2 = _generation
         try:
             raw = redis_client.get(_redis_cache_key(tier))
             if raw:
                 result = json.loads(raw)
-                # L2 命中 → 回填 L1
-                _cache[key] = (now, result)
-                return result[:limit]
+                if _generation == gen_l2:
+                    # L2 命中 → 回填 L1
+                    _cache[key] = (now, result)
+                    return result[:limit]
         except Exception:
             logger.warning("Dashboard L2 Redis 缓存读取失败", exc_info=True)
 
