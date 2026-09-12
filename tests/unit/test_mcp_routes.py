@@ -700,3 +700,95 @@ async def test_illegal_initialize_does_not_delete_existing_session():
     assert registry.get(existing_sid) is not None
     assert hub.subscriber_count(existing_sid) == 1
     hub.unsubscribe(existing_sid, q)
+
+# ---------------------------------------------------------------------------
+# FIX: B25 —— HTTP 边界：非字符串 tool name 不再 500，统一 400 + -32602
+# ---------------------------------------------------------------------------
+
+
+class TestB25HttpToolNameValidation:
+    """B25: HTTP 边界 —— 非字符串 tool name 不再 500，统一 400 + -32602。"""
+
+    @pytest.mark.parametrize(
+        "name_value",
+        [["x"], {"a": 1}, None, 42, True],
+        ids=["list", "dict", "null", "number", "boolean"],
+    )
+    def test_non_string_name_returns_400_not_500(self, name_value):
+        """非字符串 name → HTTP 400 + -32602（非 500）。
+
+        原实现：list/dict → TOOL_ROLE_REQUIREMENTS.get 抛 TypeError → 500；
+        null/number/boolean → 通过 RBAC 后协议层 -32601（误判）。
+        新实现：RBAC 前校验，统一 400 + -32602。
+        断言锁定：HTTP 不返回 500，错误码为 -32602，不泄漏 TypeError/unhashable。
+        """
+        client = _client()
+        session_id = _initialized_session(client)
+        resp = client.post(
+            "/mcp",
+            headers={"Mcp-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": name_value, "arguments": {}}},
+        )
+        assert resp.status_code != 500
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == -32602
+        assert "TypeError" not in resp.text
+        assert "unhashable" not in resp.text
+
+    def test_missing_name_with_admin_returns_32601(self, monkeypatch):
+        """缺失 name + rbac_enabled=False → -32601（保持未知工具语义）。
+
+        原实现与新实现一致：缺失 name → "" → 默认 admin required → admin 通过 → 协议层 -32601。
+        断言锁定：B25 不把缺失误判为 malformed params，RBAC 状态显式设置。
+        """
+        from app.config import settings
+        monkeypatch.setattr(settings, "rbac_enabled", False)
+
+        client = _client()
+        session_id = _initialized_session(client)
+        resp = client.post(
+            "/mcp",
+            headers={"Mcp-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"arguments": {}}},
+        )
+        assert resp.json()["error"]["code"] == -32601
+
+    def test_unknown_string_with_admin_returns_32601(self, monkeypatch):
+        """未知字符串 + rbac_enabled=False → -32601（保持）。
+
+        原实现与新实现一致：未知字符串 → 默认 admin required → admin 通过 → 协议层 -32601。
+        断言锁定：B25 不把未知字符串误判为 malformed params。
+        """
+        from app.config import settings
+        monkeypatch.setattr(settings, "rbac_enabled", False)
+
+        client = _client()
+        session_id = _initialized_session(client)
+        resp = client.post(
+            "/mcp",
+            headers={"Mcp-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": "b25-no-such", "arguments": {}}},
+        )
+        assert resp.json()["error"]["code"] == -32601
+
+    def test_rbac_fail_closed_still_403_for_unknown_name(self, monkeypatch):
+        """RBAC fail-closed 回归：rbac_enabled=True 且角色不足 → 403。
+
+        原实现与新实现一致：未知 name 默认 admin required，viewer → 403。
+        断言锁定：B25 修复不绕过 RBAC fail-closed。
+        """
+        from app.config import settings
+        monkeypatch.setattr(settings, "rbac_enabled", True)
+
+        client = _client()
+        session_id = _initialized_session(client)
+        resp = client.post(
+            "/mcp",
+            headers={"Mcp-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": "b25-no-such", "arguments": {}}},
+        )
+        assert resp.status_code == 403

@@ -386,13 +386,34 @@ def _validate_tool_arguments(tool: dict, arguments) -> "str | None":
     return None
 
 
+def _validate_tool_name(params: dict) -> tuple[str | None, str | None]:
+    """B25: 纯输入分类 —— 区分 name 键缺失 / 非字符串 / 合法字符串。
+
+    只负责分类，不构造任何错误载体（JSONResponse / make_error / ToolExecutionError）。
+    返回 (name, error_message)：
+    - name 键缺失 → ("", None)：保持既有"未知工具 -32601"语义
+    - name 键存在但非 str → (None, "工具名必须为字符串")：malformed params -32602
+    - name 是 str → (name, None)
+    """
+    if "name" not in params:
+        return ("", None)
+    name = params["name"]
+    if not isinstance(name, str):
+        return (None, "工具名必须为字符串")
+    return (name, None)
+
+
 async def _handle_tools_call(req: JSONRPCRequest) -> dict:
     """处理 tools/call"""
     # FIX: P1-9i params 非 dict（list/str/null）时返回 -32602，避免 AttributeError → 500
     if not isinstance(req.params, dict):
         return make_error(req.id, INVALID_PARAMS, "Invalid params")
     params = req.params
-    tool_name = params.get("name", "")
+    # FIX(B25): 非字符串 name 在 registry 查找前拒绝，避免 TypeError → -32603
+    # 或可哈希非字符串（null/number/boolean）误判为未知工具 -32601。
+    tool_name, name_error = _validate_tool_name(params)
+    if name_error:
+        return make_error(req.id, INVALID_PARAMS, name_error)
     arguments = params.get("arguments", {})
 
     tool = _tool_registry.get(tool_name)

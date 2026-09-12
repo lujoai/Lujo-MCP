@@ -54,6 +54,7 @@ from app.mcp.protocol.server import (
     _pool_for,
     _tool_registry,
     _validate_tool_arguments,
+    _validate_tool_name,
     get_agent_visible_tools,
     is_heavy_tool,
     tool_failure_predicate,
@@ -503,6 +504,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     3. stdio 不记 MCP 工具指标 → mcp_tool_* 指标只反映 HTTP 流量。
     """
     _tool_start = time.monotonic()
+    # FIX(B25): 防御性 name 校验 —— 直接调用 call_tool 绕过 SDK，非字符串 name
+    # 在 registry 查找前拒绝，避免 TypeError 传播或可哈希非字符串误判未知工具。
+    _, name_error = _validate_tool_name({"name": name})
+    if name_error:
+        raise ToolExecutionError(json.dumps(
+            {"error": name_error, "error_code": "INVALID_PARAMS"},
+            ensure_ascii=False,
+        ))
     tool = _tool_registry.get(name)
     if tool is None:
         record_mcp_tool_call(name, "error", 0.0)

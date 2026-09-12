@@ -401,3 +401,94 @@ class TestB08DispatchConsistency:
             assert calls == {"stdio": 0, "http": 0}
         finally:
             _tool_registry.pop("parity_async_light", None)
+
+# ---------------------------------------------------------------------------
+# FIX: B25 —— stdio 两层边界：真实 SDK 边界 + 直接 call_tool 防御边界
+# ---------------------------------------------------------------------------
+
+
+class TestB25StdioSdkBoundary:
+    """B25: 真实 stdio SDK 边界 —— 非字符串 name 被 SDK Pydantic 拦截。"""
+
+    @pytest.mark.parametrize(
+        "name_value",
+        [["x"], {"a": 1}, None, 42, True],
+        ids=["list", "dict", "null", "number", "boolean"],
+    )
+    def test_sdk_rejects_non_string_name(self, name_value):
+        """SDK Pydantic 校验拒绝非字符串 name，call_tool 不会被调用。
+
+        原实现与新实现一致：SDK 在构造 CallToolRequestParams 时校验 name 类型。
+        断言锁定：SDK 边界是第一道防线，非字符串 name 不进入 call_tool。
+        注：原始 SDK JSON-RPC 错误码未验证（取决于 SDK 内部转换，不编造）。
+        """
+        from mcp.types import CallToolRequestParams
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            CallToolRequestParams(name=name_value, arguments={})
+
+
+class TestB25DirectCallToolDefense:
+    """B25: 直接调用 call_tool 防御边界 —— 绕过 SDK 的非字符串 name 拒绝。"""
+
+    @pytest.mark.parametrize(
+        "name_value",
+        [["x"], {"a": 1}, None, 42, True],
+        ids=["list", "dict", "null", "number", "boolean"],
+    )
+    @pytest.mark.asyncio
+    async def test_non_string_name_raises_invalid_params(self, name_value, _registered):
+        """直接调用 call_tool，非字符串 name 抛 ToolExecutionError(INVALID_PARAMS)。
+
+        原实现：list/dict → _tool_registry.get 抛 TypeError 传播；
+        null/number/boolean → 误判未知工具，ToolExecutionError("未知工具")。
+        新实现：非字符串 name 在 registry 查找前拒绝，ToolExecutionError(error_code: "INVALID_PARAMS")。
+        断言锁定：不泄漏 TypeError/unhashable，handler/槽位/工具执行不触发。
+        """
+        import app.mcp_server as stdio
+        from app.mcp.protocol.tool_errors import ToolExecutionError
+
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await stdio.call_tool(name_value, {})
+        payload = json.loads(str(exc_info.value))
+        assert payload["error_code"] == "INVALID_PARAMS"
+        assert "TypeError" not in str(exc_info.value)
+        assert "unhashable" not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_unknown_string_preserves_error(self, _registered):
+        """直接调用 call_tool，未知字符串 name 保持未知工具错误。
+
+        原实现与新实现一致：未知字符串 → ToolExecutionError("未知工具")。
+        断言锁定：B25 不把未知字符串误判为 malformed params。
+        """
+        import app.mcp_server as stdio
+        from app.mcp.protocol.tool_errors import ToolExecutionError
+
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await stdio.call_tool("b25-no-such", {})
+        payload = json.loads(str(exc_info.value))
+        assert "未知工具" in payload["error"]
+
+    @pytest.mark.asyncio
+    async def test_legal_string_preserves_execution(self, _registered):
+        """直接调用 call_tool，合法字符串 name 保持原有执行语义。
+
+        原实现与新实现一致：合法工具名走正常执行，handler 被触发。
+        断言锁定：B25 不改变合法路径行为。
+        """
+        import app.mcp_server as stdio
+
+        executed = []
+
+        def _spy(arguments):
+            executed.append(1)
+            return {"ok": True}
+
+        register_tool("b25-spy", "spy", _spy, inputSchema={"type": "object"})
+        try:
+            await stdio.call_tool("b25-spy", {})
+            assert executed == [1]
+        finally:
+            _tool_registry.pop("b25-spy", None)

@@ -390,3 +390,85 @@ class TestJSONRPCErrorDataAndSemanticCodes:
         assert AUTH_ERROR == -32003
         assert TOOL_BUSY_ERROR == -32004
         assert SERVER_ERROR_RESERVED_END <= TOOL_EXECUTION_ERROR <= SERVER_ERROR_RESERVED_START
+
+# ---------------------------------------------------------------------------
+# FIX: B25 —— 非字符串 tool name 校验（协议层完整输入矩阵）
+# ---------------------------------------------------------------------------
+
+
+class TestToolNameValidation:
+    """B25: 非字符串 tool name 校验 —— 协议层完整输入矩阵。"""
+
+    @pytest.mark.parametrize(
+        "name_value",
+        [["x"], {"a": 1}, None, 42, True],
+        ids=["list", "dict", "null", "number", "boolean"],
+    )
+    def test_non_string_name_returns_32602(self, name_value):
+        """非字符串 name → -32602 INVALID_PARAMS。
+
+        原实现：list/dict 不可哈希 → _tool_registry.get 抛 TypeError → dispatch 兜底 -32603；
+        null/number/boolean 可哈希 → 误判未知工具 -32601。
+        新实现：_validate_tool_name 在 registry 查找前分类，非字符串统一 -32602。
+        断言锁定：协议层不退化为 -32603 或 -32601。
+        """
+        import json as _json
+        from app.mcp.protocol.server import dispatch_raw
+
+        raw = _json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name_value, "arguments": {}},
+        })
+        resp = asyncio.run(dispatch_raw(raw))
+        assert resp["error"]["code"] == INVALID_PARAMS
+        assert "工具名必须为字符串" in resp["error"]["message"]
+
+    def test_missing_name_returns_32601(self):
+        """name 键缺失 → -32601 METHOD_NOT_FOUND（保持既有未知工具语义）。
+
+        原实现与新实现一致：缺失 name → tool_name="" → 未知工具 -32601。
+        断言锁定：B25 不把缺失误判为 malformed params。
+        """
+        from app.mcp.protocol.server import dispatch_raw
+
+        resp = asyncio.run(dispatch_raw(
+            '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"arguments":{}}}'
+        ))
+        assert resp["error"]["code"] == METHOD_NOT_FOUND
+
+    def test_unknown_string_name_returns_32601(self):
+        """未知字符串 name → -32601 METHOD_NOT_FOUND（保持）。
+
+        原实现与新实现一致：字符串但不在注册表 → 未知工具 -32601。
+        断言锁定：B25 不把未知字符串误判为 malformed params。
+        """
+        from app.mcp.protocol.server import dispatch_raw
+
+        resp = asyncio.run(dispatch_raw(
+            '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"b25-no-such","arguments":{}}}'
+        ))
+        assert resp["error"]["code"] == METHOD_NOT_FOUND
+
+    def test_legal_string_name_preserves_execution(self):
+        """合法字符串 name → 正常执行（保持）。
+
+        原实现与新实现一致：合法工具名走正常执行路径。
+        断言锁定：B25 不改变合法路径行为。
+        """
+        from app.mcp.protocol.server import dispatch, register_tool, _tool_registry
+
+        def _ok(arguments):
+            return {"ok": True}
+
+        original = dict(_tool_registry)
+        try:
+            register_tool("b25-ok-tool", "ok", _ok, inputSchema={})
+            req = JSONRPCRequest(
+                jsonrpc="2.0", id=1, method="tools/call",
+                params={"name": "b25-ok-tool", "arguments": {}},
+            )
+            resp = asyncio.run(dispatch(req))
+            assert resp["result"]["isError"] is False
+        finally:
+            _tool_registry.clear()
+            _tool_registry.update(original)

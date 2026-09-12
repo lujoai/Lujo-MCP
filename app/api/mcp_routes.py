@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.config import settings
 from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INVALID_PARAMS, INTERNAL_ERROR
-from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES
+from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES, _validate_tool_name
 from app.mcp.transports.session import registry, SessionLimitExceeded
 from app.mcp.transports.sse import hub
 from app.api.sse import create_sse_response
@@ -142,7 +142,12 @@ async def mcp_post(request: Request):
                 make_error(req_id, INVALID_PARAMS, "Invalid params"),
                 status_code=400,
             )
-        tool_name = mcp_params.get("name", "")
+        tool_name, name_error = _validate_tool_name(mcp_params)
+        if name_error:
+            return JSONResponse(
+                make_error(req_id, INVALID_PARAMS, name_error),
+                status_code=400,
+            )
         required_roles = TOOL_ROLE_REQUIREMENTS.get(tool_name)
         if required_roles is None:
             # 未在 TOOL_ROLE_REQUIREMENTS 注册的工具默认需要 admin 角色（fail-closed）
