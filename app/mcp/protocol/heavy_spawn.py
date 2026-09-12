@@ -419,7 +419,7 @@ def spawn_attempt(
             popen_kwargs["close_fds"] = True
             parent_write_objects = [inheritable_write]
         else:
-            read_fd, write_fd, _fd_value = os.pipe()
+            read_fd, write_fd = os.pipe()
             read_file = os.fdopen(read_fd, "rb", buffering=0)
             child_env[_ENV_RESULT_FD] = str(write_fd)
             popen_kwargs["pass_fds"] = (write_fd,)

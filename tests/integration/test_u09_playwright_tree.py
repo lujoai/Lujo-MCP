@@ -26,7 +26,9 @@ import time
 import pytest
 
 from app.mcp.protocol.termination import backend as backend_mod
-from app.mcp.protocol.termination._win32 import process_exists
+
+if sys.platform == "win32":
+    from app.mcp.protocol.termination._win32 import process_exists
 
 pytestmark = [
     pytest.mark.skipif(
