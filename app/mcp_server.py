@@ -548,7 +548,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     _token = _pool.acquire_token(loop=asyncio.get_running_loop(), semaphore=slots)
     try:
         result = await _run_registered_tool(name, tool, arguments, token=_token, pool=_pool)
-        record_mcp_tool_call(name, "ok", time.monotonic() - _tool_start)
     except asyncio.TimeoutError:
         # 不结算：真实任务可能仍在运行，槽位由真实 future/task 的回调在终结时归还
         record_mcp_tool_call(name, "timeout", settings.tool_timeout_seconds)
@@ -571,8 +570,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _pool.settle(_token)
         raise ToolExecutionError(json.dumps({"error": "Tool execution failed"}, ensure_ascii=False))
 
+    # FIX(B24)：先求值**同一个**工具失败谓词，按同一布尔值只记录一次
+    # ok/error 指标，再决定是否抛 ToolExecutionError——业务失败结果不再
+    # 先记 ok 再被谓词纠正（报告 #22），指标与 isError 由同一判定派生。
     if tool_failure_predicate(tool)(result):
+        record_mcp_tool_call(name, "error", time.monotonic() - _tool_start)
         raise ToolExecutionError(json.dumps(result, ensure_ascii=False, indent=2))
+    record_mcp_tool_call(name, "ok", time.monotonic() - _tool_start)
 
     # Phase 3 D5：记录 Tool 响应耗时（仅日志，不修改协议响应、不打印敏感负载）
     _elapsed = time.monotonic() - _tool_start

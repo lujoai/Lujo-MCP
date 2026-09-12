@@ -473,7 +473,6 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         )
         try:
             result = await asyncio.wait_for(_task, timeout=timeout)
-            record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
         except asyncio.TimeoutError:
             record_mcp_tool_call(tool_name, "timeout", timeout)
             logger.warning("工具 %s 执行超时(>%ss)，已终止", tool_name, timeout)
@@ -576,7 +575,6 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 result = await asyncio.wait_for(
                     asyncio.wrap_future(real_future), timeout=timeout
                 )
-            record_mcp_tool_call(tool_name, "ok", time.monotonic() - _tool_start)
         except asyncio.TimeoutError:
             record_mcp_tool_call(tool_name, "timeout", timeout)
             # 「停止等待」的善意尝试，**不是记账事件**：对运行中线程 cancel()
@@ -639,12 +637,12 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         _size = 0
     # Phase 3 D5：记录 Tool 响应耗时/大小（仅日志，不修改协议响应、不打印敏感负载）
     logger.info("MCP HTTP tool=%s response_ms=%.1f response_size=%d", tool_name, _elapsed * 1000, _size)
-    # FIX: R7 —— handler 正常返回但代表执行失败的 dict（含非空 error 键）必须
-    # 标记 isError=true，与 stdio 的 ToolExecutionError 契约一致；正常无数据
-    # （found=false 等，无 error 键）仍是成功结果。
-    # FIX(R8): 判定改走工具自己的谓词（未声明则仍用全局契约），
-    # 结论型工具的载荷不再被误标为失败。
-    if tool_failure_predicate(tool)(result):
+    # FIX(B24)：先求值**同一个**工具失败谓词，按同一布尔值只记录一次
+    # ok/error 指标，再以同一判定构造 isError——业务失败结果不再先记 ok
+    # 再被谓词纠正（报告 #22），指标与 isError 由同一判定派生。
+    _is_failure = tool_failure_predicate(tool)(result)
+    record_mcp_tool_call(tool_name, "error" if _is_failure else "ok", _elapsed)
+    if _is_failure:
         return make_response(req.id, {
             "content": [
                 {
