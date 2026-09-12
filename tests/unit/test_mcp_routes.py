@@ -523,3 +523,180 @@ def test_http_tools_call_diagnose_issue_empty_result_is_guided():
     assert payload["found"] is False
     assert payload["setup_hint"]
     assert payload["next_step"]
+
+# ---------------------------------------------------------------------------
+# FIX: B09 —— 非法 initialize 请求创建 session 后未回收
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": []},
+        {"jsonrpc": "1.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": {"a": 1}, "method": "initialize", "params": {}},
+    ],
+    ids=["params-not-object", "jsonrpc-invalid", "id-invalid"],
+)
+def test_illegal_initialize_reclaims_session(payload):
+    """非法 initialize（params 非对象 / jsonrpc 非法 / id 非法）不泄漏 session 且无 Session 头。
+
+    原实现：initialize 先 registry.create() 建会话，dispatch_raw 返回 error 后 session 残留，
+    响应仍带 Mcp-Session-Id，重复请求持续消耗 10000 上限。
+    新实现：dispatch_raw 返回含 "error" 的响应即回收本次新建的 created_session_id，
+    并把对外 session_id 置 None，使响应不再携带 Mcp-Session-Id。
+    断言语义：registry 无残留 + 响应头不含 Mcp-Session-Id，锁定「非法 initialize 不保留会话」。
+    """
+    client = _client()
+    resp = client.post("/mcp", json=payload)
+    body = resp.json()
+    assert body["error"]["code"] == -32600
+    assert "Mcp-Session-Id" not in resp.headers
+    assert len(registry._sessions) == 0
+
+
+def test_repeated_illegal_initialize_do_not_exhaust_sessions():
+    """连续多次非法 initialize 不消耗 session 容量。
+
+    原实现：每次非法 initialize 都残留一个 session，20 次后 registry 有 20 个残留。
+    新实现：每次失败即回收，循环后存活 session 数为 0。
+    断言语义：失败请求不累计占据会话上限，锁定「非法 initialize 不消耗容量」。
+    """
+    client = _client()
+    for _ in range(20):
+        resp = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": []},
+        )
+        assert resp.json()["error"]["code"] == -32600
+    assert len(registry._sessions) == 0
+
+
+def test_dispatch_raw_error_reclaims_session(monkeypatch):
+    """dispatch_raw 返回协议错误（含 error 键）时回收临时 session。
+
+    原实现：session 先建后不回收，残留 1 个。
+    新实现：任意返回含 "error" 的响应都回收本次 created_session_id 且不设 Session 头。
+    断言语义：只要 dispatch_raw 返回 error，session 数回到 0，锁定「返回 error 即回收」。
+    """
+    import app.api.mcp_routes as mcp_routes
+
+    async def fake_dispatch(raw):
+        return {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "boom"}}
+
+    monkeypatch.setattr(mcp_routes, "dispatch_raw", fake_dispatch)
+    client = _client()
+    resp = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    assert resp.json()["error"]["code"] == -32600
+    assert "Mcp-Session-Id" not in resp.headers
+    assert len(registry._sessions) == 0
+
+
+def test_dispatch_raw_exception_reclaims_session(monkeypatch):
+    """dispatch_raw 抛异常（走 500 分支）时回收临时 session，且不掩错、不回显异常原文。
+
+    原实现：exception 分支只 logger.exception + 返回 500，已建 session 残留 1 个。
+    新实现：exception 分支在返回 500 前回收本次 created_session_id，保留统一文案。
+    断言语义：抛异常后 session 数回到 0、状态码仍 500、错误码仍 -32603、响应不含异常原文。
+    """
+    import app.api.mcp_routes as mcp_routes
+
+    def fake_dispatch(raw):
+        raise RuntimeError("internal-boom-marker")
+
+    monkeypatch.setattr(mcp_routes, "dispatch_raw", fake_dispatch)
+    client = _client()
+    resp = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    assert resp.status_code == 500
+    assert resp.json()["error"]["code"] == -32603
+    assert "internal-boom-marker" not in resp.text
+    assert "Mcp-Session-Id" not in resp.headers
+    assert len(registry._sessions) == 0
+
+
+def test_illegal_initialize_notification_keeps_202_semantics():
+    """无 id 的非法 initialize 保持通知语义：HTTP 202、空响应体、无 Mcp-Session-Id。
+
+    原实现：无 id 非法 initialize 走通知分支返回 202 空响应，但 session 已建且响应带
+    Mcp-Session-Id 头，造成泄漏。
+    新实现：失败即回收并把 session_id 置 None，仍走既有通知分支（202 空响应），
+    但不再设置 Mcp-Session-Id 头，session 数回到 0。
+    断言语义：202 + 空 body + 无 Session 头 + registry 空，锁定通知语义不被破坏且不泄漏。
+    """
+    client = _client()
+    resp = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "method": "initialize", "params": []}
+    )
+    assert resp.status_code == 202
+    assert resp.content == b""
+    assert "Mcp-Session-Id" not in resp.headers
+    assert len(registry._sessions) == 0
+
+
+def test_legal_initialize_retains_session():
+    """合法 initialize 仍创建并保留 session，且返回 Mcp-Session-Id（回归保护）。
+
+    原实现与新实现行为一致：合法 initialize 返回 200 + Mcp-Session-Id，session 保留。
+    断言语义：合法路径不因 B09 修复而改变，锁定「合法 initialize 行为保持」。
+    """
+    client = _client()
+    resp = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    assert resp.status_code == 200
+    sid = resp.headers["Mcp-Session-Id"]
+    assert sid
+    assert registry.get(sid) is not None
+    assert "result" in resp.json()
+
+
+def test_illegal_then_legal_initialize_succeeds():
+    """非法 initialize 后接合法 initialize 仍成功，且存活 session 仅 1 个。
+
+    原实现：非法 initialize 残留 1 个 session，合法 initialize 再建 1 个，共 2 个。
+    新实现：非法不残留，合法 initialize 后存活 session 数为 1。
+    断言语义：合法 initialize 在非法请求之后仍能建立会话，锁定「限流/容器不被失败请求污染」。
+    """
+    client = _client()
+    bad = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": []}
+    )
+    assert bad.json()["error"]["code"] == -32600
+
+    good = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}}
+    )
+    assert good.status_code == 200
+    sid = good.headers["Mcp-Session-Id"]
+    assert sid and registry.get(sid) is not None
+    assert len(registry._sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_illegal_initialize_does_not_delete_existing_session():
+    """非法 initialize 只回收本次新建会话，不删除已有合法 session 及其 SSE 订阅。
+
+    原实现虽泄漏但不误删（本用例改前也通过），用于防止修复引入「误删既有会话」的新缺陷。
+    新实现：回收严格限定本次 created_session_id，已有 session 与其订阅原样保留。
+    断言语义：已有 session 仍可 get、订阅数不变，锁定「回收隔离性」。
+    """
+    client = _client()
+    good = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    )
+    existing_sid = good.headers["Mcp-Session-Id"]
+    q = hub.subscribe(existing_sid)
+    assert hub.subscriber_count(existing_sid) == 1
+
+    bad = client.post(
+        "/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": []}
+    )
+    assert bad.json()["error"]["code"] == -32600
+
+    assert registry.get(existing_sid) is not None
+    assert hub.subscriber_count(existing_sid) == 1
+    hub.unsubscribe(existing_sid, q)

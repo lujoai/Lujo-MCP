@@ -88,6 +88,10 @@ async def mcp_post(request: Request):
     req_id = parsed.get("id")
     session_id = request.headers.get("Mcp-Session-Id")
 
+    # FIX(B09): 记录本次 initialize 新建的会话 id，仅用于该请求失败时的幂等回收。
+    # 非 initialize 请求恒为 None，天然保证不误删既有合法会话。
+    created_session_id = None
+
     # ── 会话建立/校验 ──
     if method == "initialize":
         try:
@@ -99,6 +103,7 @@ async def mcp_post(request: Request):
                 status_code=503,
             )
         session_id = sess.session_id
+        created_session_id = session_id
     else:
         if not session_id:
             return JSONResponse(
@@ -163,12 +168,27 @@ async def mcp_post(request: Request):
         result = await dispatch_raw(raw)
     except Exception:
         logger.exception("MCP dispatch 异常")
+        # FIX(B09): dispatch_raw 抛异常时回收本次 initialize 新建的临时会话，
+        # 保留既有 500 统一文案，不回显异常原文，回收不掩盖原始错误。
+        if created_session_id:
+            registry.delete(created_session_id)
+            hub.close_session(created_session_id)
         return JSONResponse(make_error(req_id, INTERNAL_ERROR, "内部错误，详情见服务端日志"), status_code=500)
+
+    # FIX(B09): initialize 因协议/参数校验失败返回 error（params 非对象 / jsonrpc
+    # 非法 / id 非法）时，回收本次临时会话，并将对外 session_id 置 None 使响应不再
+    # 携带 Mcp-Session-Id。回收仅针对本次新建的 created_session_id，不影响既有合法
+    # 会话；registry.delete / hub.close_session 均为幂等操作。
+    if created_session_id and isinstance(result, dict) and "error" in result:
+        registry.delete(created_session_id)
+        hub.close_session(created_session_id)
+        session_id = None
 
     # 通知类消息无 id，不返回响应体
     if req_id is None:
         resp = Response(status_code=202)
-        resp.headers["Mcp-Session-Id"] = session_id
+        if session_id:
+            resp.headers["Mcp-Session-Id"] = session_id
         return resp
 
     # 根据 Accept 决定返回 JSON 还是 SSE 流
@@ -182,11 +202,13 @@ async def mcp_post(request: Request):
             yield hub.format_event(result)
         # FIX: R7-A3 —— 统一经 create_sse_response 补缓冲控制头
         sr = create_sse_response(event_gen())
-        sr.headers["Mcp-Session-Id"] = session_id
+        if session_id:
+            sr.headers["Mcp-Session-Id"] = session_id
         return sr
 
     resp = JSONResponse(result)
-    resp.headers["Mcp-Session-Id"] = session_id
+    if session_id:
+        resp.headers["Mcp-Session-Id"] = session_id
     return resp
 
 
