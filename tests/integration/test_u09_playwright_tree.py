@@ -8,7 +8,7 @@
 - ``chromium user-data-dir`` 锁：本链路 chromium 为非持久化（headless 无
   ``--user-data-dir``），锁核对如实记录为 n/a。
 
-取证输出：``docs/internal/c_batch/evidence/w3_5/u09_evidence.json``（可复现命令 =
+取证输出：``docs/internal/c_batch/evidence__w3_5__u09_evidence.json``（可复现命令 =
 本文件的 pytest 运行）。
 """
 
@@ -38,7 +38,7 @@ pytestmark = [
 ]
 
 _EVIDENCE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "docs", "internal", "c_batch", "evidence", "w3_5"
+    os.path.dirname(__file__), "..", "..", "docs", "internal", "c_batch"
 )
 
 _BROWSER_IMAGES = {
@@ -90,7 +90,7 @@ def _page_server():
 def test_u09_real_playwright_tree_reclaim(tmp_path):
     """U09：真实 auto_test（chromium headless）超时终止 → 整树回收取证。
 
-    样本 N=3；取证 JSON 落 docs/internal/c_batch/evidence/w3_5/。定级纪律：
+    样本 N=3；取证 JSON 落 docs/internal/c_batch/，文件名保留波次前缀。定级纪律：
     残留以快照差集为准，不定级为「未看到」。
     """
     from app.runtime.verifier import ui_runner
@@ -195,7 +195,11 @@ def test_u09_real_playwright_tree_reclaim(tmp_path):
                 "整树回收达标（Windows job 后端）" if all_clear else "存在残留 → 按定级纪律处置"
             ),
         }
-        with open(os.path.join(_EVIDENCE_DIR, "u09_evidence.json"), "w", encoding="utf-8") as fh:
+        with open(
+            os.path.join(_EVIDENCE_DIR, "evidence__w3_5__u09_evidence.json"),
+            "w",
+            encoding="utf-8",
+        ) as fh:
             json.dump(evidence, fh, ensure_ascii=False, indent=2)
 
     assert samples and all(s["tree_clear"] for s in samples), evidence["verdict"]
