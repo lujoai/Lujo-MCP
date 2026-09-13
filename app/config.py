@@ -12,6 +12,10 @@ from pydantic_settings import BaseSettings
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 logger = logging.getLogger(__name__)
 
+# E 批 PG-1（V8-5）：STORAGE_BACKEND=postgresql 启动告警的进程级一次性守卫。
+# 生产路径 Settings 单例每进程只构造一次；该标志兜底重复构造（测试/热重载）不刷屏。
+_pg_backend_warning_emitted = False
+
 
 class AgentMode(str, Enum):
     """AI Debug Agent 运行模式枚举。
@@ -455,6 +459,23 @@ class Settings(BaseSettings):
                     "agent_mode=%r 不是合法枚举值 %s，已回退布尔开关派生",
                     self.agent_mode, sorted(m.value for m in AgentMode),
                 )
+
+        # E 批 PG-1（V8-5）：选择实验性 PG 后端时启动告警一次，文案定稿见
+        # DEV_PLAN.md ROADMAP §6.1。只观察不改动：不降级 memory、不动
+        # factory 分发；非法值不匹配本条件，仍由 factory._validate_backend
+        # fail-fast。stdio 下日志基建（basicConfig stream=None /
+        # _configure_stdio_logging）保证 WARNING 走 stderr，不污染协议帧。
+        global _pg_backend_warning_emitted
+        if self.storage_backend == "postgresql" and not _pg_backend_warning_emitted:
+            _pg_backend_warning_emitted = True
+            logger.warning(
+                "检测到 STORAGE_BACKEND=postgresql：PG 为实验性后端，存在已知未修问题，"
+                "不承诺支持，推荐使用默认 SQLite 笔记本。SQLite 仅持久化 KB，"
+                "运行现场的 STORAGE_BACKEND 默认仍为 memory；本提示不会自动迁移 PG 数据。"
+                "已知问题：PG KB 初始化失败可能无法降级、错误计数可能偏低、"
+                "调度失败后的节流记账可能抑制有效写入（报告 #5/#6/#7）。"
+                "stdio asyncpg pool 关闭风险尚未验证（报告 §4.3 #8）。"
+            )
 
     def get_agent_mode(self) -> AgentMode:
         """获取当前有效的 Agent 运行模式。
