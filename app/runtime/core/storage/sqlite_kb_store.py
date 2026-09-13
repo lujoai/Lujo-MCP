@@ -183,6 +183,17 @@ class SQLiteKnowledgeBaseStore(KnowledgeBaseStorage):
             ).fetchall()
         return [self._row_to_entry(row) for row in rows]
 
+    def checkpoint(self) -> None:
+        """WAL 收口：把 WAL 日志合并回主文件并截断（Step 3 WP2 迁移工具新增）。
+
+        供 factory 的一次性迁移入口在复制/备份目标文件前调用：仅复制主文件时
+        若 WAL 尚有未合并帧，备份会缺数据。本实现每次操作用短连接、正常关闭时
+        SQLite 已自动 checkpoint，这里是显式兜底；不属于
+        KnowledgeBaseStorage ABC 契约，运行时写穿路径无需调用。
+        """
+        with self._connection() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
     # ── 内部 ──
 
     @staticmethod

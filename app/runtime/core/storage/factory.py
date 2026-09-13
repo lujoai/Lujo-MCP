@@ -1,7 +1,10 @@
 """存储工厂 —— 根据配置自动选择后端"""
 
 import logging
+import shutil
 import threading
+import time
+from pathlib import Path
 
 from app.config import settings
 from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorStorage, SpecStorage, KnowledgeBaseStorage
@@ -301,3 +304,192 @@ def get_knowledge_store() -> KnowledgeBaseStorage:
                             settings.storage_backend,
                         )
     return _knowledge_store
+
+
+# ── 一次性迁移入口（Step 3 WP2 交付；WP5 与 PG 驱动同批删除，不留到 WP6/WP7） ──
+
+# 迁移源白名单：与运行时 _VALID_BACKENDS 物理分离（设计文档 §4.2 / §4.3-G3）。
+# 只被 migrate_knowledge_entries() 消费，不影响任何运行时 getter；
+# WP3 收窄 _VALID_BACKENDS 不改变本集合。
+_MIGRATION_SOURCE_BACKENDS = {"postgresql"}
+
+_MIGRATION_CONFLICT_POLICIES = {"skip", "upsert"}
+_MIGRATION_DEFAULT_LIMIT = 1_000_000
+
+
+def _migration_existing_fingerprints(store) -> set:
+    """经存储边界读取目标库既有 fingerprint 集合（on_conflict=skip 判定用，不新增 SQL 面）。"""
+    return {
+        e["fingerprint"]
+        for e in store.list_recent_kb_entries(limit=_MIGRATION_DEFAULT_LIMIT)
+        if e.get("fingerprint")
+    }
+
+
+def _migration_backup_path(target_path: str) -> str:
+    """生成带时间戳、不与既有文件冲突的备份路径。"""
+    base = f"{target_path}.backup-{time.strftime('%Y%m%dT%H%M%S')}"
+    candidate = base
+    n = 1
+    while Path(candidate).exists():
+        candidate = f"{base}-{n}"
+        n += 1
+    return candidate
+
+
+def migrate_knowledge_entries(
+    *,
+    source_backend: str,
+    target_path: str,
+    limit: int = _MIGRATION_DEFAULT_LIMIT,
+    on_conflict: str = "skip",
+    dry_run: bool = False,
+    fail_fast: bool = False,
+    backup: bool = True,
+) -> dict:
+    """一次性迁移：PostgreSQL kb_entries → 本地 SQLite「笔记本」（仅 KB，别无他表）。
+
+    Step 3 WP2 交付（对应 DEV_PLAN S2-3，兑现 docs/public/TROUBLESHOOTING.md 的公开承诺）。
+    **硬到期 WP5**：本函数与 `_MIGRATION_SOURCE_BACKENDS` 将随 PG 驱动 / PG store /
+    PG 测试同批删除（设计文档 §4.3-G1），不得成为长期运行时后端；
+    `app/` 下不允许出现任何调用方（运行时业务代码必须走 `get_knowledge_store()`）。
+
+    与运行时链路的关系：
+    - `source_backend` 只接受 `_MIGRATION_SOURCE_BACKENDS`（独立白名单，G3），
+      与 `STORAGE_BACKEND` / `_VALID_BACKENDS` / `_validate_backend()` 完全无关；
+    - 不读 `settings.storage_backend`、不复用运行时 store 单例（临时构造、即用即弃），
+      `get_*_store()` 返回的实例与迁移互不可见。
+
+    边界（设计文档 §4.4，逐条对应）：
+    - B1 源读取只经 `PGKnowledgeBaseStore.list_recent_kb_entries(limit)`，limit 为全量大值，
+      不复用启动回灌的 max_entries 截断；
+    - B2 目标写入只经 `SQLiteKnowledgeBaseStore.upsert_kb_entry(entry)`，
+      不触发 seed 加载 / LRU 驱逐 / 向量同步；
+    - B3 JSONB→dict 已由 PG 读边界完成、dict→TEXT 由 SQLite 写边界完成，
+      本函数只搬运 dict，不复制任何序列化逻辑；
+    - B5 重复执行幂等（upsert 语义 / skip 命中既有指纹即跳过）；
+    - B6 `on_conflict="skip"`（默认）保留目标既有经验，禁止时间戳规则覆盖；
+      `"upsert"` 须调用方显式选择；
+    - B7 空表 → `read=0, status="ok"`，不视为失败；
+    - B8 `fail_fast=True` 首错即停并保留已完成写入；`False` 逐行隔离错误计入
+      `report["errors"]`，行级失败经 report 暴露而非抛异常；
+    - B9 `backup=True`（默认）且目标文件已存在时先做带时间戳备份；
+      **目标已存在 + backup=False 直接拒绝**（不允许无备份写既有目标库）；
+    - B10 迁移全程不写源库；失败不破坏目标库；report 不含任何凭据。
+
+    返回 report dict（G2：绝不返回 store 实例）。关键键：
+    `status`（"ok" | "failed"）、`read` / `migrated` / `skipped_existing` / `errors`、
+    `dry_run` / `backup_path` / `limit` / `on_conflict`。
+    dry_run 时 `migrated` / `skipped_existing` 表示「将要发生」的计数，且
+    不创建目标文件、不做备份、不 checkpoint；目标已存在时仅经存储边界读取
+    既有指纹用于冲突统计，不改任何行。
+    """
+    if source_backend not in _MIGRATION_SOURCE_BACKENDS:
+        raise ValueError(
+            f"Invalid migration source_backend={source_backend!r}. "
+            f"Valid values: {sorted(_MIGRATION_SOURCE_BACKENDS)} (case-sensitive). "
+            f"注意：这是迁移专用白名单，与运行时 STORAGE_BACKEND 白名单无关。"
+        )
+    if on_conflict not in _MIGRATION_CONFLICT_POLICIES:
+        raise ValueError(
+            f"Invalid on_conflict={on_conflict!r}. "
+            f"Valid values: {sorted(_MIGRATION_CONFLICT_POLICIES)}."
+        )
+    if not isinstance(target_path, str) or not target_path.strip():
+        raise ValueError(
+            f"Invalid target_path={target_path!r}: 迁移目标必须是 SQLite 文件路径。"
+        )
+    if target_path.strip() == ":memory:":
+        raise ValueError(
+            "target_path 不支持 ':memory:'：SQLiteKnowledgeBaseStore 使用短连接，"
+            "每连接独立的内存库无法承载持久化。请改用文件路径。"
+        )
+    if limit <= 0:
+        raise ValueError(f"Invalid limit={limit!r}: 必须为正整数。")
+
+    target = str(Path(target_path).expanduser().resolve())
+    target_exists = Path(target).exists()
+    if target_exists and not dry_run and not backup:
+        raise ValueError(
+            f"目标文件已存在且 backup=False，拒绝执行：{target}。"
+            f"已有目标库不允许无备份写入；请保持 backup=True（默认）或先手动备份。"
+        )
+
+    report: dict = {
+        "status": "ok",
+        "source_backend": source_backend,
+        "target_path": target,
+        "dry_run": dry_run,
+        "limit": limit,
+        "on_conflict": on_conflict,
+        "fail_fast": fail_fast,
+        "backup": backup,
+        "backup_path": None,
+        "read": 0,
+        "migrated": 0,
+        "skipped_existing": 0,
+        "errors": [],
+    }
+
+    # 源侧：经 factory 内部构造临时 PG KB store（不触碰 _knowledge_store 单例）。
+    # 连接生命周期由 pg_executor 接管；读边界已完成 JSONB→dict 与 NULL 兜底。
+    from app.runtime.core.storage.pg_kb_store import PGKnowledgeBaseStore
+
+    source = PGKnowledgeBaseStore()
+    entries = source.list_recent_kb_entries(limit=limit)
+    report["read"] = len(entries)
+    if not entries:
+        # B7：空表直接返回成功，不创建目标文件、不做备份。
+        return report
+
+    # 目标侧：dry_run 且目标不存在时完全不构造（避免 dry_run 建库落盘）；
+    # dry_run 且目标已存在时仅构造用于读取既有指纹（无写入、无备份、无 checkpoint）。
+    from app.runtime.core.storage.sqlite_kb_store import SQLiteKnowledgeBaseStore
+
+    existing: set = set()
+    target_store = None
+    if target_exists or not dry_run:
+        target_store = SQLiteKnowledgeBaseStore(db_path=target)
+        existing = _migration_existing_fingerprints(target_store)
+        if not dry_run and target_exists and backup:
+            # B9：写入前先收口 WAL 再复制，保证备份文件内容完整（含迁移前全部数据）。
+            target_store.checkpoint()
+            backup_path = _migration_backup_path(target)
+            shutil.copy2(target, backup_path)
+            report["backup_path"] = backup_path
+
+    for index, entry in enumerate(entries):
+        fingerprint = entry.get("fingerprint") if isinstance(entry, dict) else None
+        if not fingerprint:
+            report["errors"].append(
+                {"index": index, "fingerprint": None, "error": "缺少 fingerprint，无法迁移"}
+            )
+            if fail_fast:
+                break
+            continue
+        if on_conflict == "skip" and fingerprint in existing:
+            report["skipped_existing"] += 1
+            continue
+        if dry_run:
+            report["migrated"] += 1
+            continue
+        try:
+            target_store.upsert_kb_entry(entry)
+            report["migrated"] += 1
+            existing.add(fingerprint)
+        except Exception as exc:
+            report["errors"].append(
+                {
+                    "index": index,
+                    "fingerprint": fingerprint,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            if fail_fast:
+                break
+
+    if report["errors"]:
+        report["status"] = "failed"
+    if not dry_run:
+        target_store.checkpoint()
+    return report
