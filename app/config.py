@@ -1,6 +1,7 @@
 """统一配置管理 —— 全局单例，替代散落的 os.getenv()"""
 
 import logging
+import threading
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,10 @@ logger = logging.getLogger(__name__)
 
 # E 批 PG-1（V8-5）：STORAGE_BACKEND=postgresql 启动告警的进程级一次性守卫。
 # 生产路径 Settings 单例每进程只构造一次；该标志兜底重复构造（测试/热重载）不刷屏。
+# 检查与置位必须在同一锁内完成（并发构造时保证只告警一次）；
+# logger.warning 在锁外执行，防日志 handler 慢/重入阻塞配置锁。
 _pg_backend_warning_emitted = False
+_pg_backend_warning_lock = threading.Lock()
 
 
 class AgentMode(str, Enum):
@@ -466,8 +470,13 @@ class Settings(BaseSettings):
         # fail-fast。stdio 下日志基建（basicConfig stream=None /
         # _configure_stdio_logging）保证 WARNING 走 stderr，不污染协议帧。
         global _pg_backend_warning_emitted
-        if self.storage_backend == "postgresql" and not _pg_backend_warning_emitted:
-            _pg_backend_warning_emitted = True
+        should_emit = False
+        if self.storage_backend == "postgresql":
+            with _pg_backend_warning_lock:
+                if not _pg_backend_warning_emitted:
+                    _pg_backend_warning_emitted = True
+                    should_emit = True
+        if should_emit:
             logger.warning(
                 "检测到 STORAGE_BACKEND=postgresql：PG 为实验性后端，存在已知未修问题，"
                 "不承诺支持，推荐使用默认 SQLite 笔记本。SQLite 仅持久化 KB，"
