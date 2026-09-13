@@ -1,4 +1,18 @@
-"""单元测试：存储层优雅降级（P3-5）—— PG 初始化失败时自动降级到 memory"""
+"""单元测试：存储层降级语义（P3-5 → WP3 收口）
+
+WP3（Step 3 Breaking #1）后本文件的被测对象收窄为两条仍然成立的不变量：
+
+1. ``STORAGE_BACKEND=postgresql`` 的**拒绝**不是「初始化失败」，
+   ``storage_fallback_to_memory`` 两档都不得把它降级成 memory/no-op
+   （DEV_PLAN S3-2：不能静默回 memory）；
+2. ``storage_backend=memory`` 完全不受 fallback 逻辑影响（默认行为逐位不变）。
+
+原先「PG 构造失败 → 按开关降级或抛出」的用例已无可达路径：闸门在构造之前就拒绝。
+``get_knowledge_store()`` 自身的 SQLite → no-op 降级是**无条件 try/except、从不读
+``storage_fallback_to_memory``**（设计文档 §6.1），由
+``tests/unit/test_storage_backend_removal.py`` 与 ``test_sqlite_kb_store.py`` 覆盖。
+文件末尾直接实例化 AsyncPG* 的用例不经工厂闸门，保留到 WP5 随 PG 模块一并删除。
+"""
 
 import pytest
 import logging
@@ -18,40 +32,29 @@ def _reset_factory_cache():
 
 
 class TestTraceStoreFallback:
-    """P3-5：trace_store 优雅降级"""
+    """trace_store：拒绝不得被 fallback 吞掉"""
 
-    def test_fallback_to_memory_when_pg_unavailable(self, monkeypatch, caplog):
-        """PG 初始化失败 + fallback=True → 降级到 MemoryTraceStore"""
+    def test_removed_backend_not_downgraded_when_fallback_enabled(self, monkeypatch, caplog):
+        """postgresql + fallback=True → 仍然拒绝，不降级到 MemoryTraceStore"""
+        from app.runtime.core.storage.factory import StorageBackendRemovedError, get_trace_store
+
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.pg_async_enabled", False)
         monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
-        def _boom(self):
-            raise RuntimeError("模拟 PG 连接失败")
-
-        monkeypatch.setattr("app.runtime.core.storage.pg_trace_store.PGTraceStore.__init__", _boom)
-
         with caplog.at_level(logging.WARNING):
-            from app.runtime.core.storage.factory import get_trace_store
-            store = get_trace_store()
+            with pytest.raises(StorageBackendRemovedError):
+                get_trace_store()
 
-        assert isinstance(store, MemoryTraceStore)
-        assert any("PG trace_store 初始化失败" in r.message for r in caplog.records)
-        assert any("trace_store 已降级到 memory" in r.message for r in caplog.records)
+        assert [r for r in caplog.records if "降级" in r.getMessage()] == []
 
-    def test_fail_fast_when_fallback_disabled(self, monkeypatch):
-        """PG 初始化失败 + fallback=False → 异常向上抛（fail-fast）"""
+    def test_removed_backend_fails_fast_when_fallback_disabled(self, monkeypatch):
+        """postgresql + fallback=False → 同样拒绝（开关不改变闸门结论）"""
+        from app.runtime.core.storage.factory import StorageBackendRemovedError, get_trace_store
+
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.pg_async_enabled", False)
         monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", False)
 
-        def _boom(self):
-            raise RuntimeError("模拟 PG 连接失败")
-
-        monkeypatch.setattr("app.runtime.core.storage.pg_trace_store.PGTraceStore.__init__", _boom)
-
-        from app.runtime.core.storage.factory import get_trace_store
-        with pytest.raises(RuntimeError, match="模拟 PG 连接失败"):
+        with pytest.raises(StorageBackendRemovedError):
             get_trace_store()
 
     def test_memory_backend_not_affected(self, monkeypatch):
@@ -66,40 +69,29 @@ class TestTraceStoreFallback:
 
 
 class TestSessionStoreFallback:
-    """P3-5：session_store 优雅降级"""
+    """session_store：拒绝不得被 fallback 吞掉"""
 
-    def test_session_store_fallback_to_memory(self, monkeypatch, caplog):
-        """PG 初始化失败 + fallback=True → 降级到 MemorySessionStore"""
+    def test_session_store_removed_backend_not_downgraded(self, monkeypatch, caplog):
+        """postgresql + fallback=True → 仍然拒绝，不降级到 MemorySessionStore"""
+        from app.runtime.core.storage.factory import StorageBackendRemovedError, get_session_store
+
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.pg_async_enabled", False)
         monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
-        def _boom(self):
-            raise RuntimeError("模拟 PG 连接失败")
-
-        monkeypatch.setattr("app.runtime.core.storage.pg_session_store.PGSessionStore.__init__", _boom)
-
         with caplog.at_level(logging.WARNING):
-            from app.runtime.core.storage.factory import get_session_store
-            store = get_session_store()
+            with pytest.raises(StorageBackendRemovedError):
+                get_session_store()
 
-        assert isinstance(store, MemorySessionStore)
-        assert any("PG session_store 初始化失败" in r.message for r in caplog.records)
-        assert any("session_store 已降级到 memory" in r.message for r in caplog.records)
+        assert [r for r in caplog.records if "降级" in r.getMessage()] == []
 
-    def test_session_store_fail_fast_when_fallback_disabled(self, monkeypatch):
-        """PG 初始化失败 + fallback=False → 异常向上抛（fail-fast）"""
+    def test_session_store_removed_backend_fails_fast(self, monkeypatch):
+        """postgresql + fallback=False → 同样拒绝"""
+        from app.runtime.core.storage.factory import StorageBackendRemovedError, get_session_store
+
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.pg_async_enabled", False)
         monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", False)
 
-        def _boom(self):
-            raise RuntimeError("模拟 PG 连接失败")
-
-        monkeypatch.setattr("app.runtime.core.storage.pg_session_store.PGSessionStore.__init__", _boom)
-
-        from app.runtime.core.storage.factory import get_session_store
-        with pytest.raises(RuntimeError, match="模拟 PG 连接失败"):
+        with pytest.raises(StorageBackendRemovedError):
             get_session_store()
 
     def test_session_memory_backend_not_affected(self, monkeypatch):
@@ -195,7 +187,7 @@ async def test_async_pg_cleanup_expired_rolls_back_after_archive_failure(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# FIX: R7-V4 —— async-mix fail-fast 不允许被 fallback 吞
+# FIX: R7-V4 → WP3 —— 配置错误 fail-fast，不允许被 fallback 吞
 # ---------------------------------------------------------------------------
 
 
@@ -206,9 +198,13 @@ async def test_async_pg_cleanup_expired_rolls_back_after_archive_failure(monkeyp
     ("get_spec_store", "_spec_store"),
     ("get_knowledge_store", "_knowledge_store"),
 ])
-def test_async_mix_error_not_swallowed_by_fallback(monkeypatch, getter, attr):
-    """pg_async_enabled=True + storage_fallback_to_memory=True（默认）→
-    同步 getter 必须抛配置错误，不得静默降级 memory（重启即丢）。"""
+def test_removed_backend_error_not_swallowed_by_fallback(monkeypatch, getter, attr):
+    """postgresql + storage_fallback_to_memory=True（默认）→ 同步 getter 必须抛拒绝异常，
+    不得静默降级 memory（重启即丢）。
+
+    原用例锁的是 ``_AsyncMixError`` 不被 fallback 吞掉；WP3 后闸门在 async-mix
+    检查之前就拒绝，同一不变量由 ``StorageBackendRemovedError`` 承接。
+    """
     import app.runtime.core.storage.factory as f
 
     setattr(f, attr, None)
@@ -216,7 +212,7 @@ def test_async_mix_error_not_swallowed_by_fallback(monkeypatch, getter, attr):
     monkeypatch.setattr("app.config.settings.pg_async_enabled", True)
     monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
-    with pytest.raises(RuntimeError, match="pg_async_enabled=True 要求全链路 async 调用"):
+    with pytest.raises(f.StorageBackendRemovedError):
         getattr(f, getter)()
 
     # 单例不得被静默降级实例污染

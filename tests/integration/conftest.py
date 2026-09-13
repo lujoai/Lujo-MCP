@@ -9,17 +9,29 @@ STORAGE_BACKEND=postgresql 连到了开发者本机自启的真实 PostgreSQL：
    ``test_redaction_integration`` 的 dict 断言因此"单独跑绿、混跑红"。
 
 现与 unit 一致：默认强制 memory 并重置存储工厂单例，跑测试不再碰真库。
-需要真库回归时显式设 ``LUJO_TEST_STORAGE_BACKEND=postgresql``；pg 标记用例
-自身有 ``_require_pg`` 守卫，后端不是 postgresql 时自动 skip（与 CI 口径一致）。
+
+WP3（Step 3 Breaking #1）：运行时 ``_VALID_BACKENDS`` 已收窄为 ``{"memory"}``，
+本测试后端白名单同步收口为仅 memory——显式设 ``LUJO_TEST_STORAGE_BACKEND=postgresql``
+会在 conftest 导入期**明确失败**（不静默改写为 memory、不降级为 skip）。pg 标记
+用例自身的 ``_require_pg`` 守卫照旧生效：后端不是 postgresql 时自动 skip（与 CI
+口径一致，WP3 前后 skip 数量不变）。真 PG 回归能力随 WP5 删除 PG 驱动一并到期。
 """
 import os
 
 # 必须在 app.config 被本 conftest 导入前设置好 env：与 unit conftest 相同的
 # 时序约束（settings 单例可能已被 tests/__init__ 导入链提前创建）。
 _FORCED_BACKEND = os.environ.get("LUJO_TEST_STORAGE_BACKEND", "memory").lower()
-if _FORCED_BACKEND not in ("memory", "postgresql"):
+if _FORCED_BACKEND == "postgresql":
     raise RuntimeError(
-        f"LUJO_TEST_STORAGE_BACKEND 非法: {_FORCED_BACKEND!r}（可选 memory / postgresql）"
+        "LUJO_TEST_STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已在 "
+        "Step 3 正式移除，测试后端白名单同步收窄为仅 memory（不会静默改写）。"
+        "请去掉该环境变量跑默认 memory；已有 PostgreSQL kb_entries 数据请先执行 "
+        "一次性迁移脚本 scripts/migrate_pg_kb_to_sqlite.py（建议先 --dry-run 核对 "
+        "report 再正式执行）。"
+    )
+if _FORCED_BACKEND not in ("memory",):
+    raise RuntimeError(
+        f"LUJO_TEST_STORAGE_BACKEND 非法: {_FORCED_BACKEND!r}（可选 memory）"
     )
 os.environ["STORAGE_BACKEND"] = _FORCED_BACKEND
 

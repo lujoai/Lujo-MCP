@@ -1,7 +1,6 @@
 """统一配置管理 —— 全局单例，替代散落的 os.getenv()"""
 
 import logging
-import threading
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -12,13 +11,6 @@ from pydantic_settings import BaseSettings
 # 项目根目录（app/ 的上一级）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 logger = logging.getLogger(__name__)
-
-# E 批 PG-1（V8-5）：STORAGE_BACKEND=postgresql 启动告警的进程级一次性守卫。
-# 生产路径 Settings 单例每进程只构造一次；该标志兜底重复构造（测试/热重载）不刷屏。
-# 检查与置位必须在同一锁内完成（并发构造时保证只告警一次）；
-# logger.warning 在锁外执行，防日志 handler 慢/重入阻塞配置锁。
-_pg_backend_warning_emitted = False
-_pg_backend_warning_lock = threading.Lock()
 
 
 class AgentMode(str, Enum):
@@ -97,7 +89,10 @@ class Settings(BaseSettings):
     sourcemap_max_upload_bytes: int = 20 * 1024 * 1024
 
     # ── 存储 ──
-    storage_backend: str = "memory"  # "memory" | "postgresql"
+    # WP3（Step 3）：运行时仅接受 "memory"。精确值 "postgresql" 会在 factory
+    # 使用点被 StorageBackendRemovedError 拒绝（附迁移指引），构造阶段不抛——
+    # 既有 .env 仍写着 postgresql 时导入期不崩，拒绝发生在首次触达 store 时。
+    storage_backend: str = "memory"
     # 内存存储容量上限（按 request_id 条数计），超限时按最旧条目 FIFO 淘汰，防 OOM
     memory_store_max_entries: int = 10000
     # PG 不可达时是否自动降级到 memory 存储（生产建议 True，保证服务可用性）
@@ -464,27 +459,11 @@ class Settings(BaseSettings):
                     self.agent_mode, sorted(m.value for m in AgentMode),
                 )
 
-        # E 批 PG-1（V8-5）：选择实验性 PG 后端时启动告警一次，文案定稿见
-        # DEV_PLAN.md ROADMAP §6.1。只观察不改动：不降级 memory、不动
-        # factory 分发；非法值不匹配本条件，仍由 factory._validate_backend
-        # fail-fast。stdio 下日志基建（basicConfig stream=None /
-        # _configure_stdio_logging）保证 WARNING 走 stderr，不污染协议帧。
-        global _pg_backend_warning_emitted
-        should_emit = False
-        if self.storage_backend == "postgresql":
-            with _pg_backend_warning_lock:
-                if not _pg_backend_warning_emitted:
-                    _pg_backend_warning_emitted = True
-                    should_emit = True
-        if should_emit:
-            logger.warning(
-                "检测到 STORAGE_BACKEND=postgresql：PG 为实验性后端，存在已知未修问题，"
-                "不承诺支持，推荐使用默认 SQLite 笔记本。SQLite 仅持久化 KB，"
-                "运行现场的 STORAGE_BACKEND 默认仍为 memory；本提示不会自动迁移 PG 数据。"
-                "已知问题：PG KB 初始化失败可能无法降级、错误计数可能偏低、"
-                "调度失败后的节流记账可能抑制有效写入（报告 #5/#6/#7）。"
-                "stdio asyncpg pool 关闭风险尚未验证（报告 §4.3 #8）。"
-            )
+        # WP3（Step 3 Breaking #1）：原 E 批 PG-1 的「STORAGE_BACKEND=postgresql 启动
+        # 告警一次」在此退役。PG 已从运行时移除，告警（只观察不改行为）不足以阻止
+        # 静默回退；改由 factory._validate_backend() 在使用点抛
+        # StorageBackendRemovedError 直接拒绝启动。构造阶段刻意保持不抛：
+        # 既有 .env 仍写着 postgresql 时不能在导入期崩掉整个进程/测试 collection。
 
     def get_agent_mode(self) -> AgentMode:
         """获取当前有效的 Agent 运行模式。

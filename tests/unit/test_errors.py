@@ -193,11 +193,28 @@ def test_pg_upsert_throttle_key_session_isolation(monkeypatch):
     assert sessions.count("sess-beta") == 1
 
 
-# 10. Phase 3.1: pg_async_enabled=True 时调度 AsyncPGErrorStore
+# 10. Phase 3.1 → WP3：postgresql 已移除，async upsert 调度入口必须拒绝
+#
+# 范围例外说明（WP3）：本文件不在 WP3 允许修改清单内，但
+# test_pg_async_enabled_upsert_scheduling 依赖 get_error_store_async() 对
+# STORAGE_BACKEND=postgresql 放行，白名单收窄后必然转红。经用户授权只做最小改写：
+# 仅此一个用例，断言不放宽、不新增 skip，其余 memory 路径用例全部原样保留。
 @pytest.mark.asyncio
-async def test_pg_async_enabled_upsert_scheduling(monkeypatch):
-    """验证 pg_async_enabled=True 时 _schedule_pg_upsert 调度 AsyncPGErrorStore.upsert_error。"""
+async def test_pg_async_upsert_rejected_for_removed_backend(monkeypatch):
+    """WP3：pg_async 链路入口拒绝 postgresql，且拒绝不得打断 record() 主流程。
+
+    三段断言：
+    1. ``get_error_store_async()`` 抛 ``StorageBackendRemovedError``（**不是**
+       ``ValueError``：后者会被 ``app/api/ingest.py`` / ``app/api/debug.py`` 的
+       ``except ValueError`` 抢先截走，把服务端配置错误上报成调用方 422），
+       并带一次性迁移指引；
+    2. ``_schedule_pg_upsert()`` 不再调度任何 asyncpg 写入（原用例断言
+       ``len(scheduled) == 1``，现必须为空）；
+    3. 拒绝被 ``_schedule_pg_upsert`` 的兜底 ``except Exception`` 收住并告警，
+       ``record()`` 仍正常返回 error_id 且内存聚合不受影响。
+    """
     from app.config import settings
+    from app.runtime.core.storage import factory as factory_mod
     from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
 
     monkeypatch.setattr(settings, "storage_backend", "postgresql")
@@ -211,12 +228,30 @@ async def test_pg_async_enabled_upsert_scheduling(monkeypatch):
     monkeypatch.setattr(AsyncPGErrorStore, "upsert_error", fake_async_upsert)
     errors._last_scheduled.clear()
 
+    # 1) 入口异常类型 + 迁移指引
+    with pytest.raises(factory_mod.StorageBackendRemovedError) as exc_info:
+        factory_mod.get_error_store_async()
+    assert not isinstance(exc_info.value, ValueError), "拒绝语义必须是 RuntimeError 族"
+    msg = str(exc_info.value)
+    assert "移除" in msg
+    assert "migrate_pg_kb_to_sqlite" in msg, "拒绝信息必须给一次性迁移指引"
+    assert "memory" in msg
+
+    # 2) 调度入口不再触达 asyncpg
     rec = {"fingerprint": "fp-async-1", "session_id": "sess-async", "type": "RuntimeError"}
     errors._schedule_pg_upsert(rec)
-
     await asyncio.sleep(0.05)
-    assert len(scheduled) == 1
-    assert scheduled[0]["fingerprint"] == "fp-async-1"
+    assert scheduled == [], "后端已被拒绝，不得调度 asyncpg upsert"
+
+    # 3) 拒绝不逃出 record()：内存路径与返回值不受影响
+    errors._last_scheduled.clear()
+    error_id = errors.record(
+        {"type": "RuntimeError", "message": "wp3 rejection", "frames": _frames()},
+        source="t", session_id="sess-wp3",
+    )
+    assert error_id
+    assert any(r["error_id"] == error_id for r in errors._recent["sess-wp3"])
+    assert scheduled == [], "record() 触发的调度同样不得写入 asyncpg"
 
 
 # 10b. Architecture Frozen 第 3 条：async 写路径必须经 storage factory

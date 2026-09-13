@@ -273,23 +273,17 @@ class TestStorageFactory:
         assert isinstance(ts, MemoryTraceStore)
         assert isinstance(ss, MemorySessionStore)
 
-    def test_valid_postgresql_routes_to_pg_store(self, monkeypatch):
-        """合法值 'postgresql' → 走 PG 分支，不误回退 memory。
+    def test_postgresql_is_rejected_not_routed(self, monkeypatch):
+        """WP3（Step 3 Breaking #1）：'postgresql' 不再是合法值 → 拒绝，且不误建 memory store。
 
-        用 stub 替换 PGTraceStore / PGSessionStore 避免真实连 PG；
-        同时在 MemoryTraceStore / MemorySessionStore 上加 spy，
-        断言调用次数为 0，防止"配 PG 但误回退 memory"的回归。
+        原用例断言「配 postgresql → 走 PG 分支」；闸门收口后该分发被正式移除。
+        保留原有的 memory spy 装置：它锁住的「不得静默回退 memory」在拒绝语义下
+        依然是核心不变量（DEV_PLAN S3-2）。PG store 模块本体保留到 WP5 才删。
         """
         from app.config import settings as _settings
         monkeypatch.setattr(_settings, "storage_backend", "postgresql")
 
-        # stub PG store 类（避免真实连 PG 触发 _ensure_init）
-        class _StubPGTraceStore:
-            def __init__(self): pass
-        class _StubPGSessionStore:
-            def __init__(self): pass
-
-        # 在 memory_store 上加 spy，监控是否被误实例化
+        # 在 memory_store 上加 spy，监控拒绝路径是否偷偷实例化降级 store
         mem_trace_calls = []
         mem_session_calls = []
 
@@ -303,22 +297,17 @@ class TestStorageFactory:
                 mem_session_calls.append(True)
                 super().__init__()
 
-        # factory 内部用延迟 import，需 patch 模块属性
-        import app.runtime.core.storage.pg_trace_store as pg_trace_mod
-        import app.runtime.core.storage.pg_session_store as pg_session_mod
         import app.runtime.core.storage.memory_store as mem_mod
-        monkeypatch.setattr(pg_trace_mod, "PGTraceStore", _StubPGTraceStore)
-        monkeypatch.setattr(pg_session_mod, "PGSessionStore", _StubPGSessionStore)
         monkeypatch.setattr(mem_mod, "MemoryTraceStore", _SpyMemoryTraceStore)
         monkeypatch.setattr(mem_mod, "MemorySessionStore", _SpyMemorySessionStore)
 
-        ts = factory_mod.get_trace_store()
-        ss = factory_mod.get_session_store()
+        with pytest.raises(factory_mod.StorageBackendRemovedError):
+            factory_mod.get_trace_store()
+        with pytest.raises(factory_mod.StorageBackendRemovedError):
+            factory_mod.get_session_store()
 
-        assert isinstance(ts, _StubPGTraceStore)
-        assert isinstance(ss, _StubPGSessionStore)
-        assert mem_trace_calls == [], "配置 postgresql 但误回退 MemoryTraceStore"
-        assert mem_session_calls == [], "配置 postgresql 但误回退 MemorySessionStore"
+        assert mem_trace_calls == [], "拒绝路径误建 MemoryTraceStore（静默回退）"
+        assert mem_session_calls == [], "拒绝路径误建 MemorySessionStore（静默回退）"
 
     def test_invalid_backend_raises_valueerror(self, monkeypatch):
         """拼写错误 'postgrsql'（少一个 s）→ 抛 ValueError"""
@@ -330,7 +319,10 @@ class TestStorageFactory:
 
         msg = str(exc_info.value)
         assert "postgrsql" in msg
-        assert "memory" in msg and "postgresql" in msg
+        # A1（WP3）：白名单收窄后有效值列表只剩 memory；"postgresql" 只允许以
+        # 「已移除」提示的身份出现，不得再被当成合法选项广告出去。
+        assert "Valid values: ['memory']" in msg
+        assert "postgresql" in msg and "移除" in msg
         assert "case-sensitive" in msg or "spelling" in msg
 
     def test_empty_backend_raises_valueerror(self, monkeypatch):
@@ -371,16 +363,20 @@ class TestStorageFactory:
 
         assert "postgres" in str(exc_info.value)
 
-    def test_async_getter_rejects_sync_config(self, monkeypatch):
-        """postgresql + pg_async_enabled=False → 抛 ValueError，不退回同步 store。"""
+    def test_async_getter_rejects_removed_backend_before_flag_check(self, monkeypatch):
+        """A2（WP3）：postgresql 在闸门就被拒绝，走不到 pg_async_enabled 组合判定。
+
+        原断言「postgresql + pg_async_enabled=False → ValueError 提示改用同步 getter」；
+        闸门收口后后端本身已非法，flag 组合不再是可达路径，也不该再给出
+        「请改用 get_error_store()」这种把用户引向另一个被拒绝入口的提示。
+        """
         from app.config import settings as _settings
         monkeypatch.setattr(_settings, "storage_backend", "postgresql")
-        monkeypatch.setattr(_settings, "pg_async_enabled", False)
-
-        with pytest.raises(ValueError) as exc_info:
-            factory_mod.get_error_store_async()
-
-        assert "get_error_store()" in str(exc_info.value)
+        for async_enabled in (False, True):
+            monkeypatch.setattr(_settings, "pg_async_enabled", async_enabled)
+            with pytest.raises(factory_mod.StorageBackendRemovedError) as exc_info:
+                factory_mod.get_error_store_async()
+            assert not isinstance(exc_info.value, ValueError)
 
     def test_async_getter_rejects_memory_backend(self, monkeypatch):
         """默认 memory 后端 → 抛 ValueError（异步入口只对 PG async 链路开放）。"""
@@ -391,21 +387,26 @@ class TestStorageFactory:
         with pytest.raises(ValueError):
             factory_mod.get_error_store_async()
 
-    def test_async_getter_returns_asyncpg_store(self, monkeypatch):
-        """postgresql + pg_async_enabled=True → 返回 AsyncPGErrorStore 实例。"""
+    def test_async_getter_never_returns_asyncpg_store(self, monkeypatch):
+        """A3（WP3）：异步入口不再可能返回 AsyncPGErrorStore —— 任何后端都被挡在闸门外。
+
+        原用例断言 postgresql + pg_async_enabled=True 返回 AsyncPGErrorStore 实例。
+        WP3 后 postgresql 被拒绝、memory 走 ValueError，该实例已无合法取得路径。
+        接口本体与其两个调用方在 WP4 同批删除（§6.1 I2），本用例届时一并退场。
+        """
         from app.config import settings as _settings
-        from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
         monkeypatch.setattr(_settings, "storage_backend", "postgresql")
         monkeypatch.setattr(_settings, "pg_async_enabled", True)
 
-        assert isinstance(factory_mod.get_error_store_async(), AsyncPGErrorStore)
+        with pytest.raises(factory_mod.StorageBackendRemovedError):
+            factory_mod.get_error_store_async()
 
 
 class TestErrorSpecFactory:
     """校验 factory 对 ErrorStorage / SpecStorage 的后端分发（方案 C）。
 
     - memory 后端 → NoOpErrorStore / NoOpSpecStore（no-op 保接口一致）
-    - postgresql 后端 → PG 实现（stub 替换避免真实连 PG）
+    - postgresql → WP3 起被闸门拒绝（原「分发到 PG 实现」已移除；PG 模块留到 WP5 删）
     """
 
     def setup_method(self):
@@ -427,19 +428,12 @@ class TestErrorSpecFactory:
         assert isinstance(es, NoOpErrorStore)
         assert isinstance(ss, NoOpSpecStore)
 
-    def test_postgresql_routes_to_pg_stores(self, monkeypatch):
-        """配置 postgresql → 分发到 PG 实现，不误回退 no-op。"""
+    def test_postgresql_is_rejected_not_routed(self, monkeypatch):
+        """WP3：配置 postgresql → error/spec getter 拒绝，且不误建 no-op 降级 store。"""
         from app.config import settings as _settings
         monkeypatch.setattr(_settings, "storage_backend", "postgresql")
         monkeypatch.setattr(_settings, "pg_async_enabled", False)
 
-        class _StubPGErrorStore:
-            def __init__(self): pass
-        class _StubPGSpecStore:
-            def __init__(self): pass
-
-        import app.runtime.core.storage.pg_error_store as pg_error_mod
-        import app.runtime.core.storage.pg_spec_store as pg_spec_mod
         import app.runtime.core.storage.noop_store as noop_mod
 
         noop_calls = []
@@ -448,17 +442,15 @@ class TestErrorSpecFactory:
         class _SpyNoOpSpecStore:
             def __init__(self): noop_calls.append("spec")
 
-        monkeypatch.setattr(pg_error_mod, "PGErrorStore", _StubPGErrorStore)
-        monkeypatch.setattr(pg_spec_mod, "PGSpecStore", _StubPGSpecStore)
         monkeypatch.setattr(noop_mod, "NoOpErrorStore", _SpyNoOpErrorStore)
         monkeypatch.setattr(noop_mod, "NoOpSpecStore", _SpyNoOpSpecStore)
 
-        es = factory_mod.get_error_store()
-        ss = factory_mod.get_spec_store()
+        with pytest.raises(factory_mod.StorageBackendRemovedError):
+            factory_mod.get_error_store()
+        with pytest.raises(factory_mod.StorageBackendRemovedError):
+            factory_mod.get_spec_store()
 
-        assert isinstance(es, _StubPGErrorStore)
-        assert isinstance(ss, _StubPGSpecStore)
-        assert noop_calls == [], "配置 postgresql 但误回退 no-op store"
+        assert noop_calls == [], "拒绝路径误建 no-op store（静默降级）"
 
 
 class TestNoOpStores:

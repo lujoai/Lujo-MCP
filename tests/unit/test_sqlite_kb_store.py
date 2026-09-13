@@ -372,8 +372,13 @@ def test_factory_wired_end_to_end_write_through_and_reload(monkeypatch, db_path)
     assert second.get_by_normalized_fingerprint(hit["normalized_fingerprint"]) is not None
 
 
-def test_pg_backend_branch_untouched(monkeypatch):
-    """STORAGE_BACKEND=postgresql 分发路径不变（仍走 PG store，不受 KB_PERSIST 影响）。"""
+def test_pg_backend_rejected_not_dispatched(monkeypatch):
+    """WP3：STORAGE_BACKEND=postgresql 被拒绝，不再分发到 PGKnowledgeBaseStore。
+
+    关键不变量：``kb_persist_enabled=True`` **不得**把拒绝救回来——KB store 的
+    SQLite / NoOp 分支位于 ``_validate_backend()`` 之后，后端被拒绝时任何本地
+    持久化开关都不能让进程照常启动（否则等价于静默回退）。
+    """
     monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
     monkeypatch.setattr("app.config.settings.pg_async_enabled", False)
     monkeypatch.setattr("app.config.settings.kb_persist_enabled", True)
@@ -381,9 +386,18 @@ def test_pg_backend_branch_untouched(monkeypatch):
 
     import app.runtime.core.storage.pg_kb_store as pg_kb_module
 
-    store = storage_factory.get_knowledge_store()
+    with pytest.raises(
+        storage_factory.StorageBackendRemovedError, match="移除"
+    ) as exc_info:
+        storage_factory.get_knowledge_store()
 
-    assert isinstance(store, pg_kb_module.PGKnowledgeBaseStore)
+    msg = str(exc_info.value)
+    assert "migrate_pg_kb_to_sqlite" in msg, "拒绝信息必须给一次性迁移指引"
+    assert "SQLite" in msg
+    # 单例不得被静默降级实例污染（PG / SQLite / NoOp 都不允许写入缓存）
+    assert storage_factory._knowledge_store is None
+    # PG 实现本体属 WP5 到期，本轮只收口分发，不删模块
+    assert hasattr(pg_kb_module, "PGKnowledgeBaseStore")
 
 
 # ── 5. 不污染工作目录 ────────────────────────────────────────────────

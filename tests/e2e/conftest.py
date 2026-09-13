@@ -8,11 +8,22 @@ import uvicorn
 
 # R8 存储隔离：必须在导入 app.main（其 lifespan 会读 storage_backend）之前
 # 强制后端，否则 e2e 全链路会把测试数据写进开发者本机真实 PostgreSQL。
-# 需要真库回归时显式设 LUJO_TEST_STORAGE_BACKEND=postgresql。
+# WP3（Step 3 Breaking #1）：运行时 _VALID_BACKENDS 已收窄为 {"memory"}，本测试
+# 后端白名单同步收口为仅 memory。显式设 LUJO_TEST_STORAGE_BACKEND=postgresql 会在
+# conftest 导入期明确失败（不静默改写为 memory、不降级为 skip）；真 PG 回归能力
+# 随 WP5 删除 PG 驱动一并到期。
 _FORCED_BACKEND = os.environ.get("LUJO_TEST_STORAGE_BACKEND", "memory").lower()
-if _FORCED_BACKEND not in ("memory", "postgresql"):
+if _FORCED_BACKEND == "postgresql":
     raise RuntimeError(
-        f"LUJO_TEST_STORAGE_BACKEND 非法: {_FORCED_BACKEND!r}（可选 memory / postgresql）"
+        "LUJO_TEST_STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已在 "
+        "Step 3 正式移除，测试后端白名单同步收窄为仅 memory（不会静默改写）。"
+        "请去掉该环境变量跑默认 memory；已有 PostgreSQL kb_entries 数据请先执行 "
+        "一次性迁移脚本 scripts/migrate_pg_kb_to_sqlite.py（建议先 --dry-run 核对 "
+        "report 再正式执行）。"
+    )
+if _FORCED_BACKEND not in ("memory",):
+    raise RuntimeError(
+        f"LUJO_TEST_STORAGE_BACKEND 非法: {_FORCED_BACKEND!r}（可选 memory）"
     )
 os.environ["STORAGE_BACKEND"] = _FORCED_BACKEND
 

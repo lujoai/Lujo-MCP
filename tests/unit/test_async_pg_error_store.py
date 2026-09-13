@@ -67,11 +67,17 @@ async def test_async_pg_error_store_query_errors(monkeypatch):
     assert args[2] == "sess-1"
 
 
-def test_dashboard_errors_history_async_pg_dispatch(monkeypatch):
-    """验证 GET /api/dashboard/errors/history 在 pg_async_enabled=True 时分发到 AsyncPGErrorStore。"""
+def test_dashboard_errors_history_rejects_removed_backend(monkeypatch):
+    """WP3：postgresql 在 dashboard 入口即被拒绝，不再分发到 AsyncPGErrorStore。
+
+    原用例锁「pg_async_enabled=True 时分发到 AsyncPGErrorStore」；白名单收窄后
+    ``_validate_backend()`` 位于 pg_async 分支之前，分发路径不可达。断言改为：
+    拒绝冒到调用方（HTTP fail-fast），且 fake store 从未被调用。
+    """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api.dashboard import router
+    from app.runtime.core.storage import factory as factory_mod
 
     app = FastAPI()
     app.include_router(router)
@@ -80,37 +86,31 @@ def test_dashboard_errors_history_async_pg_dispatch(monkeypatch):
     monkeypatch.setattr(settings, "storage_backend", "postgresql")
     monkeypatch.setattr(settings, "pg_async_enabled", True)
 
+    dispatched = []
+
     async def fake_query_errors(self, fingerprint=None, session_id=None, since_minutes=1440, limit=100):
-        return [{
-            "error_id": "err-async-test",
-            "fingerprint": fingerprint or "fp-test",
-            "type": "RuntimeError",
-            "message": "async error",
-            "frames": [],
-            "frame_count": 0,
-            "traceback": "",
-            "source": "test",
-            "session_id": session_id or "_global",
-            "occurrence_count": 1,
-            "first_seen": 1000.0,
-            "last_seen": 1000.0,
-            "created_at": None,
-            "updated_at": None,
-        }]
+        dispatched.append((fingerprint, limit))
+        return []
 
     monkeypatch.setattr(AsyncPGErrorStore, "query_errors", fake_query_errors)
 
-    resp = client.get("/api/dashboard/errors/history?fingerprint=fp-test&limit=5")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total"] == 1
-    assert data["errors"][0]["error_id"] == "err-async-test"
-    assert data["degraded"] is False
+    with pytest.raises(
+        factory_mod.StorageBackendRemovedError, match="移除"
+    ) as exc_info:
+        client.get("/api/dashboard/errors/history?fingerprint=fp-test&limit=5")
+
+    assert "migrate_pg_kb_to_sqlite" in str(exc_info.value)
+    assert dispatched == [], "后端已被拒绝，不得再调度 AsyncPG 查询"
 
 
-def test_dashboard_errors_history_async_pg_degraded_on_error(monkeypatch):
-    """当 AsyncPG 查询抛出异常时，应安全降级返回空列表并标记 degraded=True。"""
-    from app.config import settings
+def test_dashboard_removed_backend_not_downgraded_to_empty(monkeypatch):
+    """WP3：拒绝不得被吞成「查询降级、恒返回空列表」。
+
+    原用例锁 AsyncPG 查询异常时 ``degraded=True`` + 空列表的降级行为。后端被移除
+    属**服务端配置错误**，若也走这条降级路径，调用方看到的只是「没有错误记录」，
+    配置问题被永久掩盖——故拒绝必须原样冒出，而非 200 + degraded。
+    """
+    from app.runtime.core.storage import factory as factory_mod
     from app.runtime.core.storage.async_pg_store import AsyncPGErrorStore
     from starlette.testclient import TestClient
     from app.api.dashboard import router
@@ -126,14 +126,11 @@ def test_dashboard_errors_history_async_pg_degraded_on_error(monkeypatch):
 
     app = FastAPI()
     app.include_router(router)
+    # 关键：不让 TestClient 把异常转成 500 响应，直接看异常类型
     client = TestClient(app)
 
-    resp = client.get("/api/dashboard/errors/history?fingerprint=fp-test&limit=5")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total"] == 0
-    assert data["errors"] == []
-    assert data["degraded"] is True
+    with pytest.raises(factory_mod.StorageBackendRemovedError):
+        client.get("/api/dashboard/errors/history?fingerprint=fp-test&limit=5")
 
 
 def test_dashboard_errors_history_rejects_invalid_backend(monkeypatch):

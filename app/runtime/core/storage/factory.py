@@ -11,8 +11,11 @@ from app.runtime.core.storage.base import TraceStorage, SessionStorage, ErrorSto
 
 logger = logging.getLogger(__name__)
 
-# 合法后端白名单（大小写敏感）
-_VALID_BACKENDS = {"memory", "postgresql"}
+# 合法后端白名单（大小写敏感）。
+# WP3（Step 3 Breaking #1）：postgresql 已从运行时移除，白名单收窄为仅 memory。
+# 迁移专用白名单 _MIGRATION_SOURCE_BACKENDS 与本集合物理分离（§4.2 / §4.3-G3）：
+# 收窄不削弱一次性 PG → SQLite 迁移能力，该能力保留到 WP5 与 PG 驱动同批到期。
+_VALID_BACKENDS = {"memory"}
 
 _store_lock = threading.Lock()
 _trace_store: TraceStorage = None   # type: ignore
@@ -22,17 +25,59 @@ _spec_store: SpecStorage = None  # type: ignore
 _knowledge_store: KnowledgeBaseStorage = None  # type: ignore
 
 
+class StorageBackendRemovedError(RuntimeError):
+    """STORAGE_BACKEND 指向一个已被正式移除的后端。
+
+    必须是 ``RuntimeError`` 而非 ``ValueError``（设计文档 §5.2 / 决策 4）：
+    ``app/api/ingest.py`` 与 ``app/api/debug.py`` 都有 ``except ValueError`` 分支，
+    用 ``ValueError`` 表达「后端已移除」会让**服务端** misconfiguration 被这两个
+    分支抢先截走、上报成调用方的 422 "Invalid request payload"，把责任推给客户端。
+    ``RuntimeError`` 落到 ``except Exception`` / 全局 500 兜底，责任归属正确。
+    同一判例见 ``app/api/ingest.py`` 的 ``_DecompressedSizeExceeded``（R7-A2）。
+    """
+
+
+# 精确匹配 "postgresql" 才走移除语义；大小写变体属「非法配置」，仍走通用 ValueError
+# （设计文档 §5.3 匹配纪律，保证既有 case-sensitive 断言逐字存活）。
+_REMOVED_BACKEND_GUIDANCE = (
+    "STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已在 Step 3 正式移除，"
+    "不会静默回退到 memory。请改用默认 STORAGE_BACKEND=memory —— 运行现场存于进程内存，"
+    "知识库经验由本地 SQLite 笔记本持久化（KB_PERSIST_ENABLED / KB_PERSIST_PATH）。"
+    "已有 PostgreSQL kb_entries 数据请先执行一次性迁移脚本 "
+    "scripts/migrate_pg_kb_to_sqlite.py（建议先 --dry-run 核对 report 再正式执行）。"
+)
+
+_REMOVED_BACKEND_HINT = (
+    " 注意：PostgreSQL 后端已在 Step 3 正式移除，精确值 postgresql 会被直接拒绝；"
+    "运行现场请使用默认 memory，知识库经验由本地 SQLite 笔记本持久化"
+    "（一次性迁移脚本 scripts/migrate_pg_kb_to_sqlite.py）。"
+)
+
+
 def _validate_backend() -> None:
     """校验 storage_backend 配置值，非法值 fail-fast。
 
     防止拼写错误（如 "postgrsql"）静默回退到 memory，导致生产环境
     误以为用了 PG 实际用了内存，重启即丢数据。
+
+    WP3 起分两档拒绝：
+    - 精确等于 ``"postgresql"`` → :class:`StorageBackendRemovedError`，附迁移指引；
+    - 其余非法值（大小写变体、拼写错误、空串）→ 通用 ``ValueError``，保持既有
+      消息结构（非法值 ``!r`` / 有效值列表 / case-sensitive 提示）并追加移除提示。
+
+    拒绝点刻意留在本函数（factory 使用点）而不是 ``Settings`` 构造阶段：构造阶段
+    抛出会让 ``.env`` 仍写着 postgresql 的既有部署在**导入期**崩溃，pytest 连
+    collection 都过不去，宿主也拿不到可读的启动失败原因。
     """
-    if settings.storage_backend not in _VALID_BACKENDS:
+    backend = settings.storage_backend
+    if backend == "postgresql":
+        raise StorageBackendRemovedError(_REMOVED_BACKEND_GUIDANCE)
+    if backend not in _VALID_BACKENDS:
         raise ValueError(
-            f"Invalid STORAGE_BACKEND={settings.storage_backend!r}. "
+            f"Invalid STORAGE_BACKEND={backend!r}. "
             f"Valid values: {sorted(_VALID_BACKENDS)}. "
             f"Check .env or environment variable spelling (case-sensitive)."
+            f"{_REMOVED_BACKEND_HINT}"
         )
 
 

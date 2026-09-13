@@ -607,6 +607,17 @@ async def main(argv: list[str] | None = None):
     if not unified:
         _register_signal_handlers()
     try:
+        # ── WP3（Step 3 决策 6）：存储后端 eager gate ──
+        # 必须是本 try 的第一条语句，早于下方 bootstrap_knowledge_base()：后者经
+        # factory.get_knowledge_store() 抵达 _validate_backend()，而它被内层裸
+        # `except Exception` 包住——gate 若落在其作用域内，STORAGE_BACKEND=postgresql
+        # 的拒绝会被吞成一条 warning，进程照常启动并静默回退 memory（DEV_PLAN S3-2
+        # 明令禁止）。放在 try 内而非 try 外，是为了让 finally 的 cleanup_resources()
+        # 仍然执行：函数开头 ensure_exit_supervisor() 已创建进程级监督线程。
+        from app.runtime.core.storage.factory import _validate_backend
+
+        _validate_backend()
+
         # ── B05: 统一知识库启动初始化（回灌 + 种子加载，stdio/HTTP 共享）──
         try:
             from app.rag.knowledge_base import bootstrap_knowledge_base
