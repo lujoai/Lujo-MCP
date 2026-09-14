@@ -585,30 +585,6 @@ class TestCleanupResources:
             _heavy_pool.generation,
         )
 
-    def test_cleanup_closes_pg_pool_when_postgresql(self, monkeypatch):
-        import app.mcp_server as mcp_server
-        from app.runtime.core.storage import pg_executor
-
-        monkeypatch.setattr(mcp_server, "_cleaned_executor", None)
-        monkeypatch.setattr(mcp_server, "_cleaned_pool_generations", None)
-        monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
-        monkeypatch.setattr(mcp_server.settings, "storage_backend", "postgresql")
-
-        called = {"count": 0}
-
-        def _fake_close_pool():
-            called["count"] += 1
-
-        monkeypatch.setattr(pg_executor, "close_pool", _fake_close_pool)
-        monkeypatch.setattr(mcp_server, "uninstall_global_hook", lambda: None)
-
-        mcp_server.cleanup_resources()
-        assert called["count"] == 1
-
-        # 幂等：第二次不应再调用 close_pool
-        mcp_server.cleanup_resources()
-        assert called["count"] == 1
-
     def test_cleanup_skips_pg_pool_when_memory(self, monkeypatch):
         import app.mcp_server as mcp_server
         from app.runtime.core.storage import pg_executor

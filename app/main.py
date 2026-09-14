@@ -381,15 +381,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"HTTP lifespan M1 序执行失败: {e}")
 
-    # 优雅关闭：关闭 PG 连接池（同步 psycopg2）
-    if settings.storage_backend == "postgresql":
-        try:
-            from app.runtime.core.storage.pg_executor import close_pool
-            close_pool()
-        except Exception as e:
-            logger.warning(f"关闭 PG 连接池失败: {e}")
-
     # 优雅关闭：关闭 asyncpg 连接池（Phase 3.1）
+    # WP4：PostgreSQL 运行时后端已移除，PG 连接池关闭分支已删除；
+    # asyncpg pool 关闭保留到 WP5 删除模块时同批清理。
     if settings.pg_async_enabled:
         try:
             from app.runtime.core.storage.async_pg_store import close_pool as close_async_pool
@@ -443,12 +437,6 @@ def health():
 
     # 经存储抽象层探活（A1），不直接操作后端连接池
     storage_ok = True
-    if settings.storage_backend == "postgresql":
-        try:
-            from app.runtime.core.storage.factory import get_trace_store
-            storage_ok = get_trace_store().ping()
-        except Exception:
-            storage_ok = False
 
     if llm_ok and storage_ok:
         status = "ok"
@@ -517,17 +505,7 @@ def internal_health(request: Request):
 
     storage_ok = True
     storage_detail = settings.storage_backend
-    if settings.storage_backend == "postgresql":
-        try:
-            from app.runtime.core.storage.factory import get_trace_store
-            if get_trace_store().ping():
-                storage_detail = "postgresql (connected)"
-            else:
-                storage_ok = False
-                storage_detail = "postgresql (disconnected)"
-        except Exception:
-            storage_ok = False
-            storage_detail = "postgresql (disconnected)"
+    # WP4：PostgreSQL 运行时后端已移除，health check 不再探测 PG 连接
 
     if llm_ok and storage_ok:
         status = "ok"

@@ -194,15 +194,7 @@ def cleanup_resources() -> None:
 
     # ── 其余既有职责（保留在 ⑤ 之后）──
 
-    # 2) 关闭 PG 连接池（仅 postgresql 后端）
-    if settings.storage_backend == "postgresql":
-        try:
-            from app.runtime.core.storage.pg_executor import close_pool
-            close_pool()
-        except Exception as e:
-            logger.warning(f"stdio 退出关闭 PG 连接池失败: {e}")
-
-    # 3) 卸载全局 excepthook
+    # 2) 卸载全局 excepthook
     try:
         uninstall_global_hook()
     except Exception as e:

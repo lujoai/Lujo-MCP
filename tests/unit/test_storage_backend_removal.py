@@ -55,7 +55,6 @@ _ALL_GETTERS = (
     "get_error_store",
     "get_spec_store",
     "get_knowledge_store",
-    "get_error_store_async",
 )
 
 # 拒绝消息必须同时给出「已移除」定性与「往哪走」的迁移指引（§5.1 / 决策 4）。
@@ -620,9 +619,10 @@ class TestWp2PreservedAndWp4Wp5NotStarted:
         assert "migrate_knowledge_entries" in text
         assert "--source-backend" in text
 
-    def test_wp4_get_error_store_async_still_present(self):
-        """WP4 才删 get_error_store_async()：WP3 结束时它必须仍在（I2 顺序）。"""
-        assert callable(getattr(factory_mod, "get_error_store_async", None))
+    def test_wp4_get_error_store_async_removed(self):
+        """WP4 已删除 get_error_store_async()：接口不再存在（I2 顺序）。"""
+        assert not hasattr(factory_mod, "get_error_store_async"), \
+            "get_error_store_async 应在 WP4 被删除"
 
     @pytest.mark.parametrize(
         "module",

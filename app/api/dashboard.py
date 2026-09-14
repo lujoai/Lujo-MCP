@@ -9,7 +9,6 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.config import settings
 from app.auth.rbac import require_role
 from app.observability import get_kb_metric_snapshot
 from app.runtime.core import errors, logs
@@ -580,7 +579,7 @@ async def get_errors_history(
 ):
     """查询错误历史记录（智能分析引擎 Phase 7）
 
-    优先从 PostgreSQL 查询（长期历史），PG 不可用时返回空列表。
+    WP4：PostgreSQL 运行时后端已移除，错误历史只从内存聚合读取。
     """
     since_minutes = max(since_minutes, 1)
     limit = min(max(limit, 1), 1000)
@@ -590,35 +589,17 @@ async def get_errors_history(
     from app.runtime.core.storage.factory import _validate_backend
     _validate_backend()
 
-    degraded = False
-    if settings.storage_backend == "postgresql" and settings.pg_async_enabled:
-        # 架构冻结第 3 条：store 必须经工厂获取。工厂调用刻意放在 degraded 的
-        # try 之外——非法 STORAGE_BACKEND / flag 组合属配置错误，必须 fail-fast
-        # 冒到调用方，不能被吞成「查询降级、恒返回空列表」。
-        from app.runtime.core.storage.factory import get_error_store_async
-        store = get_error_store_async()
-        try:
-            history = await store.query_errors(
-                fingerprint=fingerprint,
-                session_id=session_id,
-                since_minutes=since_minutes,
-                limit=limit,
-            )
-        except Exception as e:
-            logger.warning("AsyncPG errors query 失败，降级为空列表: %s", e)
-            history = []
-            degraded = True
-    else:
-        history = errors.query_pg_errors(
-            fingerprint=fingerprint,
-            session_id=session_id,
-            since_minutes=since_minutes,
-            limit=limit,
-        )
+    history = errors.list_recent(limit=limit, session_id=session_id)
+
+    if fingerprint:
+        history = [e for e in history if e.get("fingerprint") == fingerprint]
+
+    cutoff = time.time() - since_minutes * 60
+    history = [e for e in history if e.get("last_seen", e.get("timestamp", 0)) >= cutoff]
 
     return {
         "errors": history,
         "total": len(history),
         "since_minutes": since_minutes,
-        "degraded": degraded,
+        "degraded": False,
     }

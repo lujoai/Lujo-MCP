@@ -347,61 +347,6 @@ class TestStorageFactory:
 
         assert "case-sensitive" in str(exc_info.value)
 
-    def test_async_getter_rejects_backend_outside_whitelist(self, monkeypatch):
-        """'postgres'（白名单外的常见拼法）→ get_error_store_async 抛 ValueError。
-
-        回归：dashboard 的 errors/history 曾把该值并入异步分支判定，而调用方直接
-        实例化 AsyncPGErrorStore 又绕过了工厂，使 _validate_backend() 的 fail-fast
-        被吞成「恒 degraded + 空列表」——正是本白名单要防的静默失效。
-        """
-        from app.config import settings as _settings
-        monkeypatch.setattr(_settings, "storage_backend", "postgres")
-        monkeypatch.setattr(_settings, "pg_async_enabled", True)
-
-        with pytest.raises(ValueError) as exc_info:
-            factory_mod.get_error_store_async()
-
-        assert "postgres" in str(exc_info.value)
-
-    def test_async_getter_rejects_removed_backend_before_flag_check(self, monkeypatch):
-        """A2（WP3）：postgresql 在闸门就被拒绝，走不到 pg_async_enabled 组合判定。
-
-        原断言「postgresql + pg_async_enabled=False → ValueError 提示改用同步 getter」；
-        闸门收口后后端本身已非法，flag 组合不再是可达路径，也不该再给出
-        「请改用 get_error_store()」这种把用户引向另一个被拒绝入口的提示。
-        """
-        from app.config import settings as _settings
-        monkeypatch.setattr(_settings, "storage_backend", "postgresql")
-        for async_enabled in (False, True):
-            monkeypatch.setattr(_settings, "pg_async_enabled", async_enabled)
-            with pytest.raises(factory_mod.StorageBackendRemovedError) as exc_info:
-                factory_mod.get_error_store_async()
-            assert not isinstance(exc_info.value, ValueError)
-
-    def test_async_getter_rejects_memory_backend(self, monkeypatch):
-        """默认 memory 后端 → 抛 ValueError（异步入口只对 PG async 链路开放）。"""
-        from app.config import settings as _settings
-        monkeypatch.setattr(_settings, "storage_backend", "memory")
-        monkeypatch.setattr(_settings, "pg_async_enabled", True)
-
-        with pytest.raises(ValueError):
-            factory_mod.get_error_store_async()
-
-    def test_async_getter_never_returns_asyncpg_store(self, monkeypatch):
-        """A3（WP3）：异步入口不再可能返回 AsyncPGErrorStore —— 任何后端都被挡在闸门外。
-
-        原用例断言 postgresql + pg_async_enabled=True 返回 AsyncPGErrorStore 实例。
-        WP3 后 postgresql 被拒绝、memory 走 ValueError，该实例已无合法取得路径。
-        接口本体与其两个调用方在 WP4 同批删除（§6.1 I2），本用例届时一并退场。
-        """
-        from app.config import settings as _settings
-        monkeypatch.setattr(_settings, "storage_backend", "postgresql")
-        monkeypatch.setattr(_settings, "pg_async_enabled", True)
-
-        with pytest.raises(factory_mod.StorageBackendRemovedError):
-            factory_mod.get_error_store_async()
-
-
 class TestErrorSpecFactory:
     """校验 factory 对 ErrorStorage / SpecStorage 的后端分发（方案 C）。
 

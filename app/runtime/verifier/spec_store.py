@@ -30,31 +30,6 @@ _lock = threading.RLock()
 _restored = False
 
 
-def _pg_available() -> bool:
-    """检查 PG 后端是否可用（spec_store 仅在 PG 后端时双写 specs 表）。"""
-    try:
-        from app.config import settings
-        return settings.storage_backend == "postgresql"
-    except Exception:
-        return False
-
-
-def _pg_spec_store():
-    """经工厂分发返回 SpecStorage 实例；非 PG / asyncpg 后端返回 None。
-
-    方案 C：sampling 不再硬编码 pg_store 模块函数。asyncpg 后端的方法为
-    async，无法在同步调用链中执行，此处返回 None 走内存 + trace_store 路径。
-    """
-    try:
-        from app.config import settings
-        if settings.storage_backend != "postgresql" or settings.pg_async_enabled:
-            return None
-        from app.runtime.core.storage.factory import get_spec_store
-        return get_spec_store()
-    except Exception:
-        return None
-
-
 def _new_id() -> str:
     return "spec-" + uuid.uuid4().hex[:12]
 
@@ -77,23 +52,14 @@ def _spec_version_ts(data: dict, entry: dict) -> float:
 def _do_restore() -> list[dict]:
     """从存储层恢复 spec 列表（纯 IO，不持有锁）。
 
-    Phase 2.4：PG 后端优先从 specs 表直接查询（消除 N+1 扫描）。
-    内存后端回退到 trace_store 扫描（向后兼容）。
+    WP4：PostgreSQL 运行时后端已移除，恢复只走 trace_store 扫描路径。
 
     返回从存储层读取到的 spec 列表，供调用方在持锁状态下合并。
 
     SEC-13：update 走 append-only，同一 spec_id 可能存在多个历史版本，
     trace_store 回退路径取 updated_at 最大者。
     """
-    # Phase 2.4：PG 后端直接查 specs 表（消除 N+1）
-    store = _pg_spec_store()
-    if store is not None:
-        try:
-            return store.list_specs()
-        except Exception:
-            logger.debug("specs 表查询失败，回退 trace_store 扫描", exc_info=True)
-
-    # 内存后端回退：扫描 trace_store（legacy N+1 路径）
+    # 内存后端：扫描 trace_store（legacy N+1 路径）
     latest: dict[str, tuple[dict, float]] = {}
     try:
         from app.runtime.core.logs import list_request_ids as _list_rids
@@ -165,14 +131,7 @@ def create(spec: dict) -> str:
     # 使同 ID 的 create/delete 具备明确的先后关系。
     with _lock:
         _specs[spec_id] = record
-        # Phase 2.4：双写 —— specs 表（PG 后端优先）
-        store = _pg_spec_store()
-        if store is not None:
-            try:
-                store.save_spec(record)
-            except Exception:
-                logger.debug("specs 表写入失败 (spec_id=%s)", spec_id, exc_info=True)
-        # 保留 trace_store 写入（迁移期双写）
+        # 保留 trace_store 写入
         add_log(spec_id, _STEP_SPEC, record)
     return spec_id
 
@@ -187,20 +146,7 @@ def get(spec_id: str) -> dict | None:
     updated_at 较新则覆盖内存缓存；无 PG 时保持原内存优先语义。
     """
     with _lock:
-        # FIX: P2 先回源，避免内存旧值压过存储新值
-        store = _pg_spec_store()
-        if store is not None:
-            try:
-                data = store.get_spec(spec_id)
-                if data is not None:
-                    cached = _specs.get(spec_id)
-                    if cached is None or _spec_version_ts(data, {}) > _spec_version_ts(cached, {}):
-                        _specs[spec_id] = data
-                    return dict(data)
-            except Exception:
-                logger.debug("specs 表读取失败 (spec_id=%s)", spec_id, exc_info=True)
-
-        # 内存兜底
+        # 内存优先
         if spec_id in _specs:
             return dict(_specs[spec_id])
 
@@ -253,13 +199,6 @@ def update(spec_id: str, patch: dict) -> dict | None:
         existing["updated_at"] = time.time()
         updated = dict(existing)
 
-        # Phase 2.4：双写 —— specs 表（PG 后端优先）
-        store = _pg_spec_store()
-        if store is not None:
-            try:
-                store.save_spec(updated)
-            except Exception:
-                logger.debug("specs 表更新失败 (spec_id=%s)", spec_id, exc_info=True)
         # crash-safe append：写入新版本作为提交点，失败仅记录日志不影响内存层
         try:
             add_log(spec_id, _STEP_SPEC, updated)
@@ -281,23 +220,6 @@ def delete(spec_id: str) -> bool:
         existed = spec_id in _specs
         _specs.pop(spec_id, None)
 
-        # Phase 2.4：双删 —— specs 表（PG 后端优先）
-        store = _pg_spec_store()
-        if store is not None:
-            try:
-                if store.delete_spec(spec_id):
-                    existed = True
-            except Exception:
-                # FIX(v0.7.1-b14-1): PG 删除失败时内存/trace_store 已删而 PG 行残留，
-                # 进程重启后 _do_restore 会从 specs 表把该 spec「复活」。此前 debug
-                # 级日志让该失败几乎不可见、复活无从排查；升级为 warning 并显式说明
-                # 后果与补救（PG 恢复后重试删除）。行为不变（优雅降级语义保持）。
-                logger.warning(
-                    "specs 表删除失败 (spec_id=%s)：内存与 trace_store 已删，PG 行残留，"
-                    "进程重启后该 spec 可能从 PG 恢复（resurrection）；PG 恢复后请重试删除",
-                    spec_id,
-                    exc_info=True,
-                )
         if existed:
             try:
                 delete_logs(spec_id)

@@ -12,7 +12,6 @@ M10 增强：指纹去重 + 聚合。相同 fingerprint（exc_type + 前3帧 fil
 
 import time
 import uuid
-import asyncio
 import hashlib
 import logging
 import threading
@@ -48,110 +47,10 @@ def compute_fingerprint(exc_type: str, frames: list[dict]) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
-def _pg_upsert_error(record_data: dict) -> None:
-    """同步 upsert 错误到 PG errors 表。非 PG 后端 / PG 不可用时静默跳过。
-
-    在守护线程或 asyncio.to_thread 中调用，不阻塞主流程。
-
-    方案 C：经存储工厂分发，不再硬编码 pg_store 模块函数。
-    """
-    try:
-        from app.config import settings
-        if settings.storage_backend != "postgresql" or settings.pg_async_enabled:
-            # memory 后端 / asyncpg 后端（async 方法需在 async 上下文调用）不在此同步路径处理
-            return
-        from app.runtime.core.storage.factory import get_error_store
-        get_error_store().upsert_error(record_data)
-    except Exception:
-        logger.debug("PG errors upsert 跳过", exc_info=True)
-
-
-# FIX: P1-9e 同 (fingerprint, session_id) 节流窗口内只调度一次 PG upsert，
-# 防止异常风暴下每错误无上限创建线程；同时保证跨会话同指纹错误不被相互误跳过。
-_PG_THROTTLE_SECONDS = 2.0
-_last_scheduled: dict[tuple[str, str], float] = {}
-_schedule_lock = threading.Lock()
-
-
-def _schedule_pg_upsert(record_data: dict) -> None:
-    """异步调度 PG upsert，不阻塞 record() 主流程。
-
-    - 非 postgresql 后端直接快速返回，不产生节流记账开销。
-    - 同 (fingerprint, session_id) 在节流窗口内只调度一次（重复错误聚合到内存层，
-      PG 侧由 upsert 的 occurrence_count 逻辑收敛，不重复建线程）。
-    - 有运行中的事件循环（FastAPI/uvicorn）：用 asyncio.to_thread / ensure_future 包装。
-    - 无事件循环（同步上下文/异常钩子）：用守护线程。
-    """
-    try:
-        from app.config import settings
-        if settings.storage_backend != "postgresql":
-            return
-    except Exception:
-        return
-
-    fingerprint = str(record_data.get("fingerprint") or record_data.get("error_id") or "")
-    session_id = str(record_data.get("session_id") or "_global")
-    throttle_key = (fingerprint, session_id)
-    with _schedule_lock:
-        now = time.time()
-        last = _last_scheduled.get(throttle_key, 0.0)
-        if now - last < _PG_THROTTLE_SECONDS:
-            # FIX: P1-9e 节流丢弃必须打日志，避免静默丢更新
-            logger.debug(
-                "PG errors upsert 节流跳过 (fingerprint=%s, session_id=%s)",
-                fingerprint,
-                session_id,
-            )
-            return
-        _last_scheduled[throttle_key] = now
-        if len(_last_scheduled) > 10000:  # 防止异常种类无限增长
-            _last_scheduled.clear()
-
-    if settings.pg_async_enabled:
-        # Phase 3.1: pg_async_enabled=True 时直接调度 asyncpg 协程入队
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # 已知限制（CODE_REVIEW §2.2）：asyncpg 连接池绑定事件循环，无 running
-            # loop 的线程（如线程池中的 MCP 工具 handler）既不跨线程调度也不回落
-            # 同步写，只告警并跳过 PG 写入，内存态记录不受影响。
-            logger.warning(
-                "PG async 写入跳过：当前线程无运行中的事件循环，asyncpg 协程无法调度入队 "
-                "(fingerprint=%s, session_id=%s)",
-                fingerprint,
-                session_id,
-            )
-            return
-        try:
-            from app.runtime.core.storage.factory import get_error_store_async
-            store = get_error_store_async()
-            asyncio.ensure_future(store.upsert_error(record_data), loop=loop)
-        except Exception:
-            # 兜底必须覆盖非 RuntimeError（如 async_pg_store 模块级 `import asyncpg`
-            # 失败）：本函数在 record() 中是裸调用，异常逃逸会让 record() 抛出，
-            # 连带打断 trace_repo 依赖其返回值的落库链路。与下方同步分支对称。
-            logger.warning("调度 asyncpg errors upsert 失败", exc_info=True)
-        return
-
-    try:
-        loop = asyncio.get_running_loop()
-        asyncio.ensure_future(
-            asyncio.to_thread(_pg_upsert_error, record_data), loop=loop
-        )
-    except RuntimeError:
-        threading.Thread(
-            target=_pg_upsert_error, args=(record_data,), daemon=True
-        ).start()
-    except Exception:
-        logger.debug("调度 PG errors upsert 失败", exc_info=True)
-
-
 def record(exc_data: dict, source: str = "unknown", session_id: str | None = None) -> str:
     """记录一条捕获到的异常，返回其 error_id。
 
     相同 fingerprint 的异常累加 occurrence_count 并刷新 last_seen，不新建记录。
-
-    Phase 2.3：内存聚合后异步 upsert 到 PG errors 表（双写，内存优先读）。
     """
     # Storage boundary: copy and redact the complete payload so direct callers
     # cannot bypass the trace_repo boundary. Keep the caller-owned object intact.
@@ -161,8 +60,6 @@ def record(exc_data: dict, source: str = "unknown", session_id: str | None = Non
     fingerprint = compute_fingerprint(safe_exc_data.get("type"), frames)
     now = time.time()
     key = _get_bucket(session_id)
-
-    pg_record = None  # 锁内捕获一致性快照，锁外异步 upsert
 
     with _lock:
         if key not in _recent:
@@ -190,19 +87,6 @@ def record(exc_data: dict, source: str = "unknown", session_id: str | None = Non
                 e["source"] = safe_source
                 e["traceback"] = safe_exc_data.get("traceback") or e["traceback"]
                 err_id = e["error_id"]
-                pg_record = {
-                    "error_id": err_id,
-                    "fingerprint": fingerprint,
-                    "type": safe_exc_data.get("type"),
-                    "message": e["message"],
-                    "frames": e["frames"],
-                    "frame_count": e["frame_count"],
-                    "traceback": e["traceback"],
-                    "source": safe_source,
-                    "session_id": session_id,
-                    "first_seen": e.get("first_seen", now),
-                    "last_seen": now,
-                }
                 break
         else:
             err_id = _new_id()
@@ -221,23 +105,6 @@ def record(exc_data: dict, source: str = "unknown", session_id: str | None = Non
                 "traceback": safe_exc_data.get("traceback"),
                 "session_id": session_id,
             })
-            pg_record = {
-                "error_id": err_id,
-                "fingerprint": fingerprint,
-                "type": safe_exc_data.get("type"),
-                "message": safe_exc_data.get("message"),
-                "frames": frames,
-                "frame_count": len(frames),
-                "traceback": safe_exc_data.get("traceback"),
-                "source": safe_source,
-                "session_id": session_id,
-                "first_seen": now,
-                "last_seen": now,
-            }
-
-    # Phase 2.3：异步 upsert 到 PG errors 表（不阻塞主流程，PG 不可用静默跳过）
-    if pg_record is not None:
-        _schedule_pg_upsert(pg_record)
 
     # 写入/刷新异常后失效 Dashboard 概览缓存，使新数据立即可见
     # （覆盖 exception_hook 直接 record、不经过 add_log 的路径）。
@@ -426,107 +293,3 @@ def rank_by_impact(
 
     ranked.sort(key=lambda g: g["impact_score"], reverse=True)
     return ranked
-
-
-def query_pg_errors(
-    fingerprint: str | None = None,
-    session_id: str | None = None,
-    since_minutes: int = 1440,
-    limit: int = 100,
-) -> list[dict]:
-    """从 PostgreSQL 查询错误记录。
-
-    参数：
-    - fingerprint: 可选，按指纹过滤
-    - session_id: 可选，按 session_id 过滤
-    - since_minutes: 时间范围（分钟），默认 24 小时
-    - limit: 返回条数上限
-
-    返回列表按 last_seen 倒序。PG 不可用时返回空列表。
-    """
-    try:
-        from app.config import settings
-        if settings.storage_backend != "postgresql":
-            return []
-        # FIX P3-10: pg_async_enabled=True 时本函数走 asyncpg 异步存储路径，
-        # 不再惰性创建 psycopg2 同步池，避免双池并存。
-        if settings.pg_async_enabled:
-            logger.debug("query_pg_errors: pg_async_enabled=True，走 async 路径，跳过同步 psycopg2 池")
-            return []
-        from app.runtime.core.storage.pg_executor import (
-            _ensure_init,
-            _get_conn,
-            _parse_data,
-            _safe_put,
-        )
-    except Exception:
-        return []
-
-    try:
-        _ensure_init()
-        # 连接借还统一走 pg_executor：_get_conn(timeout=5.0) 有界等待
-        # （P3-10，池耗尽不永久阻塞），归还 _safe_put（R7-T2，rollback 防中毒）。
-        conn = _get_conn(timeout=5.0)
-        try:
-            cur = conn.cursor()
-            sql = (
-                "SELECT error_id, fingerprint, exception_type, message, frames, "
-                "       frame_count, traceback, source, session_id, "
-                "       occurrence_count, first_seen, last_seen, created_at, updated_at "
-                "FROM errors"
-            )
-            params: list = []
-            conditions: list[str] = []
-
-            if fingerprint:
-                conditions.append("fingerprint = %s")
-                params.append(fingerprint)
-
-            if session_id:
-                conditions.append("session_id = %s")
-                params.append(session_id)
-
-            if since_minutes > 0:
-                cutoff = time.time() - since_minutes * 60
-                conditions.append("last_seen > %s")
-                params.append(cutoff)
-
-            if conditions:
-                sql += " WHERE " + " AND ".join(conditions)
-
-            sql += " ORDER BY last_seen DESC LIMIT %s"
-            params.append(min(max(limit, 1), 1000))
-
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-
-            result = []
-            for row in rows:
-                result.append({
-                    "error_id": row[0],
-                    "fingerprint": row[1],
-                    "type": row[2],
-                    "message": row[3],
-                    "frames": _parse_data(row[4]),
-                    "frame_count": row[5],
-                    "traceback": row[6],
-                    "source": row[7],
-                    "session_id": row[8],
-                    "occurrence_count": row[9],
-                    "first_seen": row[10],
-                    "last_seen": row[11],
-                    "created_at": row[12],
-                    "updated_at": row[13],
-                })
-            return result
-        finally:
-            # FIX: R7-T2 —— 全仓唯一未经 _safe_put 保护的 putconn：非
-            # OperationalError（ProgrammingError/DataError 等）后连接停留
-            # aborted 事务直接入池 → 下一借出者恒抛 InFailedSqlTransaction
-            # （连接池中毒，直至重启）。改用 _safe_put 统一 rollback 后归还。
-            _safe_put(conn)
-    except Exception:
-        # 失败返回的空列表与「确实无错误」对调用方不可区分（dashboard 同步分支
-        # 会呈现为空历史），故必须 warning 级可见，不能停在 debug。
-        logger.warning("PG errors 查询失败，返回空列表", exc_info=True)
-        return []
