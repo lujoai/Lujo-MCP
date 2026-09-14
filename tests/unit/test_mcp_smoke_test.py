@@ -79,6 +79,54 @@ def test_wait_http_accepts_successful_health_payload(monkeypatch):
     assert sm._wait_http("http://127.0.0.1:8000/health", timeout=0.1) == {"status": "degraded"}
 
 
+def test_wait_http_times_out_after_specified_timeout(monkeypatch):
+    """_wait_http 必须尊重传入的 timeout 参数，不依赖全局 _READ_TIMEOUT。
+
+    GitHub Actions Windows runner 上 PyInstaller 冻结二进制 --http 模式冷启动
+    可能超过 10 秒（默认 _READ_TIMEOUT），_wait_http 必须支持独立超时控制。
+    """
+    call_count = 0
+
+    def _always_timeout(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ConnectionRefusedError("no server")
+
+    monkeypatch.setattr(sm.urllib.request, "urlopen", _always_timeout)
+    monkeypatch.setattr(sm.time, "sleep", lambda _s: None)  # 加速
+
+    with pytest.raises(TimeoutError, match=r"0\.3s"):
+        sm._wait_http("http://127.0.0.1:9999/health", timeout=0.3)
+
+    # 确保它确实在重试（多次调用 urlopen），而不是第一次就放弃
+    assert call_count > 1
+
+
+def test_wait_http_uses_independent_timeout_not_global_read_timeout(monkeypatch):
+    """_wait_http 的 timeout 必须独立于 _READ_TIMEOUT。
+
+    即使 _READ_TIMEOUT 很短（如 0.01s），_wait_http 传入更大的 timeout
+    时仍应继续重试直到自己的 deadline。
+    """
+    monkeypatch.setattr(sm, "_READ_TIMEOUT", 0.01)
+    call_count = 0
+
+    def _always_fail(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ConnectionRefusedError("no server")
+
+    monkeypatch.setattr(sm.urllib.request, "urlopen", _always_fail)
+    monkeypatch.setattr(sm.time, "sleep", lambda _s: None)
+
+    with pytest.raises(TimeoutError, match=r"1\.0s"):
+        sm._wait_http("http://127.0.0.1:9999/health", timeout=1.0)
+
+    # 如果它错误地用了 _READ_TIMEOUT (0.01s)，call_count 会很小
+    # 用 1.0s timeout 时应该有更多重试
+    assert call_count > 5
+
+
 def test_parse_tool_arguments_requires_json_object():
     assert sm._parse_tool_arguments('{"ok": true}') == {"ok": True}
     with pytest.raises(ValueError):

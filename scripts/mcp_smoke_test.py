@@ -58,6 +58,11 @@ _READ_TIMEOUT = _DEFAULT_READ_TIMEOUT
 # 发布构建可通过 --read-timeout 放宽冷启动较慢的冻结进程（尤其 Windows
 # heavy 子进程）验证时间；默认值保持轻量开发冒烟的快速失败语义。
 
+# HTTP health readiness 超时（秒）：独立于 stdio 响应超时，因为 PyInstaller
+# 冻结二进制 --http 模式冷启动需要解压归档 + 导入 FastAPI/uvicorn，在 CI
+# runner 的慢磁盘上可能超过 10 秒。默认 15 秒给 Windows runner 足够余量。
+_DEFAULT_HTTP_TIMEOUT = 15.0
+
 
 def _next_id() -> int:
     global _ID
@@ -163,6 +168,7 @@ def _run_smoke(
     cmd=None,
     http_url: str | None = None,
     tool_arguments: dict | None = None,
+    http_timeout: float = _DEFAULT_HTTP_TIMEOUT,
 ) -> int:
     cmd = _resolve_cmd(cmd)
     proc = subprocess.Popen(
@@ -179,7 +185,7 @@ def _run_smoke(
     try:
         if http_url:
             try:
-                health = _wait_http(http_url)
+                health = _wait_http(http_url, timeout=http_timeout)
                 print(f"[OK] HTTP health: {json.dumps(health, ensure_ascii=False)}")
             except Exception as exc:
                 print(f"[FAIL] HTTP health 失败: {exc}", file=sys.stderr)
@@ -276,16 +282,24 @@ def main(argv: list[str] | None = None) -> int:
         default=_DEFAULT_READ_TIMEOUT,
         help="单条 MCP 响应读取超时（秒，默认 10；冻结构建可适当放宽）",
     )
+    parser.add_argument(
+        "--http-timeout",
+        type=float,
+        default=_DEFAULT_HTTP_TIMEOUT,
+        help="HTTP health readiness 超时（秒，默认 15；CI 冻结构建可放宽至 30）",
+    )
     args = parser.parse_args(argv)
     if args.read_timeout <= 0:
         parser.error("--read-timeout 必须大于 0")
+    if args.http_timeout <= 0:
+        parser.error("--http-timeout 必须大于 0")
     _READ_TIMEOUT = args.read_timeout
     try:
         tool_arguments = _parse_tool_arguments(args.arguments_json)
     except ValueError as exc:
         parser.error(str(exc))
     start = time.monotonic()
-    rc = _run_smoke(args.tool, args.cmd, args.http_url, tool_arguments)
+    rc = _run_smoke(args.tool, args.cmd, args.http_url, tool_arguments, args.http_timeout)
     print(f"耗时 {(time.monotonic() - start) * 1000:.0f}ms，退出码 {rc}")
     return rc
 

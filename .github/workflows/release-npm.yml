@@ -92,7 +92,8 @@ jobs:
           # health must become ready while stdio still completes MCP handshake.
           python scripts/mcp_smoke_test.py \
             --cmd "./$BIN --http --http-port 8129" \
-            --http-url "http://127.0.0.1:8129/health"
+            --http-url "http://127.0.0.1:8129/health" \
+            --http-timeout 30
           # Force one deterministic synchronous tool through the heavy
           # subprocess path.  This verifies the frozen multiprocessing entry
           # without requiring Playwright/Chromium in the lightweight package.
