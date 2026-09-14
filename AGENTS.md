@@ -75,8 +75,9 @@
 
 默认不把 Lujo 当成中央多人共享服务。
 
-中央共享 PostgreSQL 下的多人 / 多项目隔离
-目前不是承诺支持的产品场景。
+PostgreSQL runtime 已从当前版本移除，
+中央多人共享存储下的多人 / 多项目隔离
+不是当前版本支持的产品场景。
 
 未经明确立项：
 
@@ -110,8 +111,9 @@
 ### Storage
 
 - `STORAGE_BACKEND` 默认保持 `memory`
+- `memory` 是当前唯一受支持的运行时存储后端
+- `STORAGE_BACKEND=postgresql` 必须明确拒绝，不得静默回退
 - 不得未经明确计划改变默认持久化行为
-- memory 与 PostgreSQL 应尽可能保持行为语义一致
 
 ### HTTP / stdio
 
@@ -171,27 +173,40 @@ Browser SDK 的 endpoint 必须指向对应 Lujo 实例。
 
 ---
 
-## 6. PostgreSQL / asyncpg
+## 6. PostgreSQL / asyncpg（历史记录）
 
-测试默认必须保持与开发者真实 PostgreSQL 隔离。
+PostgreSQL runtime 已从当前版本移除。
+psycopg2、asyncpg、PG store、PG executor
+不再属于当前运行时。
 
-不得因为本机 `.env` 配置 PostgreSQL，
+以下旧 PG 风险仅作为历史问题记录，
+不是当前版本待验证的运行时能力：
+
+1. PG error upsert 节流键 `(fingerprint, session)` 语义——
+   历史问题，PG runtime 已移除。
+
+2. `pg_async_enabled=True` 路径下 errors 读写链路——
+   历史问题，PG runtime 已移除。
+
+不要再安排针对当前版本 PG runtime 的测试任务。
+
+### 仍然有效的通用规则
+
+测试默认不得连接真实数据库。
+
+不得因为本机 `.env` 配置外部存储，
 让普通 unit / integration / e2e 测试意外写入真实数据库。
 
-真库测试必须显式开启。
+memory / SQLite 测试隔离必须保持。
 
-当前长期需要单独验证的 PG / asyncpg 风险包括：
+### executor 生命周期（非 PG 专属，仍需验证）
 
-1. PG error upsert 节流键目前需要核实
-   `(fingerprint, session)` 语义。
+stdio 生命周期关闭 `_LIGHT_TOOL_EXECUTOR` 后，
+HTTP 路径的 executor 生命周期 / 自愈需要真实验证。
 
-2. `pg_async_enabled=True` 路径下，
-   errors 的读写完整链路需要真实验证。
-
-3. stdio 生命周期关闭 `_LIGHT_TOOL_EXECUTOR` 后，
-   HTTP 路径的 executor 生命周期 / 自愈需要真实验证。
-
-这些问题应单独立工作包。
+此问题与 PostgreSQL 无关，
+属于 heavy tool executor 生命周期范畴，
+必须保留。
 
 不要在无关功能开发中顺手重构整个 storage layer。
 
