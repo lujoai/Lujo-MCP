@@ -9,6 +9,34 @@
 
 ---
 
+## [0.9.1] - 2026-09-14
+
+> 主题「Windows release smoke 修复」：v0.9.0 tag 推送后，release-npm.yml 中 Windows GitHub Actions runner 上 PyInstaller 冻结二进制以 `--http` 模式启动时，HTTP health readiness 超过 smoke 脚本默认的 10 秒超时（该超时复用了 stdio 响应读取超时 `_READ_TIMEOUT`），导致 Windows build job 失败、publish job 被跳过、npm 0.9.0 从未发布。v0.9.1 将 HTTP health readiness 超时与 stdio 响应超时解耦，新增独立 `--http-timeout` 参数（默认 15 秒），release workflow 中 HTTP smoke 使用 30 秒。stdio 超时、health 检查语义、进程清理逻辑和 heavy tool 验证保持不变。v0.9.0 tag 保留不动，v0.9.1 是首次实际发布候选版本。
+
+### Fixed
+
+- **Windows release smoke HTTP readiness 超时**：`scripts/mcp_smoke_test.py` 的 `_wait_http` 函数此前使用全局 `_READ_TIMEOUT`（默认 10 秒，为 stdio JSON-RPC 单条响应读取设计）作为 HTTP health readiness 超时。GitHub Actions Windows runner 上 PyInstaller 冻结二进制 `--http` 冷启动（解压归档 + 导入 FastAPI/uvicorn）可超过 10 秒，导致 release build job 失败。新增 `--http-timeout` 参数（默认 15 秒），`_run_smoke` 将其传递给 `_wait_http`，与 stdio 响应超时完全解耦。release-npm.yml 的 HTTP smoke 命令使用 `--http-timeout 30`。
+
+### Changed
+
+- `_wait_http` 的 `timeout` 参数不再默认使用 `_READ_TIMEOUT`，改为由 `_run_smoke` 通过 `--http-timeout` 参数显式传递。
+- release-npm.yml 的 HTTP smoke 命令新增 `--http-timeout 30`。
+
+### Unchanged
+
+- stdio 响应读取超时（`--read-timeout`，默认 10 秒）不变。
+- HTTP health 检查仍为真实 HTTP GET `/health`，验证 2xx 响应，不降级为端口检查。
+- 进程清理（terminate → wait(5) → kill）不变。
+- stdio / HTTP / heavy tool 三类 smoke 验证保留。
+- 运行时业务语义（memory 存储、SQLite KB、MCP 协议、HTTP 路由）不变。
+
+### 注意
+
+- **v0.9.0 从未成功发布**：v0.9.0 tag 存在于远程（指向 `735c16f`），但 release-npm.yml 因 Windows HTTP smoke 失败而中止，npm registry 和 GitHub Release 均未产生 0.9.0 产物。
+- **v0.9.1 是首次实际发布候选版本**：包含 v0.9.0 的全部内容（PostgreSQL runtime 移除）加上 Windows release smoke 修复。
+
+---
+
 ## [0.9.0] - 2026-09-14
 
 > 主题「PostgreSQL runtime 正式移除」：v0.8.x 及更早版本中实验性的 PostgreSQL 后端（同步 psycopg2 + 异步 asyncpg 双实现、连接池/重试/熔断/分区/归档、Docker/compose 的 postgres 服务、PG 配置族与驱动依赖）全部删除。`STORAGE_BACKEND=memory` 成为唯一合法运行时存储（默认）；KB 经验持久化继续由本地 SQLite「笔记本」承担（行为与 v0.8.0 一致）。npm MCP Server 无需 PostgreSQL、Redis、Python、Docker 或 API key 即可直接启动。Node SDK 与 Browser SDK 属于连接客户端，仍需要用户提供 Lujo 服务 endpoint；跨源浏览器接入时可能还需要 CORS 配置。Linux/macOS 支持与三平台冻结产物仍需 CI 验证。

@@ -1,14 +1,42 @@
 # Release Notes / 发布说明
 
-> **v0.9.0（当前版本，尚未发布）**：正式移除 PostgreSQL 运行时后端。`STORAGE_BACKEND=memory` 成为唯一合法运行时存储（默认）；`postgresql` 精确值会被 `StorageBackendRemovedError` 直接拒绝（不静默回退）。KB 经验持久化继续由本地 SQLite「笔记本」承担。npm MCP Server 无需 PostgreSQL、Redis、Python、Docker 或 API key 即可直接启动。Node SDK 与 Browser SDK 属于连接客户端，仍需要用户提供 Lujo 服务 endpoint；跨源浏览器接入时可能还需要 CORS 配置。Linux/macOS 支持与三平台冻结产物仍需 CI 验证。上一版 v0.8.0 的发布证据见 https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
+> **v0.9.1（当前版本，尚未发布）**：修复 v0.9.0 发布流程中 Windows GitHub Actions runner 上 PyInstaller 冻结二进制 HTTP health readiness 超时问题。新增独立 `--http-timeout` 参数（默认 15 秒），release workflow 使用 30 秒。v0.9.0 tag 保留不动但从未成功发布到 npm/GitHub Release。v0.9.1 包含 v0.9.0 全部内容（PostgreSQL runtime 移除）加上此修复，是首次实际发布候选版本。上一版 v0.8.0 的发布证据见 https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.9.0 ・ **Release Date / 发布日期**: 2026-09-14（尚未发布） ・ **Codename / 代号**: PostgreSQL Runtime 移除 ｜ PostgreSQL Runtime Removal
+**Version / 版本**: v0.9.1 ・ **Release Date / 发布日期**: 2026-09-14（尚未发布） ・ **Codename / 代号**: Windows Release Smoke 修复 ｜ Windows Release Smoke Fix
 
 ---
 
-## v0.9.0（2026-09-14，尚未发布）
+## v0.9.1（2026-09-14，尚未发布）
+
+### 版本概述
+
+v0.9.0 tag 推送后，release-npm.yml 在 Windows GitHub Actions runner 上因 HTTP health readiness 超时失败。根因：`scripts/mcp_smoke_test.py` 的 `_wait_http` 使用 stdio 响应读取超时（`_READ_TIMEOUT`，默认 10 秒）作为 HTTP health readiness 超时；Windows CI runner 上 PyInstaller 冻结二进制 `--http` 冷启动（解压归档 + 导入 FastAPI/uvicorn）超过 10 秒。v0.9.1 新增独立 `--http-timeout` 参数（默认 15 秒），release workflow HTTP smoke 使用 30 秒。v0.9.0 从未发布到 npm/GitHub Release，v0.9.1 是首次实际发布候选版本，包含 v0.9.0 全部内容加上此修复。
+
+### 主要修复
+
+- **HTTP health readiness 超时解耦**：`scripts/mcp_smoke_test.py` 新增 `--http-timeout` 参数，独立于 `--read-timeout`（stdio 响应超时）。默认 15 秒，release workflow 使用 30 秒。`_wait_http` 不再依赖 `_READ_TIMEOUT` 全局变量。
+- **release-npm.yml HTTP smoke 命令**：新增 `--http-timeout 30`，给 Windows CI runner 足够冷启动时间。
+
+### 保持不变
+
+- stdio 响应读取超时（`--read-timeout`，默认 10 秒）不变。
+- HTTP health 检查仍为真实 HTTP GET `/health`，验证 2xx 响应，不降级为端口检查。
+- 进程清理（terminate → wait(5) → kill）不变。
+- stdio / HTTP / heavy tool 三类 smoke 验证保留。
+- 运行时业务语义不变（memory 存储、SQLite KB、MCP 协议、HTTP 路由）。
+
+### 关于 v0.9.0
+
+- v0.9.0 tag 存在于远程（指向 `735c16f`），保留不动。
+- v0.9.0 release-npm.yml 因 Windows HTTP smoke 失败而中止，publish job 被跳过。
+- npm registry 和 GitHub Release 均未产生 0.9.0 产物。
+- v0.9.0 的全部内容（PostgreSQL runtime 移除）包含在 v0.9.1 中。
+
+---
+
+## v0.9.0（2026-09-14，从未发布）
 
 ### 版本概述
 
