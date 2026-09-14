@@ -381,16 +381,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"HTTP lifespan M1 序执行失败: {e}")
 
-    # 优雅关闭：关闭 asyncpg 连接池（Phase 3.1）
-    # WP4：PostgreSQL 运行时后端已移除，PG 连接池关闭分支已删除；
-    # asyncpg pool 关闭保留到 WP5 删除模块时同批清理。
-    if settings.pg_async_enabled:
-        try:
-            from app.runtime.core.storage.async_pg_store import close_pool as close_async_pool
-            await close_async_pool()
-        except Exception as e:
-            logger.warning(f"关闭 asyncpg 连接池失败: {e}")
-
     # 优雅关闭：关闭 OTel 指标导出器
     try:
         from app.observability import shutdown_observability
