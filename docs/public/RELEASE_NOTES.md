@@ -1,14 +1,50 @@
 # Release Notes / 发布说明
 
-> **v0.8.0（当前版本，已发布）**：为单用户本地自用定位补上 KB 经验跨重启沉淀能力（本地 SQLite「笔记本」，零安装、数据不出本机），并修复平台包同名 `bin` 导致项目内安装后 `node_modules/.bin` 缺失启动入口的问题。GitHub Release：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0；发布流水线已成功。发布后 C 批生命周期加固已进入 `main` 并通过 GitHub CI run 34675974282，尚未绑定新的版本号；上一版 v0.7.9 的历史证据保留在下方版本段。
+> **v0.9.0（当前版本，尚未发布）**：正式移除 PostgreSQL 运行时后端。`STORAGE_BACKEND=memory` 成为唯一合法运行时存储（默认）；`postgresql` 精确值会被 `StorageBackendRemovedError` 直接拒绝（不静默回退）。KB 经验持久化继续由本地 SQLite「笔记本」承担。npm MCP Server 无需 PostgreSQL、Redis、Python、Docker 或 API key 即可直接启动。Node SDK 与 Browser SDK 属于连接客户端，仍需要用户提供 Lujo 服务 endpoint；跨源浏览器接入时可能还需要 CORS 配置。Linux/macOS 支持与三平台冻结产物仍需 CI 验证。上一版 v0.8.0 的发布证据见 https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.8.0 ・ **Release Date / 发布日期**: 2026-09-11 ・ **Codename / 代号**: 本地经验笔记本与安装修复 ｜ Local Experience Notebook & Install Fix
+**Version / 版本**: v0.9.0 ・ **Release Date / 发布日期**: 2026-09-14（尚未发布） ・ **Codename / 代号**: PostgreSQL Runtime 移除 ｜ PostgreSQL Runtime Removal
 
 ---
 
-## v0.8.0（2026-09-11）
+## v0.9.0（2026-09-14，尚未发布）
+
+### 版本概述
+
+本版正式移除 v0.8.x 及更早版本中实验性的 PostgreSQL 运行时后端。同步 psycopg2 与 asyncpg 双实现、连接池/重试/熔断/分区/归档模块、Docker/compose 中的 postgres 服务、PG 配置族与驱动依赖全部删除。`STORAGE_BACKEND=memory` 成为唯一合法运行时存储（默认）；精确值 `postgresql` 会在启动时被 `StorageBackendRemovedError` 直接拒绝（不静默回退 memory）。KB 经验持久化继续由本地 SQLite「笔记本」承担（行为与 v0.8.0 一致）。Redis、Prometheus、app、memory/SQLite 主路径保持不变。
+
+### 主要移除
+
+- **PostgreSQL 运行时后端全部移除**：`pg_executor.py`、`pg_*_store.py`、`async_pg_store.py`、`_pg_errors.py`、`pg_partitions.py`、`ddl.py` 等 10 个 PG 模块已从 `app/runtime/core/storage/` 删除。`psycopg2-binary` 与 `asyncpg` 不再属于运行时依赖。
+- **Docker/compose 中 PostgreSQL 服务移除**：`docker-compose.yaml` 中 postgres 服务已删除；运行时后端固定 memory。
+- **一次性迁移工具下线**：v0.8.x 提供的 PG `kb_entries` → SQLite 迁移脚本不再随当前版本分发；尚未迁移的旧 PG 用户请先在 v0.8.x 完成迁移再升级。
+
+### 升级说明
+
+- 若 `.env` 仍写着 `STORAGE_BACKEND=postgresql`，升级后首次启动会直接失败并给出迁移指引——这是设计行为（fail-fast，防止静默降级造成数据误判）；改回 `memory` 或删除该行即可。
+- **未迁移的旧 PG 用户必须先在 0.8.x 完成 KB 迁移再升级**。traces/errors/sessions/specs 没有运行现场迁移路径（本就默认 memory，重启即清）。
+- 旧部署 `.env` 遗留的 `PG_*` / `POSTGRES_PASSWORD` / `DATABASE_URL` 键不会重新启用 PostgreSQL，也不会导致启动崩溃——会被直接忽略，可安全删除。
+- npm MCP Server 无需 PostgreSQL、Redis、Python、Docker 或 API key 即可直接启动（`npx -y @lujoai/lujo-mcp`）。
+- Node SDK 与 Browser SDK 属于连接客户端，仍需要用户提供 Lujo 服务 endpoint；跨源浏览器接入时可能还需要 CORS 配置。endpoint 是应用连接配置，不是数据库配置。
+
+### 未验证边界
+
+- **Linux/macOS CI** 尚未执行。
+- **Docker build** 尚未执行。
+- **三平台冻结产物** 尚未构建。
+- **npm registry 0.9.0 尚未发布**。
+
+### 保留能力
+
+- `STORAGE_BACKEND` 默认 `memory`，行为不变。
+- KB 经验本地 SQLite「笔记本」默认开启，行为与 v0.8.0 一致。
+- Redis（限流/指标，默认 `STATE_BACKEND=memory`）、Prometheus、OpenTelemetry、RBAC、脱敏、路径白名单等保持不变。
+- MCP 工具面、公开 API、Node 最低版本（`>=18`）、API endpoint 不变。
+
+---
+
+## v0.8.0（2026-09-11，已发布）
 
 ### 版本概述
 

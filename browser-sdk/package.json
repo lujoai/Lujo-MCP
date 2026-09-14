@@ -1,6 +1,6 @@
 {
   "name": "ai-debug-sdk",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "MIT",
   "engines": {
     "node": ">=18"

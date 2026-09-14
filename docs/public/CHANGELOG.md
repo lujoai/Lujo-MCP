@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+---
+
+## [0.9.0] - 2026-09-14
+
+> 主题「PostgreSQL runtime 正式移除」：v0.8.x 及更早版本中实验性的 PostgreSQL 后端（同步 psycopg2 + 异步 asyncpg 双实现、连接池/重试/熔断/分区/归档、Docker/compose 的 postgres 服务、PG 配置族与驱动依赖）全部删除。`STORAGE_BACKEND=memory` 成为唯一合法运行时存储（默认）；KB 经验持久化继续由本地 SQLite「笔记本」承担（行为与 v0.8.0 一致）。npm MCP Server 无需 PostgreSQL、Redis、Python、Docker 或 API key 即可直接启动。Node SDK 与 Browser SDK 属于连接客户端，仍需要用户提供 Lujo 服务 endpoint；跨源浏览器接入时可能还需要 CORS 配置。Linux/macOS 支持与三平台冻结产物仍需 CI 验证。
+
 ### Removed
 
 - **正式移除 PostgreSQL 运行时后端（Step 3）**：v0.8.x 及更早版本中实验性的 `STORAGE_BACKEND=postgresql` 后端（psycopg2 同步实现与 asyncpg 异步实现、连接池/重试/熔断/分区/归档、Docker/compose 的 postgres 服务、PG 配置族与 `psycopg2-binary`/`asyncpg` 依赖）全部删除。`STORAGE_BACKEND=memory` 成为唯一合法值（默认）；精确值 `postgresql` 会在启动时被 `StorageBackendRemovedError` 直接拒绝（不静默回退 memory），大小写变体与拼写错误仍为通用 `ValueError`。KB 经验持久化由本地 SQLite「笔记本」承担（行为与 v0.8.0 一致）；traces/errors/sessions/specs 回到 memory-only（重启即清，无迁移路径）。旧部署 `.env` 遗留的 `PG_*`/`POSTGRES_PASSWORD`/`DATABASE_URL` 键会被忽略且不会导致启动失败，可安全删除。
