@@ -32,4 +32,4 @@ SQLite 版本的表结构独立定义在 `app/runtime/core/storage/sqlite_kb_sto
 ## 相关参考
 
 - 迁移工具的设计与边界：`docs/internal/DESIGN_STEP3_PG_REMOVAL_20260913.md` §4（内部文档，不入版本库）
-- 历史 PG 排障与迁移说明：[TROUBLESHOOTING.md](../docs/public/TROUBLESHOOTING.md) L 节
+- 历史 PG 排障与迁移说明：[TROUBLESHOOTING.md](../../docs/public/TROUBLESHOOTING.md) L 节

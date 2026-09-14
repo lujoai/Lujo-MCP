@@ -59,7 +59,8 @@ _ALL_GETTERS = (
 )
 
 # 拒绝消息必须同时给出「已移除」定性与「往哪走」的迁移指引（§5.1 / 决策 4）。
-_GUIDANCE_MARKERS = ("移除", "SQLite", "migrate_pg_kb_to_sqlite", "memory")
+# WP7：迁移脚本已不随当前版本分发，指引改为「旧版 v0.8.x 曾提供、当前版本不附带」。
+_GUIDANCE_MARKERS = ("移除", "SQLite", "v0.8", "memory")
 
 _SUBPROCESS_TIMEOUT = 60.0
 

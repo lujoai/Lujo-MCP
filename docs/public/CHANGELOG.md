@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **正式移除 PostgreSQL 运行时后端（Step 3）**：v0.8.x 及更早版本中实验性的 `STORAGE_BACKEND=postgresql` 后端（psycopg2 同步实现与 asyncpg 异步实现、连接池/重试/熔断/分区/归档、Docker/compose 的 postgres 服务、PG 配置族与 `psycopg2-binary`/`asyncpg` 依赖）全部删除。`STORAGE_BACKEND=memory` 成为唯一合法值（默认）；精确值 `postgresql` 会在启动时被 `StorageBackendRemovedError` 直接拒绝（不静默回退 memory），大小写变体与拼写错误仍为通用 `ValueError`。KB 经验持久化由本地 SQLite「笔记本」承担（行为与 v0.8.0 一致）；traces/errors/sessions/specs 回到 memory-only（重启即清，无迁移路径）。旧部署 `.env` 遗留的 `PG_*`/`POSTGRES_PASSWORD`/`DATABASE_URL` 键会被忽略且不会导致启动失败，可安全删除。
+- **一次性迁移工具到期下线**：v0.8.x 提供的 PG `kb_entries` → SQLite 一次性迁移脚本（`scripts/migrate_pg_kb_to_sqlite.py`，支持 `--dry-run`）不再随当前版本分发；尚未迁移的旧 PG 用户请先在 v0.8.x 完成迁移再升级（升级指引见 TROUBLESHOOTING.md L 节）。旧 PG 建表 SQL 已归档至仓库 `archive/pg-migrations/`（仅作历史查阅）。
+
+### Changed
+
+- 升级注意：若 `.env` 仍写着 `STORAGE_BACKEND=postgresql`，升级后首次启动会直接失败并给出迁移指引——这是设计行为（fail-fast，防止静默降级造成数据误判）；改回 `memory` 或删除该行即可。
 
 - **发布后 C 批生命周期加固已进入 main**：执行器槽位记账、heavy 子进程结果通道、进程树终止、绝对退出死线与 lifespan 异常清理已完成，并通过 GitHub CI run 34675974282；该内容尚未绑定新的版本号。
 

@@ -73,7 +73,7 @@ npm install -g @lujoai/lujo-mcp
 
 > 浏览器运行现场的采集链路是：**页面 SDK → Lujo-MCP HTTP 服务（/ingest）→ AI 通过 MCP 读取**。因此本流程需要先启动 Lujo-MCP HTTP 服务，并让 MCP 客户端以 HTTP 模式接入同一个服务进程。
 >
-> **推荐用本地源码 + 纯内存模式跑通**：不需要 Docker、PostgreSQL、Redis、密码或 API Key。Docker 编排面向持久化部署（需要数据库密码与 API Key），放在[进阶流程](#进阶docker-持久化部署需要完整凭据配置)。
+> **推荐用本地源码 + 纯内存模式跑通**：不需要 Docker、Redis、密码或 API Key。Docker 编排面向持久化部署（需要 API Key），放在[进阶流程](#进阶docker-持久化部署需要完整凭据配置)。
 
 ### 第 0 步：启动 Lujo-MCP HTTP 服务（本地源码，零外部依赖）
 
@@ -127,10 +127,9 @@ MCP 客户端以 HTTP 模式接入（与 SDK 上报同一个服务进程）：
 
 ### 进阶：Docker 持久化部署（需要完整凭据配置）
 
-`docker compose up -d` 走 PostgreSQL + Redis 持久化栈，Compose 强制要求以下变量，缺一个容器就起不来。在项目根目录创建 `.env`：
+`docker compose up -d` 走 Redis 缓存栈（运行现场默认 memory，KB 经验由本地 SQLite 笔记本持久化；PostgreSQL 后端已移除），Compose 强制要求以下变量，缺一个容器就起不来。在项目根目录创建 `.env`：
 
 ```ini
-POSTGRES_PASSWORD=change-me-pg-password   # 或用 PG_PASSWORD，二选一
 API_KEY=change-me-api-key                 # 必填；SDK 与 MCP 客户端都要用它
 HOST=127.0.0.1
 CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
@@ -266,7 +265,7 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
 │ 🟡 进阶增强（配置 1 个 API Key，可选）                       │
 │   • 解锁 Lujo 内置 LLM 辅助分析与历史知识库自动沉淀          │
 │   • 支持免费智谱 GLM-4.7-Flash、DeepSeek、OpenAI 等          │
-│   • 支持可选的 PostgreSQL 持久化与 Redis 缓存                │
+│   • 支持可选的 Redis 缓存与多实例端口隔离                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -281,7 +280,6 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
 
 - **数据不出本机**：就是一个普通数据库文件；删除即重置，也可用 `KB_PERSIST_PATH` 指定固定位置（避免不同工作目录各存一份）。
 - **想回到纯内存行为**：设置 `KB_PERSIST_ENABLED=false`，经验仅保留在当前进程内（与 v0.7.x 一致）。
-- **不影响 PostgreSQL 用户**：`STORAGE_BACKEND=postgresql` 时 KB 仍走 PG 持久化，本开关不生效。
 
 ### 如何开启 LLM 分析（可选）
 
@@ -335,7 +333,7 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
 ## 🛠️ 进阶开发与私有化部署
 
 <details>
-<summary><b>方式一：Docker Compose 全栈部署（含 PostgreSQL + Redis）</b></summary>
+<summary><b>方式一：Docker Compose 部署（含 Redis 缓存栈）</b></summary>
 
 ```bash
 git clone https://github.com/lujoai/Lujo-MCP.git
@@ -368,7 +366,7 @@ python -m app.main
 
 ### 多项目同机调试：「端口即隔离」
 
-Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用，一人装一套，数据留在本机（默认 memory，可选本机自己的 PostgreSQL），**没有服务端、不承诺多人共用一台中央数据库的隔离**。在这一前提下，同一台机器上同时调试多个项目时，若都使用默认采集口 `127.0.0.1:8000`，两个项目的浏览器 SDK 上报只会进入「占住 8000 的那个实例」——另一个项目的 AI 查到的是别的项目的现场。**既定方案是「端口即隔离」**：每个项目用独立端口，互不串台。
+Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用，一人装一套，数据留在本机（运行现场 memory + KB 经验本地 SQLite 笔记本），**没有服务端、不承诺多人共用一台中央数据库的隔离**。在这一前提下，同一台机器上同时调试多个项目时，若都使用默认采集口 `127.0.0.1:8000`，两个项目的浏览器 SDK 上报只会进入「占住 8000 的那个实例」——另一个项目的 AI 查到的是别的项目的现场。**既定方案是「端口即隔离」**：每个项目用独立端口，互不串台。
 
 **1. 每个项目分配独立的 `--http-port`**（在各自宿主的 MCP 配置中，其余参数由 npm 启动器原样转发给服务）：
 
@@ -405,7 +403,6 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 **已知限制（如实说明）**：
 
 - 默认采集口是 `127.0.0.1:8000`；端口被另一个 Lujo 实例占用时，服务会在启动前明确报错并提示改用 `--http-port`（不是静默退出，也不是自动回退端口）。
-- 配置 PostgreSQL 持久化时，所有实例共写同一个库且无 project/namespace 维度：多项目请各自配置独立的 `pg_database`，或知情接受混存。
 - `diagnose_issue` 缺省取本服务跨页面/标签的最近一条错误（同类错误重复出现时返回最新一次现场）；用户明确在说某个页面/会话时，可给工具传 `session_id` 过滤（缺省 = 不过滤）。
 
 ---

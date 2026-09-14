@@ -153,7 +153,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | GET | `/api/dashboard/stream` | viewer | Dashboard 实时 SSE 推送（需 `DASHBOARD_SSE_ENABLED=true`） |
 | GET | `/api/dashboard/errors/aggregated` | viewer | 按指纹聚合错误统计 |
 | GET | `/api/dashboard/errors/ranked` | viewer | 按影响程度排序错误 |
-| GET | `/api/dashboard/errors/history` | viewer | 查询错误历史（PG 长期历史，PG 不可用返回空）。注：PostgreSQL 为显式可选的**实验性**后端（不承诺支持、存在已知未修问题），默认后端为 memory，详见 TROUBLESHOOTING.md L 节 |
+| GET | `/api/dashboard/errors/history` | viewer | 查询错误历史（memory 进程内最近记录；历史长期持久化已随 PostgreSQL 后端移除而不再提供） |
 
 ### 2.4 规范 CRUD `/api/spec`
 

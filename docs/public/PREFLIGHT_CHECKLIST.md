@@ -120,13 +120,6 @@ pip check
 
 ### 2.3 可选依赖（按需）
 
-- [ ] **[可选]** PostgreSQL 存储依赖（`STORAGE_BACKEND=postgresql` 时必选）
-
-| 包名 / Package | 用途 / Purpose |
-|---|---|
-| psycopg2-binary >= 2.9.0 | PG 同步存储 |
-| asyncpg >= 0.29.0 | PG 异步存储（`PG_ASYNC_ENABLED=true`） |
-
 - [ ] **[可选]** Redis 状态后端依赖（`STATE_BACKEND=redis` 时必选）
 
 | 包名 / Package | 用途 / Purpose |
@@ -204,16 +197,15 @@ cp .env.example .env
 - [ ] **[必选]** 存储后端配置正确
 
 ```bash
-# STORAGE_BACKEND 合法值: "memory" | "postgresql"
+# STORAGE_BACKEND 合法值: "memory"（唯一；PostgreSQL 后端已移除）
 # 默认 "memory"，无需额外配置即可启动
 
 # 判定标准 / Pass Criteria:
 #   - memory 模式: 无需额外检查
-#   - postgresql 模式: 需完成第 4 节数据库连通性测试
+#   - 若 .env 仍写着 postgresql：启动会被直接拒绝（fail-fast，不静默降级），
+#     改回 memory 或删除该行即可（见 TROUBLESHOOTING.md L 节）
 # 异常处理 / Contingency:
-#   - 拼写错误会导致启动失败（fail-fast 设计）
-#   - PG 为实验性后端：仅 store 构造期不可达且 STORAGE_FALLBACK_TO_MEMORY=true 时自动降级；
-#     延迟初始化（首次读写）失败可能直接报错而不降级（见 TROUBLESHOOTING.md L 节）
+#   - 拼写错误同样会导致启动失败（fail-fast 设计）
 ```
 
 ### 3.4 安全配置
@@ -289,97 +281,22 @@ cp .env.example .env
 |---|---|---|
 | `CB_LLM_MAX_FAILURES` | LLM 熔断最大失败数 | 5 |
 | `CB_LLM_RESET_TIMEOUT` | LLM 熔断后半开等待(秒) | 30 |
-| `CB_PG_MAX_FAILURES` | PG 熔断最大失败数 | 3 |
-| `CB_PG_RESET_TIMEOUT` | PG 熔断后半开等待(秒) | 15 |
 
 > 注：`CB_*_WINDOW_SIZE` 已随 v0.5.0 死配置收敛移除（pybreaker 用 fail_max 计数 + reset_timeout 复位，无时间窗参数）。
 
 ---
 
-## 4. 数据库连通性测试 / Database Connectivity
+## 4. 数据库（PostgreSQL 已移除）
 
-> 仅当 `STORAGE_BACKEND=postgresql` 时需要执行本节。
+> PostgreSQL 运行时后端已正式移除：当前版本不建立任何数据库连接，本节原「PG 服务可达 / 数据库与用户 / 密码特殊字符 / 异步存储 / 分区与归档」检查全部不再需要。KB 经验由本地 SQLite 笔记本持久化（零配置、自动建表）。
 
-### 4.1 PostgreSQL 服务可达
-
-- [ ] **[必选]** PostgreSQL 服务正在运行
+- [ ] **[必选]** `.env` 中不存在 `STORAGE_BACKEND=postgresql`（存在则启动即拒绝）
 
 ```bash
-# 使用 psql 客户端测试
-psql -h <PG_HOST> -p <PG_PORT> -U <PG_USER> -d <PG_DATABASE> -c "SELECT 1"
-
-# 或使用 telnet/nc 测试端口
-# Linux/macOS:
-nc -zv <PG_HOST> <PG_PORT>
-# Windows PowerShell:
-Test-NetConnection -ComputerName <PG_HOST> -Port <PG_PORT>
-
-# 判定标准 / Pass Criteria: 连接成功，SELECT 1 返回结果
+# 判定标准 / Pass Criteria: STORAGE_BACKEND=memory（或未设置，默认 memory）
 # 异常处理 / Contingency:
-#   - 检查 PostgreSQL 服务是否启动
-#   - 检查防火墙规则是否放行 PG_PORT
-#   - 检查 PG_HOST / PG_PORT 配置是否正确
-#   - Docker 部署: docker compose up -d postgres
-```
-
-### 4.2 数据库与用户
-
-- [ ] **[必选]** 目标数据库和用户已创建
-
-```sql
--- 创建数据库（如尚未创建）
-CREATE DATABASE lujo_mcp;
-
--- 确认用户权限
-GRANT ALL PRIVILEGES ON DATABASE lujo_mcp TO postgres;
-
--- 判定标准 / Pass Criteria: 连接成功且用户有读写权限
-```
-
-### 4.3 密码特殊字符
-
-- [ ] **[可选]** 密码含特殊字符时已做 URL 编码
-
-```bash
-# 如果 PG_PASSWORD 包含 @ : / 等特殊字符
-# 在 DATABASE_URL 中需要 URL 编码（如 @ -> %40）
-# 注意: 应用本身读取 PG_PASSWORD 原始值，无需编码
-# 仅 DATABASE_URL（供外部工具使用）需要编码
-
-# 判定标准 / Pass Criteria: 外部工具可通过 DATABASE_URL 正常连接
-```
-
-### 4.4 异步存储（可选）
-
-- [ ] **[可选]** asyncpg 连接测试（`PG_ASYNC_ENABLED=true` 时）
-
-```bash
-# 确保 asyncpg 已安装
-pip show asyncpg
-
-# 判定标准 / Pass Criteria: asyncpg 包存在且版本 >= 0.29.0
-# 异常处理 / Contingency: pip install asyncpg>=0.29.0
-```
-
-### 4.5 分区与归档（可选）
-
-- [ ] **[可选]** 分区表配置（`PG_PARTITION_ENABLED=true` 时）
-
-```bash
-# 确保 PostgreSQL 版本 >= 12（支持声明式分区）
-psql -c "SELECT version();"
-
-# 判定标准 / Pass Criteria: PG 版本 >= 12
-```
-
-- [ ] **[可选]** 归档策略（`PG_ARCHIVE_ENABLED=true` 时）
-
-```bash
-# 确认归档天数配置合理
-# PG_ARCHIVE_DAYS=30    ← 超过 30 天的数据自动归档
-# PG_ARCHIVE_DELETE_AFTER=true  ← 归档后从主表删除
-
-# 判定标准 / Pass Criteria: PG_ARCHIVE_DAYS > 0
+#   - 遗留的 PG_* / POSTGRES_PASSWORD / DATABASE_URL 键会被忽略、不影响启动，可安全删除
+#   - 旧 PG kb_entries 数据迁移指引见 TROUBLESHOOTING.md L 节
 ```
 
 ---

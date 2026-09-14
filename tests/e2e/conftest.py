@@ -17,9 +17,9 @@ if _FORCED_BACKEND == "postgresql":
     raise RuntimeError(
         "LUJO_TEST_STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已在 "
         "Step 3 正式移除，测试后端白名单同步收窄为仅 memory（不会静默改写）。"
-        "请去掉该环境变量跑默认 memory；已有 PostgreSQL kb_entries 数据请先执行 "
-        "一次性迁移脚本 scripts/migrate_pg_kb_to_sqlite.py（建议先 --dry-run 核对 "
-        "report 再正式执行）。"
+        "请去掉该环境变量跑默认 memory；旧 PG kb_entries 数据的一次性迁移脚本"
+        "（scripts/migrate_pg_kb_to_sqlite.py）不随当前版本分发，需要迁移请先在 "
+        "v0.8.x 完成后再升级（详见 TROUBLESHOOTING.md L 节）。"
     )
 if _FORCED_BACKEND not in ("memory",):
     raise RuntimeError(

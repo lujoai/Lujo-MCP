@@ -6,6 +6,8 @@
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
+> **PostgreSQL 移除（Step 3，2026-09-14）**：PostgreSQL 运行时后端（pg_executor / pg_*_store / async_pg_store 等模块）、驱动依赖、Docker/compose 服务与 PG 配置族已全部移除；`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。本文以下历史版本注记中与 PG 相关的内容为**当时事实记录**，不再描述当前架构；现行语义以 §3.5 与 TROUBLESHOOTING.md L 节为准。
+
 > **v0.8.0（2026-09-11）**：KB 调试经验本地「笔记本」（SQLite 单文件写穿 + 启动回灌，`KB_PERSIST_ENABLED` 默认 true，`STORAGE_BACKEND != postgresql` 时生效；PG 分支行为不变）；平台包同名 bin 安装修复。默认 `STORAGE_BACKEND=memory`，产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL；`PG_ASYNC_ENABLED=true` 下全应用 trace/session 存储生命周期统一仍是独立工作项。
 >
 > 上一版 **v0.7.9 已发布（2026-09-10）**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，Node.js 服务端 SDK 首发。
@@ -89,9 +91,9 @@
                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 存储/状态 (Storage)                                           │
-│ trace_store(memory/pg/async_pg) │ session registry │ state store(memory/redis) │
-│ sse hub (广播) │ specs ✅(FR15, spec_store 独立 specs 表) │
-│ errors 表持久化聚合 │ async_pg_store ✅(feature flag 灰度) │
+│ trace_store(memory) │ session registry │ state store(memory/redis) │
+│ sse hub (广播) │ specs ✅(FR15, spec_store 进程内) │
+│ errors 进程内聚合 │ KB SQLite 笔记本（唯一持久化） │
 └───────────────────────────────┬─────────────────────────────┘
                                 ▼
                           OpenAI API
@@ -241,7 +243,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **2
 - `create_request_id()` → 唯一 ID。
 - `add_log(request_id, step, data)` → 时序追加，步骤含 `request_start`/`processing`/`response_ready`/`error` 及 MCP 专用 `mcp_*`。
 - `get_logs(request_id)` → 按序取回。
-- 持久化由 `trace_store` 后端（`memory`/`postgresql`）承担；TTL 清理（`main.py` `periodic_cleanup`，300s 周期）。
+- 存储由 `trace_store` 后端（`memory`，唯一合法值）承担；TTL 清理（`main.py` `periodic_cleanup`，300s 周期）。
 
 #### 3.4.2 Context Builder（`app/runtime/context/builder.py`）✅
 
@@ -324,8 +326,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **2
 
 | 组件 | 职责 | 实现 |
 | --- | --- | --- |
-| `trace_store` | trace/session 持久化 | `memory` / `postgresql` / `async_pg`（工厂 `storage/factory.py`） |
-| `async_pg_store` ✅ | asyncpg 异步存储（feature flag `pg_async_enabled=False` 默认关闭） | `app/runtime/core/storage/async_pg_store.py`，灰度切换可回退 |
+| `trace_store` | trace/session 存储 | `memory`（唯一后端，工厂 `storage/factory.py`；PostgreSQL/async_pg 已移除） |
 | `session registry` | MCP `Mcp-Session-Id` 会话生命周期 | `transports/session.py`，TTL 1800s |
 | `state store` | 限流/计数 | `memory` / `redis`（Redis ZSET 滑动窗口限流） |
 | `sse hub` | 服务端→客户端广播 | `transports/sse.py` |
@@ -334,25 +335,9 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **2
 | `errors` ✅ | 异常持久化聚合 | `app/runtime/core/errors.py`，**独立 errors 表**（fingerprint + occurrence_count 落 PG，重启不丢失） |
 | `MemoryTraceStore` | 内存存储 | **OrderedDict + max_entries 容量上限**（防 OOM） |
 
-#### 3.5.1 PostgreSQL 存储实现（`app/runtime/core/storage/`，god object 重构后 7 模块）✅
+#### 3.5.1 PostgreSQL 存储实现 —— 已移除
 
-> 原 `pg_store.py` 单文件 1048 行已拆分（2026-08-19），职责各归单一模块：
-
-- `pg_executor.py`：连接池 + DDL 初始化 + 重试/重连/熔断执行基础设施，另提供 `execute_sql` / `query_sql` 便捷封装（连接生命周期由 executor 托管）。
-- `pg_partitions.py`：traces 月度 RANGE 分区预创建 + 归档。
-- `pg_trace_store.py` / `pg_session_store.py` / `pg_error_store.py` / `pg_spec_store.py` / `pg_kb_store.py`：5 个 Store 类（TraceStorage / SessionStorage / ErrorStorage / SpecStorage / KnowledgeBaseStorage 的 PG 实现）。
-
-**连接池**：`psycopg2.pool.ThreadedConnectionPool`（`pg_min_connections=2, pg_max_connections=20`，见 `app/config.py`），线程安全，全局单例。
-
-**自动建表**：`_ensure_init()` 启动时执行 `CREATE TABLE IF NOT EXISTS`：
-- `traces`（id BIGSERIAL, request_id TEXT, timestamp DOUBLE PRECISION, step TEXT, data JSONB）
-- `sessions`（session_id TEXT PRIMARY KEY, created_at DOUBLE PRECISION, last_active DOUBLE PRECISION, metadata JSONB）
-
-**数据序列化**：`save_entry` 统一用 `json.dumps(data, ensure_ascii=False, default=str)` 序列化，支持 dict/list/str/int/float/bool/None；`get_entries` 用 `_parse_data` 安全反序列化（JSON 字符串→对象，非 JSON 字符串→原样返回）。
-
-**重试机制**：`_execute_with_retry` 包装 SQL 执行，捕获 `OperationalError` 自动重连重试（重连后返回最新连接，P3-9 语义保持）。
-
-**查询接口**：`list_request_ids(limit)` 返回最近写入的 request_id 列表（按 timestamp 倒序），供 Dashboard 和 MCP Tools 使用。
+> PostgreSQL 运行时后端（原 `pg_executor.py` / `pg_partitions.py` / 5 个 `pg_*_store.py` / `async_pg_store.py` 共 10 个模块）已随 Step 3 全部删除。当前存储层仅剩 `factory.py` / `base.py` / `memory_store.py` / `noop_store.py` / `sqlite_kb_store.py`：运行现场走 memory（重启即清），KB 经验由 SQLite 笔记本持久化。旧 PG 建表 SQL 归档于 `archive/pg-migrations/`。
 
 #### 3.5.2 Dashboard API（`app/api/dashboard.py`）✅
 
@@ -365,7 +350,7 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **2
 
 `_collect_all_traces` 合并两个数据源：
 1. `errors.list_recent()` — 内存异常缓冲（save_trace 默认存这里）
-2. `logs.list_request_ids()` — PostgreSQL 持久化数据
+2. `logs.list_request_ids()` — trace_store 内存数据
 
 `_extract_trace_summary` 安全处理 data 字段（支持 str/dict/None），`_safe_int` 处理 status 类型转换。
 
@@ -500,14 +485,14 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 上下文截断 | 字符估算（`max_tokens*3`）+ 帧/局部变量上限 | 控成本与延迟，防超长 |
 | 安全默认 | fail-closed + 恒定时间比较 | 防未授权与时序攻击 |
 | 降级 | 快照/LLM 失败不阻断主流程 | 提高可用性 |
-| 存储 | 工厂模式 memory/pg/async_pg + 状态 memory/redis | 本地轻量 / 生产持久 / asyncpg 灰度切换 |
+| 存储 | 工厂分发 memory + KB SQLite 笔记本；状态 memory/redis | 零配置本地运行（PostgreSQL 后端已移除） |
 
 ---
 
 ## 8. 部署与配置
 
 - 启动：HTTP 使用 `python -m app.main`；stdio 使用 `python -m app.mcp_server`。
-- 依赖：`requirements.txt`（fastapi、uvicorn、openai、psutil、psycopg2、asyncpg、redis、mcp、pydantic-settings）。
+- 依赖：`requirements.txt`（fastapi、uvicorn、openai、psutil、redis、mcp、pydantic-settings；PG 驱动 psycopg2/asyncpg 已移除）。
 - 关键配置：见 `PRD.md` §11.3；**务必生产设 `API_KEY` 与 `CORS_ORIGINS`**；`code_context_lines` 待补（§6）。
 - 容器化：`Dockerfile` + `docker-compose.yaml` 已提供。
 
@@ -615,7 +600,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | ~~代码定位未接线~~ | ~~`get_debug_context` 不含片段~~ | §6 ✅ 已修复 |
 | ~~静默失败/前端自动化~~ | ~~FR13/FR14/FR15 待建~~ | ✅ 已实现 |
 | 厂商锁定 | 仅 OpenAI | 多 LLM provider 已支持（openai/zhipu/deepseek/custom）|
-| memory 后端 | 重启即丢 | 生产用 postgresql 或 async_pg |
+| memory 后端 | 运行现场重启即丢 | 既有设计取舍：运行现场为进程内数据；KB 经验由 SQLite 笔记本跨重启保留（PostgreSQL 后端已移除） |
 | ~~PGStore API 误用~~ | ~~`conn.execute()` 不存在~~ | ✅ 已改用 `cur = conn.cursor(); cur.execute()` |
 | ~~data 字段非 dict 时崩溃~~ | ~~`json.loads` 失败 / `.get()` 报错~~ | ✅ `_parse_data` 安全解析 + 类型检查 |
 | SSE 长连接测试 | TestClient 中会阻塞 | 标记 `@pytest.mark.skip`，需手动验证 |
@@ -630,20 +615,17 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | --- | --- | --- | --- |
 | 单元测试 | `tests/unit/` | 310+ | redaction、fingerprint、storage、dashboard、verify_api、async_pg 等 |
 | 脱敏集成测试 | `tests/integration/test_redaction_integration.py` | 18 | 端到端脱敏链路验证 |
-| AsyncPGStore 测试 | `tests/integration/test_pg_integration.py` | 12 | PGStore 连接、Dashboard 读取、MCP Tools 读取、LLM 分析 |
 | **合计** | — | **1784 tests = 1766 passed / 18 skipped / 0 failed** | 当前 GitHub CI unit 基线（run 34675974282；另有 integration 136 项 / e2e 11 项）；本节表格其余数字为历史快照，仅作演进记录 |
 
 ### 11.2 测试执行
 
 ```bash
-# 全部测试（需要 PostgreSQL 运行中）
+# 全部测试（零外部依赖，默认 memory）
 python -m pytest tests/ --tb=short -q
 
-# 仅单元测试（不依赖 PostgreSQL）
+# 仅单元测试
 python -m pytest tests/unit/ --tb=short -q
 
-# 仅 PG 集成测试
-python -m pytest tests/integration/test_pg_integration.py --tb=short -q
 
 # 按 marker 运行
 python -m pytest -m "not integration and not pg and not slow" --tb=short -q
@@ -697,12 +679,10 @@ flowchart TB
 
     subgraph Storage["存储层"]
         FACTORY["Storage Factory<br/>factory.py"]
-        PG["PGStore<br/>pg_executor.py + pg_*_store.py<br/>连接池+自动建表+重试"]
+        SQLITE["SQLite KB 笔记本<br/>sqlite_kb_store.py"]
         MEM["MemoryStore<br/>memory_store.py"]
         ERRORS["errors 缓冲<br/>errors.py<br/>内存 deque"]
     end
-
-    DB[("PostgreSQL<br/>lujo_mcp<br/>traces + sessions")]
 
     MC --> STDIO
     REST --> HTTP
@@ -714,9 +694,8 @@ flowchart TB
 
     Engine --> Storage
     LOGS --> FACTORY
-    FACTORY --> PG
     FACTORY --> MEM
-    PG --> DB
+    FACTORY --> SQLITE
     BUILD --> ERRORS
 
     LLM --> |"analyze()"| Engine
@@ -730,19 +709,17 @@ sequenceDiagram
     participant API as /debug API
     participant Logs as logs core
     participant Factory as Storage Factory
-    participant PG as PGStore
-    participant DB as PostgreSQL
+    participant MEM as MemoryStore
 
     C->>API: POST /debug {payload}
     API->>Logs: create_request_id()
     API->>Logs: add_log(rid, "request_start", data)
     Logs->>Factory: get_trace_store()
-    Factory->>PG: save_entry(rid, entry)
-    PG->>DB: INSERT INTO traces ...
+    Factory->>MEM: save_entry(rid, entry)
     API->>Logs: add_log(rid, "processing", {...})
-    PG->>DB: INSERT INTO traces ...
+    MEM->>MEM: 内存条目追加
     API->>Logs: add_log(rid, "response_ready", {...})
-    PG->>DB: INSERT INTO traces ...
+    MEM->>MEM: 内存条目追加
     API-->>C: {request_id, result, trace, context}
 ```
 
@@ -755,21 +732,18 @@ sequenceDiagram
     participant Collect as _collect_all_traces
     participant Errors as errors 缓冲
     participant Logs as logs core
-    participant PG as PGStore
-    participant DB as PostgreSQL
+    participant MEM as MemoryStore
 
     Browser->>DASH: GET /api/dashboard/traces
     DASH->>Collect: _collect_all_traces(limit)
     Collect->>Errors: list_recent(limit)
     Errors-->>Collect: [err1, err2, ...]
     Collect->>Logs: list_request_ids(limit)
-    Logs->>PG: list_request_ids(limit)
-    PG->>DB: SELECT DISTINCT request_id ...
-    DB-->>PG: [rid1, rid2, ...]
-    PG-->>Logs: [rid1, rid2, ...]
+    Logs->>MEM: list_request_ids(limit)
+    MEM-->>Logs: [rid1, rid2, ...]
     Logs-->>Collect: [rid1, rid2, ...]
     Collect->>Logs: get_logs(rid) per id
-    Logs->>PG: get_entries(rid)
+    Logs->>MEM: get_entries(rid)
     PG->>DB: SELECT ... WHERE request_id = ...
     DB-->>PG: rows
     PG-->>Logs: entries
@@ -829,8 +803,8 @@ sequenceDiagram
 
 ### 13.3 存储模型（关键架构事实）
 
-- `trace_store`（默认 `memory`，可选 `postgresql`，工厂 `storage/factory.py:31`）以 `request_id`/`error_id` 为 key，条目 `{timestamp, step, data}`（`logs.py:13`）。
-- ⚠️ **所有数据类型（异常/network/ui_event/console/trace_data/meta/link）都写进同一张 `traces` 表**，用 `step` 字段区分（`trace_repo.py:44-49`）。独立表现状：`errors`/`specs` 由 `pg_store.py` DDL 常量建表并有完整 CRUD（`upsert_error`/`save_spec`/`get_spec`/`list_specs_pg`/`delete_spec`，活跃使用）；`network_records`/`ui_events` 原"已建 SQL 但代码从未使用"，M11 已删除其迁移文件（`migrations/20260712_*`），数据仍经 traces 表 step 字段存储。
+- `trace_store`（`memory`，唯一合法值，工厂 `storage/factory.py`）以 `request_id`/`error_id` 为 key，条目 `{timestamp, step, data}`（`logs.py:13`）。
+- ⚠️ **所有数据类型（异常/network/ui_event/console/trace_data/meta/link）都写进同一张 `traces` 表**，用 `step` 字段区分（`trace_repo.py:44-49`）。历史注记：PG 独立表（errors/specs/network_records/ui_events）已随后端移除，运行现场全部在 memory 进程内。
 - `errors._recent`：进程级全局 `deque(maxlen=200)`（`errors.py:21`），按 `compute_fingerprint`（`:29`）去重聚合。
 - `session registry`（`transports/session.py`）仅管理 MCP 会话生命周期，**不承载业务数据、不做数据隔离**。
 
@@ -874,12 +848,11 @@ sequenceDiagram
 
 **关键异步缺陷：**
 
-1. **🔴 PostgreSQL 操作完全同步**（`pg_executor.py` 连接池区）：`ThreadedConnectionPool(min=2, max=10)` 是同步连接池。在 FastAPI async handler 中调用同步 PG 操作会阻塞事件循环。`maxconn=10` 硬编码不可配置，超过 10 个并发写入请求排队等待。
+1. ~~**🔴 PostgreSQL 操作完全同步**~~（已随 PostgreSQL 后端移除而不再适用：当前版本无任何 PG 调用）。
 2. **🔴 LLM 调用同步阻塞**（`analyzer.py` `_retry_call`）：`_retry_call` 同步 HTTP 调用 2-10 秒。`/api/debug/analyze` 定义为 `def`（非 `async def`），FastAPI 将其放入线程池执行（默认 40 线程），高并发时线程池耗尽。
 3. **🟡 Redis 操作同步**（`state/store.py:80-114`）：`redis.Redis` 同步客户端，限流中间件每个请求增加 1-2ms 延迟。
 
 **改进方向：**
-- P0：PG 切换到 `asyncpg` + `asyncio`，所有 PG 操作改为 `async/await`
 - P1：LLM 调用改为 `async def` + `httpx.AsyncClient`
 - P2：Redis 切换到 `aioredis`
 
@@ -913,7 +886,7 @@ sequenceDiagram
 |----------|------|------|
 | 路径白名单 | `middleware.py:20` | `PUBLIC_PATHS` 免鉴权（5 项：`/`、`/health`、`/demo`、`/demo/silent-failure`、`/ai-debug.js`） |
 | MCP 方法路由 | `protocol/server.py:132-137` | `_METHOD_MAP` 分发 |
-| 存储后端 | `core/storage/factory.py:31-42` | 环境变量选择 memory/postgresql |
+| 存储后端 | `core/storage/factory.py` | `memory` 唯一合法值（postgresql 启动即拒绝） |
 | 状态后端 | `state/store.py:121-131` | 环境变量选择 memory/redis |
 | LLM Provider | `app/llm/clients.py` | 选择 openai/zhipu/deepseek/custom |
 | 规范类型 | `verifier/assert_engine.py:29-38` | `spec.kind` 分发 api/ui/rule |
@@ -936,8 +909,6 @@ sequenceDiagram
 |--------|------|------|
 | 请求体限制 | `middleware.py:56-78` | `max_body_size=1MB` 硬截断 |
 | 速率限制 | `middleware.py:95-108` | 固定窗口 60req/min/IP |
-| PG 连接池 | `pg_executor.py` | `ThreadedConnectionPool(min=2, max=10)` |
-| 连接重试 | `pg_executor.py` | `_execute_with_retry(max_retries=2)` |
 | 定时清理 | `main.py:77-86` | 每 300s 清理过期 trace/session |
 | 异常缓冲上限 | `core/errors.py:21` | `deque(maxlen=200)` |
 | 安全启动校验 | `main.py:33-41` | 拒绝 `0.0.0.0` + 空 API_KEY |
@@ -965,8 +936,7 @@ sequenceDiagram
 | SessionRegistry | ✅ Lock | ❌ | ❌ |
 
 **改进方向：**
-- P0：PG 连接池可配置化（`PG_MAX_CONNECTIONS` 环境变量，默认 20）
-- P0：生产环境强制 `STORAGE_BACKEND=postgresql` + `STATE_BACKEND=redis`
+- ~~P0：生产环境强制 `STORAGE_BACKEND=postgresql`~~（已随 PG 移除不再适用；多实例部署仍建议 `STATE_BACKEND=redis`）
 - P1：分布式清理锁（Redis `SET NX`）
 - P1：异常聚合持久化（新增 `error_stats` 表）
 - P2：spec_store 独立表（替代从 traces 扫描恢复）
@@ -1171,10 +1141,9 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 
 ---
 
-## 15. 数据层长期优化设计（Phase 5，2026-07-24）
+## 15. 数据层长期优化设计（Phase 5，2026-07-24）—— 已随 PostgreSQL 移除而失效
 
-> 本章记录 Phase 5 数据层长期优化的设计决策，包括 P3-1 表分区和 P3-2 归档策略。
-> 实现位置：`app/runtime/core/storage/pg_executor.py` + `pg_*_store.py` 各 Store（同步）、`app/runtime/core/storage/async_pg_store.py`（异步）、`app/config.py`
+> **状态（Step 3）**：本章的分区（P3-1）与归档（P3-2）设计均针对 PostgreSQL traces 表；PG 后端已移除，本章全部内容**不再描述当前架构**，仅作历史设计记录保留。原实现模块（`pg_executor.py`/`pg_*_store.py`/`async_pg_store.py`）与 `pg_partition_*`/`pg_archive_*` 配置族均已删除。
 
 ### 15.1 设计背景与目标
 

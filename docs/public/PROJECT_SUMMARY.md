@@ -58,20 +58,19 @@ Verifier 验证
 | 配置 | [app/config.py](../../app/config.py) | pydantic-settings 全局单例 |
 | 中间件 | [app/middleware.py](../../app/middleware.py) | 7 个中间件（CORS、Auth、MaxBodySize、RateLimit、SecurityHeaders、Trace + NetworkCapture，fail-closed 鉴权） |
 | 调试 API | [app/api/debug.py](../../app/api/debug.py) | /api/debug/* 路由 |
-| Dashboard API | [app/api/dashboard.py](../../app/api/dashboard.py) | 从 PostgreSQL 读取 |
+| Dashboard API | [app/api/dashboard.py](../../app/api/dashboard.py) | 运行现场状态聚合展示 |
 | MCP HTTP | [app/api/mcp_routes.py](../../app/api/mcp_routes.py) | Streamable HTTP 传输 |
 | MCP stdio | [app/mcp_server.py](../../app/mcp_server.py) | stdio 子进程传输 |
 | 日志核心 | [app/runtime/core/logs.py](../../app/runtime/core/logs.py) | add_log/get_logs/list_request_ids |
-| 存储工厂 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) | memory/pg 一键切换 |
-| PG 存储 | [app/runtime/core/storage/pg_executor.py](../../app/runtime/core/storage/pg_executor.py) | 连接池+自动建表+重试（修改需审批；v0.6.0 起拆分为 pg_executor/分区/5 个 Store 模块） |
+| 存储工厂 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) | memory 分发 + KB SQLite 笔记本 |
 | 上下文构建 | [app/runtime/context/builder.py](../../app/runtime/context/builder.py) | build_debug_context |
 | 故障定位 | [app/runtime/context/fault_localizer.py](../../app/runtime/context/fault_localizer.py) | 栈帧启发式评分，生成 `likely_cause_candidate`（候选，非根因） |
 | 断言引擎 | [app/runtime/verifier/assert_engine.py](../../app/runtime/verifier/assert_engine.py) | assert_behavior 纯函数 |
 | 规范存储 | [app/runtime/verifier/spec_store.py](../../app/runtime/verifier/spec_store.py) | dict+Lock + add_log 持久化 |
 | 异常钩子 | [app/runtime/hooks/exception_hook.py](../../app/runtime/hooks/exception_hook.py) | sys.excepthook + asyncio |
 | LLM 分析 | [app/llm/analyzer.py](../../app/llm/analyzer.py) | 重试/超时/fallback/流式 |
-| 指纹知识库 | [app/rag/knowledge_base.py](../../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀）；v0.5.3 起 PostgreSQL 写穿持久化（kb_entries 表 + 启动回灌，learned 经验跨重启保留）；v0.8.0 起默认改为本地 SQLite「笔记本」，PG 转为实验性可选后端 |
-| 知识库存储后端 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) + [base.py](../../app/runtime/core/storage/base.py) | `get_knowledge_store()` 分发（默认本地 SQLite 笔记本；PG 为实验性可选，仅构造期异常按 `storage_fallback_to_memory` 降级，延迟初始化失败可能不降级——详见 TROUBLESHOOTING.md L 节「PostgreSQL 实验性后端与已知限制」） |
+| 指纹知识库 | [app/rag/knowledge_base.py](../../app/rag/knowledge_base.py) | 按错误指纹复用历史分析结论（精确匹配 + 自动沉淀）；KB 经验由本地 SQLite「笔记本」持久化（写穿 + 启动回灌，跨重启保留；PG 后端已移除） |
+| 知识库存储后端 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) + [base.py](../../app/runtime/core/storage/base.py) | `get_knowledge_store()` 分发（本地 SQLite 笔记本为唯一持久化路径；初始化失败降级 no-op 不阻断启动） |
 | Debug 经验记录 | [app/rag/experience.py](../../app/rag/experience.py) | `DebugExperienceRecord` 输出 DTO/View（纯 View，不建存储、不替代 DebugCase） |
 | 经验检索器 | [app/rag/retriever.py](../../app/rag/retriever.py) | 三层检索：fingerprint 精确 → message normalize → vector（默认关闭） |
 | 向量检索抽象 | [app/rag/vector_store.py](../../app/rag/vector_store.py) | `VectorStore` ABC + `InProcessVectorStore`（Jaccard）+ `NullVectorStore` + 工厂/注册表 |
@@ -100,12 +99,11 @@ Verifier 验证
 
 ### 存储能力 ✅
 
-- ✅ PostgreSQL 16 集成
+- ✅ ~~PostgreSQL 16 集成~~（后端已随 Step 3 移除；KB 持久化由本地 SQLite 笔记本承担）
 - ✅ PGStore 连接池（minconn=2, maxconn=20）
-- ✅ **asyncpg 异步存储**（feature flag 灰度切换，`PG_ASYNC_ENABLED`）
 - ✅ 自动建表（traces、sessions、errors、specs、network_records、ui_events）
 - ✅ 存储工厂模式（memory/pg 一键切换）
-- ✅ Dashboard 从 PostgreSQL 读取
+- ✅ Dashboard 运行现场状态展示
 - ✅ **errors 表持久化聚合**（指纹去重 + 统计）
 - ✅ **spec_store 独立表**（CRUD + 审计追溯）
 - ✅ **P3-1 数据分区**（traces 表按月 RANGE 分区，自动预创建 + 惰性检查，默认关闭）
@@ -299,7 +297,6 @@ Verifier 验证
 
 | 模块 | 文件 | 原因 |
 |------|------|------|
-| PG 存储模块 | [app/runtime/core/storage/pg_executor.py](../../app/runtime/core/storage/pg_executor.py) | 已验证，如需修改须先输出问题分析+影响范围+测试方案（连接池/重试/熔断核心；Store 实现见 pg_*_store.py 各模块） |
 | 存储抽象层 | [app/runtime/core/storage/base.py](../../app/runtime/core/storage/base.py) | 工厂模式基础 |
 | 存储工厂 | [app/runtime/core/storage/factory.py](../../app/runtime/core/storage/factory.py) | 一行切换核心 |
 | 安全中间件 | [app/middleware.py](../../app/middleware.py) | fail-closed 安全栈 |
@@ -351,13 +348,9 @@ Verifier 验证
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `STORAGE_BACKEND` | `memory` | `memory` / `postgresql` |
+| `STORAGE_BACKEND` | `memory` | `memory`（唯一合法值；`postgresql` 已移除，启动即拒绝） |
 | `STATE_BACKEND` | `memory` | `memory` / `redis` |
-| `PG_HOST` | `localhost` | PostgreSQL 主机 |
-| `PG_PORT` | `5432` | PostgreSQL 端口 |
 | `PG_DATABASE` | `lujo_mcp` | 数据库名 |
-| `PG_USER` | `postgres` | PostgreSQL 用户名 |
-| `PG_PASSWORD` | — | PostgreSQL 权威密码来源 |
 | `LLM_PROVIDER` | `openai` | `openai` / `zhipu` / `custom` |
 | `OPENAI_API_KEY` | — | LLM API Key |
 | `API_KEY` | — | 鉴权密钥（留空不启用，向后兼容单 key 模式） |
@@ -366,7 +359,7 @@ Verifier 验证
 | `RBAC_ENABLED` | `false` | 启用 RBAC 角色分级（默认 false，全 admin 向后兼容） |
 | `RBAC_ROLE_MAPPING` | — | key→role 映射（如 `key1:admin,key2:developer,key3:viewer`），未命中映射默认 viewer（fail-closed） |
 
-> 环境固化约定：应用只读取 `PG_*` 变量；`POSTGRES_PASSWORD` 仅供 Docker 初始化数据库；`DATABASE_URL` 仅作兼容项，应用本身不会读取。
+> 环境固化约定：PG 配置族已随 PostgreSQL 后端移除；遗留 `PG_*` / `POSTGRES_PASSWORD` / `DATABASE_URL` 键会被忽略，可安全删除。
 
 **启动命令**：
 
@@ -374,7 +367,7 @@ Verifier 验证
 # Docker Compose（推荐）
 docker compose up -d
 
-# 本地开发（确保 PostgreSQL 已运行）
+# 本地开发（零配置，memory 默认）
 python -m app.main
 
 # stdio 模式（供 MCP Desktop 客户端 等本地客户端）

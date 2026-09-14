@@ -3,7 +3,7 @@
 **适用版本 / Applicable Version**: v0.8.0
 **最后更新 / Last Updated**: 2026-09-11
 
-> **发布状态**：v0.8.0 已发布。默认 `STORAGE_BACKEND=memory`；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。启用 `PG_ASYNC_ENABLED=true` 时，errors asyncpg 链路已验证，但 trace/session 仍有同步存储初始化边界。
+> **发布状态**：默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
 
 ---
 
@@ -21,7 +21,7 @@
 - [I. 性能与资源异常 / Performance & Resource Errors](#i-性能与资源异常--performance--resource-errors)
 - [J. Docker 部署异常 / Docker Deployment Errors](#j-docker-部署异常--docker-deployment-errors)
 - [K. 测试异常 / Test Errors](#k-测试异常--test-errors)
-- [L. PostgreSQL 实验性后端 / Experimental PostgreSQL](#l-postgresql-实验性后端--experimental-postgresql)
+- [L. PostgreSQL 后端移除说明 / PostgreSQL Removal](#l-postgresql-后端移除说明--postgresql-removal)
 - [通用排查流程 / General Diagnostic Flow](#通用排查流程--general-diagnostic-flow)
 
 ---
@@ -124,8 +124,6 @@ pip check
 | `fastapi` | fastapi | `pip install fastapi>=0.115.0` |
 | `uvicorn` | uvicorn | `pip install uvicorn>=0.49.0` |
 | `pydantic_settings` | pydantic-settings | `pip install pydantic-settings>=2.0.0` |
-| `psycopg2` | psycopg2-binary | `pip install psycopg2-binary>=2.9.0` |
-| `asyncpg` | asyncpg | `pip install asyncpg>=0.29.0` |
 | `redis` | redis | `pip install redis>=5.0.0` |
 | `pybreaker` | pybreaker | `pip install pybreaker>=1.0.0` |
 | `opentelemetry.*` | opentelemetry-* | `pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc` |
@@ -135,22 +133,25 @@ pip check
 
 ---
 
-### A-4. STORAGE_BACKEND 拼写错误
+### A-4. STORAGE_BACKEND 拼写错误或指向已移除的 PostgreSQL
 
 **现象 / Symptom**:
 ```
-ValueError: Invalid STORAGE_BACKEND: 'postgrsql'. Allowed: memory, postgresql
+ValueError: Invalid STORAGE_BACKEND='postgrsql'. Valid values: ['memory']. ...
+# 精确值 postgresql 则是：
+StorageBackendRemovedError: STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已正式移除...
 ```
 
-**原因 / Cause**: `.env` 中 `STORAGE_BACKEND` 值拼写错误。
+**原因 / Cause**: `.env` 中 `STORAGE_BACKEND` 值拼写错误，或仍保留着旧版的 `postgresql` 配置（该后端已移除）。
 
 **解决方案 / Solution**:
 ```bash
-# .env 中修正
-STORAGE_BACKEND=postgresql   # 注意拼写：postgresql，不是 postgrsql
+# .env 中改回唯一合法值
+STORAGE_BACKEND=memory
+# 或直接删除该行（memory 是默认值）
 ```
 
-**设计说明**: 这是 fail-fast 设计，防止拼写错误导致静默降级到 memory 存储，造成生产数据丢失。
+**设计说明**: 这是 fail-fast 设计，防止拼写错误导致静默降级到 memory 存储，造成生产数据丢失。精确值 `postgresql` 不会被静默改写为 memory，而是启动即拒绝（详见 L 节）。
 
 **验证 / Verify**: 服务正常启动，`/health` 返回正确的 storage 状态
 
@@ -237,93 +238,26 @@ LLM 调用行为异常（如返回过于随机的结果、频繁超时）。
 
 ## C. 存储层异常 / Storage Errors
 
-### C-1. PostgreSQL 连接失败
+### C-1. 配置了已移除的 PostgreSQL 后端（原「PostgreSQL 连接失败」等三节的统一入口）
+
+> v0.9.0 起 PostgreSQL 运行时后端已正式移除，原 C-1（连接失败）/ C-2（认证失败）/ C-3（数据库不存在）三节描述的问题不再可能出现——当前版本不建立任何 PG 连接。本节保留为升级指引。
 
 **现象 / Symptom**:
 ```
-psycopg2.OperationalError: could not connect to server: Connection refused
-# 或
-asyncpg.exceptions.CannotConnectNowError: ...
+StorageBackendRemovedError: STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已正式移除...
 ```
+stdio/统一模式进程在启动阶段即非零退出（stdout 保持纯 MCP 协议、错误只落 stderr）；HTTP 模式 lifespan 启动失败。
 
-**原因 / Cause**: PostgreSQL 服务未启动或配置错误。
-
-**排查步骤 / Diagnostic Steps**:
-1. 检查 PG 服务状态
-2. 验证连接参数
-3. 检查网络/防火墙
+**原因 / Cause**: `.env` 或环境变量中仍保留 `STORAGE_BACKEND=postgresql`（旧版配置）。
 
 **解决方案 / Solution**:
 ```bash
-# 1. 检查 PG 服务
-# Linux:
-systemctl status postgresql
-# Docker:
-docker compose ps postgres
-
-# 2. 验证连接参数
-psql -h localhost -p 5432 -U postgres -d lujo_mcp -c "SELECT 1"
-
-# 3. 检查 .env 配置
-# PG_HOST=localhost
-# PG_PORT=5432
-# PG_DATABASE=lujo_mcp
-# PG_USER=postgres
-# PG_PASSWORD=<correct_password>
-
-# 4. 如果 PG 确实不可用，可临时降级（注意 PG 为实验性后端：fallback 只覆盖
-#    store 构造期，延迟初始化/首次访问失败可能仍报错，详见下方 L 节）
-# .env:
+# .env 中改回唯一合法值（或删除该行，memory 是默认值）
 STORAGE_BACKEND=memory
-# 或保持 postgresql 但确保:
-STORAGE_FALLBACK_TO_MEMORY=true
 ```
+旧 PG kb_entries 数据的迁移见 L 节；遗留的 `PG_*` / `POSTGRES_PASSWORD` / `DATABASE_URL` 键不会重新启用 PostgreSQL，也不会导致启动崩溃，可安全删除。
 
-**验证 / Verify**: `/health` 返回 `"storage": "postgresql (connected)"`
-
----
-
-### C-2. PostgreSQL 认证失败
-
-**现象 / Symptom**:
-```
-psycopg2.OperationalError: FATAL: password authentication failed for user "postgres"
-```
-
-**原因 / Cause**: `PG_PASSWORD` 配置错误或用户不存在。
-
-**解决方案 / Solution**:
-```bash
-# 1. 确认密码正确
-# 2. 如果忘记密码，重置 PG 用户密码:
-#    以 postgres 系统用户执行:
-psql -c "ALTER USER postgres PASSWORD 'new_password';"
-# 3. 更新 .env 中 PG_PASSWORD 和 POSTGRES_PASSWORD
-```
-
-**验证 / Verify**: `psql` 可正常连接
-
----
-
-### C-3. 数据库不存在
-
-**现象 / Symptom**:
-```
-psycopg2.OperationalError: FATAL: database "lujo_mcp" does not exist
-```
-
-**原因 / Cause**: 目标数据库尚未创建。
-
-**解决方案 / Solution**:
-```sql
--- 连接到 PG 默认数据库
-psql -h localhost -U postgres -d postgres
-
--- 创建目标数据库
-CREATE DATABASE lujo_mcp;
-```
-
-**验证 / Verify**: `psql -d lujo_mcp -c "SELECT 1"` 成功
+**验证 / Verify**: 服务正常启动，`/health` 返回 `"storage": "memory"`
 
 ---
 
@@ -344,7 +278,7 @@ WARNING: Memory store reached max entries (10000), evicting oldest
   # .env
   MEMORY_STORE_MAX_ENTRIES=20000
   ```
-- 长期建议: 切换到 PostgreSQL 存储
+- 长期建议: 运行现场本就是进程内数据，按需调大上限即可；KB 经验由本地 SQLite 笔记本独立持久化，不受该上限影响
 
 **验证 / Verify**: 服务正常运行，旧数据按预期淘汰
 
@@ -886,9 +820,6 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/metrics
 # 2. 缩短 TTL
 # TRACE_TTL_SECONDS=1800
 # SESSION_TTL_SECONDS=1800
-
-# 3. 切换到 PostgreSQL 存储
-# STORAGE_BACKEND=postgresql
 ```
 
 **验证 / Verify**: 内存使用稳定在合理范围
@@ -899,18 +830,14 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/metrics
 
 **现象 / Symptom**: API 响应时间明显增加。
 
-**原因 / Cause**: 可能原因包括 PG 连接池耗尽、LLM 超时、大量并发请求。
+**原因 / Cause**: 可能原因包括 LLM 超时、大量并发请求、Redis 不可达时的限流退化。
 
 **排查步骤 / Diagnostic Steps**:
 1. 检查 `/metrics` 中的平均延迟
 2. 查看日志中是否有慢请求
-3. 检查 PG 连接池状态
 
 **解决方案 / Solution**:
 ```bash
-# 调整 PG 连接池
-# PG_ASYNC_MAX=30    # 增大异步连接池
-
 # 调整 LLM 超时
 # LLM_TIMEOUT=120
 
@@ -928,10 +855,6 @@ curl -H "X-API-Key: <API_KEY>" http://localhost:8000/metrics
 
 **现象 / Symptom**:
 ```
-Error: POSTGRES_PASSWORD must be set
-# 或
-Error: PG_PASSWORD must be set
-# 或
 Error: API_KEY must be set
 ```
 
@@ -939,9 +862,7 @@ Error: API_KEY must be set
 
 **解决方案 / Solution**:
 ```bash
-# .env 中设置以下必需变量:
-POSTGRES_PASSWORD=your_pg_password
-PG_PASSWORD=your_pg_password        # 建议与 POSTGRES_PASSWORD 一致
+# .env 中设置必需变量:
 API_KEY=your_api_key
 ```
 
@@ -961,35 +882,12 @@ API_KEY=your_api_key
 docker compose logs app
 
 # 常见原因:
-# 1. PG 连接失败 → 检查 PG 容器是否 healthy
-# 2. 配置错误 → 检查 .env 传递
-# 3. 依赖缺失 → 检查 Dockerfile 构建过程
+# 1. 配置错误（如 .env 仍写着 STORAGE_BACKEND=postgresql）→ 检查 .env 传递
+# 2. 依赖缺失 → 检查 Dockerfile 构建过程
+# 3. Redis 不可达（STATE_BACKEND=redis 时）→ 检查 redis 容器是否 healthy
 ```
 
 **验证 / Verify**: `docker compose ps` 所有服务显示 `healthy`
-
----
-
-### J-3. PG 密码不一致
-
-**现象 / Symptom**: 应用日志显示 PG 认证失败，但 postgres 容器正常。
-
-**原因 / Cause**: `POSTGRES_PASSWORD`（PG 初始化用）与 `PG_PASSWORD`（应用连接用）不一致。
-
-**解决方案 / Solution**:
-```bash
-# .env 中确保两者一致:
-POSTGRES_PASSWORD=same_password
-PG_PASSWORD=same_password
-```
-
-**注意**: 如果修改了已运行的 PG 密码，需要删除 volume 重新初始化:
-```bash
-docker compose down -v    # 警告: 会删除所有数据！
-docker compose up -d
-```
-
-**验证 / Verify**: `/health` 返回 `"storage": "postgresql (connected)"`
 
 ---
 
@@ -1032,7 +930,7 @@ pytest tests/unit/ --cache-clear -q
 **解决方案 / Solution**:
 ```bash
 # 方案 A: 启动 Docker 服务
-docker compose up -d postgres redis
+docker compose up -d redis
 
 # 方案 B: 仅运行不依赖外部服务的测试
 pytest tests/unit/ -q
@@ -1068,105 +966,27 @@ pytest tests/ --timeout=120
 
 ---
 
-## L. PostgreSQL 实验性后端 / Experimental PostgreSQL
+## L. PostgreSQL 后端移除说明 / PostgreSQL Removal
 
-> **合并说明**：本节原为独立文件 `POSTGRESQL_FIX_GUIDE.md`（PG 本地连接修复指南），已并入本文档。
-> **v0.8.0（2026-09-11）**：KB 经验默认走本地 SQLite「笔记本」，不再依赖 PostgreSQL 即可跨重启沉淀。`STORAGE_BACKEND=memory` 仍为默认；PostgreSQL 需显式启用，现为**实验性后端：不承诺支持，存在已知未修问题**（见下节）。产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。
->
-> 上一版 v0.7.9 已发布（2026-09-10）：asyncpg errors 真库读写链路、`(fingerprint, session_id)` 节流键和跨事件循环 pool 生命周期已验证（范围限于当时的 errors 链路，不代表全部 PG 路径已验证）。
+> **节状态（Step 3 收口）**：PostgreSQL 运行时后端已**正式移除**。本节取代原「实验性后端」节；历史内容（本地连接修复记录等）已随后端一并移除——旧版本用户可查阅 v0.8.x 的文档存档。
 
-### PostgreSQL 实验性后端与已知限制
+### 最终 STORAGE_BACKEND 语义
 
-PostgreSQL 是**显式可选的实验性后端，不承诺支持**。单用户本地自用的推荐配置是零配置默认组合：
+- 唯一合法值为 **`memory`**（默认）：运行现场（traces/errors/sessions/specs）存于进程内存，重启即清；
+- KB 调试经验由**本地 SQLite「笔记本」**持久化（`KB_PERSIST_ENABLED=true` 默认开启，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`），进程重启自动回灌——这是**唯一**的 KB 持久化路径；
+- 精确值 `postgresql` 会被**启动即拒绝**（`StorageBackendRemovedError`，`RuntimeError` 子类）：stdio/统一模式进程非零退出（stdout 保持纯 MCP 协议、错误只落 stderr），HTTP 模式 lifespan 启动失败；**不会静默回退 memory**；
+- 大小写变体（如 `PostgreSQL`）与拼写错误（如 `postgrsql`）仍走通用 `ValueError` 非法配置，消息含 case-sensitive 提示与移除说明；
+- 旧部署 `.env` 遗留的 `PG_*` / `POSTGRES_PASSWORD` / `DATABASE_URL` 键**不会重新启用 PostgreSQL**，也**不会让配置构造阶段崩溃**——它们会被直接忽略（启动日志仅打印忽略的键名），可安全删除。
 
-- 运行现场：`STORAGE_BACKEND=memory`（默认），traces/errors/sessions/specs 在进程内采集；
-- KB 调试经验：默认写穿工作目录下的本地 SQLite「笔记本」（`lujo-kb.sqlite3`，可用 `KB_PERSIST_ENABLED=false` 关闭），零安装、进程重启自动回灌。
+### 旧 PG kb_entries 数据迁移（v0.8.x 及更早版本的用户）
 
-SQLite 笔记本**只持久化 KB 经验**，不持久化 traces/errors/sessions/specs，不是全量运行现场的持久化替代。
+- **已完成迁移**：在 v0.8.x 执行过一次性迁移脚本（`scripts/migrate_pg_kb_to_sqlite.py`，支持 `--dry-run` 核对）的用户不受影响——经验已在 SQLite 笔记本中，升级后继续直接使用；
+- **尚未迁移**：当前版本**不再附带**该一次性迁移脚本；仍需迁移旧 PG `kb_entries` 数据的用户，请先回退 v0.8.x 执行迁移后再升级（该脚本在 v0.8.x 交付，此为唯一路径）；
+- **无迁移路径**：traces / errors / sessions / specs **不迁移**——运行现场在当前版本回到 memory-only（重启即清），历史错误计数不随升级延续。
 
-选择 `STORAGE_BACKEND=postgresql` 即表示接受该实验性路径；进程启动时会输出一条实验性 warning（每进程一次、日志走 stderr、不含任何凭据）。该 warning 仅作风险提示，**不代表下列已知问题已修复**，使用前请先通读本节。已知未修问题包括：
+### 历史已知问题（B16–B18/U08）与移除的关系
 
-1. **KB 延迟初始化失败可能无法降级**：存储工厂仅在 store 构造期处理部分异常；`_ensure_init` 延迟到首次读写才建表/连库，该阶段失败不再经过工厂 fallback，KB 可能持续抛错——不能保证「自动降级纯内存、主流程零影响、服务照常启动」。
-2. **错误计数可能偏低**：同指纹/同会话短时间窗口内的重复错误经节流只发送一次快照，PG 历史中的 `occurrence_count` 可能低于真实发生次数。
-3. **调度失败后的节流记账可能抑制有效写入**：无事件循环或调度任务创建失败后仍可能记录节流时间，随后的有效写入会被错误跳过。
-4. **stdio 模式 asyncpg 连接池关闭路径尚未验证**：极端情况下可能影响进程退出或连接回收。
-
-迁移与退役：PG → SQLite 笔记本的迁移工具与正式移除 PG 的计划在后续版本提供；当前版本**不会自动迁移** PG 中的 KB 数据，也不会删除或忽略既有 PG 配置。继续使用 PG 前请自行备份数据。连接、凭据与认证排障见下文各节。
-
-### 结论
-
-本轮已确认，项目之前的 PostgreSQL 阻塞**不是服务端配置异常**，而是：
-
-1. 本地 `.env` 中 `PG_PASSWORD` 与当前 PostgreSQL 实际密码不一致
-2. PostgreSQL 日志记录为 `用户 "postgres" Password 认证失败`
-3. 在修正凭据后，以下链路均已恢复：
-   - `psql`
-   - `psycopg2`
-   - `asyncpg`
-   - `tests/integration/test_runtime_enablement.py -k postgresql`
-   - `tests/integration/test_runtime_enablement.py -k asyncpg`
-   - `tests/integration/test_pg_integration.py`
-
-### 推荐修复步骤
-
-#### 方案 1：同步本地 `.env` 中的 PG 凭据
-
-把本机实际可用的 PostgreSQL 参数同步到 `.env`：
-
-```env
-STORAGE_BACKEND=postgresql
-PG_HOST=localhost
-PG_PORT=5432
-PG_DATABASE=lujo_mcp
-PG_USER=postgres
-PG_PASSWORD=你的当前 PostgreSQL 密码
-```
-
-如果需要异步存储，同时开启：
-
-```env
-PG_ASYNC_ENABLED=true
-```
-
-#### 方案 2：先用 `psql` 验证凭据，再跑项目测试
-
-```powershell
-$env:PGPASSWORD='your-postgres-password'
-psql -h localhost -U postgres -d postgres -c "SELECT current_user, current_database();"
-```
-
-若这一步能成功，再继续跑项目测试。
-
-### 验证命令
-
-```powershell
-python -m pytest tests/integration/test_runtime_enablement.py -q -k postgresql
-python -m pytest tests/integration/test_runtime_enablement.py -q -k asyncpg
-python -m pytest tests/integration/test_pg_integration.py -q
-```
-
-### 如果再次失败，按这个顺序排查
-
-1. 核对 `.env` / 本地环境变量中的 `PG_HOST`、`PG_PORT`、`PG_DATABASE`、`PG_USER`、`PG_PASSWORD`
-2. 用 `psql` 或 pgAdmin 验证同一组凭据能否成功登录
-3. 查看 PostgreSQL 日志，确认是否仍然是认证失败
-4. 只有在凭据确认无误后，才继续排查 `pg_hba.conf`、`postgresql.conf`、SSL 或编码问题
-
-### 当前项目状态
-
-✅ 已完成：
-
-- 文档收口和功能矩阵
-- MCP HTTP 流式闭环
-- Playwright UI 验证
-- Redis L2 缓存验证
-- OpenTelemetry 验证
-- 熔断器恢复验证
-- PostgreSQL / asyncpg 本机真实链路验证
-
-🟡 仍待环境支持：
-
-- Docker daemon 启动后的容器化复现实验
+原实验性后端节列出的已知未修问题（KB 延迟初始化失败可能无法降级、错误计数被节流压低、调度失败后的节流记账抑制有效写入、stdio asyncpg 连接池关闭路径未验证）**已随 PG runtime 代码路径的删除而消失——这是「能力移除」，不代表这些缺陷曾被修复**。仍在 v0.8.x 及更早版本上显式配置 `STORAGE_BACKEND=postgresql` 的用户，这些问题依然存在。
 
 ---
 

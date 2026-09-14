@@ -37,17 +37,20 @@ class StorageBackendRemovedError(RuntimeError):
 # 精确匹配 "postgresql" 才走移除语义；大小写变体属「非法配置」，仍走通用 ValueError
 # （设计文档 §5.3 匹配纪律，保证既有 case-sensitive 断言逐字存活）。
 _REMOVED_BACKEND_GUIDANCE = (
-    "STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已在 Step 3 正式移除，"
+    "STORAGE_BACKEND=postgresql 已被拒绝：PostgreSQL 运行时后端已正式移除（Step 3），"
     "不会静默回退到 memory。请改用默认 STORAGE_BACKEND=memory —— 运行现场存于进程内存，"
     "知识库经验由本地 SQLite 笔记本持久化（KB_PERSIST_ENABLED / KB_PERSIST_PATH）。"
-    "已有 PostgreSQL kb_entries 数据请先执行一次性迁移脚本 "
-    "scripts/migrate_pg_kb_to_sqlite.py（建议先 --dry-run 核对 report 再正式执行）。"
+    "旧版 v0.8.x 曾提供 PG kb_entries 一次性迁移脚本"
+    "（scripts/migrate_pg_kb_to_sqlite.py，支持 --dry-run 核对）；当前版本不附带该脚本，"
+    "尚未迁移的旧 PG 用户请先在 v0.8.x 完成迁移再升级"
+    "（traces/errors/sessions/specs 无迁移路径）。"
+    "遗留的 PG_* 环境变量不会重新启用 PostgreSQL，只会被忽略。"
 )
 
 _REMOVED_BACKEND_HINT = (
-    " 注意：PostgreSQL 后端已在 Step 3 正式移除，精确值 postgresql 会被直接拒绝；"
+    " 注意：PostgreSQL 后端已正式移除，精确值 postgresql 会被直接拒绝；"
     "运行现场请使用默认 memory，知识库经验由本地 SQLite 笔记本持久化"
-    "（一次性迁移脚本 scripts/migrate_pg_kb_to_sqlite.py）。"
+    "（旧版 v0.8.x 附带一次性迁移脚本，当前版本不附带）。"
 )
 
 

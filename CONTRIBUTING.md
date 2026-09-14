@@ -52,7 +52,7 @@
 
 - 单元测试必须覆盖新增代码的公共路径
 - 集成测试放置在 `tests/integration/`，使用 `@pytest.mark.integration` 标记
-- 依赖外部服务的测试使用对应的 marker（`@pytest.mark.pg`、`@pytest.mark.llm`）
+- 依赖外部服务的测试使用对应的 marker（`@pytest.mark.llm`）
 
 ### Commit 规范
 
