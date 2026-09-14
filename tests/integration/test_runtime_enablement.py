@@ -25,11 +25,6 @@ def _port_open(host: str, port: int) -> bool:
         s.close()
 
 
-def _require_postgresql() -> None:
-    if settings.storage_backend != "postgresql":
-        pytest.skip("STORAGE_BACKEND != postgresql")
-
-
 def _require_redis() -> None:
     if settings.state_backend != "redis":
         pytest.skip("STATE_BACKEND != redis")
@@ -44,62 +39,6 @@ def _require_circuit_breaker() -> None:
     if not settings.circuit_breaker_enabled:
         pytest.skip("CIRCUIT_BREAKER_ENABLED != true")
 
-
-@pytest.mark.integration
-@pytest.mark.pg
-def test_postgresql_psycopg2_connection_smoke():
-    _require_postgresql()
-
-    import psycopg2
-
-    assert _port_open(settings.pg_host, settings.pg_port), (
-        f"PostgreSQL 端口不可达: {settings.pg_host}:{settings.pg_port}"
-    )
-
-    conn = psycopg2.connect(
-        host=settings.pg_host,
-        port=settings.pg_port,
-        dbname=settings.pg_database,
-        user=settings.pg_user,
-        password=settings.pg_password,
-        connect_timeout=3,
-    )
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        row = cur.fetchone()
-        assert row[0] == 1
-    finally:
-        conn.close()
-
-
-@pytest.mark.integration
-@pytest.mark.pg
-@pytest.mark.asyncio
-async def test_postgresql_asyncpg_connection_smoke():
-    _require_postgresql()
-    if not settings.pg_async_enabled:
-        pytest.skip("PG_ASYNC_ENABLED != true")
-
-    import asyncpg
-
-    assert _port_open(settings.pg_host, settings.pg_port), (
-        f"PostgreSQL 端口不可达: {settings.pg_host}:{settings.pg_port}"
-    )
-
-    conn = await asyncpg.connect(
-        host=settings.pg_host,
-        port=settings.pg_port,
-        database=settings.pg_database,
-        user=settings.pg_user,
-        password=settings.pg_password,
-        timeout=3,
-    )
-    try:
-        row = await conn.fetchrow("SELECT 1 AS n")
-        assert row["n"] == 1
-    finally:
-        await conn.close()
 
 
 @pytest.mark.integration
@@ -147,7 +86,5 @@ def test_circuit_breaker_instances_available_when_enabled():
     _require_circuit_breaker()
 
     from app.llm.analyzer import _get_llm_circuit_breaker
-    from app.runtime.core.storage.pg_executor import _get_pg_circuit_breaker
 
     assert _get_llm_circuit_breaker() is not None
-    assert _get_pg_circuit_breaker() is not None

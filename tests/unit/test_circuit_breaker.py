@@ -163,94 +163,6 @@ class TestLLMCircuitBreaker:
             analyze(ctx)
 
 
-class TestPGCircuitBreaker:
-    """测试 PG 熔断器"""
-
-    def teardown_method(self):
-        """每个测试后清理熔断器实例"""
-        import app.runtime.core.storage.pg_executor as pg_store_module
-
-        if pg_store_module._pg_circuit_breaker:
-            pg_store_module._pg_circuit_breaker.close()
-        pg_store_module._pg_circuit_breaker = None
-
-    @patch("app.runtime.core.storage.pg_executor._get_pool")
-    def test_pg_circuit_breaker_triggers_after_max_failures(self, mock_get_pool):
-        """PG 连续失败达到 fail_max 后触发熔断"""
-        from app.runtime.core.storage.pg_executor import _execute_with_retry
-        import pybreaker
-        import psycopg2
-
-        cb = pybreaker.CircuitBreaker(
-            fail_max=2,
-            reset_timeout=1,
-            exclude=[pybreaker.CircuitBreakerError],
-        )
-
-        import app.runtime.core.storage.pg_executor as pg_store_module
-
-        pg_store_module._pg_circuit_breaker = cb
-
-        mock_pool = MagicMock()
-        mock_conn = MagicMock()
-        mock_pool.getconn.return_value = mock_conn
-        mock_get_pool.return_value = mock_pool
-
-        mock_conn.cursor.return_value.execute.side_effect = psycopg2.OperationalError("PG connection failed")
-
-        with pytest.raises(psycopg2.OperationalError):
-            _execute_with_retry(mock_conn, "SELECT 1", max_retries=0)
-
-        with pytest.raises(pybreaker.CircuitBreakerError):
-            _execute_with_retry(mock_conn, "SELECT 1", max_retries=0)
-
-    @patch("app.runtime.core.storage.pg_executor._get_pool")
-    @patch("app.runtime.core.storage.pg_executor._get_pg_circuit_breaker")
-    def test_pg_circuit_breaker_disabled_when_setting_off(self, mock_get_cb, mock_get_pool):
-        """circuit_breaker_enabled=False 时不触发熔断"""
-        from app.runtime.core.storage.pg_executor import _execute_with_retry
-        import psycopg2
-
-        mock_get_cb.return_value = None
-
-        mock_pool = MagicMock()
-        mock_conn = MagicMock()
-        mock_pool.getconn.return_value = mock_conn
-        mock_get_pool.return_value = mock_pool
-
-        mock_conn.cursor.return_value.execute.side_effect = psycopg2.OperationalError("PG connection failed")
-
-        for _ in range(5):
-            with pytest.raises(psycopg2.OperationalError):
-                _execute_with_retry(mock_conn, "SELECT 1", max_retries=0)
-
-    @patch("app.runtime.core.storage.pg_executor._get_pool")
-    def test_pg_circuit_breaker_protects_queries(self, mock_get_pool):
-        """PG 查询方法受熔断器保护"""
-        from app.runtime.core.storage.pg_executor import _query_with_retry
-        import pybreaker
-        import psycopg2
-
-        cb = pybreaker.CircuitBreaker(
-            fail_max=1,
-            reset_timeout=1,
-            exclude=[pybreaker.CircuitBreakerError],
-        )
-
-        import app.runtime.core.storage.pg_executor as pg_store_module
-
-        pg_store_module._pg_circuit_breaker = cb
-
-        mock_pool = MagicMock()
-        mock_conn = MagicMock()
-        mock_pool.getconn.return_value = mock_conn
-        mock_get_pool.return_value = mock_pool
-
-        mock_conn.cursor.return_value.execute.side_effect = psycopg2.OperationalError("PG query failed")
-
-        with pytest.raises(pybreaker.CircuitBreakerError):
-            _query_with_retry(mock_conn, "SELECT 1")
-
 
 class TestCircuitBreakerDisabledWhenPybreakerMissing:
     """测试 pybreaker 未安装时熔断器功能被禁用"""
@@ -265,16 +177,6 @@ class TestCircuitBreakerDisabledWhenPybreakerMissing:
             assert analyzer._llm_circuit_breaker is None
         # 恢复：以真实 pybreaker 重新加载，避免污染后续用例的模块级 pybreaker=None
         importlib.reload(analyzer)
-
-    def test_pg_circuit_breaker_none_when_pybreaker_missing(self):
-        """pybreaker 未安装时 PG 熔断器为 None"""
-        import importlib
-        from app.runtime.core.storage import pg_executor
-
-        with patch.dict("sys.modules", {"pybreaker": None}):
-            importlib.reload(pg_executor)
-            assert pg_executor._pg_circuit_breaker is None
-        importlib.reload(pg_executor)
 
 
 class TestLLMCircuitBreakerAsync:

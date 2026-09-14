@@ -384,8 +384,6 @@ def test_pg_backend_rejected_not_dispatched(monkeypatch):
     monkeypatch.setattr("app.config.settings.kb_persist_enabled", True)
     monkeypatch.setattr(storage_factory, "_knowledge_store", None)
 
-    import app.runtime.core.storage.pg_kb_store as pg_kb_module
-
     with pytest.raises(
         storage_factory.StorageBackendRemovedError, match="移除"
     ) as exc_info:
@@ -394,10 +392,8 @@ def test_pg_backend_rejected_not_dispatched(monkeypatch):
     msg = str(exc_info.value)
     assert "migrate_pg_kb_to_sqlite" in msg, "拒绝信息必须给一次性迁移指引"
     assert "SQLite" in msg
-    # 单例不得被静默降级实例污染（PG / SQLite / NoOp 都不允许写入缓存）
+    # 单例不得被静默降级实例污染（SQLite / NoOp 都不允许写入缓存）
     assert storage_factory._knowledge_store is None
-    # PG 实现本体属 WP5 到期，本轮只收口分发，不删模块
-    assert hasattr(pg_kb_module, "PGKnowledgeBaseStore")
 
 
 # ── 5. 不污染工作目录 ────────────────────────────────────────────────

@@ -92,15 +92,6 @@ class TestBackendWhitelistNarrowed:
     def test_valid_backends_contains_only_memory(self):
         assert factory_mod._VALID_BACKENDS == {"memory"}
 
-    def test_migration_source_whitelist_not_narrowed(self):
-        """WP2 迁移白名单与运行时白名单物理分离（§4.2/§4.3-G3）：收窄不得波及它。
-
-        否则 WP3 之后再也无法从 PG 迁出 kb_entries，WP5 删除驱动即等于丢数据。
-        """
-        assert factory_mod._MIGRATION_SOURCE_BACKENDS == {"postgresql"}
-        assert factory_mod._VALID_BACKENDS == {"memory"}
-        assert not (factory_mod._MIGRATION_SOURCE_BACKENDS & factory_mod._VALID_BACKENDS)
-
 
 # ── 2. StorageBackendRemovedError 的类型契约（§5.1 / §5.2） ─────────────────
 
@@ -593,32 +584,10 @@ def test_stdio_subprocess_memory_backend_still_starts():
     assert "Invalid STORAGE_BACKEND" not in text
 
 
-# ── 9. WP2 迁移能力 / WP4 / WP5 尚未开始（本轮边界证据） ────────────────────
+# ── 9. 各工作包删除边界（WP4 接口 / WP5 模块与迁移入口 / WP6 依赖） ──────────
 
 
-class TestWp2PreservedAndWp4Wp5NotStarted:
-    def test_wp2_migration_entry_still_callable(self):
-        """WP2 交付的一次性迁移入口必须保留到 WP5（I4：迁移工具不晚于驱动删除）。"""
-        assert callable(factory_mod.migrate_knowledge_entries)
-        params = inspect.signature(factory_mod.migrate_knowledge_entries).parameters
-        for name in ("source_backend", "target_path", "limit", "on_conflict",
-                     "dry_run", "fail_fast", "backup"):
-            assert name in params, f"迁移入口签名缺失 {name}"
-
-    def test_wp2_migration_entry_does_not_use_runtime_gate(self):
-        """迁移只认自己的白名单：source_backend 校验先于任何 store 构造。"""
-        with pytest.raises(ValueError, match="source_backend"):
-            factory_mod.migrate_knowledge_entries(
-                source_backend="memory", target_path="unused.sqlite3"
-            )
-
-    def test_wp2_migration_cli_still_present(self):
-        cli = _PROJECT_ROOT / "scripts" / "migrate_pg_kb_to_sqlite.py"
-        assert cli.is_file(), "WP2 迁移 CLI 不得在 WP3 被删除"
-        text = cli.read_text(encoding="utf-8")
-        assert "migrate_knowledge_entries" in text
-        assert "--source-backend" in text
-
+class TestStep3WorkpackageBoundaries:
     def test_wp4_get_error_store_async_removed(self):
         """WP4 已删除 get_error_store_async()：接口不再存在（I2 顺序）。"""
         assert not hasattr(factory_mod, "get_error_store_async"), \
@@ -632,15 +601,22 @@ class TestWp2PreservedAndWp4Wp5NotStarted:
             "ddl", "_pg_errors",
         ],
     )
-    def test_wp5_pg_implementation_modules_still_present(self, module):
-        """§6.2 的 10 个 PG 模块在 WP5 才删：WP3 不得提前动手（I6 单 WP 可 revert）。"""
+    def test_wp5_pg_implementation_modules_removed(self, module):
+        """WP5（Step 3 Breaking #3）：§6.2 的 10 个 PG 模块已与迁移入口同批删除。"""
         path = _PROJECT_ROOT / "app" / "runtime" / "core" / "storage" / f"{module}.py"
-        assert path.is_file(), f"{module}.py 在 WP3 被提前删除"
-        assert importlib.import_module(f"app.runtime.core.storage.{module}") is not None
+        assert not path.exists(), f"{module}.py 应在 WP5 被删除"
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(f"app.runtime.core.storage.{module}")
+
+    def test_wp5_migration_entry_and_cli_removed(self):
+        """WP5：WP2 一次性迁移入口与 CLI 到期删除（设计文档 §4.3-G1 硬到期）。"""
+        assert not hasattr(factory_mod, "migrate_knowledge_entries")
+        assert not hasattr(factory_mod, "_MIGRATION_SOURCE_BACKENDS")
+        assert not (_PROJECT_ROOT / "scripts" / "migrate_pg_kb_to_sqlite.py").exists()
 
     @pytest.mark.parametrize("filename", ["requirements.txt", "requirements-locked.txt"])
     def test_wp6_pg_dependencies_still_declared(self, filename):
         path = _PROJECT_ROOT / filename
         text = path.read_text(encoding="utf-8")
-        assert "psycopg2-binary" in text, f"{filename} 的 PG 驱动在 WP3 被提前删除"
-        assert "asyncpg" in text, f"{filename} 的 asyncpg 在 WP3 被提前删除"
+        assert "psycopg2-binary" in text, f"{filename} 的 PG 驱动在 WP5 被提前删除"
+        assert "asyncpg" in text, f"{filename} 的 asyncpg 在 WP5 被提前删除"

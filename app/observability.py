@@ -46,8 +46,6 @@ _llm_tokens_total: Dict[str, int] = defaultdict(int)                     # "prom
 _storage_ops_total: Dict[Tuple[str, str, str], int] = defaultdict(int)   # (store, operation, status) -> count
 _storage_latency_sum: Dict[Tuple[str, str], float] = defaultdict(float)  # (store, operation) -> sum_sec
 _storage_latency_count: Dict[Tuple[str, str], int] = defaultdict(int)    # (store, operation) -> count
-_pg_retries_total: Dict[str, int] = defaultdict(int)                     # operation -> count
-
 # v0.6.2: MCP 工具执行与背压指标
 _mcp_tool_calls_total: Dict[Tuple[str, str], int] = defaultdict(int)        # (tool_name, status) -> count
 _mcp_tool_latency_sum: Dict[str, float] = defaultdict(float)                # tool_name -> sum_sec
@@ -75,7 +73,6 @@ _otel_llm_token_counter = None
 _otel_llm_cache_counter = None
 _otel_storage_op_counter = None
 _otel_storage_lat_hist = None
-_otel_pg_retry_counter = None
 _otel_mcp_tool_counter = None
 _otel_mcp_tool_lat_hist = None
 _otel_mcp_busy_counter = None
@@ -106,7 +103,7 @@ def _init_otel():
     """
     global _otel_meter, _otel_request_counter, _otel_error_counter, _otel_latency_histogram
     global _otel_llm_req_counter, _otel_llm_latency_hist, _otel_llm_token_counter, _otel_llm_cache_counter
-    global _otel_storage_op_counter, _otel_storage_lat_hist, _otel_pg_retry_counter, _otel_shutdown
+    global _otel_storage_op_counter, _otel_storage_lat_hist, _otel_shutdown
     global _otel_mcp_tool_counter, _otel_mcp_tool_lat_hist, _otel_mcp_busy_counter, _otel_mcp_wait_lat_hist
     global _otel_kb_hit_counter, _otel_kb_writeback_counter, _otel_kb_experience_counter
 
@@ -178,10 +175,6 @@ def _init_otel():
             "storage_operation_duration_seconds",
             description="Storage operation latency in seconds",
         )
-        pg_retry_counter = meter.create_counter(
-            "pg_retries_total",
-            description="Total PostgreSQL connection retries",
-        )
         _otel_mcp_tool_counter = meter.create_counter(
             "mcp_tool_calls_total",
             description="Total MCP tool calls by tool name and status",
@@ -224,7 +217,6 @@ def _init_otel():
         _otel_llm_cache_counter = llm_cache_counter
         _otel_storage_op_counter = storage_op_counter
         _otel_storage_lat_hist = storage_lat_hist
-        _otel_pg_retry_counter = pg_retry_counter
         _otel_shutdown = shutdown
 
         logger.info("OpenTelemetry 指标导出已启用 (service=%s)", settings.otel_service_name)
@@ -272,7 +264,6 @@ def _trim_metric_tables_if_needed() -> None:
         _storage_ops_total.clear()
         _storage_latency_sum.clear()
         _storage_latency_count.clear()
-        _pg_retries_total.clear()
         _mcp_tool_calls_total.clear()
         _mcp_tool_latency_sum.clear()
         _mcp_tool_latency_count.clear()
@@ -360,18 +351,6 @@ def record_storage_operation(
         _otel_storage_op_counter.add(1, {"store": st, "operation": op, "status": stat})
     if _otel_storage_lat_hist:
         _otel_storage_lat_hist.record(dur, {"store": st, "operation": op})
-
-
-def record_pg_retry(operation: str) -> None:
-    """记录 PostgreSQL 断线重试操作"""
-    op = _sanitize_label(operation or "unknown")
-    with _counter_lock:
-        _trim_metric_tables_if_needed()
-        _pg_retries_total[op] += 1
-
-    _init_otel()
-    if _otel_pg_retry_counter:
-        _otel_pg_retry_counter.add(1, {"operation": op})
 
 
 # ── v0.6.2: MCP 工具记录辅助函数 ──
@@ -668,14 +647,6 @@ def _render_prometheus() -> str:
             for (store, op), count in _storage_latency_count.items():
                 lines.append(
                     f'storage_operation_duration_seconds_count{{store="{store}",operation="{op}"}} {count}'
-                )
-
-        if _pg_retries_total:
-            lines.append("# HELP pg_retries_total Total PostgreSQL connection retries")
-            lines.append("# TYPE pg_retries_total counter")
-            for op, count in _pg_retries_total.items():
-                lines.append(
-                    f'pg_retries_total{{operation="{op}"}} {count}'
                 )
 
         # 4. v0.6.2: MCP 工具执行与背压指标

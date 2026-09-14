@@ -4,7 +4,6 @@ from app.observability import (
     record_llm_request,
     record_llm_cache_hit,
     record_storage_operation,
-    record_pg_retry,
     record_mcp_tool_call,
     record_mcp_tool_busy,
     record_mcp_tool_wait,
@@ -45,21 +44,18 @@ class TestBusinessMetrics:
         assert 'cache_type="knowledge_base"' in rendered
         assert 'cache_type="exact_context"' in rendered
 
-    def test_record_storage_operation_and_pg_retry(self):
+    def test_record_storage_operation_and_render(self):
         record_storage_operation(
             store="pg",
             operation="query_traces",
             status="ok",
             duration_sec=0.012,
         )
-        record_pg_retry("reconnect_execute")
 
         rendered = _render_prometheus()
         assert "storage_operations_total" in rendered
         assert 'store="pg"' in rendered
         assert 'operation="query_traces"' in rendered
-        assert "pg_retries_total" in rendered
-        assert 'operation="reconnect_execute"' in rendered
 
     def test_label_sanitization(self):
         # 包含换行与引号的非法 label 不应破坏 Prometheus 输出格式

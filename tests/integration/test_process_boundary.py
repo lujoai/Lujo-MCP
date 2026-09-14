@@ -320,108 +320,12 @@ class TestHttpMainBoundary:
         )
 
 
-class TestPGPoolLifecycleBoundary:
-    """PG 连接池生命周期进程边界测试"""
-
-    def test_pg_pool_closed_on_shutdown(self, _isolated_env):
-        """
-        验证进程终止后 PG 连接池正确关闭，无连接泄漏。
-
-        平台差异：
-        - Unix: SIGTERM 触发 lifespan shutdown → close_pool()，
-          严格断言 stderr 含 "连接池已关闭" 或 "close_pool" 日志
-        - Windows: proc.terminate() 等价于 TerminateProcess（硬 kill），
-          不触发 lifespan shutdown，只严格断言"进程超时内退出"，
-          日志检查作为 best-effort（不严格断言）。
-
-        严格断言（所有平台）：进程在超时内退出（无挂死 = 无连接泄漏阻塞）。
-        """
-        if settings.storage_backend != "postgresql":
-            pytest.skip(
-                "STORAGE_BACKEND != postgresql，跳过 PG 池关闭验证。"
-                "如需启用，请在 .env 设置 STORAGE_BACKEND=postgresql 并配置 PG 连接参数"
-            )
-
-        # 前置探测：PG 是否真的可连通
-        try:
-            from app.runtime.core.storage.pg_executor import _get_pool
-            pool = _get_pool()
-            conn = pool.getconn()
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT 1")
-                cur.fetchone()
-            finally:
-                pool.putconn(conn)
-        except Exception as e:
-            pytest.skip(
-                f"PG 不可连通，跳过 PG 池关闭验证: {e}"
-            )
-
-        port = _find_free_port()
-        # 环境变量完整覆盖，避免 .env 污染
-        env = {
-            **os.environ,
-            "STORAGE_BACKEND": "postgresql",
-            "PG_HOST": settings.pg_host,
-            "PG_PORT": str(settings.pg_port),
-            "PG_DATABASE": settings.pg_database,
-            "PG_USER": settings.pg_user,
-            "PG_PASSWORD": settings.pg_password,
-            "API_KEY": "",
-            "HOST": "127.0.0.1",
-            "PORT": str(port),
-        }
-
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "app.main"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=os.getcwd(),
-        )
-
-        ready = False
-        wait_err = None
-        try:
-            ready, wait_err = _wait_for_health(port, timeout=15.0)
-        finally:
-            exit_code, stderr_text = _terminate_gracefully(proc, timeout=15.0)
-
-        # 先验证服务确实起来过（说明 PG 池已初始化）
-        assert ready, (
-            f"HTTP 服务 15s 内未就绪（PG 池可能未初始化，exit_code={exit_code}）。\n"
-            f"最后错误: {wait_err}\n"
-            f"stderr 输出:\n{stderr_text}"
-        )
-
-        # 严格断言：进程在超时内退出（无挂死 = 无连接泄漏阻塞）
-        assert exit_code is not None, (
-            f"进程在 15s 内未退出，可能存在连接泄漏。\n"
-            f"stderr 输出:\n{stderr_text}"
-        )
-
-        # 平台差异化日志断言
-        if sys.platform != "win32":
-            # Unix: SIGTERM 触发 lifespan，应看到 close_pool 日志
-            assert "连接池已关闭" in stderr_text or "close_pool" in stderr_text, (
-                f"Unix 上未找到 PG 连接池关闭日志（lifespan shutdown 未执行 close_pool）。\n"
-                f"stderr 输出:\n{stderr_text}"
-            )
-        else:
-            # Windows: best-effort，不严格断言
-            # TerminateProcess 不触发 lifespan，但仍验证进程退出（已断言 exit_code is not None）
-            # 仅记录未找到日志的事实，不 fail
-            # 注：Windows TerminateProcess 是硬 kill，lifespan 不执行属预期行为
-            pass
-
-
 # ──────────────────────────────────────────────────────────────────────────
 #  N3（任务 I）：stdio 关闭资源回收
 #  ──────────────────────────────────────────────────────────────────────────
 #  覆盖：
 #  - uninstall_global_hook() 行为（恢复 sys.excepthook、幂等）
-#  - cleanup_resources() 行为（关闭 PG 池 / 取消后台任务 / 幂等）
+#  - cleanup_resources() 行为（取消后台任务 / 幂等）
 #  - stdio 子进程在 EOF / SIGINT 退出时干净回收资源（无 traceback）
 #  ──────────────────────────────────────────────────────────────────────────
 
@@ -584,22 +488,6 @@ class TestCleanupResources:
             _light_pool.generation,
             _heavy_pool.generation,
         )
-
-    def test_cleanup_skips_pg_pool_when_memory(self, monkeypatch):
-        import app.mcp_server as mcp_server
-        from app.runtime.core.storage import pg_executor
-
-        monkeypatch.setattr(mcp_server, "_cleaned_executor", None)
-        monkeypatch.setattr(mcp_server, "_cleaned_pool_generations", None)
-        monkeypatch.setattr(mcp_server, "_periodic_cleanup_task", None)
-        monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
-
-        called = {"count": 0}
-        monkeypatch.setattr(pg_executor, "close_pool", lambda: called.__setitem__("count", called["count"] + 1))
-        monkeypatch.setattr(mcp_server, "uninstall_global_hook", lambda: None)
-
-        mcp_server.cleanup_resources()
-        assert called["count"] == 0  # memory 后端不应调用 close_pool
 
     def test_cleanup_cancels_periodic_task_if_running(self, monkeypatch):
         import app.mcp_server as mcp_server
