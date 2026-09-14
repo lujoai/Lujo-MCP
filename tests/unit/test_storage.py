@@ -233,7 +233,6 @@ class TestErrorSpecFactory:
         """WP3：配置 postgresql → error/spec getter 拒绝，且不误建 no-op 降级 store。"""
         from app.config import settings as _settings
         monkeypatch.setattr(_settings, "storage_backend", "postgresql")
-        monkeypatch.setattr(_settings, "pg_async_enabled", False)
 
         import app.runtime.core.storage.noop_store as noop_mod
 

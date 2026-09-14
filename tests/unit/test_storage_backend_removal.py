@@ -15,7 +15,8 @@
 本文件同时承接原 ``tests/unit/test_config_pg_warning.py``（E 批 PG-1 启动告警）：
 告警在 WP3 退役后被测行为不复存在，其 8 例已逐条迁移为拒绝测试（对照表见 WP3 报告）。
 
-全部用例不连接真实 PostgreSQL：子进程用例显式把 ``PG_PORT`` 指向不可达端口。
+全部用例不连接真实 PostgreSQL：闸门在任何连接建立之前即拒绝（WP6 起 PG 配置
+键本身已不被读取）。
 """
 
 from __future__ import annotations
@@ -142,7 +143,6 @@ class TestExactPostgresqlRejected:
         import app.runtime.core.storage.noop_store as noop_mod
 
         monkeypatch.setattr(settings, "storage_backend", "postgresql")
-        monkeypatch.setattr(settings, "storage_fallback_to_memory", True)
 
         built: list[str] = []
 
@@ -186,25 +186,39 @@ class TestExactPostgresqlRejected:
     def test_message_contains_no_credentials(self, monkeypatch):
         """对齐原 test_config_pg_warning.py:215 的既有手法：文案不得回显凭据。"""
         monkeypatch.setattr(settings, "storage_backend", "postgresql")
-        monkeypatch.setattr(settings, "pg_password", "super-secret-pw")
         monkeypatch.setattr(settings, "api_key", "sk-test-secret")
         monkeypatch.setattr(settings, "redis_url", "redis://:redis-pass@localhost:6379/0")
         with pytest.raises(_removed_error()) as exc_info:
             factory_mod._validate_backend()
         message = str(exc_info.value)
-        assert "super-secret-pw" not in message
         assert "sk-test-secret" not in message
         assert "redis-pass" not in message
 
-    def test_legacy_pg_settings_do_not_mask_guidance(self, monkeypatch):
-        """旧 PG_* 配置齐全时，移除指引仍必须完整可见（不得被遮蔽/截断）。"""
+    def test_legacy_pg_settings_do_not_mask_guidance(self, monkeypatch, tmp_path):
+        """WP6：PG 配置族已删除。.env 遗留的旧 PG_* 键经 extra="ignore" 被忽略
+        （构造不崩、不产生同名属性），移除指引仍完整可见、不被遮蔽/截断。"""
+        from app.config import Settings
+
+        legacy_env = tmp_path / ".env"
+        legacy_env.write_text(
+            "STORAGE_BACKEND=postgresql\n"
+            "PG_HOST=db.internal\n"
+            "PG_PORT=5432\n"
+            "PG_DATABASE=lujo\n"
+            "PG_USER=lujo\n"
+            "PG_PASSWORD=legacy-pw\n"
+            "PG_ASYNC_ENABLED=true\n"
+            "STORAGE_FALLBACK_TO_MEMORY=false\n"
+            "POSTGRES_PASSWORD=legacy-pw\n"
+            "DATABASE_URL=postgresql://legacy\n",
+            encoding="utf-8",
+        )
+        obj = Settings(_env_file=str(legacy_env))
+        for removed in ("pg_host", "pg_port", "pg_database", "pg_user", "pg_password",
+                        "pg_async_enabled", "storage_fallback_to_memory"):
+            assert not hasattr(obj, removed), f"{removed} 应在 WP6 被删除"
+
         monkeypatch.setattr(settings, "storage_backend", "postgresql")
-        monkeypatch.setattr(settings, "pg_host", "db.internal")
-        monkeypatch.setattr(settings, "pg_port", 5432)
-        monkeypatch.setattr(settings, "pg_database", "lujo")
-        monkeypatch.setattr(settings, "pg_user", "lujo")
-        monkeypatch.setattr(settings, "pg_async_enabled", True)
-        monkeypatch.setattr(settings, "storage_fallback_to_memory", True)
         with pytest.raises(_removed_error()) as exc_info:
             factory_mod._validate_backend()
         message = str(exc_info.value)
@@ -304,8 +318,8 @@ class TestMemoryBackendUnchanged:
     def test_memory_kb_sqlite_fallback_semantics_preserved(self, monkeypatch, tmp_path):
         """get_knowledge_store() 自身的 SQLite 降级语义不受闸门收口影响。
 
-        ``factory.py:279-297`` 的 SQLite 分支是无条件 try/except、从不读
-        ``storage_fallback_to_memory``（§6.1）；本用例锁住这一点。
+        SQLite 分支是无条件 try/except、不依赖任何后端开关（原
+        ``storage_fallback_to_memory`` 已随 WP6 删除）；本用例锁住这一点。
         """
         from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
 
@@ -433,12 +447,10 @@ class TestHttpStartupRejection:
         from app.api.dashboard import router
 
         monkeypatch.setattr(settings, "storage_backend", "postgresql")
-        monkeypatch.setattr(settings, "pg_async_enabled", True)
 
         app = FastAPI()
         app.include_router(router)
         client = TestClient(app)
-
         # raise_server_exceptions 默认 True：拒绝必须穿透 handler 冒到调用方，
         # 而不是被吞成 200 + degraded=True + 空列表（那正是 factory 注释里点名
         # 要防的「查询降级、恒返回空列表」）。
@@ -518,11 +530,8 @@ def _subprocess_env(backend: str) -> dict[str, str]:
             "PYTHONUNBUFFERED": "1",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
-            # AGENTS.md §6：测试不得触达开发者真实 PostgreSQL。端口 1 必然不可达，
-            # 红灯期即使闸门未生效也只会连接失败，不会写进真库。
-            "PG_HOST": "127.0.0.1",
-            "PG_PORT": "1",
-            "PG_ASYNC_ENABLED": "false",
+            # WP6：PG 配置族已删除；遗留 PG_* env 键经 Settings extra="ignore"
+            # 被忽略，闸门在任何连接之前拒绝，不存在触达真实库的路径。
         }
     )
     return env
@@ -615,8 +624,11 @@ class TestStep3WorkpackageBoundaries:
         assert not (_PROJECT_ROOT / "scripts" / "migrate_pg_kb_to_sqlite.py").exists()
 
     @pytest.mark.parametrize("filename", ["requirements.txt", "requirements-locked.txt"])
-    def test_wp6_pg_dependencies_still_declared(self, filename):
+    def test_wp6_pg_dependencies_removed(self, filename):
+        """WP6（Step 3 Breaking #4）：PG 驱动已从依赖声明删除；
+        pybreaker 仍被 LLM 熔断使用，不得随 PG 误删（设计文档 §6.1 / R7）。"""
         path = _PROJECT_ROOT / filename
         text = path.read_text(encoding="utf-8")
-        assert "psycopg2-binary" in text, f"{filename} 的 PG 驱动在 WP5 被提前删除"
-        assert "asyncpg" in text, f"{filename} 的 asyncpg 在 WP5 被提前删除"
+        assert "psycopg2" not in text, f"{filename} 的 PG 驱动应在 WP6 被删除"
+        assert "asyncpg" not in text, f"{filename} 的 asyncpg 应在 WP6 被删除"
+        assert "pybreaker" in text, "pybreaker 仍被 LLM 熔断使用，不得随 PG 删除"

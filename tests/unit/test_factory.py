@@ -91,44 +91,41 @@ class TestErrorSpecKnowledgeStore:
         assert isinstance(f.get_spec_store(), NoOpSpecStore)
         assert isinstance(f.get_knowledge_store(), NoOpKnowledgeBaseStore)
 
-    def test_rejection_precedes_async_mix_check(self, monkeypatch):
-        """闸门优先于 async-mix 检查：pg_async_enabled 任何取值都改变不了拒绝结果。
+    def test_rejection_precedes_any_backend_machinery(self, monkeypatch):
+        """闸门优先：任何后端机制都改变不了拒绝结果。
 
         原 ``test_async_mix_fail_fast`` 断言 postgresql + pg_async_enabled=True 时
-        同步 getter 抛 ``_AsyncMixError``。WP3 后 ``_validate_backend()`` 先拒绝，
-        ``_raise_async_mix`` 已不可经 STORAGE_BACKEND 抵达（它随 PG 分支留到 WP5）。
+        同步 getter 抛 ``_AsyncMixError``；WP3 后 ``_validate_backend()`` 先拒绝，
+        WP5 删除了 ``_raise_async_mix`` 与全部 PG 分支，WP6 又删除了
+        ``pg_async_enabled`` 配置本身——拒绝是唯一可能的结果。
         """
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", False)
-        for async_enabled in (True, False):
-            monkeypatch.setattr("app.config.settings.pg_async_enabled", async_enabled)
+        for getter in TestRemovedBackendRejected._GETTERS:
+            with pytest.raises(f.StorageBackendRemovedError):
+                getattr(f, getter)()
+
+    def test_rejection_not_downgraded_by_fallback_flag(self, monkeypatch, caplog):
+        """拒绝不是「初始化失败」：不得被降级逻辑吞掉（DEV_PLAN S3-2）。
+
+        原 ``test_pg_stores_fallback_when_enabled`` / ``_fail_fast_when_fallback_disabled``
+        断言 PG 构造失败时按 ``storage_fallback_to_memory`` 开关降级或抛出；WP3 后
+        postgresql 走不到构造阶段，WP6 已删除该开关。存活下来的不变量仍是
+        「不能静默回 memory」：降级日志一条也不许有。
+        """
+        monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
+        for attr in ("_trace_store", "_session_store", "_error_store",
+                     "_spec_store", "_knowledge_store"):
+            setattr(f, attr, None)
+        with caplog.at_level(logging.WARNING):
             for getter in TestRemovedBackendRejected._GETTERS:
                 with pytest.raises(f.StorageBackendRemovedError):
                     getattr(f, getter)()
-
-    def test_rejection_not_downgraded_by_fallback_flag(self, monkeypatch, caplog):
-        """拒绝不是「初始化失败」：storage_fallback_to_memory 两档都必须保持拒绝。
-
-        原 ``test_pg_stores_fallback_when_enabled`` / ``_fail_fast_when_fallback_disabled``
-        断言 PG 构造失败时按该开关降级或抛出；WP3 后 postgresql 根本走不到构造阶段。
-        存活下来的不变量是 DEV_PLAN S3-2 的「不能静默回 memory」：降级日志一条也不许有。
-        """
-        monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        for fallback in (True, False):
-            monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", fallback)
-            for attr in ("_trace_store", "_session_store", "_error_store",
-                         "_spec_store", "_knowledge_store"):
-                setattr(f, attr, None)
-            with caplog.at_level(logging.WARNING):
-                for getter in TestRemovedBackendRejected._GETTERS:
-                    with pytest.raises(f.StorageBackendRemovedError):
-                        getattr(f, getter)()
-            assert [r for r in caplog.records if "降级" in r.getMessage()] == [], (
-                f"fallback={fallback} 时拒绝被降级日志掩盖"
-            )
-            for attr in ("_trace_store", "_session_store", "_error_store",
-                         "_spec_store", "_knowledge_store"):
-                assert getattr(f, attr) is None
+        assert [r for r in caplog.records if "降级" in r.getMessage()] == [], (
+            "拒绝被降级日志掩盖"
+        )
+        for attr in ("_trace_store", "_session_store", "_error_store",
+                     "_spec_store", "_knowledge_store"):
+            assert getattr(f, attr) is None
 
 
 class TestConcurrentInitialization:

@@ -37,32 +37,30 @@ class TestSettingsExtraEnvKeys:
         settings = _TestSettings()
         assert settings.llm_provider == "openai"
 
-    def test_settings_ignores_extra_keys_correctly(self, tmp_path, monkeypatch):
-        """额外键被忽略，已知键正常加载"""
+    def test_settings_ignores_legacy_pg_env_keys(self, tmp_path, monkeypatch):
+        """WP6：PG 配置族已删除。.env 遗留的 PG_*/POSTGRES_*/DATABASE_URL 键
+        经 extra="ignore" 被忽略：构造不崩、已知键正常加载、不产生同名属性。"""
         env_content = (
+            "LLM_PROVIDER=openai\n"
             "PG_HOST=myhost\n"
             "PG_PORT=5433\n"
+            "PG_PASSWORD=secret\n"
+            "PG_ASYNC_ENABLED=true\n"
+            "STORAGE_FALLBACK_TO_MEMORY=false\n"
+            "CB_PG_MAX_FAILURES=9\n"
             "POSTGRES_PASSWORD=secret\n"
             "DATABASE_URL=postgresql://x\n"
         )
         env_file = tmp_path / ".env"
-        env_file.write_text(env_content)
+        env_file.write_text(env_content, encoding="utf-8")
 
-        from pydantic import ConfigDict
-        from pydantic_settings import BaseSettings
+        from app.config import Settings
 
-        class _TestSettings(BaseSettings):
-            model_config = ConfigDict(
-                extra="ignore",
-                env_file=str(env_file),
-                env_file_encoding="utf-8",
-            )
-            pg_host: str = "localhost"
-            pg_port: int = 5432
-
-        settings = _TestSettings()
-        assert settings.pg_host == "myhost"
-        assert settings.pg_port == 5433
+        obj = Settings(_env_file=str(env_file))
+        assert obj.llm_provider == "openai"
+        for removed in ("pg_host", "pg_port", "pg_password", "pg_async_enabled",
+                        "storage_fallback_to_memory", "cb_pg_max_failures"):
+            assert not hasattr(obj, removed), f"{removed} 应在 WP6 被删除"
 
     def test_settings_warning_logged_for_extra_keys(self, tmp_path, monkeypatch, caplog):
         """额外键存在时，logger.warning 输出忽略的键名"""

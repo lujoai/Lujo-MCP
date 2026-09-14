@@ -13,9 +13,7 @@ httpx==0.28.1
 # AI / LLM
 openai==2.47.0
 
-# 存储
-psycopg2-binary==2.9.12
-asyncpg==0.29.0
+# 存储（PostgreSQL 驱动已随 Step 3 WP6 移除）
 redis==5.0.8
 qdrant-client==1.18.0
 

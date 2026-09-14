@@ -53,15 +53,22 @@ def test_entry_stdio_exposes_main_entry():
 
 
 def test_spec_has_required_datas_and_hiddenimports():
-    """spec 必须携带 Web 演示页 / SDK / migrations，且排除 playwright（可选依赖）。"""
+    """spec 必须携带 Web 演示页 / SDK，且排除 playwright（可选依赖）。
+
+    WP6（Step 3）：migrations datas 与 psycopg2/asyncpg hiddenimports 已随
+    PostgreSQL 移除一并删除，此处反向断言防止复活。
+    """
     text = (PACKAGING / "lujo-mcp-server.spec").read_text(encoding="utf-8")
-    # datas：内置 Web / SDK / 迁移 SQL
+    # datas：内置 Web / SDK（PostgreSQL migrations 已归档，不再打包）
     assert '"app", "web"' in text
     assert '"browser-sdk"' in text
-    assert '"migrations"' in text
+    assert '"migrations"' not in text, "migrations datas 应在 WP6 被移除"
     # 关键运行时库（MCP / FastAPI / LLM provider）
-    for mod in ("mcp.server.stdio", "fastapi", "openai", "psycopg2", "asyncpg"):
+    for mod in ("mcp.server.stdio", "fastapi", "openai"):
         assert f'"{mod}"' in text, f"hiddenimports 缺少 {mod}"
+    # PG 驱动不得再作为 hiddenimports 复活
+    for mod in ("psycopg2", "asyncpg"):
+        assert f'"{mod}"' not in text, f"{mod} hiddenimport 应在 WP6 被移除"
     # 可选依赖必须被排除（不打包进二进制）
     assert '"playwright"' in text
     # stdio MCP Server 需要控制台

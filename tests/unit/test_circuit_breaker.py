@@ -8,14 +8,12 @@ class TestCircuitBreakerConfig:
     """测试熔断器配置项是否正确加载"""
 
     def test_config_fields_exist(self):
-        """config 中存在所有熔断器配置字段"""
+        """config 中存在所有熔断器配置字段（cb_pg_* 已随 Step 3 WP6 删除）"""
         from app.config import settings
 
         assert hasattr(settings, "circuit_breaker_enabled")
         assert hasattr(settings, "cb_llm_max_failures")
         assert hasattr(settings, "cb_llm_reset_timeout")
-        assert hasattr(settings, "cb_pg_max_failures")
-        assert hasattr(settings, "cb_pg_reset_timeout")
 
     def test_config_defaults(self):
         """默认配置值正确"""
@@ -24,8 +22,6 @@ class TestCircuitBreakerConfig:
         assert settings.circuit_breaker_enabled is False
         assert settings.cb_llm_max_failures == 5
         assert settings.cb_llm_reset_timeout == 30
-        assert settings.cb_pg_max_failures == 3
-        assert settings.cb_pg_reset_timeout == 15
 
 
 class TestLLMCircuitBreaker:

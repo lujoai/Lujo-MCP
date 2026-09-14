@@ -95,49 +95,19 @@ class Settings(BaseSettings):
     storage_backend: str = "memory"
     # 内存存储容量上限（按 request_id 条数计），超限时按最旧条目 FIFO 淘汰，防 OOM
     memory_store_max_entries: int = 10000
-    # PG 不可达时是否自动降级到 memory 存储（生产建议 True，保证服务可用性）
-    # False = PG 不可达时启动直接失败（fail-fast，适用于强一致性场景）
-    storage_fallback_to_memory: bool = True
 
     # ── 状态后端（限流/指标计数）──
     state_backend: str = "memory"  # "memory" | "redis"
     redis_url: str = "redis://localhost:6379/0"
 
-    # ── PostgreSQL ──
-    pg_host: str = "localhost"
-    pg_port: int = 5432
-    pg_database: str = "lujo_mcp"
-    pg_user: str = "postgres"
-    pg_password: str = ""
-    pg_min_connections: int = 2
-    pg_max_connections: int = 20
-
-    # ── PG 异步化（Phase 3.1）──
-    # feature flag：开启后使用 asyncpg 异步存储实现（与 psycopg2 同步实现并存）
-    # 默认关闭，保持 psycopg2 同步行为；开启前需安装 asyncpg（见 requirements.txt）
-    pg_async_enabled: bool = False
-    # asyncpg 连接池容量（独立于 psycopg2 的 pg_min/max_connections）
-    pg_async_min: int = 2
-    pg_async_max: int = 20
+    # WP6（Step 3）：PostgreSQL 配置族（pg_* / pg_async_* / pg_partition_* /
+    # pg_archive_* / cb_pg_* / storage_fallback_to_memory）已随 PG 后端整体删除。
+    # 旧部署 .env 中遗留的这些键经 extra="ignore" 静默忽略（仅 model_post_init
+    # 记一条 Ignored extra .env keys 告警），不会让配置导入崩溃。
 
     # ── 过期清理 ──
     trace_ttl_seconds: int = 3600
     session_ttl_seconds: int = 3600
-
-    # ── Phase 5：数据层长期优化 ──
-    # P3-1：traces 表按月分区（PostgreSQL 声明式 RANGE 分区）
-    # 默认关闭，启用后自动创建当月及下月分区，历史数据需手动迁移
-    pg_partition_enabled: bool = False
-    # 自动预创建未来 N 个月的分区（默认 2，保证跨月不中断）
-    pg_partition_precreate_months: int = 2
-
-    # P3-2：归档策略（>N 天数据自动归档到 traces_archive 表）
-    # 默认关闭，启用后 cleanup_expired 先归档再删除
-    pg_archive_enabled: bool = False
-    # 归档阈值天数，超过该天数的 traces 数据自动归档（默认 30 天）
-    pg_archive_days: int = 30
-    # 归档后是否从主表删除（默认 True，False=仅复制不删除，用于验证）
-    pg_archive_delete_after: bool = True
 
     # ── 安全 ──
     api_key: Optional[str] = None  # 不设置 = 不鉴权
@@ -225,7 +195,7 @@ class Settings(BaseSettings):
     log_format: str = "json"  # "json" | "text"
 
     # ── 熔断器（P3-8）──
-    # 全局开关：开启后 LLM 和 PG 调用都受熔断器保护
+    # 全局开关：开启后 LLM 调用受熔断器保护（PG 熔断配置 cb_pg_* 已随 WP6 删除）
     circuit_breaker_enabled: bool = False
 
     # LLM 熔断器配置（cb_llm_*）
@@ -235,11 +205,6 @@ class Settings(BaseSettings):
     cb_llm_reset_timeout: int = 30
     # 注：无 cb_llm_window_size —— pybreaker 用 fail_max 计数 + reset_timeout
     # 复位，无时间窗参数，该配置项已移除（FIX: P2 死配置收敛）
-
-    # PG 熔断器配置（cb_pg_*）
-    cb_pg_max_failures: int = 3
-    cb_pg_reset_timeout: int = 15
-    # 注：无 cb_pg_window_size —— 同上，pybreaker 无时间窗参数（FIX: P2 死配置收敛）
 
     # ── P3-6 异步分析队列（消息队列削峰）──
     # 全局开关：开启后 /api/debug/analyze/async 走有界队列 + K 常驻消费协程，对齐 LLM RPM/TPM
@@ -376,8 +341,8 @@ class Settings(BaseSettings):
 
     # ── KB 经验本地持久化「笔记本」（v0.8.0）──
     # 默认开启：memory 后端下 KB 自有经验写穿到本地 SQLite 单文件，跨重启保留；
-    # 关闭时退回纯内存行为（与 v0.7.x 完全一致）。本组开关仅在
-    # STORAGE_BACKEND != postgresql 时生效（postgresql 下 KB 走 PG 持久化，行为不变）。
+    # 关闭时退回纯内存行为（与 v0.7.x 完全一致）。PG 持久化已在 Step 3 移除，
+    # 本地 SQLite 笔记本是唯一的 KB 持久化路径。
     kb_persist_enabled: bool = True
     # SQLite 单文件路径：相对路径解析到当前工作目录（单用户本地自用，工作目录即数据目录）
     kb_persist_path: str = "lujo-kb.sqlite3"

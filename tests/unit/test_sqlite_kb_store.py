@@ -380,7 +380,6 @@ def test_pg_backend_rejected_not_dispatched(monkeypatch):
     持久化开关都不能让进程照常启动（否则等价于静默回退）。
     """
     monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-    monkeypatch.setattr("app.config.settings.pg_async_enabled", False)
     monkeypatch.setattr("app.config.settings.kb_persist_enabled", True)
     monkeypatch.setattr(storage_factory, "_knowledge_store", None)
 

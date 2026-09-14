@@ -1,29 +1,4 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: lujo-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${PG_DATABASE:-lujo_mcp}
-      POSTGRES_USER: ${PG_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_PASSWORD:?必须设置 PG_PASSWORD}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d ${PG_DATABASE:-lujo_mcp}"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
-    # FIX: 此处 networks 原为零缩进（被解析为顶层键），导致整个文件 YAML 解析
-    # 失败、docker compose 无法加载；缩进回归 postgres 服务层级（与 redis/app 一致）
-    networks:
-      - lujo-internal-network
-
   redis:
     image: redis:7-alpine
     container_name: lujo-redis
@@ -51,19 +26,13 @@ services:
     container_name: lujo-mcp-app
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      STORAGE_BACKEND: postgresql
+      # WP6（Step 3）：PostgreSQL 服务已移除，运行时后端固定 memory
+      # （KB 经验由本地 SQLite 笔记本持久化，KB_PERSIST_ENABLED 默认开启）
+      STORAGE_BACKEND: memory
       STATE_BACKEND: redis
-      PG_HOST: postgres
-      PG_PORT: 5432
-      PG_DATABASE: ${PG_DATABASE:-lujo_mcp}
-      PG_USER: ${PG_USER:-postgres}
-      PG_PASSWORD: ${PG_PASSWORD:?必须设置 PG_PASSWORD}
-      PG_MAX_CONNECTIONS: ${PG_MAX_CONNECTIONS:-20}
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}
@@ -125,7 +94,6 @@ services:
       - lujo-internal-network
 
 volumes:
-  pgdata:
   redisdata:
   promdata:
 

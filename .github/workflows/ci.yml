@@ -57,8 +57,8 @@ jobs:
   # 历史：CI 只跑 tests/unit，"integration 红而 CI 绿"的回归已发生过两次
   # （verify_ui 失败标记、redaction 字符串归一，曾在 f221d6d 上红两天无人知晓）。
   # tests/integration/conftest.py 默认强制 memory 后端，CI 无需真实
-  # PostgreSQL/Redis/Qdrant；依赖真库的 pg 标记用例按自身 _require_pg 守卫
-  # 自动 skip —— 允许部分 skip，全 skip 由守卫判红。
+  # Redis/Qdrant；依赖真库/外部服务的用例按自身守卫自动 skip
+  # —— 允许部分 skip，全 skip 由守卫判红。
   integration-tests:
     runs-on: ubuntu-latest
     steps:

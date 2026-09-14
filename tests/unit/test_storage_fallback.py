@@ -1,15 +1,14 @@
-"""单元测试：存储层降级语义（P3-5 → WP3 收口）
+"""单元测试：存储层降级语义（P3-5 → WP3 收口；PG 开关随 WP6 删除）
 
-WP3（Step 3 Breaking #1）后本文件的被测对象收窄为两条仍然成立的不变量：
+当前仍然成立的两条不变量：
 
-1. ``STORAGE_BACKEND=postgresql`` 的**拒绝**不是「初始化失败」，
-   ``storage_fallback_to_memory`` 两档都不得把它降级成 memory/no-op
-   （DEV_PLAN S3-2：不能静默回 memory）；
-2. ``storage_backend=memory`` 完全不受 fallback 逻辑影响（默认行为逐位不变）。
+1. ``STORAGE_BACKEND=postgresql`` 的**拒绝**不是「初始化失败」，不得被任何
+   降级逻辑吞成 memory/no-op（DEV_PLAN S3-2：不能静默回 memory；原
+   ``storage_fallback_to_memory`` 开关已随 Step 3 WP6 删除）；
+2. ``storage_backend=memory`` 完全不受降级逻辑影响（默认行为逐位不变）。
 
 原先「PG 构造失败 → 按开关降级或抛出」的用例已无可达路径：闸门在构造之前就拒绝。
-``get_knowledge_store()`` 自身的 SQLite → no-op 降级是**无条件 try/except、从不读
-``storage_fallback_to_memory``**（设计文档 §6.1），由
+``get_knowledge_store()`` 自身的 SQLite → no-op 降级是**无条件 try/except**，由
 ``tests/unit/test_storage_backend_removal.py`` 与 ``test_sqlite_kb_store.py`` 覆盖。
 """
 
@@ -38,7 +37,6 @@ class TestTraceStoreFallback:
         from app.runtime.core.storage.factory import StorageBackendRemovedError, get_trace_store
 
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
         with caplog.at_level(logging.WARNING):
             with pytest.raises(StorageBackendRemovedError):
@@ -51,7 +49,6 @@ class TestTraceStoreFallback:
         from app.runtime.core.storage.factory import StorageBackendRemovedError, get_trace_store
 
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", False)
 
         with pytest.raises(StorageBackendRemovedError):
             get_trace_store()
@@ -59,7 +56,6 @@ class TestTraceStoreFallback:
     def test_memory_backend_not_affected(self, monkeypatch):
         """storage_backend=memory 时不受 fallback 逻辑影响"""
         monkeypatch.setattr("app.config.settings.storage_backend", "memory")
-        monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
         from app.runtime.core.storage.factory import get_trace_store
         store = get_trace_store()
@@ -75,7 +71,6 @@ class TestSessionStoreFallback:
         from app.runtime.core.storage.factory import StorageBackendRemovedError, get_session_store
 
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
         with caplog.at_level(logging.WARNING):
             with pytest.raises(StorageBackendRemovedError):
@@ -88,7 +83,6 @@ class TestSessionStoreFallback:
         from app.runtime.core.storage.factory import StorageBackendRemovedError, get_session_store
 
         monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-        monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", False)
 
         with pytest.raises(StorageBackendRemovedError):
             get_session_store()
@@ -96,7 +90,6 @@ class TestSessionStoreFallback:
     def test_session_memory_backend_not_affected(self, monkeypatch):
         """storage_backend=memory 时 session_store 不受 fallback 逻辑影响"""
         monkeypatch.setattr("app.config.settings.storage_backend", "memory")
-        monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
         from app.runtime.core.storage.factory import get_session_store
         store = get_session_store()
@@ -117,7 +110,7 @@ class TestSessionStoreFallback:
     ("get_knowledge_store", "_knowledge_store"),
 ])
 def test_removed_backend_error_not_swallowed_by_fallback(monkeypatch, getter, attr):
-    """postgresql + storage_fallback_to_memory=True（默认）→ 同步 getter 必须抛拒绝异常，
+    """postgresql（原降级开关开启场景，开关已随 WP6 删除）→ 同步 getter 必须抛拒绝异常，
     不得静默降级 memory（重启即丢）。
 
     原用例锁的是 ``_AsyncMixError`` 不被 fallback 吞掉；WP3 后闸门在 async-mix
@@ -127,8 +120,6 @@ def test_removed_backend_error_not_swallowed_by_fallback(monkeypatch, getter, at
 
     setattr(f, attr, None)
     monkeypatch.setattr("app.config.settings.storage_backend", "postgresql")
-    monkeypatch.setattr("app.config.settings.pg_async_enabled", True)
-    monkeypatch.setattr("app.config.settings.storage_fallback_to_memory", True)
 
     with pytest.raises(f.StorageBackendRemovedError):
         getattr(f, getter)()

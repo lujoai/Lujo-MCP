@@ -1,10 +1,5 @@
 FROM python:3.12-slim
 
-# 系统依赖（psycopg2 需要 libpq）
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 # 先装依赖，利用层缓存。
@@ -12,11 +7,11 @@ WORKDIR /app
 COPY requirements-locked.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 拷贝源码
+# 拷贝源码（PostgreSQL migrations 已随 Step 3 WP6 归档至 archive/pg-migrations/，
+# 不再进入运行时镜像）
 COPY app ./app
 COPY browser-sdk ./browser-sdk
 COPY examples ./examples
-COPY migrations ./migrations
 COPY scripts ./scripts
 
 # FIX: P2 非 root 运行 —— 默认 root 运行违背最小权限原则，容器逃逸风险高

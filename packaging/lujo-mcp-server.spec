@@ -24,10 +24,10 @@ a = Analysis(
     pathex=[ROOT],
     binaries=[],
     datas=[
-        # 内置 Web 演示页 / SDK / 迁移 SQL（供 HTTP / Dashboard 路由读取）
+        # 内置 Web 演示页 / SDK（供 HTTP / Dashboard 路由读取；
+        # PostgreSQL migrations 已随 Step 3 WP6 归档，不再打包）
         (os.path.join(ROOT, "app", "web"), os.path.join("app", "web")),
         (os.path.join(ROOT, "browser-sdk"), "browser-sdk"),
-        (os.path.join(ROOT, "migrations"), "migrations"),
     ],
     hiddenimports=[
         # 动态/间接导入的库，PyInstaller 静态分析可能遗漏
@@ -68,9 +68,6 @@ a = Analysis(
         "openai.resources",
         "dotenv",
         "psutil",
-        "asyncpg",
-        "psycopg2",
-        "psycopg2.extensions",
         "redis",
         "redis.asyncio",
         "pybreaker",
