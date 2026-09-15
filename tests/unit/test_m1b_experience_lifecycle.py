@@ -308,6 +308,80 @@ class TestVerifyKbWriteback:
 
         kb.clear()
 
+    def test_verify_kb_miss_silently_skips(self, monkeypatch):
+        """verify 成功但 fingerprint 在 KB 中不存在时静默降级，不报错。"""
+        from app.mcp.tools.verify_api import verify_handler
+        from app.rag.knowledge_base import get_knowledge_base
+
+        kb = get_knowledge_base()
+        kb.clear()
+        # KB 中没有对应 fingerprint 的条目
+
+        from app.schemas import DebugContext
+        mock_ctx = DebugContext(
+            request_id="test-trace-miss",
+            exception={"type": "ValueError", "message": "test", "fingerprint": "fp-not-in-kb"},
+        )
+        monkeypatch.setattr(
+            "app.runtime.context.builder.build_debug_context",
+            lambda tid, **kw: mock_ctx,
+        )
+
+        result = verify_handler({
+            "actual": {"status_code": 200, "body": {"ok": True}},
+            "spec": {"kind": "api", "target": "test", "expect": {"status": 200, "body_rules": {"ok": True}}},
+            "trace_id": "test-trace-miss",
+        })
+
+        # verify 结论不受影响
+        assert result["matched"] is True
+        # KB 中确实没有该条目
+        assert kb.get("fp-not-in-kb") is None
+
+        kb.clear()
+
+    def test_verify_writeback_failure_does_not_change_result(self, monkeypatch):
+        """verify 写回 KB 时如果 record_verification 抛异常，verify 结论不变。"""
+        from app.mcp.tools.verify_api import verify_handler
+        from app.rag.knowledge_base import get_knowledge_base
+
+        kb = get_knowledge_base()
+        kb.clear()
+        kb.upsert(
+            fingerprint="fp-writeback-fail",
+            analysis={"exception_type": "ValueError", "message": "test"},
+            fix_suggestion="fix",
+            source="seed",
+        )
+
+        from app.schemas import DebugContext
+        mock_ctx = DebugContext(
+            request_id="test-trace-wb-fail",
+            exception={"type": "ValueError", "message": "test", "fingerprint": "fp-writeback-fail"},
+        )
+        monkeypatch.setattr(
+            "app.runtime.context.builder.build_debug_context",
+            lambda tid, **kw: mock_ctx,
+        )
+        # mock record_verification 抛异常
+        import app.rag.knowledge_base as kb_module
+        monkeypatch.setattr(
+            kb_module,
+            "record_verification",
+            lambda fp, confidence: (_ for _ in ()).throw(RuntimeError("simulated")),
+        )
+
+        result = verify_handler({
+            "actual": {"status_code": 200, "body": {"ok": True}},
+            "spec": {"kind": "api", "target": "test", "expect": {"status": 200, "body_rules": {"ok": True}}},
+            "trace_id": "test-trace-wb-fail",
+        })
+
+        # verify 结论不受写回失败影响
+        assert result["matched"] is True
+
+        kb.clear()
+
 
 # ---------------------------------------------------------------------------
 # 3. diagnose_issue 返回 related_experiences
