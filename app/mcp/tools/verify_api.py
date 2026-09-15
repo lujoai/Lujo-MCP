@@ -5,9 +5,16 @@ MCP 工具：verify —— 比对实际结果 vs 期望规范，自动检测静�
 输出 VerifyResult = {matched, diffs, silent_failure, spec_id?, trace_id?}
 
 spec 与 spec_id 二选一：传 spec 直接比对；传 spec_id 从 spec_store 取已存储规范。
+
+M1-B: 验证成功（matched=true）且关联了 trace_id 时，可选写回 KB ——
+递增 verify_count、提升 case_confidence。验证失败不写回。
 """
+import logging
+
 from app.runtime.verifier.assert_engine import assert_behavior
 from app.runtime.verifier import spec_store
+
+logger = logging.getLogger("lujo-mcp.tools.verify")
 
 VERIFY_DEF = {
     "name": "verify",
@@ -96,4 +103,35 @@ def verify_handler(arguments: dict) -> dict:
         except Exception:
             pass
 
+    # M1-B: 验证成功时写回 KB —— 递增 verify_count、提升 case_confidence。
+    # 验证失败（matched=false）不写回，防止未验证的结论被误标为已验证。
+    # 需要从 debug_context 提取 fingerprint 来命中 KB 条目。
+    if result.get("matched") and trace_id:
+        try:
+            _try_kb_writeback(trace_id)
+        except Exception:
+            logger.warning("verify KB writeback failed", exc_info=True)
+
     return result
+
+
+def _try_kb_writeback(trace_id: str) -> None:
+    """验证成功后尝试写回 KB。
+
+    从 debug_context 提取异常指纹，命中 KB 条目则递增 verify_count。
+    未命中或无指纹时静默跳过（不阻断验证结论）。
+    """
+    from app.rag.knowledge_base import record_verification
+    from app.runtime.context.builder import build_debug_context
+
+    ctx = build_debug_context(trace_id)
+    if ctx is None:
+        return
+    # DebugContext.exception 是 Optional[dict]，含 type/message/fingerprint
+    exception = ctx.exception if hasattr(ctx, "exception") else None
+    if not isinstance(exception, dict):
+        return
+    fingerprint = exception.get("fingerprint") or ""
+    if not fingerprint:
+        return
+    record_verification(fingerprint, confidence=0.7)

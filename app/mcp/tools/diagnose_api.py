@@ -19,6 +19,70 @@ from app.runtime.context.builder import build_debug_context
 
 logger = logging.getLogger("lujo-mcp.tools.diagnose")
 
+
+def _lookup_related_experience(debug_context: dict | None) -> list[dict]:
+    """M1-B: 从 KB 检索与当前调试上下文相关的历史经验。
+
+    使用三级检索（L1 精确 → L1.5 归一化 → L2 类型级），
+    返回最多 3 条经验摘要。失败静默降级为空列表，不阻断诊断主链路。
+    """
+    if not debug_context:
+        return []
+    try:
+        from app.rag.knowledge_base import (
+            get_knowledge_entry,
+            get_entry_by_normalized_fingerprint,
+            get_entries_by_type_fingerprint,
+        )
+        from app.rag.debug_case import (
+            compute_normalized_fingerprint,
+            compute_type_fingerprint,
+        )
+
+        exception = debug_context.get("exception") or {}
+        if not isinstance(exception, dict):
+            return []
+        fingerprint = exception.get("fingerprint") or ""
+        exc_type = str(exception.get("type") or "")
+        message = str(exception.get("message") or "")
+
+        # L1: 精确指纹命中
+        if fingerprint:
+            entry = get_knowledge_entry(fingerprint)
+            if entry:
+                return [_summarize_experience(entry)]
+
+        # L1.5: 归一化指纹命中
+        if exc_type or message:
+            norm_fp = compute_normalized_fingerprint(exc_type, message)
+            if norm_fp:
+                entry = get_entry_by_normalized_fingerprint(norm_fp)
+                if entry:
+                    return [_summarize_experience(entry)]
+
+        # L2: 类型级候选（最多 3 条）
+        if exc_type:
+            type_fp = compute_type_fingerprint(exc_type)
+            if type_fp:
+                candidates = get_entries_by_type_fingerprint(type_fp, top_k=3)
+                return [_summarize_experience(c) for c in candidates]
+
+        return []
+    except Exception:
+        logger.warning("related experience lookup failed", exc_info=True)
+        return []
+
+
+def _summarize_experience(entry: dict) -> dict:
+    """把 KB entry 精简为经验摘要（不泄露完整 analysis 内部结构）。"""
+    return {
+        "fingerprint": entry.get("fingerprint", ""),
+        "fix_suggestion": entry.get("fix_suggestion", ""),
+        "source": entry.get("source", ""),
+        "verify_count": entry.get("verify_count", 0),
+        "case_confidence": entry.get("case_confidence", 0.0),
+    }
+
 DIAGNOSE_DEF = {
     "name": "diagnose_issue",
     "description": (
@@ -130,7 +194,7 @@ def _build_context(trace_id: str, session_id: str | None = None) -> dict | None:
 
 
 def _finish(trace_id: str, err: dict | None, source: str, session_id: str | None = None) -> dict:
-    """汇总单条命中结果：摘要 + 完整上下文。"""
+    """汇总单条命中结果：摘要 + 完整上下文 + 相关经验。"""
     if err is None:
         err = errors.get_by_id(trace_id, session_id=session_id)
     ctx = _build_context(trace_id, session_id=session_id)
@@ -139,11 +203,14 @@ def _finish(trace_id: str, err: dict | None, source: str, session_id: str | None
             f"记录 {trace_id} 存在摘要但无法构建调试上下文",
             next_step="可尝试调用 trace 工具查看该 ID 的原始追踪日志。",
         )
+    # M1-B: 返回相关历史经验（只读，失败静默降级为空列表）
+    related_experiences = _lookup_related_experience(ctx)
     return {
         "found": True,
         "trace_id": trace_id,
         "summary": _summarize_error(err),
         "debug_context": ctx or {},
+        "related_experiences": related_experiences,
         "source": source,
     }
 
@@ -177,6 +244,7 @@ def handler(arguments: dict) -> dict:
             "trace_id": request_id,
             "summary": _summarize_error(err),
             "debug_context": ctx or {},
+            "related_experiences": _lookup_related_experience(ctx),
             "source": "request_id",
         }
 

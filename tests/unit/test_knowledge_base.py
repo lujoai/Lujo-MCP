@@ -43,7 +43,7 @@ def test_upsert_updates_existing_entry_and_preserves_created_at():
         fingerprint="fp-1",
         analysis={"root_cause": "new"},
         fix_suggestion="new fix",
-        source="knowledge_base",
+        source="llm",  # M1-B: 同优先级 source 允许覆盖
     )
 
     assert store.size() == 1
@@ -51,7 +51,7 @@ def test_upsert_updates_existing_entry_and_preserves_created_at():
     assert updated["updated_at"] >= original["updated_at"]
     assert updated["analysis"]["root_cause"] == "new"
     assert updated["fix_suggestion"] == "new fix"
-    assert updated["source"] == "knowledge_base"
+    assert updated["source"] == "llm"
 
 
 def test_evicts_least_recently_used_entry_when_capacity_exceeded():

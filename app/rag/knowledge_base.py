@@ -38,6 +38,16 @@ logger = logging.getLogger("lujo-mcp.knowledge-base")
 DEFAULT_MAX_ENTRIES = 100
 EVICTION_POLICY = "lru"
 
+# M1-B: source 优先级——低优先级 source 的 upsert 不得覆盖高优先级的
+# analysis / fix_suggestion。verify_count / case_confidence 总是保留取 max。
+# 优先级：user_confirmed > seed > llm（未在此列表的视为最低）。
+_SOURCE_PRIORITY = {"user_confirmed": 3, "seed": 2, "llm": 1}
+
+
+def _source_rank(source: str) -> int:
+    """返回 source 的优先级数字，越大越高。未知 source 返回 0。"""
+    return _SOURCE_PRIORITY.get(source, 0)
+
 
 @dataclass(slots=True)
 class KnowledgeBaseEntry:
@@ -220,11 +230,23 @@ class KnowledgeBaseStore:
                 else:
                     case_confidence = 0.0
 
+            # M1-B: source 优先级保护——低优先级 source 不覆盖高优先级
+            # 条目的 analysis / fix_suggestion / source。
+            # verify_count / case_confidence 总是按 max 语义保留。
+            effective_analysis = copy.deepcopy(analysis)
+            effective_fix = fix_suggestion
+            effective_source = source
+            if existing is not None and _source_rank(source) < _source_rank(existing.source):
+                # 新写入优先级低于已有条目：保留高优先级的 analysis/fix/source
+                effective_analysis = existing.analysis  # 已是深拷贝安全对象
+                effective_fix = existing.fix_suggestion
+                effective_source = existing.source
+
             entry = KnowledgeBaseEntry(
                 fingerprint=fingerprint,
-                analysis=copy.deepcopy(analysis),
-                fix_suggestion=fix_suggestion,
-                source=source,
+                analysis=copy.deepcopy(effective_analysis),
+                fix_suggestion=effective_fix,
+                source=effective_source,
                 created_at=created_at,
                 updated_at=now,
                 normalized_fingerprint=normalized_fp,
