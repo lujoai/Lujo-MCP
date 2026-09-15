@@ -44,6 +44,28 @@ class TestSourcePriority:
         assert entry["fix_suggestion"] == "seed fix"
         assert entry["source"] == "seed"
 
+    def test_llm_does_not_overwrite_debug_case_seed_analysis(self):
+        """真实内置 DebugCase 使用 debug_case source，必须同样受保护。"""
+        store = KnowledgeBaseStore(max_entries=10)
+        store.upsert(
+            fingerprint="fp-debug-case",
+            analysis={"exception_type": "ValueError", "message": "bad input", "root_cause": "built-in cause"},
+            fix_suggestion="built-in fix",
+            source="debug_case",
+        )
+        store.upsert(
+            fingerprint="fp-debug-case",
+            analysis={"exception_type": "ValueError", "message": "bad input", "root_cause": "llm cause"},
+            fix_suggestion="llm fix",
+            source="llm",
+        )
+
+        entry = store.get("fp-debug-case")
+        assert entry is not None
+        assert entry["analysis"]["root_cause"] == "built-in cause"
+        assert entry["fix_suggestion"] == "built-in fix"
+        assert entry["source"] == "debug_case"
+
     def test_llm_preserves_seed_verify_count_and_confidence(self):
         store = KnowledgeBaseStore(max_entries=10)
         store.upsert(
@@ -129,6 +151,52 @@ class TestSourcePriority:
         assert entry["source"] == "user_confirmed"
         assert entry["case_confidence"] == 0.95
         assert entry["verify_count"] == 2
+
+    def test_explicit_lifecycle_stats_are_monotonic(self):
+        """显式 upsert 统计不能降低已有验证证据。"""
+        store = KnowledgeBaseStore(max_entries=10)
+        store.upsert(
+            fingerprint="fp-monotonic",
+            analysis={"exception_type": "ValueError", "message": "msg"},
+            fix_suggestion="fix",
+            source="user_confirmed",
+            verify_count=4,
+            case_confidence=0.9,
+        )
+        entry = store.upsert(
+            fingerprint="fp-monotonic",
+            analysis={"exception_type": "ValueError", "message": "msg"},
+            fix_suggestion="updated fix",
+            source="user_confirmed",
+            verify_count=0,
+            case_confidence=0.1,
+        )
+
+        assert entry["verify_count"] == 4
+        assert entry["case_confidence"] == 0.9
+
+    def test_explicit_lifecycle_stats_can_increase(self):
+        """显式 upsert 允许补充更高的验证统计。"""
+        store = KnowledgeBaseStore(max_entries=10)
+        store.upsert(
+            fingerprint="fp-increase",
+            analysis={"exception_type": "ValueError", "message": "msg"},
+            fix_suggestion="fix",
+            source="llm",
+            verify_count=1,
+            case_confidence=0.2,
+        )
+        entry = store.upsert(
+            fingerprint="fp-increase",
+            analysis={"exception_type": "ValueError", "message": "msg"},
+            fix_suggestion="updated fix",
+            source="llm",
+            verify_count=3,
+            case_confidence=0.8,
+        )
+
+        assert entry["verify_count"] == 3
+        assert entry["case_confidence"] == 0.8
 
 
 # ---------------------------------------------------------------------------

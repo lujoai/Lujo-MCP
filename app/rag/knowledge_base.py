@@ -41,7 +41,15 @@ EVICTION_POLICY = "lru"
 # M1-B: source 优先级——低优先级 source 的 upsert 不得覆盖高优先级的
 # analysis / fix_suggestion。verify_count / case_confidence 总是保留取 max。
 # 优先级：user_confirmed > seed > llm（未在此列表的视为最低）。
-_SOURCE_PRIORITY = {"user_confirmed": 3, "seed": 2, "llm": 1}
+_SOURCE_PRIORITY = {
+    "user_confirmed": 3,
+    # DebugCase.to_kb_entry() uses the historical ``debug_case`` label for
+    # built-in seed data; keep ``seed`` as a compatibility alias for callers
+    # that use the shorter lifecycle label.
+    "seed": 2,
+    "debug_case": 2,
+    "llm": 1,
+}
 
 
 def _source_rank(source: str) -> int:
@@ -221,6 +229,10 @@ class KnowledgeBaseStore:
                     verify_count = int(analysis.get("verify_count", 0))
                 else:
                     verify_count = 0
+            elif existing is not None:
+                # Verification evidence is monotonic: an upsert must not
+                # erase confirmations recorded by a previous verification.
+                verify_count = max(existing.verify_count, int(verify_count))
 
             if case_confidence is None:
                 if existing is not None:
@@ -229,6 +241,9 @@ class KnowledgeBaseStore:
                     case_confidence = float(analysis.get("case_confidence", 0.0))
                 else:
                     case_confidence = 0.0
+            elif existing is not None:
+                # Confidence is also monotonic across lifecycle updates.
+                case_confidence = max(existing.case_confidence, float(case_confidence))
 
             # M1-B: source 优先级保护——低优先级 source 不覆盖高优先级
             # 条目的 analysis / fix_suggestion / source。
