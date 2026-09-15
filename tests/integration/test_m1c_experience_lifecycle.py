@@ -79,7 +79,7 @@ def _seed_kb(kb) -> str:
 class TestFullLifecycleChain:
     """真实 trace → diagnose → verify 写回 → SQLite 持久化 → 重载检索。"""
 
-    def test_end_to_end_chain(self, kb_sqlite):
+    def test_end_to_end_chain(self, kb_sqlite, monkeypatch):
         sqlite_store, kb = kb_sqlite
 
         # 0. 真实 trace（生产 ingestion 入口），指纹与 KB 条目对齐
@@ -149,6 +149,21 @@ class TestFullLifecycleChain:
         assert store2.get_by_type_fingerprint(
             compute_type_fingerprint(EXC_TYPE)
         ) != []
+
+        # 9. 重启回灌后替换进程内 KB 单例，公共 diagnose_handler 仍可召回经验
+        monkeypatch.setattr(kb_module, "_knowledge_base", store2)
+        monkeypatch.setattr(kb_module, "get_knowledge_base", lambda: store2)
+        diag2 = diagnose_handler({})
+        assert diag2["found"] is True
+        assert diag2["trace_id"] == error_id
+        exps2 = diag2["related_experiences"]
+        assert len(exps2) == 1
+        assert exps2[0]["fingerprint"] == FINGERPRINT
+        assert exps2[0]["source"] == "seed"
+        assert exps2[0]["fix_suggestion"] == "seed fix: validate balance before transfer"
+        assert exps2[0]["verify_count"] == 1
+        assert exps2[0]["case_confidence"] >= 0.7
+        assert exps2[0]["case_confidence"] >= exps[0]["case_confidence"]
 
 
 class TestSourcePriorityAndIndex:
