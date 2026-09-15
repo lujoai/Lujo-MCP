@@ -205,10 +205,6 @@ class KnowledgeBaseStore:
         if not source:
             raise ValueError("source is required")
 
-        exc_type, message = _extract_case_fields(analysis)
-        normalized_fp = compute_normalized_fingerprint(exc_type, message)
-        type_fp = compute_type_fingerprint(exc_type)
-
         now = time.time()
         evicted_fingerprint: str | None = None
         evicted: KnowledgeBaseEntry | None = None
@@ -256,6 +252,16 @@ class KnowledgeBaseStore:
                 effective_analysis = existing.analysis  # 已是深拷贝安全对象
                 effective_fix = existing.fix_suggestion
                 effective_source = existing.source
+
+            # 索引必须与最终保留的 analysis 一致。尤其是低优先级写入被
+            # 保护时，不能用被丢弃的 LLM analysis 清空或污染 seed 索引。
+            effective_exc_type, effective_message = _extract_case_fields(
+                effective_analysis
+            )
+            normalized_fp = compute_normalized_fingerprint(
+                effective_exc_type, effective_message
+            )
+            type_fp = compute_type_fingerprint(effective_exc_type)
 
             entry = KnowledgeBaseEntry(
                 fingerprint=fingerprint,

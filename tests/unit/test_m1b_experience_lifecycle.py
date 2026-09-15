@@ -66,6 +66,33 @@ class TestSourcePriority:
         assert entry["fix_suggestion"] == "built-in fix"
         assert entry["source"] == "debug_case"
 
+    def test_protected_entry_keeps_indexes_from_effective_analysis(self):
+        """低优先级写入不得清空高优先级条目的三级检索索引。"""
+        from app.rag.debug_case import compute_normalized_fingerprint, compute_type_fingerprint
+
+        store = KnowledgeBaseStore(max_entries=10)
+        store.upsert(
+            fingerprint="fp-index-protection",
+            analysis={"exception_type": "ValueError", "message": "bad input", "root_cause": "built-in cause"},
+            fix_suggestion="built-in fix",
+            source="debug_case",
+        )
+        store.upsert(
+            fingerprint="fp-index-protection",
+            analysis={"root_cause": "llm-only analysis"},
+            fix_suggestion="llm fix",
+            source="llm",
+        )
+
+        entry = store.get("fp-index-protection")
+        assert entry is not None
+        assert entry["normalized_fingerprint"] == compute_normalized_fingerprint(
+            "ValueError", "bad input"
+        )
+        assert entry["type_fingerprint"] == compute_type_fingerprint("ValueError")
+        assert store.get_by_normalized_fingerprint(entry["normalized_fingerprint"])
+        assert store.get_by_type_fingerprint(entry["type_fingerprint"])
+
     def test_llm_preserves_seed_verify_count_and_confidence(self):
         store = KnowledgeBaseStore(max_entries=10)
         store.upsert(
