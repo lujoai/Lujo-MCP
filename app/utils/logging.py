@@ -86,6 +86,14 @@ def setup_logging() -> None:
     if not root.handlers:
         root.addHandler(handler)
 
+    # FIX(logging): 阻止 lujo-mcp logger 记录传播到 root logger 的 basicConfig
+    # handler。统一模式下 mcp_server.py 模块级 basicConfig 在 root logger 上注册
+    # 了文本格式 handler，而 setup_logging 给 lujo-mcp logger 注册了 JSON handler；
+    # propagate 默认 True 导致同一条记录被两个 handler 各输出一次（JSON + 文本
+    # 双行噪音）。设 False 后 lujo-mcp 及子 logger 只由自己的 handler 输出，
+    # 第三方库（uvicorn/httpx/openai）仍由 root handler 正常处理。
+    root.propagate = False
+
     # 降低第三方库日志级别
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
