@@ -640,6 +640,14 @@ async def main(argv: list[str] | None = None):
     finally:
         # 正常 EOF / 协议退出路径
         cleanup_resources()
+        # C4 §2.1 信号路径收口前置：官方 stdio transport 的 stdin 读取 worker
+        # （anyio to_thread，非守护线程）在宿主保持 stdin 打开时永不返回，
+        # 解释器 threading._shutdown 会阻塞在线程 join 上，此前只能等 25s
+        # 看门狗 os._exit 兜底（exit code 0 但拖满绝对期限）。信号驱动的退出
+        # 在 M1 ①–⑥ 清理完成后已无值得等待的资源，直接确定性收口；EOF
+        # 正常退出路径不受影响（worker 随 EOF 自然结束，走正常解释器收尾）。
+        if shutdown_mod.signal_exit_requested():
+            os._exit(0)
 
 
 if __name__ == "__main__":

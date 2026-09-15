@@ -87,6 +87,19 @@ def exit_intent_recorded() -> bool:
         return _intent_t0 is not None
 
 
+def signal_exit_requested() -> bool:
+    """信号薄发布是否已生效（SIGINT/SIGTERM handler 已观察到退出请求）。
+
+    供主入口 finally 区分「信号驱动的退出」与「EOF/协议正常退出」：前者在
+    清理完成后需要确定性收口——官方 stdio transport 的 stdin 读取 worker
+    （anyio ``to_thread``，非守护线程）在宿主保持 stdin 打开时永不返回，
+    会阻塞解释器 ``threading._shutdown`` 的线程 join（原本只能等
+    EXIT_DEADLINE_SECONDS 看门狗 ``os._exit`` 兜底）；后者保持正常解释器
+    收尾（EOF 后 worker 会自然结束）。
+    """
+    return _signal_t0 is not None
+
+
 def deadline_remaining() -> float | None:
     """距绝对 deadline 的剩余秒数；未记录意图时返回 None。"""
     with _intent_lock:

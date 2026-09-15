@@ -560,7 +560,14 @@ class TestStdioExitCleanup:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Windows 不支持 SIGTERM")
     def test_stdio_exits_on_sigterm(self, _isolated_env):
-        """发送 SIGTERM → signal handler 触发 cleanup + sys.exit(0)"""
+        """就绪后发送 SIGTERM → signal handler 触发 cleanup 后快速退出。
+
+        用 initialize 握手作为**真实就绪信号**（取代盲 sleep）：SIGTERM 必须
+        落在 handler 已注册、stdio 读取循环已运行的状态。此前盲 sleep 1.0s
+        在慢 runner 上让信号命中 import 期的默认处置（-15 直接通过），测试
+        对退出路径失去覆盖且结果随 runner 速度漂移；快 runner 上则暴露
+        「stdin 读取 worker 阻塞解释器收尾 → 25s 看门狗兜底」的真实缺陷。
+        """
         env = {
             **os.environ,
             "STORAGE_BACKEND": "memory",
@@ -574,24 +581,70 @@ class TestStdioExitCleanup:
             env=env,
             cwd=os.getcwd(),
         )
+        init_req = (
+            json.dumps({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pytest", "version": "1.0"},
+                },
+            }) + "\n"
+        ).encode("utf-8")
+
+        line = None
+        write_error = None
+        read_error = None
+        returncode = None
+        timeout_sigterm = False
         try:
-            time.sleep(1.0)
             try:
-                proc.send_signal(signal.SIGTERM)
-            except (OSError, ProcessLookupError) as e:
-                pytest.skip(f"无法发送 SIGTERM: {e}")
-            try:
-                returncode = proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                pytest.fail("stdio 子进程在 SIGTERM 后未在 15s 内退出")
+                proc.stdin.write(init_req)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                write_error = e
+            else:
+                line, read_error = _readline_with_timeout(proc, timeout=15.0)
+
+            if write_error is None and read_error is None and line and line.strip():
+                try:
+                    proc.send_signal(signal.SIGTERM)
+                except (OSError, ProcessLookupError) as e:
+                    pytest.skip(f"无法发送 SIGTERM: {e}")
+                try:
+                    returncode = proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    timeout_sigterm = True
+                    proc.kill()
+                    proc.wait()
         finally:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
             stderr_text = _safe_read_stderr(proc)
 
+        # 就绪握手失败：未发 SIGTERM（含启动失败 / 无响应 / 读取超时）
+        if write_error is not None:
+            pytest.fail(
+                f"stdio 子进程启动失败或无法写入 stdin: {write_error}\n"
+                f"stderr 输出:\n{stderr_text}"
+            )
+        assert line is not None and line.strip(), (
+            f"就绪握手无响应（未发送 SIGTERM）。read_error: {read_error}\n"
+            f"stderr 输出:\n{stderr_text}"
+        )
+        assert read_error is None, (
+            f"就绪握手读取响应失败（未发送 SIGTERM）: {read_error}\n"
+            f"stderr 输出:\n{stderr_text}"
+        )
+
+        # SIGTERM 已发送后的退出断言
+        assert not timeout_sigterm, (
+            "stdio 子进程在 SIGTERM 后未在 15s 内退出\n"
+            f"stderr 输出:\n{stderr_text}"
+        )
         # signal handler 内 sys.exit(0) → returncode 0
         # 若 handler 未注册被信号杀掉 → -15
         assert returncode in (0, -15, 143), (
