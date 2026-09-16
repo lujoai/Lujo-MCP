@@ -4,7 +4,7 @@
 
 > 项目功能完成度、待开发项、稳定性验证状态以内部文档为准（不对外公开）。
 
-> **当前公开快照（2026-09-12）**：v0.8.0 已发布（[GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0)）。发布后 C 批生命周期修复已推送到 `main`，最新 CI run [34675974282](https://github.com/lujoai/Lujo-MCP/actions/runs/34675974282) 全绿；CI 口径为 unit 1766 passed / 18 skipped、integration 89 passed / 47 skipped、e2e 10 passed / 1 skipped，Node SDK 18/20/22 与 SDK smoke 全部通过。默认 `STORAGE_BACKEND=memory`，KB 本地 SQLite「笔记本」默认开启；PG 专属实验路径和真实宿主 GUI 流程仍属独立边界。
+> **当前公开快照（2026-09-16）**：v0.9.1 已发布（[GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.1)，npm registry `latest=0.9.1`）。PostgreSQL 运行时后端已正式移除，`STORAGE_BACKEND=memory` 为唯一合法值；KB 本地 SQLite「笔记本」默认开启。v0.9.1 之后的维护提交（日志、KB 生命周期、缓存、heavy observability、stdio wire 与 error-code contract）已进入 `main`，但不改变已发布产物。测试基线以仓库内最新 `pytest` 实际执行结果与对应 GitHub CI run 为准；真实宿主 GUI 全流程验证仍属独立边界。
 
 ---
 
@@ -43,7 +43,7 @@ Verifier 验证
     ↓
 调试引擎（logs/context builder/stacktrace/code_locator/runtime/llm/exception_hook）
     ↓
-存储/状态层（trace_store[memory/pg] │ session │ state[memory/redis] │ sse hub │ specs）
+存储/状态层（trace_store[memory] │ session │ state[memory/redis] │ sse hub │ KB 本地 SQLite 笔记本）
 ```
 
 **架构分层意义**：每层只干一件事，能单独测、换存储后端只动一层、构建逻辑不污染路由。
@@ -100,17 +100,17 @@ Verifier 验证
 ### 存储能力 ✅
 
 - ✅ ~~PostgreSQL 16 集成~~（后端已随 Step 3 移除；KB 持久化由本地 SQLite 笔记本承担）
-- ✅ PGStore 连接池（minconn=2, maxconn=20）
-- ✅ 自动建表（traces、sessions、errors、specs、network_records、ui_events）
-- ✅ 存储工厂模式（memory/pg 一键切换）
+- 🗑️ ~~PGStore 连接池（minconn=2, maxconn=20）~~（随 PostgreSQL 后端移除）
+- ✅ 自动建表（KB 本地 SQLite 笔记本；运行现场 traces/errors/sessions/specs 走 memory，重启即清）
+- ✅ 存储工厂模式（`STORAGE_BACKEND=memory` 唯一合法值，经 `factory.py` 分发）
 - ✅ Dashboard 运行现场状态展示
-- ✅ **errors 表持久化聚合**（指纹去重 + 统计）
-- ✅ **spec_store 独立表**（CRUD + 审计追溯）
-- ✅ **P3-1 数据分区**（traces 表按月 RANGE 分区，自动预创建 + 惰性检查，默认关闭）
-- ✅ **P3-2 归档策略**（>N 天数据自动归档到 traces_archive，cleanup_expired 先归档再删除，默认关闭）
+- 🗑️ ~~errors 表持久化聚合~~（原 PG `errors` 表已移除；当前为 `NoOpErrorStore`，重启即清）
+- 🗑️ ~~spec_store 独立表~~（原 PG 表已移除；spec 走 memory）
+- 🗑️ ~~P3-1 数据分区~~（原 PostgreSQL 声明式分区已随后端移除）
+- 🗑️ ~~P3-2 归档策略~~（原 traces_archive 归档已随 PG 后端移除）
 - ✅ **P3-3 批量写入**（save_entries + add_logs_batch，trace_repo META+LINK 批量）
-- ✅ **P3-5 优雅降级**（PG **构造期**不可用且 fallback 开启时降级到 memory，默认开启；PG 现为实验性后端，延迟初始化/首次访问失败可能不降级，见 TROUBLESHOOTING.md L 节）
-- ✅ **P3-8 熔断器**（pybreaker，LLM/PG 调用熔断保护）
+- 🗑️ ~~P3-5 优雅降级~~（`storage_fallback_to_memory` 配置族已随 PG 移除删除；memory 为唯一后端，无降级路径）
+- ✅ **P3-8 熔断器**（pybreaker，LLM 调用熔断保护；原 PG 熔断已随后端移除）
 
 ### 传输能力 ✅
 
@@ -126,9 +126,9 @@ Verifier 验证
 
 - ✅ **L1/L2/L3 多级缓存**：L1 进程 LRU + L2 Redis 分布式 + L3 缓存预热（从 Redis 回填热门 fingerprint 到 L1，只写 L1 不刷新 L2 TTL）
 - ✅ **异步分析削峰队列**（P3-6）：有界 `asyncio.Queue(maxsize=N)` + K 常驻消费协程 + `asyncio.Semaphore(K)` 对齐 LLM RPM/TPM；队列满返回 429；优雅停机 drain
-- ✅ **LLM/PG 熔断器**（P3-8）：pybreaker 包装 LLM 和 PG 调用，熔断时返回结构化 fallback；`open → half-open → close` 恢复链路已验证
+- ✅ **LLM 熔断器**（P3-8）：pybreaker 包装 LLM 调用，熔断时返回结构化 fallback；`open → half-open → close` 恢复链路已验证（原 PG 熔断已随后端移除）
 - ✅ **OpenTelemetry 集成**（P3-4）：双模式 OTel SDK + Prometheus `/metrics` 文本端点向后兼容；OTLP gRPC 导出；惰性初始化 + 失败降级
-- ✅ **PG 构造期失败降级 memory**（P3-5）：`storage_fallback_to_memory` 控制，默认开启；仅覆盖 store 构造期，延迟初始化（首次读写）失败不在降级范围（PG 实验性、不承诺支持）
+- 🗑️ ~~**PG 构造期失败降级 memory**（P3-5）~~：`storage_fallback_to_memory` 配置族已随 PostgreSQL 后端移除删除；memory 为唯一后端，非法值 fail-fast
 
 ### 安全能力 ✅
 
@@ -176,22 +176,22 @@ Verifier 验证
 ### 工程化 ✅
 
 - ✅ Docker Compose 一键启动
-- ✅ scripts/ 目录（run_tests.sh / lint.sh / init_db.sh）
-- ✅ migrations/ 目录（6 个 SQL 文件）
+- ✅ scripts/ 目录（run_tests.sh / lint.sh / mcp_smoke_test.py / check_doc_links.py 等）
+- 🗑️ ~~migrations/ 目录（6 个 SQL 文件）~~：PG 建表 SQL 已归档至 `archive/pg-migrations/`（仅历史查阅）
 - ✅ GitHub Actions CI
-- ✅ 测试基线：以 `pytest` 实际执行结果为准；最新 GitHub CI 为 **unit 1784 tests = 1766 passed / 18 skipped / 0 failed**、**integration 136 tests = 89 passed / 47 skipped / 0 failed**、**Playwright e2e 11 tests = 10 passed / 1 skipped / 0 failed**；Browser SDK JS、Node SDK 18/20/22 与 SDK smoke 均由 CI 守护。历史 v0.8.0 发布基线保留在版本记录中。
+- ✅ 测试基线：以 `pytest` 实际执行结果为准；该快照记录的 GitHub CI 为 **unit 1784 tests = 1766 passed / 18 skipped / 0 failed**、**integration 136 tests = 89 passed / 47 skipped / 0 failed**、**Playwright e2e 11 tests = 10 passed / 1 skipped / 0 failed**；Browser SDK JS、Node SDK 18/20/22 与 SDK smoke 均由 CI 守护。历史 v0.8.0 发布基线保留在版本记录中；更晚的维护提交另有其对应的 CI run（见内部文档）。
 - ✅ ruff 硬门禁：仓库根 `ruff.toml` 显式锁定规则集（`E4/E7/E9/F` + `C4` + `PIE`），`ruff check .` = All checks passed；`requirements-dev.txt` 锁 `ruff>=0.16.4,<0.17.0` 防规则集随版本漂移
 
 ### v0.3.0 Release Audit 收口 ✅
 
-- ✅ C3/C4 trace_repo 键统一 + PG 持久化回读链路
+- ✅ C3/C4 trace_repo 键统一（历史 PG 持久化回读链路已随后端移除）
 - ✅ H4/H5/H12 进程边界 + 脱敏复核 + 测试卫生
 - ✅ H10 SDK 静默失败事件链补齐（network/UI 环形缓冲 + observed_events 入库）
 - ✅ M1 storage factory 拼写错误 fail-fast
 - ✅ M4 JSON-RPC 错误码规范化（-32700/-32600/-32601/-32602/-32603）
 - ✅ M12 依赖拆分（requirements.txt / requirements-dev.txt）
 - ✅ N2 LLM 输出 schema 校验 + 结构化 fallback
-- ✅ N3 stdio 生命周期资源回收（PG 连接池 / excepthook 卸载 / atexit+signal 兜底）
+- ✅ N3 stdio 生命周期资源回收（历史 PG 连接池已移除 / excepthook 卸载 / atexit+signal 兜底）
 - ✅ N4 内部错误串全仓复核（已收口 17 类，漏网 3 处登记 follow-up）
 - ✅ M9 .env 未知键 fail-fast（ConfigDict extra="ignore" + model_post_init warning）
 - ✅ schemas 重复定义统一（删除死代码 debug.py + 重命名冲突类）
@@ -225,20 +225,20 @@ Verifier 验证
 - **v0.8.0**（2026-09-11）：主题「本地经验笔记本与安装修复」——KB 调试经验默认写穿本机 SQLite 单文件（跨重启回灌、零安装、数据不出本机、`KB_PERSIST_ENABLED`/`KB_PERSIST_PATH` 可调）；平台 npm 包不再声明与元包同名的 `bin`（修复项目内安装后 `node_modules/.bin` 缺失启动入口）；持久层健壮性加固（短连接显式关闭、拒绝 `:memory:`、路径绝对化）。零 Breaking、零新依赖、零 schema 变更。
 - **v0.7.8**（2026-09-09）：主题「发布工程收口 + 使用面文档」——GitHub Actions 升版消除 Node 20 弃用告警；平台包生成器保留 `engines` 声明（v0.7.6/0.7.7 线上三包为空 → 闭环）+ 严格参数校验；README 多项目「端口即隔离」示例与单用户、本地自用定位声明。零 Breaking、零 schema 变更。
 
-**当前路线**：**v0.8.0 已发布**（2026-09-11）——KB 调试经验本地「笔记本」默认开启（跨重启保留自有经验，数据不出本机），平台包同名 `bin` 安装入口修复。发布后 C 批生命周期修复已合入 `main` 并通过 [GitHub CI](https://github.com/lujoai/Lujo-MCP/actions/runs/34675974282)。产品定位为单用户、本地自用（npm 元包装完即用，数据不出本机，不承诺中央共享数据库隔离）。PG 专属实验路径与真实宿主 GUI 全流程验证仍是独立长期工作面。
+**当前路线**：**v0.9.1 已发布**（2026-09-14）——PostgreSQL 运行时后端正式移除（`STORAGE_BACKEND=memory` 为唯一合法值），KB 调试经验本地「笔记本」默认开启（跨重启保留自有经验，数据不出本机）。v0.9.1 之后的维护提交（日志、KB 生命周期、缓存、heavy observability、stdio wire 与 error-code contract）已合入 `main`，但不改变已发布产物。产品定位为单用户、本地自用（npm 元包装完即用，数据不出本机，不承诺中央共享数据库隔离）。真实宿主 GUI 全流程验证仍是独立长期工作面。
 
 **已完成**：
 - Phase 0：项目标准化 ✅
-- Phase 1：PostgreSQL 集成 ✅
+- 🗑️ Phase 1：~~PostgreSQL 集成~~ ✅（历史里程碑，后端已随 Step 3 移除）
 - Phase 1 规范驱动验证 ✅（V1-V5 全部完成）
 - v0.3.0 Release Audit 收口 ✅（P0 7/7 ✅，P1 8/8 ✅，2026-07-19）
-- Phase 2：PG 异步存储（asyncpg）+ errors 表持久化聚合 ✅
+- 🗑️ Phase 2：~~PG 异步存储（asyncpg）+ errors 表持久化聚合~~ ✅（历史里程碑，已随后端移除）
 - Phase 3：LLM 异步调用（AsyncOpenAI）+ 多级缓存 ✅
 - Phase 4：Browser SDK V2 批量上报 + /ingest/batch ✅
 - Browser SDK V3 / V6：网络错误自动标记 + UI 静默失败自动检测 ✅
 - 指纹知识库基础能力：命中优先 + 自动沉淀 ✅
 - Phase 5：安全加固（SEC-04/07/08/12/LFI/SSRF/auth hardening）✅
-- Phase 5-6 数据层优化：P3-1 分区 / P3-2 归档 / P3-3 批量写入 / P3-4 OpenTelemetry / P3-5 优雅降级 / P3-6 异步分析队列 / P3-7 L3 缓存预热 / P3-8 熔断器 ✅
+- Phase 5-6 数据层优化：🗑️ ~~P3-1 分区~~ / 🗑️ ~~P3-2 归档~~ / P3-3 批量写入 / P3-4 OpenTelemetry / 🗑️ ~~P3-5 优雅降级~~ / P3-6 异步分析队列 / P3-7 L3 缓存预热 / P3-8 熔断器 ✅（标 🗑️ 者为历史 PG 能力，已随后端移除）
 - Phase 7 智能化：智能错误分析引擎 + 向量检索 RAG（in-process + Qdrant 语义召回 + uuid5 幂等 upsert）✅
 - AUDIT-2-13/14：RBAC 角色分级 + API_KEY 多 key 轮换 ✅
 - AI Debug Agent Phase 1：单 Agent `RepairAgent` + `BaseAgent` ABC 多 Agent 协同框架预留 ✅（2026-07-26）
@@ -265,7 +265,7 @@ Verifier 验证
 - 多 Agent 协作（独立自动修复链路）
 - 自动 Repair Loop
 
-**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；最新 GitHub CI run 34675974282 的 unit 为 **1766 passed / 18 skipped / 0 failed / 0 errors**，integration 为 **89 passed / 47 skipped / 0 failed / 0 errors**，Playwright e2e 为 **10 passed / 1 skipped / 0 failed / 0 errors**。历史 v0.8.0 发布基线与 PG 专项数字保留在版本记录中；单测已强制 memory 后端与 CI 一致。
+**测试提示**：全仓测试基线请以仓库内最新 `pytest` 实际执行结果为准；v0.8.0/C 批时期 GitHub CI run 34675974282 的 unit 为 **1766 passed / 18 skipped / 0 failed / 0 errors**，integration 为 **89 passed / 47 skipped / 0 failed / 0 errors**，Playwright e2e 为 **10 passed / 1 skipped / 0 failed / 0 errors**。历史 v0.8.0 发布基线与 PG 专项数字保留在版本记录中；单测已强制 memory 后端与 CI 一致。
 
 **当前优先级**：
 
@@ -280,11 +280,11 @@ Verifier 验证
 | ~~**P2**~~ ✅ | ~~第 6 轮审查 P2 十六项~~ | ✅ 全部收口（F4-F7 随 v0.6.8；B2/B4/B5 由 6e0b23e、C2/G3 随 v0.6.9 修复） |
 | **P3** | 第 6 轮审查 Minor 90+ 项择机清理 | 内部索引见 CODE_REVIEW 第 6 轮记录 |
 | ~~P2~~ ✅ | ~~Browser SDK 压缩 e2e 联调（`SDK-007`）~~ | 已并入 v0.6.7+ 传输修复交付 |
-| ~~P3~~ ✅ | ~~Docker 容器化复现实验（`STAB-007`）~~ | ✅ 已完成（postgres/redis/app 三容器健康，/health、/api/debug/run、连接池均已验证） |
+| ~~**P3**~~ ✅ | ~~Docker 容器化复现实验（`STAB-007`）~~ | ✅ 已完成（当时 postgres/redis/app 三容器健康；postgres 服务已随 Step 3 移除） |
 | ~~P4~~ ✅ | ~~SSE 实时 Dashboard~~ | ✅ 已完成（2026-07-30，`DASH-SSE-001`：`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource；`dashboard_sse_enabled` 默认 False） |
 
 **v0.3.0 收口成果**：
-- 测试基线：340 passed / 6 skipped / 0 failed（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）
+- 测试基线：340 passed / 6 skipped / 0 failed（单元 310 passed + 6 skipped，脱敏集成 18，AsyncPGStore 12）——历史快照，PG 相关项已随后端移除
 - P0 全部清零：C3/C4 键统一+PG回读、H4/H5 复核、H10 SDK事件链、H12 进程边界、M9 .env fail-fast、schemas 统一、spec_store 持久化
 - P1 全部清零：N2 LLM输出校验、N3 stdio资源回收、M1 storage factory、M4 JSON-RPC错误码、M12 依赖拆分
 - Phase 2-5 新增：asyncpg 异步存储、AsyncOpenAI、多级缓存、errors 聚合、spec_store 独立表、SDK V2 批量上报、GitHub Actions CI
@@ -308,7 +308,7 @@ Verifier 验证
 | 禁止 | 说明 |
 |------|------|
 | ❌ 绕过 Storage 访问数据库 | 必须通过 factory 获取 store |
-| ❌ 新建数据库连接 | 必须使用连接池 |
+| ❌ 新建数据库连接 | 存储经 factory 分发；运行现场为 memory，KB 走本地 SQLite |
 | ❌ 引入 SQLAlchemy | 当前不允许 |
 | ❌ 引入 Alembic | 当前不允许 |
 | ❌ 大规模重构 | 除非明确要求，否则小步修改 |
@@ -331,12 +331,12 @@ Verifier 验证
 
 ## 8. 关键设计决策
 
-1. **工厂模式**：存储层（memory/PG）、状态层（memory/Redis）、LLM provider（openai/zhipu/deepseek/custom）都用工厂模式，一行配置切换
+1. **工厂模式**：存储层（memory 为唯一后端，经 `factory.py` 分发）、状态层（memory/Redis）、LLM provider（openai/zhipu/deepseek/custom）都用工厂模式，一行配置切换
 2. **规范驱动**：用期望规范作为 ground truth，`assert_behavior()` 纯函数自动比对，偏离即告警，支持 api/ui/rule 三种 kind
 3. **双传输**：HTTP 与 stdio 均复用 `register_all_tools()` + `_tool_registry`，避免工具面漂移和漏注册
 4. **宿主 AI 推理模式**：服务只交付结构化原始数据，推理交给 Claude/Trae/Codex/Cursor
 5. **安全优先**：fail-closed 鉴权、Content-Length 硬检查、IP 限流、安全响应头、入库前脱敏
-6. **幂等性**：异常钩子 `install_global_hook()` 幂等安装，PG 建表 `CREATE TABLE IF NOT EXISTS`
+6. **幂等性**：异常钩子 `install_global_hook()` 幂等安装，KB 本地 SQLite 笔记本 `CREATE TABLE IF NOT EXISTS`
 7. **降级策略**：各采集器失败降级不阻断整体，中间件异常降级放行
 8. **实时推送**：Dashboard 使用 SSE（Server-Sent Events）而非 WebSocket——Dashboard 只需服务端→客户端单向推送，SSE 原生支持自动重连、更轻量；`DashboardEventBus` 采用进程内广播总线（`asyncio.Queue` + `call_soon_threadsafe`），队列满时丢弃旧消息保最新
 
@@ -350,7 +350,6 @@ Verifier 验证
 |------|--------|------|
 | `STORAGE_BACKEND` | `memory` | `memory`（唯一合法值；`postgresql` 已移除，启动即拒绝） |
 | `STATE_BACKEND` | `memory` | `memory` / `redis` |
-| `PG_DATABASE` | `lujo_mcp` | 数据库名 |
 | `LLM_PROVIDER` | `openai` | `openai` / `zhipu` / `custom` |
 | `OPENAI_API_KEY` | — | LLM API Key |
 | `API_KEY` | — | 鉴权密钥（留空不启用，向后兼容单 key 模式） |
@@ -364,11 +363,11 @@ Verifier 验证
 **启动命令**：
 
 ```bash
-# Docker Compose（推荐）
-docker compose up -d
-
-# 本地开发（零配置，memory 默认）
+# 本地开发（推荐；零配置，memory 默认）
 python -m app.main
+
+# Docker Compose（可选；需设置 API_KEY）
+docker compose up -d
 
 # stdio 模式（供 MCP Desktop 客户端 等本地客户端）
 python -m app.mcp_server

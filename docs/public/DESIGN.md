@@ -2,15 +2,17 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.8.0｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.9.1｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
 > **PostgreSQL 移除（Step 3，2026-09-14）**：PostgreSQL 运行时后端（pg_executor / pg_*_store / async_pg_store 等模块）、驱动依赖、Docker/compose 服务与 PG 配置族已全部移除；`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。本文以下历史版本注记中与 PG 相关的内容为**当时事实记录**，不再描述当前架构；现行语义以 §3.5 与 TROUBLESHOOTING.md L 节为准。
 
-> **v0.8.0（2026-09-11）**：KB 调试经验本地「笔记本」（SQLite 单文件写穿 + 启动回灌，`KB_PERSIST_ENABLED` 默认 true，`STORAGE_BACKEND != postgresql` 时生效；PG 分支行为不变）；平台包同名 bin 安装修复。默认 `STORAGE_BACKEND=memory`，产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL；`PG_ASYNC_ENABLED=true` 下全应用 trace/session 存储生命周期统一仍是独立工作项。
+> **v0.9.1（2026-09-14，已发布）**：PostgreSQL 运行时后端（Step 3）正式移除后收口，并修复 Windows release smoke 的 HTTP readiness 超时（新增独立 `--http-timeout`，默认 15 秒）。`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。
 >
-> 上一版 **v0.7.9 已发布（2026-09-10）**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，Node.js 服务端 SDK 首发。
+> **v0.8.0（2026-09-11）**：KB 调试经验本地「笔记本」（SQLite 单文件写穿 + 启动回灌，`KB_PERSIST_ENABLED` 默认 true）；平台包同名 bin 安装修复。默认 `STORAGE_BACKEND=memory`，产品定位为单用户本地自用。（该版曾提到的 `STORAGE_BACKEND != postgresql` 条件与 `PG_ASYNC_ENABLED` 工作项均已随 Step 3 PG 移除失效。）
+>
+> 更早版本 **v0.7.9 已发布（2026-09-10）**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，Node.js 服务端 SDK 首发。
 >
 > **v0.6.0 更新（2026-08-21，测试基线 1161 passed / 6 skipped / 0 failed）**：
 > - **God Object 彻底拆解**：`pg_store.py` 拆解为 `pg_executor.py` + 5 个分治 Store + `pg_partitions.py`；`analyzer.py` 拆解为 `app/llm/` 6 个单一职责子模块，消除所有隐式跨模块调用与连接管理样板代码。
@@ -331,8 +333,8 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **2
 | `state store` | 限流/计数 | `memory` / `redis`（Redis ZSET 滑动窗口限流） |
 | `sse hub` | 服务端→客户端广播 | `transports/sse.py` |
 | `dashboard event bus` ✅ | Dashboard 实时 SSE 广播（FR20，无 session 门槛） | `app/api/dashboard_events.py`（`DashboardEventBus`，跨线程 `call_soon_threadsafe`，队列满丢旧保最新） |
-| `specs` ✅ | 规范存储（FR15） | `app/runtime/verifier/spec_store.py`，**独立 specs 表**（消除 N+1 查询，不再从 traces 扫描恢复） |
-| `errors` ✅ | 异常持久化聚合 | `app/runtime/core/errors.py`，**独立 errors 表**（fingerprint + occurrence_count 落 PG，重启不丢失） |
+| `specs` ✅ | 规范存储（FR15） | `app/runtime/verifier/spec_store.py`（memory 存储；原独立 specs PG 表已随 Step 3 移除） |
+| `errors` ✅ | 异常聚合 | `app/runtime/core/errors.py`，**内存异常缓冲**（fingerprint + occurrence_count；原独立 errors PG 表已移除，重启即清） |
 | `MemoryTraceStore` | 内存存储 | **OrderedDict + max_entries 容量上限**（防 OOM） |
 
 #### 3.5.1 PostgreSQL 存储实现 —— 已移除
@@ -343,9 +345,9 @@ HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **2
 
 | 端点 | 功能 | 数据源 |
 | --- | --- | --- |
-| `GET /api/dashboard/stats` | 概览统计（total/silent/exceptions/spec_count） | errors 缓冲 + PG traces |
-| `GET /api/dashboard/traces?limit=N` | 列出最近 traces 摘要 | errors 缓冲 + PG traces |
-| `GET /api/dashboard/trace/{trace_id}` | trace 详情（含 spec_diffs） | PG traces + errors 缓冲 |
+| `GET /api/dashboard/stats` | 概览统计（total/silent/exceptions/spec_count） | errors 缓冲 + trace_store 内存 |
+| `GET /api/dashboard/traces?limit=N` | 列出最近 traces 摘要 | errors 缓冲 + trace_store 内存 |
+| `GET /api/dashboard/trace/{trace_id}` | trace 详情（含 spec_diffs） | trace_store 内存 + errors 缓冲 |
 | `GET /api/dashboard/specs` | 列出已存规范 | spec_store |
 
 `_collect_all_traces` 合并两个数据源：
@@ -627,18 +629,22 @@ python -m pytest tests/ --tb=short -q
 python -m pytest tests/unit/ --tb=short -q
 
 
-# 按 marker 运行
-python -m pytest -m "not integration and not pg and not slow" --tb=short -q
+# 按 marker 运行（可用 marker：integration / llm / slow）
+python -m pytest -m "not integration and not slow" --tb=short -q
 ```
 
-> **pytest markers**：`integration` / `llm` / `pg` / `slow`，`pytest.ini` 已注册。
+> **pytest markers**：`integration` / `llm` / `slow`，`pytest.ini` 已注册（原 `pg` marker 已随 PostgreSQL 后端移除删除）。
 
-### 11.3 PG 集成测试覆盖
+### 11.3 集成测试覆盖
 
-- **PGStoreConnection**：连接池、表自动创建、save/get 往返、字符串 data 存储、list_request_ids、_parse_data 辅助函数
-- **DashboardIntegration**：stats 结构、traces 列表从 PG 读取、trace 详情从 PG 读取
-- **MCPToolIntegration**：list_recent_traces 包含 PG 数据、search_logs 搜索 PG 数据、get_logs 返回 PG 数据
+> 范围注记：下列「KB 经验闭环」「进程边界与生命周期」「传输契约」三条目来自 v0.9.1 发布后的 main 维护提交，不属于 v0.9.1 已发布产物，将在后续版本发布时纳入。
+
+- **DashboardIntegration**：stats 结构、traces 列表、trace 详情（当前数据源为 memory + errors 缓冲；原 PG 读取路径已移除）
+- **MCPToolIntegration**：list_recent_traces、search_logs、get_logs 返回运行现场数据（memory）
 - **LLMIntegration**：analyze_with_llm 端到端（LLM 未配置时自动跳过）
+- **KB 经验闭环**：`test_m1c_experience_lifecycle`（trace → diagnose → verify 写回 → SQLite 持久化 → 重载检索）
+- **进程边界与生命周期**：`test_process_boundary` / `test_exit_deadline_os` / `test_frozen_child_smoke`
+- **传输契约**：`test_stdio_wire_contract`（stdio wire error semantics）
 
 ---
 
@@ -823,7 +829,7 @@ sequenceDiagram
 
 - **异常处理**：路由层（`ingest.py`/`debug.py`/`main.py`）全 `try/except`，对外统一 `"Internal server error"`；全局兜底 `error_handlers.py:15`；工具异常 `server.py:100` 返回 `isError:True`（但**无机器可读 error_code**，见 SEC-11）。
 - **降级**：`build_debug_context` 六个子采集器各自 `try/except`（`context.py:109,122,132,142,152`），任一失败不阻断整体——设计亮点，但也把攻击者可控的 frame 路径放大为文件读取/ git 命令（见 SEC-01）。
-- **并发**：`MemoryTraceStore`/`errors`/`spec_store`/`session registry` 均 `Lock` 保护；PG 连接池双重检查锁正确。⚠️ 但 `analyzer._get_client` 用模块级 bool 冒充自旋锁（`analyzer.py:18,47-55`），非真正线程安全；**全链路无单次工具调用超时**（`server.py:87`/`mcp_server.py:125`，见 SEC-05）。
+- **并发**：`MemoryTraceStore`/`errors`/`spec_store`/`session registry` 均 `Lock` 保护；PG 连接池双重检查锁正确（历史记录：该连接池已随 PostgreSQL 后端移除）。⚠️ 但 `analyzer._get_client` 用模块级 bool 冒充自旋锁（`analyzer.py:18,47-55`），非真正线程安全；**全链路无单次工具调用超时**（`server.py:87`/`mcp_server.py:125`，见 SEC-05）。
 
 ---
 
@@ -916,11 +922,11 @@ sequenceDiagram
 
 **关键高并发风险：**
 
-1. **🔴 PG 连接池瓶颈**（`maxconn=10` 硬编码）：100 并发写入 → 10 连接全占 → 90 请求阻塞 → 最坏等待 200ms+
+1. ~~**🔴 PG 连接池瓶颈**（`maxconn=10` 硬编码）：100 并发写入 → 10 连接全占 → 90 请求阻塞 → 最坏等待 200ms+~~（已随 PostgreSQL 后端移除而不再适用：当前版本无任何 PG 调用）
 2. **🔴 内存存储多 worker 数据不一致**：`gunicorn` 多 worker 下每个 worker 独立内存，数据完全隔离
 3. **🔴 定时清理无分布式锁**：多 worker 各自执行清理，重复操作
 4. **🟡 异常指纹缓冲无持久化**：`occurrence_count`/`fingerprint` 仅内存，重启丢失
-5. **🟡 spec_store 恢复性能**：扫描 500 个 request_id = 500 次 PG 查询
+5. ~~**🟡 spec_store 恢复性能**：扫描 500 个 request_id = 500 次 PG 查询~~（已随 PG 后端移除而不再适用）
 
 **并发安全矩阵：**
 
@@ -931,7 +937,7 @@ sequenceDiagram
 | MemoryStateStore | ✅ Lock | ❌ 进程隔离 | ❌ |
 | RedisStateStore | ✅ | ✅ | ✅ |
 | errors deque | ✅ Lock | ❌ 进程隔离 | ❌ |
-| spec_store | ✅ Lock | ✅ PG 持久化 | ✅ |
+| spec_store | ✅ Lock | ❌ 进程隔离（原 PG 持久化已随后端移除） | ❌ |
 | SSEHub | ✅ asyncio.Queue | ❌ | ❌ |
 | SessionRegistry | ✅ Lock | ❌ | ❌ |
 
@@ -943,7 +949,7 @@ sequenceDiagram
 
 ### 14.5 数据写入/读取路径分析
 
-**写入路径瓶颈：**
+**写入路径瓶颈：**（2026-07-22 审查时点记录；其中 PG 分支已随 PostgreSQL 后端移除，当前仅剩 memory 路径）
 ```
 浏览器 SDK → /ingest/* (HTTP) → tool handler → trace_repo → add_log → TraceStorage
                                                                               ↓
@@ -1169,7 +1175,7 @@ Dashboard → /api/dashboard/traces → _collect_all_traces → errors.list_rece
 | PostgreSQL 声明式分区（原生） | 零依赖，内置支持，稳定可靠 | 需手动管理分区创建 | ✅ |
 | 应用层分表（多表名） | 灵活可控 | 业务代码侵入大，查询复杂 | ❌ |
 
-**决策**：使用 PostgreSQL 原生声明式 RANGE 分区，应用层管理分区创建。
+**决策**：使用 PostgreSQL 原生声明式 RANGE 分区，应用层管理分区创建。（历史决策；PG 后端已移除，见 §15 章首状态说明。）
 
 #### 15.2.2 分区键选择
 
@@ -1310,7 +1316,7 @@ WHERE timestamp < $1 AND id NOT IN (SELECT id FROM traces_archive)
 - 关闭分区时不检查分区
 - 惰性检查频率（每 1000 次一次）
 
-**真实 PG 集成测试**（需 PG，手动运行）：
+**真实 PG 集成测试**（历史设计；PG 后端与 `pg` marker 均已移除，当前不再适用）：
 - 分区表创建与写入
 - 跨月数据路由到正确分区
 - 归档数据正确性

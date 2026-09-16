@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前版本：v0.8.0（2026-09-11，已发布）。本版新增 KB 调试经验本地「笔记本」（默认开启，详见 KNOWLEDGE_BASE 文档）并修复平台包安装入口；公开工具面与数据库 schema 不变。上一版 v0.7.9 为 Node SDK 首发版本。
+> 当前版本：v0.9.1（2026-09-14，已发布）。本版移除 PostgreSQL 运行时后端（`STORAGE_BACKEND=memory` 为唯一合法值），保留 KB 调试经验本地「笔记本」（默认开启，详见 KNOWLEDGE_BASE 文档）；公开工具面与数据库 schema 不变。上一版 v0.8.0 为 KB 本地「笔记本」与安装入口修复。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -20,7 +20,7 @@
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
-- [4. Node SDK（v0.8.0 已发布）](#4-node-sdkv080-已发布)
+- [4. Node SDK（v0.9.1 已发布）](#4-node-sdkv091-已发布)
 - [5. 常用字段速查](#5-常用字段速查)
 
 ---
@@ -289,9 +289,9 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ---
 
-## 4. Node SDK（v0.8.0 已发布）
+## 4. Node SDK（v0.9.1 已发布）
 
-包名固定为 `@lujoai/lujo-mcp-node-sdk`，当前发布版本为 v0.8.0，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。该包已随本版发布，`engines.node` 为 `>=18`。
+包名固定为 `@lujoai/lujo-mcp-node-sdk`，当前发布版本为 v0.9.1，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。该包已随本版发布，`engines.node` 为 `>=18`。
 
 ```bash
 npm install @lujoai/lujo-mcp-node-sdk
@@ -338,7 +338,7 @@ Node SDK 在发送前递归脱敏错误、网络记录和 `extra`；默认敏感
 |------|------|
 | `request_id` | 一次调试流程的唯一标识（`/api/debug/run`、`debug` 工具生成） |
 | `trace_id` | SDK 生命周期内的追踪标识（贯穿所有上报），也可作为 request_id 关联 |
-| `error_id` | 自动捕获异常的唯一标识（`errors` 表主键） |
+| `error_id` | 自动捕获异常的唯一标识（内存异常缓冲条目；原独立 `errors` 表已随 PostgreSQL 后端移除） |
 | `fingerprint` | 错误指纹（归一化 message + type），用于知识库精确命中去重 |
 | `silent_failure` | 静默失败标志：`matched=false` 且无异常、无 4xx/5xx |
 | `spec_diffs` | 规范比对差异列表（expected vs actual） |

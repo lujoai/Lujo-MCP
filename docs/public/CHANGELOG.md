@@ -11,7 +11,7 @@
 
 ## [0.9.1] - 2026-09-14
 
-> 主题「Windows release smoke 修复」：v0.9.0 tag 推送后，release-npm.yml 中 Windows GitHub Actions runner 上 PyInstaller 冻结二进制以 `--http` 模式启动时，HTTP health readiness 超过 smoke 脚本默认的 10 秒超时（该超时复用了 stdio 响应读取超时 `_READ_TIMEOUT`），导致 Windows build job 失败、publish job 被跳过、npm 0.9.0 从未发布。v0.9.1 将 HTTP health readiness 超时与 stdio 响应超时解耦，新增独立 `--http-timeout` 参数（默认 15 秒），release workflow 中 HTTP smoke 使用 30 秒。stdio 超时、health 检查语义、进程清理逻辑和 heavy tool 验证保持不变。v0.9.0 tag 保留不动，v0.9.1 是首次实际发布候选版本。
+> 主题「Windows release smoke 修复」：v0.9.0 tag 推送后，release-npm.yml 中 Windows GitHub Actions runner 上 PyInstaller 冻结二进制以 `--http` 模式启动时，HTTP health readiness 超过 smoke 脚本默认的 10 秒超时（该超时复用了 stdio 响应读取超时 `_READ_TIMEOUT`），导致 Windows build job 失败、publish job 被跳过、npm 0.9.0 从未发布。v0.9.1 将 HTTP health readiness 超时与 stdio 响应超时解耦，新增独立 `--http-timeout` 参数（默认 15 秒），release workflow 中 HTTP smoke 使用 30 秒。stdio 超时、health 检查语义、进程清理逻辑和 heavy tool 验证保持不变。v0.9.0 tag 保留不动，v0.9.1 是 v0.9.0 之后的首个实际发布版本（npm registry `latest=0.9.1`，GitHub Release v0.9.1 含三平台资产）。
 
 ### Fixed
 
@@ -33,7 +33,7 @@
 ### 注意
 
 - **v0.9.0 从未成功发布**：v0.9.0 tag 存在于远程（指向 `735c16f`），但 release-npm.yml 因 Windows HTTP smoke 失败而中止，npm registry 和 GitHub Release 均未产生 0.9.0 产物。
-- **v0.9.1 是首次实际发布候选版本**：包含 v0.9.0 的全部内容（PostgreSQL runtime 移除）加上 Windows release smoke 修复。
+- **v0.9.1 是本轮首个实际发布版本**：已发布到 npm registry（`latest=0.9.1`）与 GitHub Release（含三平台资产），包含 v0.9.0 的全部内容（PostgreSQL runtime 移除）加上 Windows release smoke 修复。
 
 ---
 
@@ -50,7 +50,7 @@
 
 - 升级注意：若 `.env` 仍写着 `STORAGE_BACKEND=postgresql`，升级后首次启动会直接失败并给出迁移指引——这是设计行为（fail-fast，防止静默降级造成数据误判）；改回 `memory` 或删除该行即可。
 
-- **发布后 C 批生命周期加固已进入 main**：执行器槽位记账、heavy 子进程结果通道、进程树终止、绝对退出死线与 lifespan 异常清理已完成，并通过 GitHub CI run 34675974282；该内容尚未绑定新的版本号。
+- **发布后 C 批生命周期加固已进入 main**：执行器槽位记账、heavy 子进程结果通道、进程树终止、绝对退出死线与 lifespan 异常清理已完成，并通过 GitHub CI run 34675974282；该内容属于 v0.9.1 发布后的维护提交，不属于 v0.9.1 已发布产物，将在后续版本发布时纳入。
 
 ## [0.8.0] - 2026-09-11
 

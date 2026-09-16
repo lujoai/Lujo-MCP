@@ -1,18 +1,18 @@
 # Release Notes / 发布说明
 
-> **v0.9.1（当前版本，尚未发布）**：修复 v0.9.0 发布流程中 Windows GitHub Actions runner 上 PyInstaller 冻结二进制 HTTP health readiness 超时问题。新增独立 `--http-timeout` 参数（默认 15 秒），release workflow 使用 30 秒。v0.9.0 tag 保留不动但从未成功发布到 npm/GitHub Release。v0.9.1 包含 v0.9.0 全部内容（PostgreSQL runtime 移除）加上此修复，是首次实际发布候选版本。上一版 v0.8.0 的发布证据见 https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
+> **v0.9.1（当前版本，已发布）**：修复 v0.9.0 发布流程中 Windows GitHub Actions runner 上 PyInstaller 冻结二进制 HTTP health readiness 超时问题。新增独立 `--http-timeout` 参数（默认 15 秒），release workflow 使用 30 秒。v0.9.0 tag 保留不动但从未成功发布到 npm/GitHub Release。v0.9.1 包含 v0.9.0 全部内容（PostgreSQL runtime 移除）加上此修复，是 v0.9.0 之后的首个实际发布版本。发布证据：npm registry `latest=0.9.1`；GitHub Release https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.1（含 Windows / Linux / macOS 三平台资产）。上一版 v0.8.0 的发布证据见 https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
 >
 > **架构冻结（Architecture Frozen）**：Runtime / RAG / Agent 三层分界线已冻结。禁止 Agent 改 RAG；禁止 Runtime 调 RAG/Agent/LLM/MCP；禁止 RAG 调 Agent/Runtime/LLM/MCP。
 
-**Version / 版本**: v0.9.1 ・ **Release Date / 发布日期**: 2026-09-14（尚未发布） ・ **Codename / 代号**: Windows Release Smoke 修复 ｜ Windows Release Smoke Fix
+**Version / 版本**: v0.9.1 ・ **Release Date / 发布日期**: 2026-09-14（已发布） ・ **Codename / 代号**: Windows Release Smoke 修复 ｜ Windows Release Smoke Fix
 
 ---
 
-## v0.9.1（2026-09-14，尚未发布）
+## v0.9.1（2026-09-14，已发布）
 
 ### 版本概述
 
-v0.9.0 tag 推送后，release-npm.yml 在 Windows GitHub Actions runner 上因 HTTP health readiness 超时失败。根因：`scripts/mcp_smoke_test.py` 的 `_wait_http` 使用 stdio 响应读取超时（`_READ_TIMEOUT`，默认 10 秒）作为 HTTP health readiness 超时；Windows CI runner 上 PyInstaller 冻结二进制 `--http` 冷启动（解压归档 + 导入 FastAPI/uvicorn）超过 10 秒。v0.9.1 新增独立 `--http-timeout` 参数（默认 15 秒），release workflow HTTP smoke 使用 30 秒。v0.9.0 从未发布到 npm/GitHub Release，v0.9.1 是首次实际发布候选版本，包含 v0.9.0 全部内容加上此修复。
+v0.9.0 tag 推送后，release-npm.yml 在 Windows GitHub Actions runner 上因 HTTP health readiness 超时失败。根因：`scripts/mcp_smoke_test.py` 的 `_wait_http` 使用 stdio 响应读取超时（`_READ_TIMEOUT`，默认 10 秒）作为 HTTP health readiness 超时；Windows CI runner 上 PyInstaller 冻结二进制 `--http` 冷启动（解压归档 + 导入 FastAPI/uvicorn）超过 10 秒。v0.9.1 新增独立 `--http-timeout` 参数（默认 15 秒），release workflow HTTP smoke 使用 30 秒。v0.9.0 从未发布到 npm/GitHub Release，v0.9.1 是 v0.9.0 之后的首个实际发布版本（已发布 npm 与 GitHub Release），包含 v0.9.0 全部内容加上此修复。
 
 ### 主要修复
 

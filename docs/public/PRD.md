@@ -5,16 +5,16 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v7.2（v0.8.0 同步） |
+| 文档版本 | v7.3（v0.9.1 同步） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v0.8.0（已发布） |
+| 当前产品版本 | v0.9.1（已发布） |
 | 文档状态 | 已交付（Delivered） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-09-11 |
+| 最后更新 | 2026-09-14 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
-> **v0.8.0 状态（2026-09-11，已发布）**：KB 经验本地「笔记本」默认开启（SQLite 单文件、跨重启回灌、数据不出本机）；平台包同名 bin 安装修复。默认 `STORAGE_BACKEND=memory` 不变；产品定位为单用户本地自用，不承诺中央多人共享 PostgreSQL。GitHub Release：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
+> **v0.9.1 状态（2026-09-14，已发布）**：PostgreSQL 运行时后端正式移除，`STORAGE_BACKEND=memory` 为唯一合法值；KB 经验本地「笔记本」默认开启（SQLite 单文件、跨重启回灌、数据不出本机）。产品定位为单用户本地自用，不承诺中央多人共享数据库。发布证据：npm registry `latest=0.9.1`；GitHub Release：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.1。
 
 ---
 
@@ -46,6 +46,7 @@
 | v7.2 | 2026-09-11 | 架构委员会 | **v0.8.0 同步**：KB 调试经验本地「笔记本」——自有经验默认写穿本机 SQLite 单文件（`KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`），进程重启自动回灌，`KB_PERSIST_ENABLED=false` 退回纯内存，`STORAGE_BACKEND=postgresql` 行为不变；平台 npm 包不再声明与元包同名 `bin`（修复项目内安装后 `node_modules/.bin` 缺失启动入口）；持久层加固（短连接显式关闭、拒绝 `:memory:`、路径绝对化）。零 Breaking、零新依赖、零 schema 变更。测试基线 unit 1636/6、integration 79/41、e2e 10/1、Node SDK 11。产品版本 v0.7.9 → v0.8.0。 |
 | v7.1 | 2026-09-10 | 架构委员会 | **v0.7.9 发布完成同步**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，连接池跨事件循环生命周期加固；Node.js 服务端 SDK 首发，支持 Node 18/20/22、CJS/ESM、显式错误与网络上报；验证 stdio executor 自愈和项目解释器隔离。默认 memory 后端、公开工具面、schema 不变；全应用 async PG 生命周期统一仍是独立工作项。测试基线 unit 1615/6、integration 79/41、e2e 10/1、PG async 5、Node SDK 11。产品版本 v0.7.8 → v0.7.9。 |
 | v6.5 | 2026-08-25 | 架构委员会 | **v0.6.3 ~ v0.6.7 发布 + 全量代码审查三档 Major 清零交付**：(1) v0.6.3 稳定性维护补丁（2 Critical + 10 Major）；(2) v0.6.4 安全补丁（embedding 未脱敏外发、verify_loop 安全门失效、限流键绕过）；(3) v0.6.6 可用性补丁（stdio 坏输入、槽位竞态、事件循环阻塞、async 双池绕过）；(4) v0.6.7 正确性补丁（SDK 传输三件套、LLM 缓存指纹碰撞、流式绕熔断、smoke_test 死锁、sourcemap 版本键）。测试基线 1198 → 1231 passed / 6 skipped / 0 failed。产品版本 v0.6.2 → v0.6.7。 |
+| v7.3 | 2026-09-14 | 架构委员会 | **v0.9.1 同步**：PostgreSQL 运行时后端正式移除——`STORAGE_BACKEND=memory` 为唯一合法值，精确值 `postgresql` 启动即被 `StorageBackendRemovedError` 拒绝（不静默回退），KB 经验持久化由本地 SQLite「笔记本」承担；Windows release smoke 的 HTTP readiness 超时修复（独立 `--http-timeout`）。v0.9.1 已发布（npm `latest=0.9.1`，GitHub Release 含三平台资产）。公开工具面 18/22、Node SDK 接口、schema 不变。产品版本 v0.8.0 → v0.9.1。 |
 
 ---
 
@@ -90,13 +91,13 @@
 | **宿主 AI 推理模式** | 服务只交付结构化原始数据，宿主 AI 自行推理 | P2 ✅ |
 | **LLM 分析 + 多 provider** | `analyzer.py`（openai/zhipu/deepseek/custom）| 辅助 P2 ✅ |
 | **静默失败检测** | `assert_engine.py` + `verify` MCP 工具 + `/api/debug/verify` | P5/P6 ✅ |
-| **规范存储** | `spec_store.py`（dict+Lock + add_log 持久化，预留 PG 工厂模式待迁移）+ `/api/spec` CRUD | FR15 ✅ |
+| **规范存储** | `spec_store.py`（memory 存储；原「预留 PG 工厂模式待迁移」已随 PostgreSQL 后端移除作废）+ `/api/spec` CRUD | FR15 ✅ |
 | **前端自动化验证** | `ui_runner.py`（Playwright）+ `verify_ui` MCP 工具 + `/api/debug/verify/ui` | P4 ✅ |
 | **浏览器 SDK** | `browser-sdk/ai-debug.js`（UMD/CJS/ESM） | P4/P5 ✅ |
 | **Browser SDK V3/V6 增强** | `browser-sdk/ai-debug.js` + demo 页面 | P4/P5/P6 ✅ |
 | **Web 控制台** | `dashboard.html` + `/api/dashboard/*` | 运维 ✅ |
 | **安全中间件 / 可观测性 / 双传输 / 配置** | 见 v1.0 | 基础设施 ✅ |
-| **数据层长期优化（Phase 5）** | P3-1 按月 RANGE 分区 + P3-2 自动归档 + P3-3 批量写入 + P3-5 优雅降级 + P3-8 熔断器 | 企业级性能 ✅ |
+| **数据层长期优化（Phase 5）** | 🗑️ ~~P3-1 按月 RANGE 分区~~ + 🗑️ ~~P3-2 自动归档~~ + P3-3 批量写入 + 🗑️ ~~P3-5 优雅降级~~ + P3-8 熔断器（🗑️ 项为历史 PG 能力，已随后端移除） | 企业级性能 ✅ |
 | **智能错误分析引擎（Phase 7）** | `errors.py` 指纹聚合 + 根因排序 + dashboard API | 运维效率 ✅ |
 | **指纹知识库基础能力** | `knowledge_base.py` + `analyzer.py` | 历史结论复用 ✅ |
 | **异步分析队列（P3-6）** | `app/llm/analysis_queue.py` + `app/main.py` lifespan 钩子 | 限流削峰 ✅ |
@@ -104,7 +105,7 @@
 | **RBAC + API Key 轮换（AUDIT-2-13/14）** | `app/auth/key_rotation.py` + `app/auth/rbac.py` | 鉴权增强 ✅ |
 | **AI Debug Agent（Phase 1）** | `app/agent/`（`BaseAgent` ABC + `RepairAgent` + `Coordinator` + `RepairQueue` + `RepairContextAssembler` + `schemas`）+ 2 REST 端点 + 2 MCP 工具 | 自动修复 ✅ |
 | **Dashboard 实时 SSE 推送** | `app/api/dashboard_events.py`（`DashboardEventBus` 广播总线）+ `GET /api/dashboard/stream` SSE 端点 + `invalidate_cache` 广播钩子 + 前端 EventSource | 实时运维 ✅ |
-| **RAG 知识库 PostgreSQL 持久化（v0.5.3）** | `knowledge_base.py` 写穿（kb_entries 表 + `load_from_persistent()` 启动回灌）+ `factory.get_knowledge_store()` 分发（PG/NoOp 降级） | 历史结论跨重启复用 ✅ |
+| **RAG 知识库本地持久化（v0.5.3 引入 PG；v0.9.x 改为 SQLite 笔记本）** | `knowledge_base.py` 写穿 + `load_from_persistent()` 启动回灌 + `factory.get_knowledge_store()` 分发（当前为本地 SQLite / NoOp 降级） | 历史结论跨重启复用 ✅ |
 
 > **架构师结论（更新 v5.5）**：P1–P6 全部痛点已可交付解决。产品全面覆盖：
 > - 报错场景：自动捕获 → 源码定位 → IDE 跳转（P1/P2/P3）
@@ -112,7 +113,7 @@
 > - 前端场景：SDK 上报 + Playwright 自动遍历（P4）
 > - 前端增量场景：网络错误自动标记 + UI 静默失败自动检测（Browser SDK V3/V6）
 > - 运维场景：Web 控制台 Dashboard 可视化
-> - 企业级场景：数据分区 + 归档 + 批量写入 + 优雅降级 + 熔断器（Phase 5）
+> - 企业级场景：批量写入 + 熔断器（Phase 5；原分区/归档/优雅降级三项已随 PostgreSQL 后端移除）
 > - 智能化场景：错误指纹聚合 + 根因排序 + 智能分析引擎（Phase 7）+ 指纹知识库基础能力
 > - 限流场景：异步分析队列削峰 + 优雅停机 drain（P3-6，v5.2）
 > - 召回增强场景：向量检索 RAG fallback（Phase 7 增量，v5.2）+ Qdrant 语义召回（v5.3，OpenAI/智谱 Embeddings + uuid5 幂等 upsert + 静默降级）
@@ -120,7 +121,7 @@
 > - 缓存预热场景：L3 缓存预热（只写 L1 不刷新 L2 TTL，P3-7，v5.3）
 > - 自动修复场景：AI Debug Agent Phase 1 单 Agent `RepairAgent` + Phase 2 多 Agent DAG（`GitAgent`/`TestAgent`/`SecurityAgent` 并行审查，`AGENT-002`，2026-07-30）+ `BaseAgent` ABC 协同框架 + `Coordinator` 编排 + `RepairQueue` 削峰（v5.4/v5.5）
 > - 实时运维场景：Dashboard SSE 实时推送（`DashboardEventBus` 广播总线 + `GET /api/dashboard/stream` + 前端 EventSource 去抖刷新 + 轮询兜底，`DASH-SSE-001`，v5.5）
-> - 持久化场景：RAG 知识库 PostgreSQL 写穿 + 启动回灌（kb_entries 表，learned 经验跨重启保留，v0.5.3）
+> - 持久化场景：RAG 知识库本地 SQLite 写穿 + 启动回灌（learned 经验跨重启保留；v0.5.3 原为 PostgreSQL kb_entries 表，已随 v0.9.x PG 后端移除改为本地 SQLite 笔记本）
 
 ---
 
@@ -659,7 +660,7 @@ M2 贡献最大（+0.10），因为知识库命中同时提升完整度和可信
 | AC5 | 启用 `API_KEY` 后无凭证返回 401 |
 | AC6 | 超 `MAX_BODY_SIZE` 返回 413 |
 | AC7 | 限流生效 |
-| AC8 | `/health` PG 断开不泄露内部错误 |
+| AC8 | `/health` 存储异常不泄露内部错误（原「PG 断开」场景已随 PostgreSQL 后端移除） |
 | AC15 | `POST /api/debug/analyze/async` 返回 `job_id`；并发 N>K 时仅 K 个并行执行，其余排队不丢失 |
 | AC16 | 队列满载时 `POST /api/debug/analyze/async` 返回 429；停机信号触发 `drain_timeout` 内未完成任务优雅终止 |
 | AC17 | 指纹未命中但向量库存在相似文档时，`analysis_source=vector_recall` 且相似度 ≥ `min_score`；`vector_store_enabled=False` 时行为与旧版完全一致 |

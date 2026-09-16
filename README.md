@@ -6,7 +6,7 @@
 
 > 💡 **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 
-> **当前版本：v0.8.0（2026-09-11）**：KB 调试经验本地「笔记本」默认开启（跨重启保留自有经验，数据不出本机），并修复平台包同名 `bin` 导致的安装入口缺失问题。npm 最新已发布版本见 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp)；上一版 v0.7.9 的发布证据见 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases)。
+> **当前版本：v0.9.1（2026-09-14）**：PostgreSQL 运行时后端正式移除，`STORAGE_BACKEND=memory` 成为唯一合法值（精确值 `postgresql` 会被直接拒绝，不静默回退）；KB 调试经验本地「笔记本」默认开启（跨重启保留自有经验，数据不出本机）；修复 Windows release smoke 的 HTTP readiness 超时。npm 最新已发布版本见 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp)；v0.9.1 的发布证据见 [GitHub Release v0.9.1](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.1)。
 
 ---
 
@@ -177,7 +177,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
-### Node 服务接入：使用 Node SDK（v0.8.0 已发布）
+### Node 服务接入：使用 Node SDK（v0.9.1 已发布）
 
 服务端 Node.js 使用独立包 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18/20/22 和 CJS/ESM。它只做显式错误与网络上报，不安装浏览器的 DOM、XHR/fetch、console 或 `localStorage` 钩子；浏览器页面继续使用上面的 Browser SDK。
 

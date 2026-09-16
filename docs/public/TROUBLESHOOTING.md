@@ -1,7 +1,7 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.8.0
-**最后更新 / Last Updated**: 2026-09-11
+**适用版本 / Applicable Version**: v0.9.1
+**最后更新 / Last Updated**: 2026-09-14
 
 > **发布状态**：默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
 
@@ -61,7 +61,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HOST=127.0.0.1`
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | Lujo-MCP v0.8.0`
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.1`
 
 ---
 
@@ -153,7 +153,7 @@ STORAGE_BACKEND=memory
 
 **设计说明**: 这是 fail-fast 设计，防止拼写错误导致静默降级到 memory 存储，造成生产数据丢失。精确值 `postgresql` 不会被静默改写为 memory，而是启动即拒绝（详见 L 节）。
 
-**验证 / Verify**: 服务正常启动，`/health` 返回正确的 storage 状态
+**验证 / Verify**: 服务正常启动，`/internal/health` 返回 `"storage": "memory"`（公开 `/health` 仅返回 status）
 
 ---
 
@@ -213,7 +213,7 @@ WARNING: API_KEY 为空，已视为未配置，鉴权关闭
   python -c "import secrets; print(secrets.token_urlsafe(32))"
   ```
 
-**验证 / Verify**: `/health` 返回 `auth: on`（生产环境）
+**验证 / Verify**: 配置后重启不再出现「鉴权关闭」告警；无 key 请求受保护端点返回 401（生产环境）
 
 ---
 
@@ -257,7 +257,7 @@ STORAGE_BACKEND=memory
 ```
 旧 PG kb_entries 数据的迁移见 L 节；遗留的 `PG_*` / `POSTGRES_PASSWORD` / `DATABASE_URL` 键不会重新启用 PostgreSQL，也不会导致启动崩溃，可安全删除。
 
-**验证 / Verify**: 服务正常启动，`/health` 返回 `"storage": "memory"`
+**验证 / Verify**: 服务正常启动，`/internal/health` 返回 `"storage": "memory"`（公开 `/health` 仅返回 status）
 
 ---
 
@@ -523,7 +523,7 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-`tools/list` 公开 18 个 Agent-facing 工具（v0.8.0；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
+`tools/list` 公开 18 个 Agent-facing 工具（v0.9.1；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
 `debug`, `context`, `trace`, `stacktrace`, `diagnose_issue`, `list_recent_traces`, `search_logs`, `ingest_specs`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
@@ -923,20 +923,20 @@ pytest tests/unit/ --cache-clear -q
 
 ### K-2. 集成测试需要外部服务
 
-**现象 / Symptom**: 集成测试因 PG/Redis 不可用而跳过或失败。
+**现象 / Symptom**: 集成测试因缺少外部服务或 LLM API Key 而跳过。
 
-**原因 / Cause**: 集成测试需要真实的外部服务。
+**原因 / Cause**: 集成测试需要真实的外部服务或 LLM Key。
 
 **解决方案 / Solution**:
 ```bash
-# 方案 A: 启动 Docker 服务
+# 方案 A: 启动 Redis（仅 STATE_BACKEND=redis 相关测试需要）
 docker compose up -d redis
 
 # 方案 B: 仅运行不依赖外部服务的测试
 pytest tests/unit/ -q
 
-# 方案 C: 跳过需要外部服务的测试
-pytest tests/integration/ -q -m "not requires_pg and not requires_redis"
+# 方案 C: 跳过需要 LLM API Key 的测试（llm 是 pytest.ini 已注册的 marker）
+pytest tests/integration/ -q -m "not llm"
 ```
 
 **验证 / Verify**: 测试按预期通过或跳过
@@ -1002,7 +1002,7 @@ pytest tests/ --timeout=120
 2. 检查健康状态
    └── curl http://localhost:8000/health
        ├── status=ok → 服务正常，问题在特定功能
-       ├── status=degraded → 部分组件异常，查看 storage/llm_configured
+       ├── status=degraded → 部分组件异常，用 /internal/health 查看 storage/llm_configured
        └── status=unhealthy → 核心组件异常
 
 3. 检查配置
@@ -1047,8 +1047,7 @@ DEBUG=true    # 仅开发环境！
 | `ModuleNotFoundError` | A 启动 | A-3 | `pip install -r requirements.txt` |
 | `Invalid STORAGE_BACKEND` | A 启动 | A-4 | 修正拼写 |
 | `.env` 警告 | B 配置 | B-2 | 可忽略 |
-| PG 连接失败 | C 存储 | C-1 | 检查 PG 服务与配置 |
-| PG 认证失败 | C 存储 | C-2 | 修正密码 |
+| `StorageBackendRemovedError` | C 存储 | C-1 | 改用 `memory` |
 | Redis 连接失败 | C 存储 | C-5 | 检查 Redis 服务 |
 | LLM 401 | D LLM | D-1 | 检查 API Key |
 | LLM 超时 | D LLM | D-2 | 增大 LLM_TIMEOUT |

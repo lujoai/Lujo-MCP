@@ -1,9 +1,9 @@
 # 启动前检查清单 / Pre-flight Checklist
 
-**适用版本 / Applicable Version**: v0.8.0
-**最后更新 / Last Updated**: 2026-09-11
+**适用版本 / Applicable Version**: v0.9.1
+**最后更新 / Last Updated**: 2026-09-14
 
-> **发布状态**：v0.8.0 已发布。默认 `STORAGE_BACKEND=memory`；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。发布页：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.8.0。
+> **发布状态**：v0.9.1 已发布（npm registry `latest=0.9.1`）。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。发布页：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.1。
 
 ---
 
@@ -13,7 +13,7 @@
 - [1. 运行环境校验 / Runtime Environment](#1-运行环境校验--runtime-environment)
 - [2. 依赖安装验证 / Dependency Verification](#2-依赖安装验证--dependency-verification)
 - [3. 配置文件检查 / Configuration Check](#3-配置文件检查--configuration-check)
-- [4. 数据库连通性测试 / Database Connectivity](#4-数据库连通性测试--database-connectivity)
+- [4. 数据库（PostgreSQL 已移除） / Database](#4-数据库postgresql-已移除--database)
 - [5. Redis 连通性测试 / Redis Connectivity](#5-redis-连通性测试--redis-connectivity)
 - [6. 安全与权限核查 / Security & Permissions](#6-安全与权限核查--security--permissions)
 - [7. UI 验证环境检查 / UI Verification Environment](#7-ui-验证环境检查--ui-verification-environment)
@@ -180,7 +180,7 @@ cp .env.example .env
 
 # 判定标准 / Pass Criteria: OPENAI_API_KEY 非空且为有效密钥
 # 异常处理 / Contingency:
-#   - 服务启动后 /health 会返回 llm_configured: false（降级模式）
+#   - 服务启动后 /internal/health 会返回 llm_configured: false（降级模式，公开 /health 只返回 status）
 #   - LLM 调用将失败，但不影响其他功能
 ```
 
@@ -240,17 +240,15 @@ cp .env.example .env
 # 判定标准 / Pass Criteria: 根据实际需求配置，生产环境不建议使用 *
 ```
 
-### 3.4a JWT 配置（启用 OAuth 时必选）
+### 3.4a 鉴权方式说明
 
-- [ ] **[必选]** JWT_SECRET 已配置且非硬编码值
+- [ ] **[必选]** 确认鉴权方式与当前实现一致
 
 ```bash
-# JWT_SECRET=<your_random_secret_at_least_32_chars>
 # 判定标准 / Pass Criteria:
-#   - JWT_SECRET 非空且长度 >= 32
-#   - 禁止使用硬编码降级密钥（当前代码会静默降级，需显式配置）
-# 异常处理 / Contingency:
-#   - 生成随机密钥: python -c "import secrets; print(secrets.token_urlsafe(48))"
+#   - 本项目鉴权基于 API Key（fail-closed，hmac.compare_digest），不引入 JWT/OAuth
+#   - 不需要配置 JWT_SECRET 等密钥；历史 BETA 审查中的 JWT 相关项已确认为误报（无 JWT 实现）
+# 说明：详见第 6.7 节 鉴权安全（API Key）
 ```
 
 - [ ] **[必选]** 生产环境 CORS 必须收紧
@@ -530,7 +528,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | Lujo-MCP v0.8.0 | ..."
+#   - 日志输出 "服务启动 | lujo-mcp v0.9.1 | ..."
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -545,19 +543,29 @@ python -m app.main
 
 ```bash
 curl http://localhost:8000/health
-
 # 判定标准 / Pass Criteria:
-#   {
-#     "status": "ok",              ← 或 "degraded"（LLM 未配置时）
-#     "service": "Lujo-MCP",
-#     "version": "0.8.0",
-#     "storage": "memory",         ← 或 "postgresql (connected)"
-#     "llm_configured": true       ← false 表示 LLM 未配置
-#   }
+#   {"status": "ok"}    ← 公开 /health 只返回状态字段（不暴露内部配置）
 # 状态说明:
 #   - ok: 所有组件正常
 #   - degraded: 部分组件异常（如 LLM 未配置），服务仍可用
 #   - unhealthy: 核心组件异常，需要排查
+```
+
+- [ ] **[必选]** `/internal/health` 返回完整配置字段
+
+```bash
+# 完整字段（service / version / storage / llm_configured）在 /internal/health：
+# 仅内网/回环可直接访问（本机 curl 免鉴权），外网需携带 API Key
+curl http://localhost:8000/internal/health
+
+# 判定标准 / Pass Criteria:
+#   {
+#     "status": "ok",
+#     "service": "lujo-mcp",
+#     "version": "0.9.1",
+#     "storage": "memory",         ← 唯一合法值（PostgreSQL 后端已移除）
+#     "llm_configured": true       ← false 表示 LLM 未配置
+#   }
 ```
 
 ### 9.4 MCP 协议端点
@@ -604,7 +612,8 @@ curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 # 判定标准 / Pass Criteria: 返回的 tools 数组包含 repair_async 和 repair_result
-# 注意：需启用 agent_enabled=true（默认 false）
+# 注意：需启用 Agent 模式（AGENT_MODE，取值 off/single/dag/verify_loop，默认 off；
+#       未显式设置时才按 agent_enabled 等历史布尔开关派生）
 ```
 
 ---
@@ -631,13 +640,12 @@ docker compose version
 
 ```bash
 # 以下变量在 docker-compose.yaml 中标记为必须（?语法）:
-# POSTGRES_PASSWORD=<password>    ← PostgreSQL 初始密码
-# PG_PASSWORD=<password>          ← 应用连接 PG 密码（建议与 POSTGRES_PASSWORD 一致）
-# API_KEY=<token>                 ← 服务鉴权令牌
+# API_KEY=<token>                 ← 服务鉴权令牌（当前唯一使用 ? 必填语法的变量）
 
-# 判定标准 / Pass Criteria: 上述变量均已设置且非空
+# 判定标准 / Pass Criteria: 上述变量已设置且非空
 # 异常处理 / Contingency:
 #   - 未设置会导致 docker compose up 直接报错
+#   - PostgreSQL 服务与 PG_PASSWORD / POSTGRES_PASSWORD 已随后端移除，不再需要
 ```
 
 ### 10.3 启动与验证
@@ -651,13 +659,11 @@ docker compose up -d
 docker compose ps
 
 # 判定标准 / Pass Criteria:
-#   - postgres: healthy
 #   - redis: healthy
 #   - app: healthy (或 running)
 # 异常处理 / Contingency:
 #   - docker compose logs app    ← 查看应用日志
-#   - docker compose logs postgres  ← 查看 PG 日志
-#   - 确认 .env 中密码配置一致
+#   - 确认 .env 中 API_KEY 已配置
 ```
 
 ---
@@ -730,11 +736,11 @@ Write-Host "=== Check Complete ==="
 | 错误现象 / Symptom | 可能原因 / Cause | 处理方案 / Resolution |
 |---|---|---|
 | `Refusing to start: host contains 0.0.0.0 but API_KEY is empty` | 外网监听无鉴权 | 设置 `API_KEY` 或改用 `HOST=127.0.0.1` |
-| `Invalid STORAGE_BACKEND` | 配置拼写错误 | 检查 `STORAGE_BACKEND` 值，仅允许 `memory` 或 `postgresql` |
+| `Invalid STORAGE_BACKEND` | 配置拼写错误 | 检查 `STORAGE_BACKEND` 值，仅允许 `memory`（唯一合法值；`postgresql` 已移除，会以 `StorageBackendRemovedError` 拒绝） |
 | `Address already in use` | 端口被占用 | 更换端口或终止占用进程 |
 | `ModuleNotFoundError` | 依赖未安装 | `pip install -r requirements.txt` |
-| PG 连接失败 + 自动降级 | PG 不可达 | 检查 PG 配置，或设置 `STORAGE_FALLBACK_TO_MEMORY=true` |
-| `.env` 警告 `Ignored extra .env keys` | .env 含多余键 | 可忽略，不影响运行；或清理多余键 |
+| `StorageBackendRemovedError` | `STORAGE_BACKEND=postgresql` | PostgreSQL 后端已移除；改回 `memory` 或删除该行，迁移指引见 TROUBLESHOOTING.md L 节 |
+| `.env` 警告 `Ignored extra .env keys` | .env 含多余键 | 可忽略，不影响运行；或清理多余键（含遗留 `PG_*`） |
 
 ### 降级模式说明
 
@@ -743,11 +749,10 @@ Write-Host "=== Check Complete ==="
 | 条件 / Condition | 影响 / Impact | 恢复方式 / Recovery |
 |---|---|---|
 | `OPENAI_API_KEY` 未设置 | LLM 分析功能不可用 | 配置有效的 API Key |
-| PostgreSQL 不可达 + fallback=true | 自动降级为内存存储，重启后数据丢失 | 恢复 PG 连接后重启 |
 | Redis 不可达 + STATE_BACKEND=redis | 限流功能异常 | 恢复 Redis 连接或切换为 `STATE_BACKEND=memory` |
 | OTel Collector 不可达 | 指标导出失败，不影响主服务 | 恢复 OTel Collector 或关闭 `OTEL_ENABLED` |
 
-> 注：PostgreSQL 为实验性后端，上表 PG 相关的自动降级仅覆盖 store 构造期；延迟初始化（首次读写）失败可能直接报错而非降级，已知限制见 TROUBLESHOOTING.md L 节。
+> 注：存储层不再有 PostgreSQL 降级路径——后端固定 memory，且 `STORAGE_BACKEND=postgresql` 会在启动时被直接拒绝（fail-fast，不静默回退）。
 
 ---
 
