@@ -507,7 +507,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     tool = _tool_registry.get(name)
     if tool is None:
         record_mcp_tool_call(name, "error", 0.0)
-        raise ToolExecutionError(json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False))
+        raise ToolExecutionError(json.dumps(
+            {"error": f"未知工具: {name}", "error_code": "METHOD_NOT_FOUND"},
+            ensure_ascii=False,
+        ))
 
     validation_error = _validate_tool_arguments(tool, arguments)
     if validation_error:
@@ -545,7 +548,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         record_mcp_tool_call(name, "timeout", settings.tool_timeout_seconds)
         logger.warning("工具 %s 执行超时（>%ss），已中止", name, settings.tool_timeout_seconds)
         raise ToolExecutionError(json.dumps(
-            {"error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。", "_timed_out": True},
+            {
+                "error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。",
+                "error_code": "TOOL_TIMEOUT",
+                "_timed_out": True,
+            },
             ensure_ascii=False,
         ))
     except ToolExecutionError:
@@ -560,7 +567,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # submit 抛错（池已关闭）等「任务从未入队」路径需补偿结算；
         # handler 自身抛错时真实 future/task 已完成、回调已结算，此处幂等空转。
         _pool.settle(_token)
-        raise ToolExecutionError(json.dumps({"error": "Tool execution failed"}, ensure_ascii=False))
+        raise ToolExecutionError(json.dumps(
+            {"error": "Tool execution failed", "error_code": "TOOL_INTERNAL"},
+            ensure_ascii=False,
+        ))
 
     # FIX(B24)：先求值**同一个**工具失败谓词，按同一布尔值只记录一次
     # ok/error 指标，再决定是否抛 ToolExecutionError——业务失败结果不再
