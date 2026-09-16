@@ -5,7 +5,8 @@
 
 能力：
 - `build_manifest`   生成 without_lujo / with_lujo 成对实验清单模板
-- `validate_records` 校验外部填写或导入的实验记录
+- `validate_records` 校验外部填写或导入的实验记录（含 input_hash canonical
+  来源绑定：必须等于 case_id + user_description 的 SHA-256，M2-B1.2）
 - `summarize_records` 离线汇总已有测量结果（区分 None 与 0，报告覆盖率）
 - `stable_hash` / `compute_input_hash` 稳定输入哈希
 
@@ -219,6 +220,13 @@ def _is_iso8601_with_tz(value: Any) -> bool:
     return dt.tzinfo is not None and dt.utcoffset() is not None
 
 
+def _control_equal(field: str, a: Any, b: Any) -> bool:
+    """控制变量一致比较；input_hash 是 hex 摘要，按语义大小写不敏感。"""
+    if field == "input_hash" and isinstance(a, str) and isinstance(b, str):
+        return a.lower() == b.lower()
+    return a == b
+
+
 def _has_measurement(metrics: dict[Any, Any]) -> bool:
     """该记录是否含任何已测量指标（非 None）。"""
     return any(v is not None for k, v in metrics.items() if k in METRIC_NAMES)
@@ -231,10 +239,14 @@ def validate_records(records: list[Any]) -> list[str]:
     - 单条字段：schema_version / experiment_id / case_id 存在且合法、group 枚举、
       run_index 非负整数、model / tool_policy / repo_sha / input_hash 非空、
       temperature 为实数、metrics 键合法且值 None 或符合范围。
+    - input_hash 来源（M2-B1.2）：case 已知且格式合法时，必须等于该 case 的
+      canonical 输入哈希（case_id + user_description 的 SHA-256，大小写不敏感
+      比较）。格式非法或 case_id 未知时不做来源校验（各自单独报错）。
     - 指标范围：比率 [0,1]，时间非负；未测量用 None，真实 0 合法。
     - 配对：配对键 (experiment_id, case_id, run_index) 下恰好 1 条 without + 1 条 with。
     - 重复：同一配对键 + 同 group 出现多次即重复。
-    - 控制变量：同一配对的 model / temperature / repo_sha / input_hash 一致。
+    - 控制变量：同一配对的 model / temperature / repo_sha / input_hash 一致
+      （input_hash 按摘要语义大小写不敏感，其余逐字比较）。
     """
     errors: list[str] = []
     pairable: list[tuple[tuple, str, dict]] = []
@@ -251,10 +263,13 @@ def validate_records(records: list[Any]) -> list[str]:
         if not _non_empty_str(record.get("experiment_id")):
             errors.append(f"{idx} missing experiment_id")
         case_id = record.get("case_id")
+        case = None
         if not _non_empty_str(case_id):
             errors.append(f"{idx} missing case_id")
-        elif get_case(case_id) is None:
-            errors.append(f"{idx} unknown case_id: {case_id!r}")
+        else:
+            case = get_case(case_id)
+            if case is None:
+                errors.append(f"{idx} unknown case_id: {case_id!r}")
         if record.get("group") not in VALID_GROUPS:
             errors.append(f"{idx} invalid group: {record.get('group')!r}")
         if (
@@ -284,10 +299,18 @@ def validate_records(records: list[Any]) -> list[str]:
             errors.append(
                 f"{idx} invalid repo_sha: {record.get('repo_sha')!r} (expected 40/64-char hex)"
             )
-        if not _is_sha256_hex(record.get("input_hash")):
+        input_hash = record.get("input_hash")
+        if not _is_sha256_hex(input_hash):
             errors.append(
-                f"{idx} invalid input_hash: {record.get('input_hash')!r} (expected 64-char hex)"
+                f"{idx} invalid input_hash: {input_hash!r} (expected 64-char hex)"
             )
+        elif case is not None:
+            expected = compute_input_hash(case.case_id, case.user_description)
+            if input_hash.lower() != expected:
+                errors.append(
+                    f"{idx} input_hash does not match canonical input of case "
+                    f"{case_id!r} (expected sha256 of case_id + user_description)"
+                )
 
         created_at = record.get("created_at")
         if created_at is None:
@@ -344,7 +367,7 @@ def validate_records(records: list[Any]) -> list[str]:
             errors.append(f"pair={pair_key} missing with_lujo record")
         if w is not None and wi is not None:
             for field in _CONTROL_FIELDS:
-                if w.get(field) != wi.get(field):
+                if not _control_equal(field, w.get(field), wi.get(field)):
                     errors.append(
                         f"pair={pair_key} control variable mismatch on {field}"
                     )
@@ -446,6 +469,9 @@ def summarize_records(records: list[Any]) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "record_count": record_count,
         "pair_count": pair_count,
+        # 不变量（M2-B1.1/M2-B1.2）：summarize 前置 validate_records，任何不完整
+        # 配对（缺侧/重复/控制变量不一致）都在校验阶段报错并抛 ValueError，能进入
+        # 此处汇总的配对必然双侧完整，故 incomplete_pairs 恒为 0。
         "incomplete_pairs": 0,
         "metrics": metrics_summary,
     }

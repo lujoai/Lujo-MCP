@@ -18,6 +18,8 @@
 - 配对键 = (experiment_id, case_id, run_index)，每组恰好 1 条 without + 1 条 with。
 - 同一配对内 model / temperature / repo_sha / input_hash 必须一致（tool_policy 是
   实验变量允许不同）。
+- input_hash 必须等于 case canonical 输入（case_id + user_description）的 SHA-256
+  （M2-B1.2，比较大小写不敏感）；格式合法但来源错误的 hash 必须拒绝。
 - 无样本时统计值为 null，绝不产生虚假均值；空记录集也安全返回。
 - hash 只存摘要，不回显明文用户描述 / lujo_context / secrets / 绝对路径。
 - 旧 list/show/quality 命令行为与返回值保持不变。
@@ -33,11 +35,21 @@ import pytest
 
 from benchmark import runner
 from benchmark import experiment as exp
-from benchmark.cases import BENCHMARK_CASES
+from benchmark.cases import BENCHMARK_CASES, get_case
 
 
 def _record(group="without_lujo", run_index=1, case_id="api_500_none_attribute", **overrides):
-    """构造一条合法实验记录，返回 dict。"""
+    """构造一条合法实验记录，返回 dict。
+
+    input_hash 使用该 case 的真实 canonical hash（M2-B1.2）：合法记录不得依赖
+    仅格式合法的假 hash。未知 case_id 无 canonical 输入，退回占位值（仅用于
+    unknown case_id 错误分支的测试）。
+    """
+    case = get_case(case_id)
+    if case is None:
+        input_hash = "a" * 64
+    else:
+        input_hash = exp.compute_input_hash(case.case_id, case.user_description)
     base = {
         "schema_version": exp.SCHEMA_VERSION,
         "experiment_id": "exp-1",
@@ -48,7 +60,7 @@ def _record(group="without_lujo", run_index=1, case_id="api_500_none_attribute",
         "temperature": 0.0,
         "tool_policy": "no_lujo_tools" if group == "without_lujo" else "lujo_mcp_tools",
         "repo_sha": "0" * 40,
-        "input_hash": "a" * 64,
+        "input_hash": input_hash,
         "created_at": "2026-09-16T00:00:00Z",
         "metrics": dict.fromkeys(exp.METRIC_NAMES),
         "notes": "",
@@ -182,11 +194,17 @@ class TestValidate:
         assert any("mismatch" in e.lower() or "inconsistent" in e.lower() for e in errors)
 
     def test_input_hash_mismatch_rejected(self):
-        """input_hash 不一致说明两侧不是同一基础现场，必须拒绝。"""
+        """input_hash 不一致说明两侧不是同一基础现场，必须拒绝。
+
+        M2-B1.2 升级：伪造值改用另一 case 的真实 canonical hash（语义合法但
+        来源错误），同时断言 provenance 错误与配对不一致错误都出现。
+        """
         w, _ = _pair()
-        w["input_hash"] = "b" * 64
+        other = get_case("frontend_blank_fetch_error")
+        w["input_hash"] = exp.compute_input_hash(other.case_id, other.user_description)
         errors = exp.validate_records([w, _record("with_lujo")])
-        assert any("mismatch" in e.lower() or "inconsistent" in e.lower() for e in errors)
+        assert any("canonical" in e.lower() for e in errors)
+        assert any("mismatch" in e.lower() for e in errors)
 
     def test_unknown_case_id_rejected(self):
         w = _record(case_id="no_such_case")
@@ -452,6 +470,22 @@ class TestCLI:
     def test_init_unknown_arg_exit_nonzero(self):
         assert runner.main(["init", "--bogus", "x"]) == 1
 
+    def test_init_validate_summarize_roundtrip(self, tmp_path, capsys):
+        """init → validate → summarize 全链路：CLI 生成的模板天然通过 provenance。"""
+        path = tmp_path / "plan.json"
+        assert (
+            runner.main(
+                ["init", "--output", str(path), "--force", "--repo-sha", "0" * 40]
+            )
+            == 0
+        )
+        assert runner.main(["validate", str(path)]) == 0
+        capsys.readouterr()  # 丢弃 validate 输出，单独解析 summarize JSON
+        assert runner.main(["summarize", str(path)]) == 0
+        summary = json.loads(capsys.readouterr().out)
+        assert summary["record_count"] == len(BENCHMARK_CASES) * 2
+        assert summary["incomplete_pairs"] == 0
+
     def test_init_write_to_directory_fails_gracefully(self, tmp_path, capsys):
         """--output 指向目录/不可写时应走 stderr + 非零退出，而非抛 traceback。"""
         rc = runner.main(["init", "--output", str(tmp_path), "--repo-sha", "0" * 40])
@@ -687,6 +721,133 @@ class TestMetadataValidation:
         assert exp.validate_records([w, wi]) == []
 
 
+# ── input_hash canonical 来源绑定（M2-B1.2）──
+
+
+class TestInputHashProvenance:
+    """input_hash 必须绑定 case 的 canonical 输入，不能只是任意 64 位 hex。"""
+
+    def _canonical(self, case_id: str) -> str:
+        case = get_case(case_id)
+        return exp.compute_input_hash(case.case_id, case.user_description)
+
+    def test_valid_format_wrong_provenance_rejected(self):
+        """"a"*64 格式合法但不是任何 case 的 canonical 输入，必须拒绝。"""
+        w, wi = _pair()
+        w["input_hash"] = "a" * 64
+        wi["input_hash"] = "a" * 64
+        errors = exp.validate_records([w, wi])
+        assert any("canonical" in e.lower() for e in errors)
+        # 大写表示的假 hash 同样必须拒绝（大小写兼容不得成为绕过）
+        w["input_hash"] = "A" * 64
+        wi["input_hash"] = "A" * 64
+        errors = exp.validate_records([w, wi])
+        assert any("canonical" in e.lower() for e in errors)
+
+    def test_canonical_hash_accepted(self):
+        """同一 case 的真实 canonical hash 必须通过。"""
+        w, wi = _pair()
+        assert exp.validate_records([w, wi]) == []
+
+    def test_uppercase_canonical_accepted(self):
+        """同一摘要的大写 hex 表示兼容（hexdigest 规范为小写，比较不敏感）。"""
+        w, wi = _pair()
+        w["input_hash"] = w["input_hash"].upper()
+        wi["input_hash"] = wi["input_hash"].upper()
+        assert exp.validate_records([w, wi]) == []
+
+    def test_mixed_case_pair_no_false_mismatch(self):
+        """一侧大写一侧小写的相同摘要不得触发控制变量大小写漂移误报。"""
+        w, wi = _pair()
+        w["input_hash"] = w["input_hash"].upper()
+        assert exp.validate_records([w, wi]) == []
+
+    def test_cross_case_hash_rejected(self):
+        """case A 的 canonical hash 用在 case B 上必须拒绝。"""
+        w, wi = _pair(run_index=1, case_id="api_500_none_attribute")
+        other = self._canonical("frontend_blank_fetch_error")
+        w["input_hash"] = other
+        wi["input_hash"] = other
+        errors = exp.validate_records([w, wi])
+        assert any("canonical" in e.lower() for e in errors)
+
+    def test_tampered_user_description_invalidates_hash(self):
+        """case 的 canonical 输入被篡改后旧 hash 失效（来源绑定生效）。"""
+        case = get_case("api_500_none_attribute")
+        stale = exp.compute_input_hash(
+            case.case_id, case.user_description + "（已被篡改）"
+        )
+        w, wi = _pair()
+        w["input_hash"] = stale
+        wi["input_hash"] = stale
+        errors = exp.validate_records([w, wi])
+        assert any("canonical" in e.lower() for e in errors)
+
+    def test_manifest_records_use_canonical_hash(self):
+        """生成端不变量：build_manifest 每条 record 都使用 canonical hash。"""
+        manifest = exp.build_manifest(BENCHMARK_CASES, repo_sha="0" * 40)
+        for r in manifest["records"]:
+            case = get_case(r["case_id"])
+            assert r["input_hash"] == exp.compute_input_hash(
+                case.case_id, case.user_description
+            )
+
+    def test_unknown_case_id_reports_unknown_not_provenance(self):
+        """未知 case_id 只报 unknown 一类错误，不做 provenance 二次报错。"""
+        w = _record(case_id="no_such_case")
+        errors = exp.validate_records([w])
+        assert any("unknown case_id" in e for e in errors)
+        assert not any("canonical" in e.lower() for e in errors)
+
+    def test_invalid_format_no_duplicate_provenance_error(self):
+        """格式非法时只报格式错误，不叠加 provenance 错误。"""
+        w = _record()
+        w["input_hash"] = "g" * 64
+        errors = exp.validate_records([w])
+        assert any("invalid input_hash" in e for e in errors)
+        assert not any("canonical" in e.lower() for e in errors)
+
+    def test_summarize_rejects_wrong_provenance(self):
+        """summarize 前置校验同样拒绝来源错误的 hash。"""
+        w, wi = _pair()
+        w["input_hash"] = "f" * 64
+        wi["input_hash"] = "f" * 64
+        with pytest.raises(ValueError, match="canonical"):
+            exp.summarize_records([w, wi])
+
+    def test_cli_validate_wrong_provenance_exit_nonzero(self, tmp_path, capsys):
+        """CLI validate 对来源错误的 hash 返回 1 且 stderr 指明 canonical。"""
+        w, wi = _pair()
+        w["input_hash"] = "f" * 64
+        wi["input_hash"] = "f" * 64
+        path = tmp_path / "bad_provenance.json"
+        path.write_text(json.dumps([w, wi]), encoding="utf-8")
+        assert runner.main(["validate", str(path)]) == 1
+        assert "canonical" in capsys.readouterr().err
+
+    def test_cli_summarize_wrong_provenance_exit_nonzero(self, tmp_path, capsys):
+        """CLI summarize 对来源错误的 hash 返回 1，不产出汇总。"""
+        w, wi = _pair()
+        w["input_hash"] = "f" * 64
+        wi["input_hash"] = "f" * 64
+        path = tmp_path / "bad_provenance.json"
+        path.write_text(json.dumps([w, wi]), encoding="utf-8")
+        assert runner.main(["summarize", str(path)]) == 1
+        assert "canonical" in capsys.readouterr().err
+
+    def test_incomplete_pairs_invariant_zero(self):
+        """不变量：validate 拒绝不完整配对 ⇒ summarize 的 incomplete_pairs 恒 0。
+
+        单侧缺失在 validate 阶段报错、summarize 抛 ValueError，因此任何成功
+        产出的汇总中 incomplete_pairs 只能是 0；不得为使其非零而放宽校验。
+        """
+        w, wi = _pair()
+        summary = exp.summarize_records([w, wi])
+        assert summary["incomplete_pairs"] == 0
+        with pytest.raises(ValueError):
+            exp.summarize_records([w])
+
+
 # ── manifest 顶层一致性 ──
 
 
@@ -713,6 +874,17 @@ class TestManifestPayload:
     def test_matching_top_field_ok(self):
         manifest = exp.build_manifest(BENCHMARK_CASES, repo_sha="0" * 40)
         assert exp.validate_payload(manifest) == []
+
+    def test_top_level_fields_no_provenance_bypass(self):
+        """manifest 顶层塞 input_hash / case_ids 等字段不能绕过 record 级校验。
+
+        record 级 provenance 校验无条件执行，顶层字段只叠加约束、从不豁免。
+        """
+        manifest = exp.build_manifest(BENCHMARK_CASES, repo_sha="0" * 40)
+        manifest["records"][0]["input_hash"] = "a" * 64
+        manifest["input_hash"] = "a" * 64  # 顶层伪造同值
+        manifest["case_ids"] = ["bogus_case"]
+        assert exp.validate_payload(manifest)
 
     def test_invalid_payload_shape(self):
         assert exp.validate_payload({"nope": 1})
