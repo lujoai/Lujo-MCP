@@ -40,6 +40,7 @@ _cache_lock = threading.Lock()
 #   释放 _cache_lock，因此等待在途 setex 不会阻塞其他线程进出临界区。
 _l2_invalidating = 0
 _l2_writes_inflight = 0
+_l2_delete_failed_generation = -1
 _l2_drain_cond = threading.Condition(_cache_lock)
 _REDIS_CACHE_KEY = "ai-debug:dashboard:all_traces"
 # FIX: R7-A4 —— 缓存按 limit 分档：Dashboard 常态请求（limit≤100）只按
@@ -82,6 +83,11 @@ def invalidate_cache(source: str | None = None) -> None:
     # 结果会在 delete 之后写回，下一请求又从 L2 读到旧值。失效标记已阻止新的
     # 登记，等待集合有限；setex 受 Redis 客户端 socket 超时约束，且 finally
     # 必减计数，因此不会永久阻塞。
+    # FIX(B19-delete-failure): 记录本轮失效代际。若 Redis delete 失败，旧键仍留在
+    # Redis 中，需记录 _l2_delete_failed_generation，使后续请求拒绝读取/promotion
+    # 该代际的旧 L2 缓存，直接降级重新计算；若全部 tier 删除成功，则清除失败标记。
+    current_gen = _generation
+    delete_failed = False
     try:
         redis_client = _get_redis_cache()
         with _l2_drain_cond:
@@ -92,9 +98,15 @@ def invalidate_cache(source: str | None = None) -> None:
                 for tier in _CACHE_TIERS:
                     redis_client.delete(_redis_cache_key(tier))
             except Exception:
+                delete_failed = True
                 logger.warning("Dashboard L2 Redis 缓存清除失败", exc_info=True)
     finally:
+        global _l2_delete_failed_generation
         with _cache_lock:
+            if delete_failed:
+                _l2_delete_failed_generation = max(_l2_delete_failed_generation, current_gen)
+            elif _l2_delete_failed_generation <= current_gen:
+                _l2_delete_failed_generation = -1
             _l2_invalidating -= 1
 
     # SSE 实时推送：通知 Dashboard 客户端数据已变更
@@ -250,9 +262,16 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
         # 处于失效期间」——若读取始于失效期间，即使最终 delete 已完成、
         # _l2_invalidating 已归零，该值也可能是在删除前取到的旧值，不得接受；
         # 只看最终状态无法区分这种请求。
+        # FIX(B19-delete-failure): 若某代失效时 Redis delete 失败，旧键仍残留在
+        # Redis 中，_l2_delete_failed_generation 记录了该失效代际。对于任一
+        # gen_l2 <= _l2_delete_failed_generation 的 L2 读取，该 Redis 缓存均为
+        # 未能成功删除的陈旧数据，一律拒绝命中并降级走重新计算。
         with _cache_lock:
             gen_l2 = _generation
-            l2_read_started_ok = _l2_invalidating == 0
+            l2_read_started_ok = (
+                _l2_invalidating == 0
+                and gen_l2 > _l2_delete_failed_generation
+            )
         try:
             raw = redis_client.get(_redis_cache_key(tier))
             if raw:
@@ -265,11 +284,13 @@ def _collect_all_traces(limit: int = 100) -> list[dict]:
                 # miss 路径重新计算。
                 # FIX(B19-l2-late-read): 三个条件同时成立才接受——读取开始时
                 # 不在失效期间、代际未变、当前也不在失效中。
+                # FIX(B19-delete-failure): promotion 时同样校验 _l2_delete_failed_generation。
                 with _cache_lock:
                     promoted = (
                         l2_read_started_ok
                         and _generation == gen_l2
                         and _l2_invalidating == 0
+                        and gen_l2 > _l2_delete_failed_generation
                     )
                     if promoted:
                         # L2 命中 → 回填 L1

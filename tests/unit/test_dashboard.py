@@ -17,6 +17,7 @@ from app.mcp.tools.verify_api import verify_handler
 def _clear_cache():
     """每个测试前清空 dashboard 缓存，避免跨用例污染"""
     dashboard_module._cache.clear()
+    dashboard_module._l2_delete_failed_generation = -1
 
 
 @pytest.fixture
@@ -1159,3 +1160,124 @@ class TestDashboardCacheInvalidationGenerationRace:
         assert dashboard_module._cache[dashboard_module._cache_key(100)][1] == [fresh]
         again = dashboard_module._collect_all_traces(limit=10)
         assert [t["trace_id"] for t in again] == ["fresh-trace"]
+
+    def test_l2_hit_rejected_when_redis_delete_failed_during_invalidation(self, monkeypatch):
+        """B19 核心缺陷：Redis delete 失败后，残留的旧 L2 键不得被后续请求接受并回填 L1。
+
+        缺陷场景：
+        1. Redis 中已有旧缓存（stale-trace）；
+        2. invalidate_cache() 执行，L1 被清空，_generation 自增，_l2_invalidating 暂时置位；
+        3. fake Redis 的 delete() 抛出异常（网络错误/连接断开），delete 失败；
+        4. invalidate_cache() 捕获异常，并在 finally 中将 _l2_invalidating 归零；
+        5. 后续请求发起，此时 _l2_invalidating == 0；
+        6. 在无保护的代码中，后续请求读取 Redis 得到 stale-trace，因代际相等且
+           _l2_invalidating == 0 而将旧值判定为有效命中，回填 L1 并返回；
+        7. 预期行为：delete 失败后，残留旧 L2 数据必须被拒绝，降级重新计算（fresh-trace），
+           且旧值绝不能回填 L1。
+        """
+        stale = [_trace_summary("stale-trace-b19")]
+        fresh = _trace_summary("fresh-trace-b19")
+
+        dashboard_module._cache.clear()
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["fresh-trace-b19"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: fresh)
+
+        l2_storage = {
+            dashboard_module._redis_cache_key(100): json.dumps(stale),
+            dashboard_module._redis_cache_key(1000): json.dumps(stale),
+        }
+
+        class _FailingDeleteRedis:
+            def __init__(self):
+                self.get_calls = []
+                self.delete_calls = []
+
+            def get(self, key):
+                self.get_calls.append(key)
+                return l2_storage.get(key)
+
+            def delete(self, key):
+                self.delete_calls.append(key)
+                raise ConnectionError("simulated redis delete failure")
+
+            def setex(self, key, ttl, value):
+                l2_storage[key] = value
+
+        fake_redis = _FailingDeleteRedis()
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: fake_redis)
+
+        # 执行缓存失效（Redis delete 会失败）
+        dashboard_module.invalidate_cache(source="b19-repro")
+        assert len(fake_redis.delete_calls) > 0, "invalidate_cache 应尝试调用 Redis delete"
+
+        # 后续请求发起（此时 invalidate_cache 已结束，_l2_invalidating 已归零）
+        result = dashboard_module._collect_all_traces(limit=10)
+
+        # 断言 1: 不得返回旧 L2 数据，必须降级走重算返回 fresh
+        assert [t["trace_id"] for t in result] == ["fresh-trace-b19"]
+
+        # 断言 2: L1 不得被旧 L2 数据污染
+        for tier in dashboard_module._CACHE_TIERS:
+            entry = dashboard_module._cache.get(dashboard_module._cache_key(tier))
+            if entry is not None:
+                assert all(t["trace_id"] != "stale-trace-b19" for t in entry[1]), (
+                    f"档位 {tier} 的 L1 被 delete 失败后残留的旧 L2 数据污染"
+                )
+
+    def test_l2_promotion_recovers_after_subsequent_successful_delete(self, monkeypatch):
+        """B19 恢复性验证：在前一次 delete 失败后，若后续 invalidate_cache 成功清除，L2 promotion 恢复正常。"""
+        recovered_fresh = _trace_summary("recovered-fresh")
+
+        dashboard_module._cache.clear()
+        monkeypatch.setattr(dashboard_module, "_generation", 0)
+        monkeypatch.setattr(dashboard_module.errors, "list_recent", lambda limit=100: [])
+        monkeypatch.setattr(
+            dashboard_module.logs, "list_request_ids", lambda limit=100: ["recovered-fresh"]
+        )
+        monkeypatch.setattr(dashboard_module, "_extract_trace_summary", lambda rid: recovered_fresh)
+
+        l2_storage: dict = {}
+        should_fail = True
+
+        class _ConditionalRedis:
+            def get(self, key):
+                return l2_storage.get(key)
+
+            def delete(self, key):
+                if should_fail:
+                    raise ConnectionError("transient redis delete failure")
+                l2_storage.pop(key, None)
+
+            def setex(self, key, ttl, value):
+                l2_storage[key] = value
+
+        fake_redis = _ConditionalRedis()
+        monkeypatch.setattr(dashboard_module, "_get_redis_cache", lambda: fake_redis)
+
+        # 1. 第一次失效：Redis delete 失败
+        dashboard_module.invalidate_cache()
+        assert dashboard_module._l2_delete_failed_generation == 1
+
+        # 2. 第二次失效：Redis 恢复正常，delete 成功
+        should_fail = False
+        dashboard_module.invalidate_cache()
+        assert dashboard_module._l2_delete_failed_generation == -1
+
+        # 3. 产生一次正常计算并写回 L1/L2
+        res1 = dashboard_module._collect_all_traces(limit=10)
+        assert [t["trace_id"] for t in res1] == ["recovered-fresh"]
+        assert dashboard_module._redis_cache_key(100) in l2_storage
+
+        # 4. 清空 L1，模拟下一请求直接命中 L2
+        dashboard_module._cache.clear()
+        # 此时计算源返回空，以便确认是否由 L2 命中返回
+        monkeypatch.setattr(dashboard_module.logs, "list_request_ids", lambda limit=100: [])
+
+        res2 = dashboard_module._collect_all_traces(limit=10)
+        assert [t["trace_id"] for t in res2] == ["recovered-fresh"]
+        # 确认已成功 promotion 到 L1
+        assert dashboard_module._cache_key(100) in dashboard_module._cache
