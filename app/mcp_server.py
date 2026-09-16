@@ -66,7 +66,14 @@ from app.mcp.protocol.heavy_process import (
     run_heavy_tool_blocking,
     terminate_active_processes,
 )
-from app.mcp.protocol.tool_errors import ToolExecutionError
+from app.mcp.protocol.tool_errors import (
+    ERROR_INVALID_PARAMS,
+    ERROR_METHOD_NOT_FOUND,
+    ERROR_TOOL_BUSY,
+    ERROR_TOOL_INTERNAL,
+    ERROR_TOOL_TIMEOUT,
+    ToolExecutionError,
+)
 from app.mcp.tools import register_all_tools
 from app.observability import (
     record_mcp_tool_busy,
@@ -501,14 +508,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     _, name_error = _validate_tool_name({"name": name})
     if name_error:
         raise ToolExecutionError(json.dumps(
-            {"error": name_error, "error_code": "INVALID_PARAMS"},
+            {"error": name_error, "error_code": ERROR_INVALID_PARAMS},
             ensure_ascii=False,
         ))
     tool = _tool_registry.get(name)
     if tool is None:
         record_mcp_tool_call(name, "error", 0.0)
         raise ToolExecutionError(json.dumps(
-            {"error": f"未知工具: {name}", "error_code": "METHOD_NOT_FOUND"},
+            {"error": f"未知工具: {name}", "error_code": ERROR_METHOD_NOT_FOUND},
             ensure_ascii=False,
         ))
 
@@ -516,7 +523,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if validation_error:
         record_mcp_tool_call(name, "invalid_params", 0.0)
         raise ToolExecutionError(json.dumps(
-            {"error": validation_error, "error_code": "INVALID_PARAMS"},
+            {"error": validation_error, "error_code": ERROR_INVALID_PARAMS},
             ensure_ascii=False,
         ))
 
@@ -532,7 +539,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         record_mcp_tool_call(name, "busy", wait_sec)
         logger.warning("工具 %s (%s池) 执行队列已满，已拒绝执行", name, pool_type)
         raise ToolExecutionError(json.dumps(
-            {"error": "工具执行队列已满，请稍后重试。", "error_code": "TOOL_BUSY", "_busy": True},
+            {"error": "工具执行队列已满，请稍后重试。", "error_code": ERROR_TOOL_BUSY, "_busy": True},
             ensure_ascii=False,
         ))
     record_mcp_tool_wait(name, pool_type, time.perf_counter() - wait_start)
@@ -550,7 +557,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         raise ToolExecutionError(json.dumps(
             {
                 "error": f"工具执行超时（>{settings.tool_timeout_seconds}s），已中止。",
-                "error_code": "TOOL_TIMEOUT",
+                "error_code": ERROR_TOOL_TIMEOUT,
                 "_timed_out": True,
             },
             ensure_ascii=False,
@@ -568,7 +575,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # handler 自身抛错时真实 future/task 已完成、回调已结算，此处幂等空转。
         _pool.settle(_token)
         raise ToolExecutionError(json.dumps(
-            {"error": "Tool execution failed", "error_code": "TOOL_INTERNAL"},
+            {"error": "Tool execution failed", "error_code": ERROR_TOOL_INTERNAL},
             ensure_ascii=False,
         ))
 

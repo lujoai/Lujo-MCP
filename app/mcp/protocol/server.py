@@ -12,7 +12,12 @@ from app.config import settings
 from app.mcp.protocol.executor_lifecycle import SlotPool
 from app.mcp.protocol.executor_lifecycle import lifecycle as _slot_lifecycle
 from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
-from app.mcp.protocol.tool_errors import is_tool_failure_result
+from app.mcp.protocol.tool_errors import (
+    ERROR_TOOL_BUSY,
+    ERROR_TOOL_INTERNAL,
+    ERROR_TOOL_TIMEOUT,
+    is_tool_failure_result,
+)
 from app.observability import (
     record_mcp_tool_call,
     record_mcp_tool_busy,
@@ -456,7 +461,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                     }
                 ],
                 "isError": True,
-                "error_code": "TOOL_BUSY",
+                "error_code": ERROR_TOOL_BUSY,
                 "_busy": True,
             })
         # FIX(v0.7.1-b1-5): async 工具取得槽位后补记 record_mcp_tool_wait，
@@ -484,7 +489,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                     }
                 ],
                 "isError": True,
-                "error_code": "TOOL_TIMEOUT",
+                "error_code": ERROR_TOOL_TIMEOUT,
                 "_timed_out": True,
             })
         except Exception:
@@ -498,7 +503,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                     }
                 ],
                 "isError": True,
-                "error_code": "TOOL_INTERNAL",
+                "error_code": ERROR_TOOL_INTERNAL,
             })
     else:
         # 同步工具 / **heavy 工具（sync 与 async 都进子进程，C2 §6.1 B08）**：
@@ -524,7 +529,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                     }
                 ],
                 "isError": True,
-                "error_code": "TOOL_BUSY",
+                "error_code": ERROR_TOOL_BUSY,
                 "_busy": True,
             })
 
@@ -604,7 +609,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                     }
                 ],
                 "isError": True,
-                "error_code": "TOOL_TIMEOUT",
+                "error_code": ERROR_TOOL_TIMEOUT,
                 "_timed_out": True,
             })
         except asyncio.CancelledError:
@@ -627,7 +632,7 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                     }
                 ],
                 "isError": True,
-                "error_code": "TOOL_INTERNAL",
+                "error_code": ERROR_TOOL_INTERNAL,
             })
 
     _elapsed = time.monotonic() - _tool_start

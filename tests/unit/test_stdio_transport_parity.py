@@ -492,3 +492,153 @@ class TestB25DirectCallToolDefense:
             assert executed == [1]
         finally:
             _tool_registry.pop("b25-spy", None)
+
+
+# ---------------------------------------------------------------------------
+# M2-B: MCP 错误码契约统一与 HTTP/stdio 传输防漂移测试
+# ---------------------------------------------------------------------------
+
+
+class TestHttpStdioErrorCodeParity:
+    """M2-B: HTTP 与 stdio 传输层在全部错误类型下的契约对齐与防漂移。"""
+
+    def test_canonical_error_codes_defined_in_tool_errors(self):
+        """核心契约：所有 5 类工具错误码必须在 app.mcp.protocol.tool_errors 统一声明常量与集合。"""
+        import app.mcp.protocol.tool_errors as errs
+
+        expected_codes = {
+            "INVALID_PARAMS",
+            "METHOD_NOT_FOUND",
+            "TOOL_BUSY",
+            "TOOL_TIMEOUT",
+            "TOOL_INTERNAL",
+        }
+        assert hasattr(errs, "ERROR_INVALID_PARAMS")
+        assert getattr(errs, "ERROR_INVALID_PARAMS") == "INVALID_PARAMS"
+        assert hasattr(errs, "ERROR_METHOD_NOT_FOUND")
+        assert getattr(errs, "ERROR_METHOD_NOT_FOUND") == "METHOD_NOT_FOUND"
+        assert hasattr(errs, "ERROR_TOOL_BUSY")
+        assert getattr(errs, "ERROR_TOOL_BUSY") == "TOOL_BUSY"
+        assert hasattr(errs, "ERROR_TOOL_TIMEOUT")
+        assert getattr(errs, "ERROR_TOOL_TIMEOUT") == "TOOL_TIMEOUT"
+        assert hasattr(errs, "ERROR_TOOL_INTERNAL")
+        assert getattr(errs, "ERROR_TOOL_INTERNAL") == "TOOL_INTERNAL"
+
+        assert hasattr(errs, "MCP_TOOL_ERROR_CODES")
+        assert getattr(errs, "MCP_TOOL_ERROR_CODES") == frozenset(expected_codes)
+
+    @pytest.mark.asyncio
+    async def test_tool_busy_parity(self, _registered, monkeypatch):
+        """TOOL_BUSY: HTTP 与 stdio 均返回 isError=True、error_code='TOOL_BUSY' 且带 _busy=True。"""
+        import app.mcp_server as stdio
+
+        def _blocking(_a):
+            return {"ok": True}
+
+        register_tool("parity_m2b_busy", description="test busy", handler=_blocking,
+                      inputSchema={"type": "object"}, heavy=True)
+        monkeypatch.setattr(stdio.settings, "tool_busy_queue_timeout", 0.0)
+        try:
+            free = protocol._heavy_pool.semaphore._value
+            held = []
+            for _ in range(free):
+                await protocol._heavy_pool.semaphore.acquire()
+                held.append(1)
+            try:
+                # stdio 表现
+                stdio_dump = await _stdio_call("parity_m2b_busy", {})
+                stdio_payload = _stdio_payload(stdio_dump)
+                assert stdio_dump["isError"] is True
+                assert stdio_payload["error_code"] == "TOOL_BUSY"
+                assert stdio_payload.get("_busy") is True
+
+                # HTTP 表现
+                http_resp = await _http_call("parity_m2b_busy", {})
+                assert http_resp["result"]["isError"] is True
+                assert http_resp["result"]["error_code"] == "TOOL_BUSY"
+                assert http_resp["result"].get("_busy") is True
+            finally:
+                for _ in held:
+                    protocol._heavy_pool.semaphore.release()
+        finally:
+            _tool_registry.pop("parity_m2b_busy", None)
+
+    @pytest.mark.asyncio
+    async def test_tool_timeout_parity(self, _registered, monkeypatch):
+        """TOOL_TIMEOUT: HTTP 与 stdio 均返回 isError=True、error_code='TOOL_TIMEOUT' 且带 _timed_out=True。"""
+        import app.mcp_server as stdio
+
+        def _slow(_a):
+            import time
+            time.sleep(0.2)
+            return {"ok": True}
+
+        register_tool("parity_m2b_timeout", description="test timeout", handler=_slow,
+                      inputSchema={"type": "object"})
+        monkeypatch.setattr(stdio.settings, "tool_timeout_seconds", 0.05)
+        before = protocol._light_pool.semaphore._value
+        try:
+            stdio_dump = await _stdio_call("parity_m2b_timeout", {})
+            stdio_payload = _stdio_payload(stdio_dump)
+            assert stdio_dump["isError"] is True
+            assert stdio_payload["error_code"] == "TOOL_TIMEOUT"
+            assert stdio_payload.get("_timed_out") is True
+
+            http_resp = await _http_call("parity_m2b_timeout", {})
+            assert http_resp["result"]["isError"] is True
+            assert http_resp["result"]["error_code"] == "TOOL_TIMEOUT"
+            assert http_resp["result"].get("_timed_out") is True
+
+            assert await TestSlotAccounting._wait_slot_restored(before)
+        finally:
+            _tool_registry.pop("parity_m2b_timeout", None)
+
+    @pytest.mark.asyncio
+    async def test_tool_internal_parity(self, _registered):
+        """TOOL_INTERNAL: HTTP 与 stdio 在 handler 未捕获异常时均返回 isError=True 与 error_code='TOOL_INTERNAL'。"""
+        def _boom(_a):
+            raise RuntimeError("parity intentional crash")
+
+        register_tool("parity_m2b_internal", description="test crash", handler=_boom,
+                      inputSchema={"type": "object"})
+        try:
+            stdio_dump = await _stdio_call("parity_m2b_internal", {})
+            stdio_payload = _stdio_payload(stdio_dump)
+            assert stdio_dump["isError"] is True
+            assert stdio_payload["error_code"] == "TOOL_INTERNAL"
+
+            http_resp = await _http_call("parity_m2b_internal", {})
+            assert http_resp["result"]["isError"] is True
+            assert http_resp["result"]["error_code"] == "TOOL_INTERNAL"
+        finally:
+            _tool_registry.pop("parity_m2b_internal", None)
+
+    @pytest.mark.asyncio
+    async def test_conclusion_tool_failure_parity(self, _registered):
+        """结论型工具（verify）：matched=False 为正常业务结论，两侧均 isError=False。"""
+        args = {"actual": {"status_code": 500}, "spec_id": "no-such-spec"}
+
+        stdio_dump = await _stdio_call("verify", args)
+        stdio_payload = _stdio_payload(stdio_dump)
+        assert stdio_dump["isError"] is False
+        assert stdio_payload["matched"] is False
+
+        http_resp = await _http_call("verify", args)
+        assert http_resp["result"]["isError"] is False
+        http_payload = json.loads(http_resp["result"]["content"][0]["text"])
+        assert http_payload["matched"] is False
+
+    @pytest.mark.asyncio
+    async def test_business_error_parity(self, _registered):
+        """普通业务失败（resolve_stack 空帧）：两侧均 isError=True，且均返回错误说明。"""
+        args = {"frames": []}
+
+        stdio_dump = await _stdio_call("resolve_stack", args)
+        stdio_payload = _stdio_payload(stdio_dump)
+        assert stdio_dump["isError"] is True
+        assert "error" in stdio_payload
+
+        http_resp = await _http_call("resolve_stack", args)
+        assert http_resp["result"]["isError"] is True
+        http_payload = json.loads(http_resp["result"]["content"][0]["text"])
+        assert "error" in http_payload

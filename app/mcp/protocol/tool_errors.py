@@ -30,6 +30,21 @@ from __future__ import annotations
 # 结论型工具载荷的识别键：同时出现即认为这是一份「验证结论」而非失败报告。
 _CONCLUSION_KEYS = ("matched", "diffs")
 
+# ── MCP 工具错误码契约（M2-B：HTTP 与 stdio 传输层统一常量，防硬编码漂移）──
+ERROR_INVALID_PARAMS = "INVALID_PARAMS"
+ERROR_METHOD_NOT_FOUND = "METHOD_NOT_FOUND"
+ERROR_TOOL_BUSY = "TOOL_BUSY"
+ERROR_TOOL_TIMEOUT = "TOOL_TIMEOUT"
+ERROR_TOOL_INTERNAL = "TOOL_INTERNAL"
+
+MCP_TOOL_ERROR_CODES = frozenset({
+    ERROR_INVALID_PARAMS,
+    ERROR_METHOD_NOT_FOUND,
+    ERROR_TOOL_BUSY,
+    ERROR_TOOL_TIMEOUT,
+    ERROR_TOOL_INTERNAL,
+})
+
 
 class ToolExecutionError(Exception):
     """工具执行失败。
