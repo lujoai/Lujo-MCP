@@ -31,3 +31,52 @@ def slow_sync(arguments):
 
     time.sleep(0.3)
     return {"matched": True, "diffs": [], "silent_failure": False}
+
+
+def business_failure(arguments):
+    """重型工具正常执行但返回业务失败字典。"""
+    return {"error": "heavy business failure occurred", "details": "invalid business state"}
+
+
+def conclusion_success(arguments):
+    """重型结论工具（如 verify_ui）验证通过。"""
+    return {"matched": True, "diffs": [], "silent_failure": False}
+
+
+def conclusion_failure(arguments):
+    """重型结论工具验证不通过（matched=False 且含说明性 error）。属于业务结论而非工具崩溃。"""
+    return {
+        "matched": False,
+        "diffs": [{"field": "status", "expected": 200, "actual": 500}],
+        "silent_failure": False,
+        "error": "spec mismatch on status code",
+    }
+
+
+def conclusion_bare_error(arguments):
+    """重型结论工具返回裸 error 字典（无 matched 键），应被判为工具执行失败。"""
+    return {"error": "bare error without matched key"}
+
+
+def crash_exit(arguments):
+    """模拟子进程非零异常崩溃退出（exitcode=42）。"""
+    import os
+
+    os._exit(42)
+
+
+def slow_hang(arguments):
+    """长时间阻塞，用于验证调用超时及子进程强杀回收。"""
+    import time
+
+    time.sleep(float(arguments.get("sleep", 10.0)))
+    return {"ok": True}
+
+
+def sensitive_echo(arguments):
+    """返回包含敏感信息的业务载荷，用于验证指标与日志脱敏。"""
+    return {
+        "ok": True,
+        "api_key": "sk-secret-token-12345",
+        "secret_path": "C:\\Users\\SecretUser\\confidential.txt",
+    }
