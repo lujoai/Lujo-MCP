@@ -26,6 +26,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -61,6 +63,16 @@ def _pair(run_index=1, case_id="api_500_none_attribute"):
         _record("without_lujo", run_index, case_id),
         _record("with_lujo", run_index, case_id),
     )
+
+
+class _FakeReport:
+    """最小 QualityReport 替身，暴露 cmd_quality 读取的三个分数属性。"""
+
+    def __init__(self, scores):
+        comp, conf, overall = scores
+        self.context_completeness = types.SimpleNamespace(overall_score=comp)
+        self.analysis_confidence = types.SimpleNamespace(overall_score=conf)
+        self.overall_score = overall
 
 
 # ── 稳定哈希 ──
@@ -445,3 +457,308 @@ class TestCLI:
         rc = runner.main(["init", "--output", str(tmp_path), "--repo-sha", "0" * 40])
         assert rc == 1
         assert capsys.readouterr().err
+
+# ── paired 成对统计 ──
+
+
+class TestPairedSummarize:
+    """M2-B1.1：paired 统计只使用两侧该指标都非 None 的配对。"""
+
+    def test_paired_requires_both_sides(self):
+        """单侧有值时 paired_measured=0，但总体 measured/missing 不变（兼容）。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.6
+        summary = exp.summarize_records([w, wi])
+        stat = summary["metrics"]["root_cause_accuracy"]
+        assert stat["measured"] == 1
+        assert stat["missing"] == 1
+        assert stat["paired_measured"] == 0
+        assert stat["paired_missing"] == 1
+        assert stat["paired_coverage"] == 0.0
+
+    def test_paired_measured_counts_complete_pairs(self):
+        """2 对中 1 对完整 1 对单侧缺失 → paired_measured=1, paired_coverage=0.5。"""
+        w1, wi1 = _pair(run_index=1, case_id="api_500_none_attribute")
+        w2, wi2 = _pair(run_index=1, case_id="frontend_blank_fetch_error")
+        w1["metrics"]["root_cause_accuracy"] = 0.6
+        wi1["metrics"]["root_cause_accuracy"] = 0.9
+        w2["metrics"]["root_cause_accuracy"] = 0.4
+        summary = exp.summarize_records([w1, wi1, w2, wi2])
+        stat = summary["metrics"]["root_cause_accuracy"]
+        assert stat["paired_measured"] == 1
+        assert stat["paired_missing"] == 1
+        assert stat["paired_coverage"] == pytest.approx(0.5)
+
+    def test_paired_delta_excludes_single_sided(self):
+        """单侧缺失的配对不得进入 delta 分布。"""
+        w1, wi1 = _pair(run_index=1, case_id="api_500_none_attribute")
+        w2, wi2 = _pair(run_index=1, case_id="frontend_blank_fetch_error")
+        w1["metrics"]["root_cause_accuracy"] = 0.6
+        wi1["metrics"]["root_cause_accuracy"] = 0.9
+        w2["metrics"]["root_cause_accuracy"] = 0.0
+        summary = exp.summarize_records([w1, wi1, w2, wi2])
+        stat = summary["metrics"]["root_cause_accuracy"]
+        assert stat["raw_delta_mean"] == pytest.approx(0.3)
+        assert stat["raw_delta_min"] == pytest.approx(0.3)
+        assert stat["raw_delta_max"] == pytest.approx(0.3)
+
+    def test_raw_delta_higher_is_better(self):
+        """higher-is-better：raw_delta = with - without，improvement 同号同值。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.5
+        wi["metrics"]["root_cause_accuracy"] = 0.9
+        summary = exp.summarize_records([w, wi])
+        stat = summary["metrics"]["root_cause_accuracy"]
+        assert stat["raw_delta_mean"] == pytest.approx(0.4)
+        assert stat["improvement_delta_mean"] == pytest.approx(0.4)
+
+    def test_improvement_delta_lower_is_better(self):
+        """lower-is-better（time_to_diagnosis）：improvement = without - with，取反 raw。"""
+        w, wi = _pair()
+        w["metrics"]["time_to_diagnosis"] = 100.0
+        wi["metrics"]["time_to_diagnosis"] = 30.0
+        summary = exp.summarize_records([w, wi])
+        stat = summary["metrics"]["time_to_diagnosis"]
+        assert stat["raw_delta_mean"] == pytest.approx(-70.0)
+        assert stat["improvement_delta_mean"] == pytest.approx(70.0)
+
+    def test_improvement_delta_unsupported_guess_rate(self):
+        """unsupported_guess_rate 越低越好：with=0.1 vs without=0.3 → 改善 +0.2。"""
+        w, wi = _pair()
+        w["metrics"]["unsupported_guess_rate"] = 0.3
+        wi["metrics"]["unsupported_guess_rate"] = 0.1
+        summary = exp.summarize_records([w, wi])
+        stat = summary["metrics"]["unsupported_guess_rate"]
+        assert stat["raw_delta_mean"] == pytest.approx(-0.2)
+        assert stat["improvement_delta_mean"] == pytest.approx(0.2)
+
+    def test_zero_is_valid_paired_sample(self):
+        """真实 0 属于有效配对样本，进入 paired_measured 与 delta。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.0
+        wi["metrics"]["root_cause_accuracy"] = 0.0
+        summary = exp.summarize_records([w, wi])
+        stat = summary["metrics"]["root_cause_accuracy"]
+        assert stat["paired_measured"] == 1
+        assert stat["raw_delta_mean"] == 0.0
+
+    def test_no_paired_samples_null_delta(self):
+        """所有配对单侧缺失 → delta 均值/min/max 均为 None，不产出虚假 delta。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.5
+        summary = exp.summarize_records([w, wi])
+        stat = summary["metrics"]["root_cause_accuracy"]
+        assert stat["paired_measured"] == 0
+        assert stat["raw_delta_mean"] is None
+        assert stat["improvement_delta_mean"] is None
+        assert stat["raw_delta_min"] is None
+        assert stat["raw_delta_max"] is None
+        assert stat["improvement_delta_min"] is None
+        assert stat["improvement_delta_max"] is None
+
+    def test_paired_coverage_no_division_by_zero(self):
+        """空记录集 paired_coverage=0.0 不除零。"""
+        summary = exp.summarize_records([])
+        stat = summary["metrics"]["root_cause_accuracy"]
+        assert stat["paired_measured"] == 0
+        assert stat["paired_coverage"] == 0.0
+
+    def test_direction_sets_partition_all_metrics(self):
+        """higher/lower-is-better 两集合必须互斥且并集恰为全部 7 项指标。
+
+        防止某指标漏分类时静默按 -raw 处理（方向反转）。
+        """
+        assert exp._HIGHER_IS_BETTER.isdisjoint(exp._LOWER_IS_BETTER)
+        assert exp._HIGHER_IS_BETTER | exp._LOWER_IS_BETTER == set(exp.METRIC_NAMES)
+
+    @pytest.mark.parametrize("name", sorted(exp.METRIC_NAMES))
+    def test_improvement_delta_positive_means_with_better(self, name):
+        """对全部 7 项指标：令 with 侧严格更优，improvement_delta_mean 必须 > 0。"""
+        w, wi = _pair()
+        if name == "time_to_diagnosis":
+            w["metrics"][name] = 80.0  # 时长，越低越好
+            wi["metrics"][name] = 20.0
+        elif name in exp._HIGHER_IS_BETTER:
+            w["metrics"][name] = 0.2  # 比率，越高越好
+            wi["metrics"][name] = 0.8
+        else:  # unsupported_guess_rate：比率，越低越好
+            w["metrics"][name] = 0.8
+            wi["metrics"][name] = 0.2
+        summary = exp.summarize_records([w, wi])
+        stat = summary["metrics"][name]
+        assert stat["paired_measured"] == 1
+        assert stat["improvement_delta_mean"] > 0
+
+
+# ── 复现元数据校验 ──
+
+
+class TestMetadataValidation:
+    """M2-B1.1：复现元数据收紧校验，但模板（metrics 全 None）不被误报。"""
+
+    def test_invalid_repo_sha_rejected(self):
+        """repo_sha 必须是 40 或 64 位 hex；任意非空短串（如 "x"）必须拒绝。"""
+        for bad in ("x", "", "0" * 39, "0" * 41, "g" * 40, "0" * 65):
+            w, wi = _pair()
+            w["repo_sha"] = bad
+            wi["repo_sha"] = bad
+            assert exp.validate_records([w, wi])
+
+    def test_valid_repo_sha_64_accepted(self):
+        w, wi = _pair()
+        w["repo_sha"] = "a" * 64
+        wi["repo_sha"] = "a" * 64
+        assert exp.validate_records([w, wi]) == []
+
+    def test_valid_repo_sha_uppercase_hex_accepted(self):
+        """大写十六进制同样合法（接受大小写）。"""
+        w, wi = _pair()
+        w["repo_sha"] = "A" * 40
+        wi["repo_sha"] = "A" * 40
+        assert exp.validate_records([w, wi]) == []
+
+    def test_invalid_input_hash_rejected(self):
+        """input_hash 必须是 64 位 hex。"""
+        for bad in ("a" * 63, "a" * 65, "g" * 64):
+            w, wi = _pair()
+            w["input_hash"] = bad
+            wi["input_hash"] = bad
+            assert exp.validate_records([w, wi])
+
+    def test_measured_requires_created_at(self):
+        """有测量值但 created_at 缺失必须拒绝。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.5
+        w["created_at"] = None
+        assert exp.validate_records([w, wi])
+
+    def test_created_at_without_timezone_rejected(self):
+        """created_at 无时区（naive）必须拒绝。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.5
+        w["created_at"] = "2026-09-16T00:00:00"
+        assert exp.validate_records([w, wi])
+
+    def test_created_at_with_offset_accepted(self):
+        """created_at 带明确 UTC 偏移或 Z 应接受。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.5
+        w["created_at"] = "2026-09-16T08:00:00+08:00"
+        assert exp.validate_records([w, wi]) == []
+
+    def test_created_at_non_iso_rejected(self):
+        """有测量值时，created_at 非法字符串（非 ISO 8601）必须拒绝。"""
+        for bad in ("yesterday", "2026-13-45T99:99:99Z", "not-a-date"):
+            w, wi = _pair()
+            w["metrics"]["root_cause_accuracy"] = 0.5
+            w["created_at"] = bad
+            assert exp.validate_records([w, wi])
+
+    def test_pair_created_at_may_differ(self):
+        """不要求 without/with 两侧 created_at 完全相同。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.5
+        wi["metrics"]["root_cause_accuracy"] = 0.6
+        w["created_at"] = "2026-09-16T00:00:00Z"
+        wi["created_at"] = "2026-09-16T08:00:00+08:00"
+        assert exp.validate_records([w, wi]) == []
+
+    def test_template_none_created_at_ok(self):
+        """模板（metrics 全 None）created_at=None 合法。"""
+        w, wi = _pair()
+        w["created_at"] = None
+        wi["created_at"] = None
+        assert exp.validate_records([w, wi]) == []
+
+    def test_measured_model_unspecified_rejected(self):
+        """有测量值时 model=unspecified 必须拒绝。"""
+        w, wi = _pair()
+        w["metrics"]["root_cause_accuracy"] = 0.5
+        wi["metrics"]["root_cause_accuracy"] = 0.5
+        w["model"] = "unspecified"
+        wi["model"] = "unspecified"
+        assert exp.validate_records([w, wi])
+
+    def test_template_model_unspecified_ok(self):
+        """模板（metrics 全 None）model=unspecified 合法。"""
+        w, wi = _pair()
+        w["model"] = "unspecified"
+        wi["model"] = "unspecified"
+        assert exp.validate_records([w, wi]) == []
+
+
+# ── manifest 顶层一致性 ──
+
+
+class TestManifestPayload:
+    """M2-B1.1：payload 级校验拦截顶层字段与 records 漂移。"""
+
+    def test_top_field_conflict_rejected(self):
+        manifest = exp.build_manifest(BENCHMARK_CASES, repo_sha="0" * 40)
+        manifest["model"] = "gpt-4o"  # 顶层与 records 不一致
+        errors = exp.validate_payload(manifest)
+        assert any("conflict" in e.lower() for e in errors)
+
+    def test_missing_top_field_ok(self):
+        """顶层字段缺失兼容，不报错。"""
+        w, wi = _pair()
+        payload = {"records": [w, wi]}
+        assert exp.validate_payload(payload) == []
+
+    def test_array_input_compat(self):
+        """纯 records 数组继续兼容。"""
+        w, wi = _pair()
+        assert exp.validate_payload([w, wi]) == []
+
+    def test_matching_top_field_ok(self):
+        manifest = exp.build_manifest(BENCHMARK_CASES, repo_sha="0" * 40)
+        assert exp.validate_payload(manifest) == []
+
+    def test_invalid_payload_shape(self):
+        assert exp.validate_payload({"nope": 1})
+
+    def test_cli_validate_manifest_conflict_exit_nonzero(self, tmp_path, capsys):
+        """顶层字段与 records 冲突时，CLI validate 必须返回非零并指明字段。"""
+        manifest = exp.build_manifest(BENCHMARK_CASES, repo_sha="0" * 40)
+        manifest["model"] = "gpt-4o"  # records 内为 unspecified → 冲突
+        path = tmp_path / "conflict.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        assert runner.main(["validate", str(path)]) == 1
+        assert "model" in capsys.readouterr().err
+
+    def test_cli_summarize_manifest_conflict_exit_nonzero(self, tmp_path, capsys):
+        """顶层冲突时 CLI summarize 同样必须返回非零（不得产出汇总）。"""
+        manifest = exp.build_manifest(BENCHMARK_CASES, repo_sha="0" * 40)
+        manifest["model"] = "gpt-4o"
+        path = tmp_path / "conflict.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        assert runner.main(["summarize", str(path)]) == 1
+        assert "model" in capsys.readouterr().err
+
+
+# ── quality 命令真实分派 ──
+
+
+class TestQualityCLI:
+    """M2-B1.1：quality 命令真实分派（注入最小 scorer 替身，不依赖 app/网络/LLM）。"""
+
+    def _install_fake_scorer(self, monkeypatch, enabled, scores):
+        fake = types.ModuleType("app.quality.scorer")
+        fake.is_enabled = lambda: enabled
+
+        def evaluate(agent_context):
+            return _FakeReport(scores)
+
+        fake.evaluate = evaluate
+        monkeypatch.setitem(sys.modules, "app.quality.scorer", fake)
+
+    def test_quality_dispatches_enabled(self, monkeypatch, capsys):
+        self._install_fake_scorer(monkeypatch, True, (0.5, 0.5, 0.25))
+        assert runner.main(["quality"]) == 0
+        out = capsys.readouterr().out
+        assert "api_500_none_attribute" in out
+
+    def test_quality_dispatches_disabled(self, monkeypatch, capsys):
+        self._install_fake_scorer(monkeypatch, False, (0.0, 0.0, 0.0))
+        assert runner.main(["quality"]) == 0
+        assert "未启用" in capsys.readouterr().out

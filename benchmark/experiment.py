@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from datetime import datetime
 from typing import Any
 
 from benchmark.cases import get_case
@@ -53,9 +54,28 @@ _RATIO_METRICS = frozenset(
 )
 _DURATION_METRICS = frozenset({"time_to_diagnosis"})
 
+# 指标方向：用于 improvement_delta = sign * raw_delta（raw_delta = with - without）。
+# higher-is-better 指标 sign=+1；lower-is-better 指标 sign=-1。
+# 因此 improvement_delta > 0 在全部 7 项指标上恒表示 Lujo 侧更优。
+_HIGHER_IS_BETTER = frozenset(
+    {
+        "root_cause_accuracy",
+        "evidence_completeness",
+        "debug_success_rate",
+        "verification_success_rate",
+        "repeated_bug_recall",
+    }
+)
+_LOWER_IS_BETTER = frozenset({"time_to_diagnosis", "unsupported_guess_rate"})
+
 # 控制变量：同一配对（experiment_id + case_id + run_index）的 two 侧必须逐字一致。
 # tool_policy 是实验变量（without/with 使用 Lujo 工具的策略不同），不在此列。
 _CONTROL_FIELDS = ("model", "temperature", "repo_sha", "input_hash")
+
+# manifest 顶层字段（与 records 内重名字段需一致，若顶层存在）。
+_MANIFEST_FIELDS = ("schema_version", "experiment_id", "model", "temperature", "repo_sha")
+
+_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 
 DEFAULT_TOOL_POLICY_WITHOUT = "no_lujo_tools"
 DEFAULT_TOOL_POLICY_WITH = "lujo_mcp_tools"
@@ -170,6 +190,40 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values)
 
 
+def _is_git_object_id(value: Any) -> bool:
+    """40 位 SHA-1 或 64 位 SHA-256 的完整十六进制 Git object id。"""
+    return (
+        isinstance(value, str)
+        and len(value) in (40, 64)
+        and all(c in _HEX_CHARS for c in value)
+    )
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    """64 位十六进制 SHA-256 摘要。"""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(c in _HEX_CHARS for c in value)
+    )
+
+
+def _is_iso8601_with_tz(value: Any) -> bool:
+    """合法 ISO 8601 时间且必须携带时区（Z 或显式 UTC 偏移）。"""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        dt = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return dt.tzinfo is not None and dt.utcoffset() is not None
+
+
+def _has_measurement(metrics: dict[Any, Any]) -> bool:
+    """该记录是否含任何已测量指标（非 None）。"""
+    return any(v is not None for k, v in metrics.items() if k in METRIC_NAMES)
+
+
 def validate_records(records: list[Any]) -> list[str]:
     """校验记录，返回错误信息列表（空列表 = 全部合法）。
 
@@ -209,23 +263,41 @@ def validate_records(records: list[Any]) -> list[str]:
             or record.get("run_index") < 0
         ):
             errors.append(f"{idx} invalid run_index: {record.get('run_index')!r}")
-        if not _non_empty_str(record.get("model")):
-            errors.append(f"{idx} missing model")
-        if not _is_real_number(record.get("temperature")):
-            errors.append(f"{idx} invalid temperature: {record.get('temperature')!r}")
-        if not _non_empty_str(record.get("tool_policy")):
-            errors.append(f"{idx} missing tool_policy")
-        if not _non_empty_str(record.get("repo_sha")):
-            errors.append(f"{idx} missing repo_sha")
-        if not _non_empty_str(record.get("input_hash")):
-            errors.append(f"{idx} missing input_hash")
-
         metrics = record.get("metrics")
         if metrics is None:
             metrics = {}
         elif not isinstance(metrics, dict):
             errors.append(f"{idx} metrics must be an object")
             metrics = {}
+        has_measurement = _has_measurement(metrics)
+
+        model = record.get("model")
+        if not _non_empty_str(model):
+            errors.append(f"{idx} missing model")
+        elif model.strip() == "unspecified" and has_measurement:
+            errors.append(f"{idx} model must not be 'unspecified' when metrics are measured")
+        if not _is_real_number(record.get("temperature")):
+            errors.append(f"{idx} invalid temperature: {record.get('temperature')!r}")
+        if not _non_empty_str(record.get("tool_policy")):
+            errors.append(f"{idx} missing tool_policy")
+        if not _is_git_object_id(record.get("repo_sha")):
+            errors.append(
+                f"{idx} invalid repo_sha: {record.get('repo_sha')!r} (expected 40/64-char hex)"
+            )
+        if not _is_sha256_hex(record.get("input_hash")):
+            errors.append(
+                f"{idx} invalid input_hash: {record.get('input_hash')!r} (expected 64-char hex)"
+            )
+
+        created_at = record.get("created_at")
+        if created_at is None:
+            if has_measurement:
+                errors.append(f"{idx} missing created_at (required when metrics are measured)")
+        elif not _is_iso8601_with_tz(created_at):
+            errors.append(
+                f"{idx} invalid created_at: {created_at!r} (expected ISO 8601 with timezone)"
+            )
+
         for key, value in metrics.items():
             if key not in METRIC_NAMES:
                 errors.append(f"{idx} unknown metric: {key!r}")
@@ -291,11 +363,12 @@ def summarize_records(records: list[Any]) -> dict[str, Any]:
         raise ValueError("validation failed:\n" + "\n".join(errors))
 
     record_count = len(records)
-    pair_keys = {
-        (r["experiment_id"], r["case_id"], r["run_index"])
-        for r in records
-        if isinstance(r, dict)
-    }
+    pairs: dict[tuple[Any, ...], dict[str, dict]] = {}
+    for r in records:
+        if isinstance(r, dict):
+            key = (r["experiment_id"], r["case_id"], r["run_index"])
+            pairs.setdefault(key, {})[r["group"]] = r
+    pair_count = len(pairs)
 
     metrics_summary: dict[str, Any] = {}
     for name in METRIC_NAMES:
@@ -332,6 +405,24 @@ def summarize_records(records: list[Any]) -> dict[str, Any]:
                 "max": max(gv) if gv else None,
             }
 
+        # paired 统计：只使用两侧该指标都非 None 的配对（对照同一现场）。
+        raw_deltas: list[float] = []
+        improvement_deltas: list[float] = []
+        paired_missing = 0
+        for groups in pairs.values():
+            w = groups.get(GROUP_WITHOUT)
+            wi = groups.get(GROUP_WITH)
+            wv = (w.get("metrics") or {}).get(name) if w else None
+            wiv = (wi.get("metrics") or {}).get(name) if wi else None
+            if wv is not None and wiv is not None:
+                raw = wiv - wv
+                raw_deltas.append(raw)
+                improvement_deltas.append(raw if name in _HIGHER_IS_BETTER else -raw)
+            else:
+                paired_missing += 1
+        paired_measured = len(raw_deltas)
+        paired_coverage = (paired_measured / pair_count) if pair_count else 0.0
+
         metrics_summary[name] = {
             "measured": measured,
             "missing": missing,
@@ -340,15 +431,53 @@ def summarize_records(records: list[Any]) -> dict[str, Any]:
             "min": min(values) if values else None,
             "max": max(values) if values else None,
             "by_group": by_group,
+            "paired_measured": paired_measured,
+            "paired_missing": paired_missing,
+            "paired_coverage": paired_coverage,
+            "raw_delta_mean": _mean(raw_deltas),
+            "raw_delta_min": min(raw_deltas) if raw_deltas else None,
+            "raw_delta_max": max(raw_deltas) if raw_deltas else None,
+            "improvement_delta_mean": _mean(improvement_deltas),
+            "improvement_delta_min": min(improvement_deltas) if improvement_deltas else None,
+            "improvement_delta_max": max(improvement_deltas) if improvement_deltas else None,
         }
 
     return {
         "schema_version": SCHEMA_VERSION,
         "record_count": record_count,
-        "pair_count": len(pair_keys),
+        "pair_count": pair_count,
         "incomplete_pairs": 0,
         "metrics": metrics_summary,
     }
+
+
+def validate_payload(payload: Any) -> list[str]:
+    """校验 payload（纯数组或 ``{"records": [...]}``），返回错误列表。
+
+    对 ``{"records": [...]}`` 形态额外做顶层字段一致性校验：顶层存在
+    schema_version / experiment_id / model / temperature / repo_sha 时，必须与
+    每条 record 的对应字段一致；顶层字段缺失则兼容（不报错）。纯数组保持
+    原行为，等价于 ``validate_records``。
+    """
+    if isinstance(payload, list):
+        return validate_records(payload)
+    if isinstance(payload, dict) and "records" in payload:
+        records = payload["records"]
+        if not isinstance(records, list):
+            return ["manifest 'records' must be an array"]
+        errors: list[str] = []
+        for field in _MANIFEST_FIELDS:
+            if field in payload:
+                top_val = payload[field]
+                for i, record in enumerate(records):
+                    if isinstance(record, dict) and field in record and record[field] != top_val:
+                        errors.append(
+                            f"manifest.{field} conflicts with record[{i}].{field}: "
+                            f"{top_val!r} != {record[field]!r}"
+                        )
+        errors.extend(validate_records(records))
+        return errors
+    return ["expected a JSON array of records or an object with a 'records' array"]
 
 
 __all__ = [
@@ -364,5 +493,6 @@ __all__ = [
     "build_manifest",
     "coerce_records",
     "validate_records",
+    "validate_payload",
     "summarize_records",
 ]

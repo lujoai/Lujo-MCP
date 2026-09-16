@@ -25,7 +25,7 @@ from benchmark.experiment import (
     build_manifest,
     coerce_records,
     summarize_records,
-    validate_records,
+    validate_payload,
 )
 
 
@@ -173,41 +173,43 @@ def _load_json(path: str) -> Any:
         return json.load(f)
 
 
-def _load_records(path: str) -> tuple[list[Any] | None, str | None]:
-    """读文件并归一化为记录数组，返回 (records, error)。"""
+def _load_payload(path: str) -> tuple[Any | None, str | None]:
+    """读取 JSON 文件，返回 (payload, error)。"""
     try:
-        payload = _load_json(path)
+        return _load_json(path), None
     except (OSError, ValueError) as e:
         return None, f"读取失败: {e}"
-    try:
-        return coerce_records(payload), None
-    except ValueError as e:
-        return None, f"格式错误: {e}"
 
 
 def cmd_validate(path: str) -> int:
     """校验记录文件；合法返回 0，否则返回 1 并把错误写到 stderr（M2-B1）。"""
-    records, err = _load_records(path)
+    payload, err = _load_payload(path)
     if err is not None:
         print(err, file=sys.stderr)
         return 1
-    errors = validate_records(records)
+    errors = validate_payload(payload)
     if errors:
         for message in errors:
             print(f"校验失败: {message}", file=sys.stderr)
         return 1
+    records = coerce_records(payload)
     print(f"OK: {len(records)} 条记录校验通过")
     return 0
 
 
 def cmd_summarize(path: str) -> int:
     """校验并汇总记录文件；失败返回非零，成功输出汇总 JSON（M2-B1）。"""
-    records, err = _load_records(path)
+    payload, err = _load_payload(path)
     if err is not None:
         print(err, file=sys.stderr)
         return 1
+    errors = validate_payload(payload)
+    if errors:
+        for message in errors:
+            print(f"校验失败: {message}", file=sys.stderr)
+        return 1
     try:
-        summary = summarize_records(records)
+        summary = summarize_records(coerce_records(payload))
     except ValueError as e:
         print(f"校验失败:\n{e}", file=sys.stderr)
         return 1
