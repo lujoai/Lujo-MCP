@@ -11,6 +11,7 @@ import logging
 
 from app.runtime.collectors.network import parse_network_records
 from app.runtime.collectors.ui_event import parse_ui_events
+from app.runtime.core.errors import compute_silent_failure_group
 from app.runtime.core.trace_repo import save_trace, save_ui_event, save_network_record
 
 logger = logging.getLogger("lujo-mcp.tools.silent_failure")
@@ -175,6 +176,12 @@ def tool_ingest_silent_failure(
     if obs_unknown:
         extra["observed_events_unknown"] = obs_unknown
 
+    # 无堆栈 SilentFailure 的稳定分组段：不同 expectation 目标（selector/
+    # to 等）必须分指纹，避免不同 UI 静默失败共用 error_id 合并现场。
+    # 分组串只作为哈希输入、不落盘；降级分支的 message 在 helper 内先脱敏，
+    # 结构化值（selector/route 等稳定标识）保持原值参与分组以保证区分度。
+    fingerprint_group = compute_silent_failure_group(expectation, message)
+
     result_trace_id = save_trace(
         exc_type="SilentFailure",
         message=message,
@@ -184,6 +191,7 @@ def tool_ingest_silent_failure(
         trace_kind="silent_failure",
         trace_id=trace_id,
         session_id=session_id,
+        fingerprint_group=fingerprint_group,
     )
 
     # 关联入库（单条失败不阻断整体）

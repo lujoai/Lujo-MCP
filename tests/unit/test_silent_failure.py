@@ -3,7 +3,8 @@ import pytest
 
 from app.config import settings
 from app.mcp.tools import silent_failure_api
-from app.runtime.core import trace_repo
+from app.runtime.core import errors, trace_repo
+from app.runtime.core.logs import get_logs
 
 
 @pytest.fixture(autouse=True)
@@ -298,6 +299,188 @@ def test_ingest_silent_failure_endpoint_persists_observed_fields():
     # 服务端按 kind 分类入库，AI 通过 get_debug_context 能拿到完整事件链
     assert len(trace_repo.get_network_records(tid)) == 1
     assert len(trace_repo.get_ui_events(tid)) == 1
+
+
+# ── SilentFailure fingerprint 隔离（无堆栈不得共用指纹合并现场）──
+#
+# 缺陷：无 frames 的 SilentFailure 一律退化为 sha256("SilentFailure")[:16]，
+# 不同 UI 目标的静默失败共用同一 error_id，occurrence_count 互相累加、
+# message/frames 取最新一次覆盖，错误合并现场。
+# 修复：仅针对 SilentFailure 引入稳定分组标识（expectation 类型 + 目标字段，
+# 缺结构化期望时按去数字化/去空白的有界 message 降级），普通异常指纹逐字不变。
+
+
+def test_ingest_silent_failure_different_selectors_distinct_errors():
+    """同一 session、无 frames、selector 不同 → 必须 fingerprint/error_id 分离。"""
+    r1 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#tests"},
+        session_id="demo-session",
+    )
+    r2 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#selfResult"},
+        session_id="demo-session",
+    )
+    assert r1["trace_id"] != r2["trace_id"]
+
+    e1 = errors.get_by_id(r1["trace_id"], session_id="demo-session")
+    e2 = errors.get_by_id(r2["trace_id"], session_id="demo-session")
+    assert e1["fingerprint"] != e2["fingerprint"]
+    assert e1["occurrence_count"] == 1
+    assert e2["occurrence_count"] == 1
+
+
+def test_ingest_silent_failure_same_selector_merges_occurrence():
+    """相同 selector + 相同期望类型 → 仍合并并累加 occurrence_count。"""
+    r1 = silent_failure_api.tool_ingest_silent_failure(
+        message="第一次点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#tests"},
+        session_id="demo-session",
+    )
+    r2 = silent_failure_api.tool_ingest_silent_failure(
+        message="第二次点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#tests"},
+        session_id="demo-session",
+    )
+    assert r1["trace_id"] == r2["trace_id"]
+    merged = errors.get_by_id(r1["trace_id"], session_id="demo-session")
+    assert merged["occurrence_count"] == 2
+    assert merged["last_seen"] >= merged["first_seen"]
+
+
+def test_ingest_silent_failure_different_route_destination_distinct():
+    """route_change 期望按 type + to（目标路由）分离。"""
+    r1 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后未跳转",
+        expectation={"type": "route_change", "to": "/done"},
+        session_id="demo-session",
+    )
+    r2 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后未跳转",
+        expectation={"type": "route_change", "to": "/results"},
+        session_id="demo-session",
+    )
+    assert r1["trace_id"] != r2["trace_id"]
+    assert (
+        errors.get_by_id(r1["trace_id"], session_id="demo-session")["fingerprint"]
+        != errors.get_by_id(r2["trace_id"], session_id="demo-session")["fingerprint"]
+    )
+
+
+def test_ingest_silent_failure_unstructured_degrades_deterministically():
+    """缺结构化 expectation：按稳定化的 message 降级分组。
+
+    - 不同 message → 分离（不得退回全局碰撞）；
+    - message 仅数字/空白差异（计数、时间戳等易变片段）→ 仍合并；
+    - 降级分组不得与结构化分组互相碰撞。
+    """
+    r1 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击提交按钮后无反应", session_id="demo-session",
+    )
+    r2 = silent_failure_api.tool_ingest_silent_failure(
+        message="搜索结果未更新", session_id="demo-session",
+    )
+    assert r1["trace_id"] != r2["trace_id"]
+    assert (
+        errors.get_by_id(r1["trace_id"], session_id="demo-session")["occurrence_count"]
+        == 1
+    )
+
+    r3 = silent_failure_api.tool_ingest_silent_failure(
+        message="第 3 次重试后无反应", session_id="demo-session",
+    )
+    r4 = silent_failure_api.tool_ingest_silent_failure(
+        message="第 5 次重试后无反应", session_id="demo-session",
+    )
+    assert r3["trace_id"] == r4["trace_id"]
+    assert (
+        errors.get_by_id(r3["trace_id"], session_id="demo-session")["occurrence_count"]
+        == 2
+    )
+
+    r5 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击提交按钮后无反应",
+        expectation={"type": "ui_feedback", "selector": "#submit"},
+        session_id="demo-session",
+    )
+    assert r5["trace_id"] != r1["trace_id"]
+
+
+def test_ingest_silent_failure_memory_and_store_rebuild_share_fingerprint(monkeypatch):
+    """errors 内存结果与 trace_store 回读重建使用同一最终 fingerprint。"""
+    r = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#tests"},
+        session_id="demo-session",
+    )
+    mem_fp = trace_repo.get_trace(r["trace_id"], session_id="demo-session")["fingerprint"]
+
+    # 模拟重启/缓冲淘汰：errors 内存未命中 → 走存储回读重建
+    monkeypatch.setattr(trace_repo, "_get_error", lambda *a, **k: None)
+    rebuilt = trace_repo.get_trace(r["trace_id"], session_id="demo-session")
+    assert rebuilt is not None and rebuilt.get("from_store") is True
+    assert rebuilt["fingerprint"] == mem_fp
+
+
+def test_ingest_silent_failure_session_bucket_isolation_unchanged():
+    """session bucket 行为不变：去重只发生在同一 bucket 内。"""
+    r1 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#tests"},
+        session_id="sess-a",
+    )
+    r2 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#tests"},
+        session_id="sess-b",
+    )
+    assert r1["trace_id"] != r2["trace_id"]
+
+    r3 = silent_failure_api.tool_ingest_silent_failure(
+        message="点击后无反应",
+        expectation={"type": "ui_feedback", "selector": "#tests"},
+        session_id="sess-a",
+    )
+    assert r3["trace_id"] == r1["trace_id"]
+    assert errors.get_by_id(r1["trace_id"], session_id="sess-a")["occurrence_count"] == 2
+
+
+def test_ingest_silent_failure_secret_message_not_persisted_in_plaintext():
+    """降级分组依赖的 message 必须先脱敏，敏感内容不得明文进入持久数据。"""
+    r = silent_failure_api.tool_ingest_silent_failure(
+        message='登录失败 password=supersecret-123 后无反应',
+        session_id="demo-session",
+    )
+    persisted = str(list(get_logs(r["trace_id"])))
+    assert "supersecret-123" not in persisted
+
+
+def test_ingest_silent_failure_http_endpoint_isolates_selectors():
+    """HTTP /ingest/silent-failure 与 stdio 共用 handler：selector 隔离同样生效。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.ingest import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    common = {
+        "message": "点击后无反应",
+        "session_id": "demo-session",
+    }
+    resp1 = client.post(
+        "/ingest/silent-failure",
+        json={**common, "expectation": {"type": "ui_feedback", "selector": "#tests"}},
+    )
+    resp2 = client.post(
+        "/ingest/silent-failure",
+        json={**common, "expectation": {"type": "ui_feedback", "selector": "#selfResult"}},
+    )
+    assert resp1.status_code == 200 and resp2.status_code == 200
+    assert resp1.json()["trace_id"] != resp2.json()["trace_id"]
 
 
 # ── inbound 网络采集中间件（经 TestClient）──

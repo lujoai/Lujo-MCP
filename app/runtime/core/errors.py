@@ -10,6 +10,7 @@ M10 增强：指纹去重 + 聚合。相同 fingerprint（exc_type + 前3帧 fil
 按 proj1 架构重写（非复制 proj2 SQLite 逻辑）。
 """
 
+import re
 import time
 import uuid
 import hashlib
@@ -39,25 +40,92 @@ def _get_bucket(session_id: str | None) -> str:
     return session_id or "_global"
 
 
-def compute_fingerprint(exc_type: str, frames: list[dict]) -> str:
-    """用异常类型 + 关键堆栈帧（file:function，忽略行号差异）算指纹。"""
+def compute_fingerprint(exc_type: str, frames: list[dict], group: str | None = None) -> str:
+    """用异常类型 + 关键堆栈帧（file:function，忽略行号差异）算指纹。
+
+    group 是可选的附加分组段：非空字符串时追加进哈希输入，用于无堆栈
+    记录（如 SilentFailure）的稳定分组；两参调用（普通异常路径）的
+    结果逐字保持不变。指纹格式与长度不变（sha256 前 16 位 hex）。
+    """
     parts = [exc_type or "Unknown"]
     for f in (frames or [])[:3]:
         parts.append(f"{f.get('file', '')}:{f.get('function', '')}")
+    if group:
+        parts.append(group)
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
-def record(exc_data: dict, source: str = "unknown", session_id: str | None = None) -> str:
+# SilentFailure 分组：expectation 的稳定目标字段（按固定顺序拼接，顺序即规范）。
+# 易变字段（timestamp / within_ms 等阈值、计数、延迟）与自由文本字段不参与。
+_SF_GROUP_TARGET_KEYS = (
+    "selector", "to", "target", "destination", "route", "url", "status_code",
+)
+_SF_GROUP_TYPE_KEYS = ("type", "kind")
+_SF_GROUP_TARGET_MAX_CHARS = 120
+_SF_GROUP_FALLBACK_MAX_CHARS = 80
+
+
+def compute_silent_failure_group(expectation: object, message: object) -> str:
+    """计算 SilentFailure 专用的稳定分组标识（作为指纹附加段，不落盘）。
+
+    修复：无 frames 的 SilentFailure 此前一律退化为 sha256(exc_type)[:16]，
+    不同 UI 目标的静默失败共用同一指纹并被 errors 聚合合并现场。分组规则：
+
+    1. expectation 是 dict 且含可用结构化字段时，取稳定类型（type/kind，
+       小写归一）+ 全部稳定目标字段（key=value 依固定顺序拼接）。
+       相同语义的期望（同 selector / 同 to）分组相同 → 仍合并。
+    2. 缺少可用结构化字段时，按脱敏后的 message 确定性降级：数字折叠为
+       `#`、空白折叠、有界截断。不直接依赖完整易变自由文本，但保证不同
+       描述分离、同语义复发（仅计数/时间戳等数字差异）仍合并。
+
+    返回值只作为 compute_fingerprint 的附加段参与哈希，不持久化。
+    """
+    parts: list[str] = []
+    if isinstance(expectation, dict):
+        for key in _SF_GROUP_TYPE_KEYS:
+            value = expectation.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(f"type={value.strip().lower()}")
+                break
+        for key in _SF_GROUP_TARGET_KEYS:
+            value = expectation.get(key)
+            if value is None or isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                parts.append(f"{key}={value}")
+            elif isinstance(value, str) and value.strip():
+                parts.append(f"{key}={value.strip()[:_SF_GROUP_TARGET_MAX_CHARS]}")
+        if parts:
+            return "sf|" + "|".join(parts)
+    raw_message = message if isinstance(message, str) else ""
+    safe_message = redact(raw_message) or ""
+    normalized = re.sub(r"\d+", "#", safe_message)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return f"sf|msg|{normalized[:_SF_GROUP_FALLBACK_MAX_CHARS]}"
+
+
+def record(
+    exc_data: dict,
+    source: str = "unknown",
+    session_id: str | None = None,
+    fingerprint_group: str | None = None,
+) -> str:
     """记录一条捕获到的异常，返回其 error_id。
 
     相同 fingerprint 的异常累加 occurrence_count 并刷新 last_seen，不新建记录。
+
+    fingerprint_group 仅参与指纹计算（无堆栈记录的稳定分组），不写入
+    记录 schema；调用方需传入已脱敏输入派生的分组（本模块的
+    compute_silent_failure_group 已在派生前脱敏）。
     """
     # Storage boundary: copy and redact the complete payload so direct callers
     # cannot bypass the trace_repo boundary. Keep the caller-owned object intact.
     safe_exc_data = redact_nested(exc_data)
     safe_source = redact(source)
     frames = safe_exc_data.get("frames", []) or []
-    fingerprint = compute_fingerprint(safe_exc_data.get("type"), frames)
+    fingerprint = compute_fingerprint(
+        safe_exc_data.get("type"), frames, fingerprint_group
+    )
     now = time.time()
     key = _get_bucket(session_id)
 

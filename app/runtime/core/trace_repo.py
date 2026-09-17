@@ -103,6 +103,7 @@ def save_trace(
     trace_kind: str = "exception",
     trace_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    fingerprint_group: Optional[str] = None,
 ) -> str:
     """保存一条 trace（复用 errors 近期缓冲 + trace_store 持久化），返回 error_id。
 
@@ -111,6 +112,11 @@ def save_trace(
 
     caller 提供的 trace_id（如浏览器 SDK 的 _trace_id）会以 trace_link 形式
     记录在 error_id 下，用于审计与反向查询，但不再作为返回值或存储 key。
+
+    fingerprint_group 是无堆栈记录（如 SilentFailure）的稳定分组段：
+    同时用于本函数持久化的 fingerprint 字段与 errors.record 的内存聚合
+    指纹，两路保持一致；不作为独立字段落盘。传入前需已脱敏
+    （errors.compute_silent_failure_group 在派生时脱敏）。
     """
     extra = extra or {}
     frames = redact_nested(frames or [])
@@ -126,10 +132,15 @@ def save_trace(
         "session_id": session_id,
         # FIX: R7-P1-2（断点②）—— 落库数据持久化指纹：重启/缓冲淘汰后
         # _rebuild_trace_from_store 回读时可直接恢复（与 errors.record 内
-        # compute_fingerprint 同一算法，保持两路指纹一致）。
-        "fingerprint": compute_fingerprint(exc_type, frames),
+        # compute_fingerprint 同一算法 + 同一分组段，保持两路指纹一致）。
+        "fingerprint": compute_fingerprint(exc_type, frames, fingerprint_group),
     }
-    error_id = _record_error(exc_data, source=redacted_source, session_id=session_id)
+    error_id = _record_error(
+        exc_data,
+        source=redacted_source,
+        session_id=session_id,
+        fingerprint_group=fingerprint_group,
+    )
 
     # SEC-13：commit-marker 模式 —— 写入顺序调整为 META → LINK → DATA，
     # DATA 作为提交标记最后写入。这样 trace_data 存在即保证 META（及 LINK）已落库；

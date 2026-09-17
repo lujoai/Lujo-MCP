@@ -3,6 +3,7 @@ import pytest
 
 from app.runtime.core import errors
 from app.runtime.core import trace_repo
+from app.runtime.core.errors import compute_fingerprint
 from app.mcp.tools import trace_api
 
 
@@ -123,3 +124,54 @@ def test_trace_summary_first_seen_normal_min(monkeypatch):
     summary = trace_api._extract_trace_summary("req-normal")
     assert summary["first_seen"] == 100
     assert summary["last_seen"] == 200
+
+
+# ---------------------------------------------------------------------------
+# SilentFailure fingerprint 分组：普通异常指纹逐字不变 + 分组参数契约
+# ---------------------------------------------------------------------------
+
+# sha256("ValueError|a.py:f")[:16] —— 既有两参算法的逐字基线
+_LEGACY_TWO_ARG_FINGERPRINT = "118983b55978feef"
+# sha256("SilentFailure")[:16] —— 无堆栈 SilentFailure 的历史碰撞值
+_LEGACY_BARE_SILENT_FAILURE_FINGERPRINT = "7c677b28885aa835"
+
+
+def test_compute_fingerprint_two_arg_literal_unchanged():
+    """两参调用（普通异常路径）的指纹必须逐字保持，不因分组扩展改变。"""
+    fp = compute_fingerprint("ValueError", _frames())
+    assert fp == _LEGACY_TWO_ARG_FINGERPRINT
+    # record() 真实链路同样保持
+    err_id = errors.record({"type": "ValueError", "message": "m", "frames": _frames()}, source="t")
+    assert errors.get_by_id(err_id)["fingerprint"] == _LEGACY_TWO_ARG_FINGERPRINT
+
+
+def test_compute_fingerprint_group_separates_and_keeps_format():
+    """分组参数：分离指纹、保持 16 位小写 hex 格式、空分组等价旧算法。"""
+    import re
+
+    fp_plain = compute_fingerprint("SilentFailure", [])
+    assert fp_plain == _LEGACY_BARE_SILENT_FAILURE_FINGERPRINT
+
+    fp_a = compute_fingerprint("SilentFailure", [], "sf|ui_feedback|selector=#tests")
+    fp_b = compute_fingerprint("SilentFailure", [], "sf|ui_feedback|selector=#selfResult")
+
+    assert re.fullmatch(r"[0-9a-f]{16}", fp_a)
+    assert len({fp_plain, fp_a, fp_b}) == 3
+
+
+def test_record_accepts_fingerprint_group_without_persisting_it():
+    """record 的分组参数只参与指纹计算，不得写入内存记录 schema。"""
+    g1 = "sf|ui_feedback|selector=#tests"
+    id1 = errors.record(
+        {"type": "SilentFailure", "message": "m", "frames": []},
+        source="t",
+        fingerprint_group=g1,
+    )
+    id2 = errors.record(
+        {"type": "SilentFailure", "message": "m", "frames": []},
+        source="t",
+    )
+    assert id1 != id2
+    entry = errors.get_by_id(id1)
+    assert entry["fingerprint"] == compute_fingerprint("SilentFailure", [], g1)
+    assert "fingerprint_group" not in entry
