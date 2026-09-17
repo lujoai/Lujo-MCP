@@ -19,13 +19,12 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 from datetime import datetime
 from typing import Any
 
 from benchmark.cases import get_case
+from benchmark.hashing import compute_input_hash, stable_hash, text_hash  # noqa: F401
 
 SCHEMA_VERSION = "1.0"
 
@@ -81,26 +80,17 @@ _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 DEFAULT_TOOL_POLICY_WITHOUT = "no_lujo_tools"
 DEFAULT_TOOL_POLICY_WITH = "lujo_mcp_tools"
 
+# ── M2-B2 真实 LLM 实验字段（均为可选：老记录/模板缺失时不报错）──
+# run_mode：dry_run = 只生成计划（绝不产 metrics）；live_llm = 真实调用过模型。
+RUN_MODE_DRY = "dry_run"
+RUN_MODE_LIVE = "live_llm"
+VALID_RUN_MODES = (RUN_MODE_DRY, RUN_MODE_LIVE)
 
-def stable_hash(payload: Any) -> str:
-    """结构化输入（dict/list/scalar）的稳定 sha256 摘要。
-
-    采用 `sort_keys=True` + `ensure_ascii=False` 保证键顺序与平台无关，返回完整
-    64 位 hexdigest（不截断，参考 `app/llm/cache.py` 的碰撞教训）。
-    """
-    canonical = json.dumps(
-        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def compute_input_hash(case_id: str, user_description: str) -> str:
-    """计算「基础现场」输入哈希（不含 lujo_context）。
-
-    without 与 with 组共享同一 case 的基础输入（user_description），故两侧
-    input_hash 相同，可用于校验配对两侧是否基于同一现场。
-    """
-    return stable_hash({"case_id": case_id, "user_description": user_description})
+# context_mode：without 组必须是 none；with 组的 fixture_replay 表示 context 来自
+# 手写 fixture（不是真实 MCP 运行时），结论口径必须相应降级。
+CONTEXT_MODE_NONE = "none"
+CONTEXT_MODE_FIXTURE = "fixture_replay"
+VALID_CONTEXT_MODES = (CONTEXT_MODE_NONE, CONTEXT_MODE_FIXTURE)
 
 
 def _empty_metrics() -> dict[str, None]:
@@ -321,6 +311,57 @@ def validate_records(records: list[Any]) -> list[str]:
                 f"{idx} invalid created_at: {created_at!r} (expected ISO 8601 with timezone)"
             )
 
+        # M2-B2：真实实验记录的组间契约（字段缺失时跳过，兼容老记录与模板）。
+        run_mode = record.get("run_mode")
+        if run_mode is not None and run_mode not in VALID_RUN_MODES:
+            errors.append(f"{idx} invalid run_mode: {run_mode!r}")
+        if run_mode == RUN_MODE_DRY and has_measurement:
+            errors.append(f"{idx} dry_run records must not carry measured metrics")
+        context_mode = record.get("context_mode")
+        if context_mode is not None and context_mode not in VALID_CONTEXT_MODES:
+            errors.append(f"{idx} invalid context_mode: {context_mode!r}")
+        elif context_mode is not None and case is not None:
+            if record.get("group") == GROUP_WITHOUT and context_mode != CONTEXT_MODE_NONE:
+                errors.append(
+                    f"{idx} without_lujo record must use context_mode='none', "
+                    f"got {context_mode!r}"
+                )
+            if record.get("group") == GROUP_WITH and context_mode == CONTEXT_MODE_NONE:
+                errors.append(
+                    f"{idx} with_lujo record must not use context_mode='none'"
+                )
+        context_hash = record.get("context_hash")
+        if context_hash is not None:
+            if not _is_sha256_hex(context_hash):
+                errors.append(
+                    f"{idx} invalid context_hash: {context_hash!r} (expected 64-char hex)"
+                )
+            elif case is not None:
+                if record.get("group") == GROUP_WITHOUT:
+                    errors.append(
+                        f"{idx} without_lujo record must not carry a context_hash"
+                    )
+                else:
+                    expected_ctx = stable_hash(case.lujo_context)
+                    if context_hash.lower() != expected_ctx:
+                        errors.append(
+                            f"{idx} context_hash does not match canonical lujo_context "
+                            f"of case {case_id!r}"
+                        )
+        elif record.get("group") == GROUP_WITH and record.get("context_mode") == CONTEXT_MODE_FIXTURE:
+            errors.append(f"{idx} with_lujo record with fixture context must carry context_hash")
+
+        base_prompt_hash = record.get("base_prompt_hash")
+        if base_prompt_hash is not None and not _is_sha256_hex(base_prompt_hash):
+            errors.append(
+                f"{idx} invalid base_prompt_hash: {base_prompt_hash!r} (expected 64-char hex)"
+            )
+        prompt_hash = record.get("prompt_hash")
+        if prompt_hash is not None and not _is_sha256_hex(prompt_hash):
+            errors.append(
+                f"{idx} invalid prompt_hash: {prompt_hash!r} (expected 64-char hex)"
+            )
+
         for key, value in metrics.items():
             if key not in METRIC_NAMES:
                 errors.append(f"{idx} unknown metric: {key!r}")
@@ -370,6 +411,23 @@ def validate_records(records: list[Any]) -> list[str]:
                 if not _control_equal(field, w.get(field), wi.get(field)):
                     errors.append(
                         f"pair={pair_key} control variable mismatch on {field}"
+                    )
+            # M2-B2：两组必须共用同一基础 prompt，但实际发送内容必须不同，
+            # 否则说明对照失效（要么漏注入 context，要么给 with 组加了额外提示）。
+            w_base = w.get("base_prompt_hash")
+            wi_base = wi.get("base_prompt_hash")
+            if w_base is not None or wi_base is not None:
+                if not _control_equal("base_prompt_hash", w_base, wi_base):
+                    errors.append(
+                        f"pair={pair_key} base_prompt_hash mismatch between without and with"
+                    )
+            w_prompt = w.get("prompt_hash")
+            wi_prompt = wi.get("prompt_hash")
+            if w_prompt is not None and wi_prompt is not None:
+                if w_prompt.lower() == wi_prompt.lower():
+                    errors.append(
+                        f"pair={pair_key} without/with prompt_hash are identical "
+                        f"(context was not injected)"
                     )
 
     return errors
@@ -465,6 +523,9 @@ def summarize_records(records: list[Any]) -> dict[str, Any]:
             "improvement_delta_max": max(improvement_deltas) if improvement_deltas else None,
         }
 
+    measured_any = any(
+        stat["measured"] > 0 for stat in metrics_summary.values()
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "record_count": record_count,
@@ -473,6 +534,9 @@ def summarize_records(records: list[Any]) -> dict[str, Any]:
         # 配对（缺侧/重复/控制变量不一致）都在校验阶段报错并抛 ValueError，能进入
         # 此处汇总的配对必然双侧完整，故 incomplete_pairs 恒为 0。
         "incomplete_pairs": 0,
+        # 结果状态横幅（M2-B2 防误读）：所有指标全为未测量时，本输出**不是**实验
+        # 结果，只是空汇总；防止把模板/采集阶段输出当成"已跑出结论"。
+        "result_status": "measured" if measured_any else "no_measurements",
         "metrics": metrics_summary,
     }
 
@@ -511,6 +575,12 @@ __all__ = [
     "GROUP_WITHOUT",
     "GROUP_WITH",
     "VALID_GROUPS",
+    "RUN_MODE_DRY",
+    "RUN_MODE_LIVE",
+    "VALID_RUN_MODES",
+    "CONTEXT_MODE_NONE",
+    "CONTEXT_MODE_FIXTURE",
+    "VALID_CONTEXT_MODES",
     "METRIC_NAMES",
     "DEFAULT_TOOL_POLICY_WITHOUT",
     "DEFAULT_TOOL_POLICY_WITH",

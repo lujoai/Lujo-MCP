@@ -7,10 +7,11 @@
 - init      ：生成 without_lujo / with_lujo 成对实验清单模板（M2-B1）
 - validate  ：校验外部填写或导入的实验记录（M2-B1）
 - summarize ：离线汇总已有测量结果（M2-B1）
+- run       ：对已有清单执行真实 LLM 成对调用并回收响应（M2-B2）
 
-定位：纯评估工具，独立于 app/ 生产 Layer，不引入 LLM 调用链。
-默认评估方式为人工对照 4 指标打分（见 docs/internal/BENCHMARK.md）。
-M2-B1 新增的三条命令为纯离线测量基础设施，不联网、不调用模型、不产出真实结果。
+定位：纯评估工具，独立于 app/ 生产 Layer。默认评估方式为人工对照打分
+（见 docs/internal/BENCHMARK.md）。除 `run` 外全部命令纯离线；`run` 需要显式
+配置 `BENCHMARK_LLM_*` 才会发起网络调用，且只采集响应、不评分。
 """
 
 from __future__ import annotations
@@ -21,6 +22,9 @@ import sys
 from typing import Any
 
 from benchmark.cases import get_case, list_cases
+from benchmark import experiment as exp
+from benchmark import llm_experiment as llm_exp
+from benchmark import llm_provider
 from benchmark.experiment import (
     build_manifest,
     coerce_records,
@@ -214,7 +218,189 @@ def cmd_summarize(path: str) -> int:
         print(f"校验失败:\n{e}", file=sys.stderr)
         return 1
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("result_status") == "no_measurements":
+        print(
+            "提示: 全部指标均未测量（result_status=no_measurements）——上面是空汇总，"
+            "不是实验结果。",
+            file=sys.stderr,
+        )
     return 0
+
+
+# ── run：真实 LLM 成对实验（M2-B2）──
+
+_RUN_OPTS_WITH_VALUE = (
+    "--case-id",
+    "--run-index",
+    "--group",
+    "--experiment-id",
+    "--output",
+    "--raw-dir",
+    "--repo-sha",
+    "--max-tokens",
+    "--timeout-seconds",
+    "--max-retries",
+    "--context-mode",
+)
+_RUN_MULTI_OPTS = ("--case-id", "--run-index")
+
+
+def _parse_run_args(argv: list[str]) -> tuple[dict[str, Any] | None, str | None]:
+    """解析 run 子命令参数，返回 (options, error)。"""
+    if not argv:
+        return None, "missing <manifest> path"
+    opts: dict[str, Any] = {
+        "manifest": argv[0],
+        "force_rerun": False,
+        "retry_failed": False,
+        "dry_run": False,
+    }
+    multi: dict[str, list[str]] = {name: [] for name in _RUN_MULTI_OPTS}
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--force-rerun", "--retry-failed", "--dry-run"):
+            opts[arg[2:].replace("-", "_")] = True
+            i += 1
+        elif arg in _RUN_OPTS_WITH_VALUE:
+            if i + 1 >= len(argv):
+                return None, f"missing value for {arg}"
+            if arg in multi:
+                multi[arg].append(argv[i + 1])
+            else:
+                opts[arg[2:].replace("-", "_")] = argv[i + 1]
+            i += 2
+        else:
+            return None, f"unknown argument: {arg}"
+    opts["case_ids"] = multi["--case-id"]
+    try:
+        opts["run_indices"] = [int(v) for v in multi["--run-index"]]
+    except ValueError:
+        return None, "--run-index must be an integer"
+    try:
+        opts["max_tokens"] = int(opts.get("max_tokens", 1024))
+        opts["max_retries"] = int(opts.get("max_retries", 0))
+        opts["timeout_seconds"] = float(opts.get("timeout_seconds", 60.0))
+    except (TypeError, ValueError):
+        return None, "--max-tokens / --max-retries / --timeout-seconds must be numbers"
+    if opts["max_tokens"] < 1:
+        return None, "--max-tokens must be >= 1"
+    if opts["max_retries"] < 0:
+        return None, "--max-retries must be >= 0"
+    if opts["timeout_seconds"] <= 0:
+        return None, "--timeout-seconds must be > 0"
+    group = opts.get("group", "both")
+    if group not in ("both", "without", "with"):
+        return None, "--group must be both | without | with"
+    context_mode = opts.get("context_mode", exp.CONTEXT_MODE_FIXTURE)
+    if context_mode not in exp.VALID_CONTEXT_MODES:
+        return None, f"--context-mode must be one of {exp.VALID_CONTEXT_MODES}"
+    opts["group"] = group
+    opts["context_mode"] = context_mode
+    return opts, None
+
+
+def _groups_for(group: str) -> tuple[str, ...]:
+    if group == "without":
+        return (exp.GROUP_WITHOUT,)
+    if group == "with":
+        return (exp.GROUP_WITH,)
+    return (exp.GROUP_WITHOUT, exp.GROUP_WITH)
+
+
+def cmd_run(argv: list[str]) -> int:
+    """对已有清单执行真实 LLM 成对调用（M2-B2）。"""
+    opts, err = _parse_run_args(argv)
+    if err is not None:
+        print(f"run 参数错误: {err}", file=sys.stderr)
+        return 1
+
+    manifest_path = opts["manifest"]
+    payload, load_err = _load_payload(manifest_path)
+    if load_err is not None:
+        print(load_err, file=sys.stderr)
+        return 1
+    if not isinstance(payload, dict):
+        print("run 需要 manifest 对象（含 records 数组），不支持裸数组", file=sys.stderr)
+        return 1
+    manifest: dict[str, Any] = payload
+
+    errors = exp.validate_payload(manifest)
+    if errors:
+        for message in errors:
+            print(f"校验失败: {message}", file=sys.stderr)
+        return 1
+
+    plan = llm_exp.build_plan(
+        manifest,
+        case_ids=opts["case_ids"] or None,
+        run_indices=opts["run_indices"] or None,
+        groups=_groups_for(opts["group"]),
+        skip_measured=not opts["force_rerun"],
+        retry_failed=opts["retry_failed"],
+    )
+    summary = llm_exp.plan_summary(plan)
+    print(
+        f"计划执行 {summary['planned_records']} 条记录"
+        f"（without={summary['by_group'][exp.GROUP_WITHOUT]},"
+        f" with={summary['by_group'][exp.GROUP_WITH]}）",
+        file=sys.stderr,
+    )
+    if opts["dry_run"]:
+        print("dry-run：未发起任何模型调用，未写入任何结果。", file=sys.stderr)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
+    if not plan:
+        print("没有需要执行的记录（全部已完成，或筛选条件为空）。", file=sys.stderr)
+        return 0
+
+    try:
+        config = llm_provider.load_config_from_env(
+            override={
+                "max_tokens": opts["max_tokens"],
+                "max_retries": opts["max_retries"],
+                "timeout_s": opts["timeout_seconds"],
+            }
+        )
+    except llm_provider.LLMNotConfiguredError as e:
+        print(f"provider 未配置: {e}", file=sys.stderr)
+        return 1
+
+    provider = llm_provider.LLMProvider(config)
+    output_path = opts.get("output") or manifest_path
+
+    def _save(_record: dict[str, Any], _updated: dict[str, Any]) -> None:
+        llm_exp.write_manifest_atomic(output_path, manifest)
+
+    llm_exp.execute_plan(
+        manifest,
+        plan,
+        provider=provider,
+        provider_model=config.model,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        timeout_s=config.timeout_s,
+        endpoint_host=config.endpoint_host(),
+        context_mode=opts["context_mode"],
+        raw_dir=opts.get("raw_dir"),
+        repo_sha=opts.get("repo_sha"),
+        on_record=_save,
+    )
+    llm_exp.write_manifest_atomic(output_path, manifest)
+
+    executed = [r for r in manifest.get("records", []) if isinstance(r, dict)]
+    ok_count = sum(
+        1 for r in executed if (r.get("execution") or {}).get("status") == "ok"
+    )
+    err_count = sum(
+        1 for r in executed if (r.get("execution") or {}).get("error_class")
+    )
+    print(
+        f"完成：{ok_count} 条成功，{err_count} 条失败；写入 {output_path}",
+        file=sys.stderr,
+    )
+    print("注意：metrics 仍全部未测量，本次只采集响应，不是实验结论。", file=sys.stderr)
+    return 0 if err_count == 0 else 1
 
 
 _USAGE = """用法:
@@ -224,7 +410,27 @@ _USAGE = """用法:
   python -m benchmark.runner init [--output F] [--force]  # 生成成对实验清单模板
   python -m benchmark.runner validate <file>              # 校验实验记录
   python -m benchmark.runner summarize <file>             # 离线汇总实验记录
-  python -m benchmark.runner                              # 显示本帮助
+  python -m benchmark.runner run <manifest> [选项]         # 执行真实 LLM 成对调用
+                                                          #   --dry-run 只列计划
+
+run 选项:
+  --case-id ID        只跑指定 case（可重复；缺省全部）
+  --run-index N       只跑指定 run_index（可重复；缺省全部）
+  --group G           both | without | with（缺省 all）
+  --experiment-id ID  只跑指定 experiment_id（缺省全部）
+  --output F          输出 manifest（缺省原地更新）
+  --raw-dir D         原始响应输出目录（缺省不保存原文）
+  --repo-sha SHA      覆盖 records 的 repo_sha 并回填顶层
+  --max-tokens N      缺省 1024      --timeout-seconds S  缺省 60
+  --max-retries N     缺省 0（不做自动重试）
+  --context-mode M    fixture_replay（缺省）| none
+  --force-rerun       重跑已测槽位（缺省跳过）
+  --retry-failed      重跑上次报错的槽位（缺省跳过）
+  --dry-run           只打印计划，不联网、不写盘
+
+provider 配置（环境变量，缺一不可；不经 .env）:
+  BENCHMARK_LLM_BASE_URL / BENCHMARK_LLM_API_KEY / BENCHMARK_LLM_MODEL
+  BENCHMARK_LLM_TIMEOUT（秒，缺省 60）/ BENCHMARK_LLM_TEMPERATURE（缺省 0）
 """
 
 
@@ -255,6 +461,8 @@ def main(argv: list[str] | None = None) -> int:
             print(_USAGE)
             return 1
         return cmd_summarize(argv[1])
+    if cmd == "run":
+        return cmd_run(argv[1:])
     print(f"未知命令: {cmd}", file=sys.stderr)
     print(_USAGE)
     return 1
