@@ -5,7 +5,9 @@
 `BENCHMARK_LLM_*`，在调用时读取）。
 
 安全：API Key 只出现在请求头构造的瞬间，绝不进入日志、manifest、异常文本或
-落盘内容；所有对外文本一律先经 `redact()`。
+落盘内容；所有对外文本一律先经 `redact()`。`redact()` / `redact_metadata()`
+接受可选 `secrets`（真实已知凭据字面量），按字面量替换后再走通用正则——因为
+正则只能覆盖有限形态，而 provider 已从 Authorization 头看到真实 key。
 """
 
 from __future__ import annotations
@@ -13,12 +15,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import socket
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from benchmark.hashing import text_hash
 
@@ -62,11 +65,37 @@ _SECRET_PATTERNS: tuple[tuple[str, str], ...] = (
 )
 
 
-def redact(text: Any) -> str:
-    """脱敏任意文本：去除 Authorization / API Key / token 等敏感片段。"""
-    import re
+def normalize_secrets(secrets: Iterable[str] | None) -> tuple[str, ...]:
+    """把已知凭据规整为「非空、去重、按长度降序」的元组。
 
+    - 只忽略**空/纯空白** secret（空串会匹配任意位置，逐字符替换整段文本）。
+    - **不按长度忽略**：任何非空 API Key 都必须脱敏——安全优先于文本保真，
+      短 key 会造成较多文本替换，但绝不允许其明文落盘。
+    - 按长度降序：单次替换的 alternation 是**最左优先**，必须先试最长的，
+      否则短 secret 会先命中长 secret 的前缀，留下残片。
+    """
+    if not secrets:
+        return ()
+    uniq = {s for s in secrets if isinstance(s, str) and s.strip()}
+    return tuple(sorted(uniq, key=len, reverse=True))
+
+
+def _literal_pass(text: str, secrets: tuple[str, ...]) -> str:
+    """单次、转义后的字面量替换（不重扫替换结果，故无二次污染/循环）。"""
+    if not secrets or not text:
+        return text
+    pattern = "|".join(re.escape(s) for s in secrets)
+    return re.sub(pattern, "<redacted-secret>", text)
+
+
+def redact(text: Any, *, secrets: Iterable[str] | None = None) -> str:
+    """脱敏任意文本。
+
+    顺序：**先**已知凭据字面量替换（覆盖任意格式的真实 key），**再**跑通用
+    正则 `_SECRET_PATTERNS` 作为补充防线。单次 `re.sub` 避免顺序替换互相污染。
+    """
     out = text if isinstance(text, str) else str(text)
+    out = _literal_pass(out, normalize_secrets(secrets))
     for pattern, replacement in _SECRET_PATTERNS:
         out = re.sub(pattern, replacement, out)
     return out
@@ -75,25 +104,25 @@ def redact(text: Any) -> str:
 _SAFE_PLACEHOLDER = "<unavailable>"
 
 
-def _safe_redact_text(value: Any) -> str:
+def _safe_redact_text(value: Any, secrets: tuple[str, ...] = ()) -> str:
     """把任意值转成「已脱敏」字符串；字符串化抛异常时返回固定安全占位符。
 
     绝不再调用可能再次泄漏数据的 `repr()`；绝不让原异常对象逃逸。
     """
     try:
-        return redact(value)[:_MAX_METADATA_TEXT]
+        return redact(value, secrets=secrets)[:_MAX_METADATA_TEXT]
     except Exception:  # noqa: BLE001 - 字符串化/脱敏自身失败
         return _SAFE_PLACEHOLDER
 
 
-def _safe_redact_key(key: Any) -> str:
+def _safe_redact_key(key: Any, secrets: tuple[str, ...] = ()) -> str:
     """脱敏 dict key；标量 key 保持原值文本，其余走安全脱敏。"""
     if key is None or isinstance(key, (bool, int, float)):
         return str(key)
-    return _safe_redact_text(key)
+    return _safe_redact_text(key, secrets)
 
 
-def redact_metadata(value: Any) -> Any:
+def redact_metadata(value: Any, *, secrets: Iterable[str] | None = None) -> Any:
     """递归脱敏 provider 返回的元数据（usage / finish_reason / request_id 等）。
 
     这些字段由**远端**提供，可能被构造来回显凭据；落盘前必须先脱敏并限长，
@@ -105,23 +134,25 @@ def redact_metadata(value: Any) -> Any:
     - 多个敏感 key 脱敏后同名时**追加数字后缀**（`<redacted-key>`、
       `<redacted-key-2>`），绝不静默覆盖丢失。
     - key/value 字符串化抛异常时返回固定占位符，绝不向外抛携密异常。
+    - `secrets` 为已知真实凭据（如 `api_key`），按字面量脱敏后再走正则。
     """
+    known = normalize_secrets(secrets)
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for raw_key, raw_val in value.items():
-            key = _safe_redact_key(raw_key)
+            key = _safe_redact_key(raw_key, known)
             if key in out:
                 base, n = key, 2
                 while key in out:
                     key = f"{base}-{n}"
                     n += 1
-            out[key] = redact_metadata(raw_val)
+            out[key] = redact_metadata(raw_val, secrets=known)
         return out
     if isinstance(value, list):
-        return [redact_metadata(v) for v in value]
+        return [redact_metadata(v, secrets=known) for v in value]
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return _safe_redact_text(value)
+    return _safe_redact_text(value, known)
 
 
 @dataclass(slots=True)
@@ -331,6 +362,7 @@ class LLMProvider:
         return last if last is not None else LLMResult(ok=False, error_class=ERROR_CONNECTION)
 
     def _call_once(self, messages: list[dict[str, str]], attempt: int) -> LLMResult:
+        secrets = normalize_secrets((self.config.api_key,))
         body = json.dumps(
             {
                 "model": self.config.model,
@@ -365,14 +397,14 @@ class LLMProvider:
             return LLMResult(
                 ok=False,
                 error_class=ERROR_CONNECTION,
-                error_message=redact(f"connection error: {e.reason!r}"),
+                error_message=redact(f"connection error: {e.reason!r}", secrets=secrets),
                 latency_ms=self._elapsed_ms(started),
             )
         except OSError as e:
             return LLMResult(
                 ok=False,
                 error_class=ERROR_CONNECTION,
-                error_message=redact(f"network error: {e}"),
+                error_message=redact(f"network error: {e}", secrets=secrets),
                 latency_ms=self._elapsed_ms(started),
             )
         except Exception as e:  # noqa: BLE001 - 兜底：任何异常都必须脱敏后落账，
@@ -380,14 +412,16 @@ class LLMProvider:
             return LLMResult(
                 ok=False,
                 error_class=ERROR_CONNECTION,
-                error_message=redact(f"{type(e).__name__}: {e}"),
+                error_message=redact(f"{type(e).__name__}: {e}", secrets=secrets),
                 latency_ms=self._elapsed_ms(started),
             )
 
         latency_ms = self._elapsed_ms(started)
         # 远端可控元数据先脱敏再进入 LLMResult，杜绝凭据回显落盘。
         request_id = (
-            redact_metadata(resp_headers.get("x-request-id")) if resp_headers else None
+            redact_metadata(resp_headers.get("x-request-id"), secrets=secrets)
+            if resp_headers
+            else None
         )
         retry_after = self._retry_after(resp_headers)
 
@@ -395,7 +429,7 @@ class LLMProvider:
             return LLMResult(
                 ok=False,
                 error_class=classify_http_error(status),
-                error_message=redact(text)[:_MAX_ERROR_TEXT],
+                error_message=redact(text, secrets=secrets)[:_MAX_ERROR_TEXT],
                 http_status=status,
                 latency_ms=latency_ms,
                 retry_after_s=retry_after,
@@ -417,8 +451,12 @@ class LLMProvider:
             )
 
         content, usage, finish_reason = _extract_text(payload)
-        usage = redact_metadata(usage)
-        finish_reason = redact_metadata(finish_reason)
+        # 模型输出同样是远端可控文本，可能被诱导回显凭据（并会写入 raw-dir）。
+        # 先留一份原文用于 response_sha256（单向摘要，不泄漏明文），再脱敏正文。
+        raw_content = content
+        content = redact(content, secrets=secrets) if content is not None else None
+        usage = redact_metadata(usage, secrets=secrets)
+        finish_reason = redact_metadata(finish_reason, secrets=secrets)
         if not content or not content.strip():
             return LLMResult(
                 ok=False,
@@ -437,7 +475,7 @@ class LLMProvider:
             text=content,
             http_status=status,
             latency_ms=latency_ms,
-            response_sha256=text_hash(content),
+            response_sha256=text_hash(raw_content) if raw_content is not None else None,
             body_sha256=text_hash(text),
             usage=usage,
             finish_reason=finish_reason,
@@ -487,4 +525,5 @@ __all__ = [
     "classify_http_error",
     "redact",
     "redact_metadata",
+    "normalize_secrets",
 ]

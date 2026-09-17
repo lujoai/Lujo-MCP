@@ -1553,3 +1553,304 @@ class TestNonFiniteTemperature:
         monkeypatch.setenv(lp.ENV_TEMPERATURE, "inf")
         assert runner.main(["run", str(path)]) != 0
         assert path.read_text(encoding="utf-8") == "KEEP-ME-EXACTLY"
+
+
+# ── M2-B2.4：已知凭据字面量脱敏（不依赖 sk- 前缀）──
+#
+# 现有脱敏依赖有限正则（sk-/pk-/rk-、Bearer、key=）。真实 API Key 可以是 Azure hex、
+# Google AIza…、Groq gsk_…、本地不透明 token 等任意格式；provider 已从 Authorization
+# 头看到该 key，可原样回显到 usage / request_id / finish_reason / content / 错误正文
+# 并落盘。程序已知 self.config.api_key，必须按字面量脱敏。
+#
+# 下列常量均为**测试假值**，不含真实凭据。
+
+_OPAQUE_KEY = "opaque-local-token-12345"
+_AIZA_KEY = "AIzaExampleCredential987654"
+_GSK_KEY = "gsk_example_credential_abcdef"
+_HEX_KEY = "0f8e2c1a4b6d9e7f0a1b2c3d4e5f6071"
+_NON_SK_KEYS = (_OPAQUE_KEY, _AIZA_KEY, _GSK_KEY, _HEX_KEY)
+
+
+def _provider_for_key(api_key: str, transport) -> lp.LLMProvider:
+    return lp.LLMProvider(
+        lp.LLMConfig(base_url="https://api.example.com/v1", api_key=api_key, model="m"),
+        transport=transport,
+    )
+
+
+def _choices_body(content: str, finish_reason: str = "stop", usage=None) -> str:
+    payload: dict = {
+        "choices": [{"message": {"content": content}, "finish_reason": finish_reason}]
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return json.dumps(payload)
+
+
+class TestKnownCredentialRedaction:
+    """只要文本中出现实际配置的 api_key 字面量，无论格式，都必须被脱敏。"""
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_echoed_in_usage_value(self, key):
+        body = _choices_body("ok", usage={"note": key, "prompt_tokens": 1})
+        result = _provider_for_key(key, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert key not in json.dumps(result.usage, ensure_ascii=False)
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_echoed_in_usage_key(self, key):
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body("ok", usage={key: 1}))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in json.dumps(result.usage, ensure_ascii=False)
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_in_nested_usage(self, key):
+        usage = {"outer": {key: {"note": key}}, "list": [key]}
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body("ok", usage=usage))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in json.dumps(result.usage, ensure_ascii=False)
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_in_request_id(self, key):
+        result = _provider_for_key(
+            key, _transport_returning(200, _ok_body(), {"x-request-id": key})[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.request_id or "")
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_in_finish_reason(self, key):
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body("ok", finish_reason=key))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.finish_reason or "")
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_in_response_content(self, key):
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body(f"the key is {key}"))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.text or "")
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_in_http_error_body(self, key):
+        result = _provider_for_key(
+            key,
+            _transport_returning(401, json.dumps({"error": f"Incorrect API key: {key}"}))[0],
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.error_message or "")
+        assert result.error_class == lp.ERROR_HTTP_4XX
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_opaque_key_in_transport_exception(self, key):
+        def _raising(url, headers, body, timeout_s):
+            raise OSError(f"connection failed for credential {key}")
+
+        result = _provider_for_key(key, _raising).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.error_message or "")
+
+    def test_opaque_key_as_substring_of_longer_text(self):
+        key = _OPAQUE_KEY
+        body = _choices_body(f"prefix-{key}-suffix", usage={f"id-{key}-end": 1})
+        result = _provider_for_key(key, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert key not in (result.text or "")
+        assert key not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_repeated_occurrence_all_replaced(self):
+        key = _OPAQUE_KEY
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body(f"{key} {key} {key}"))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.text or "")
+
+    def test_unicode_text_around_key(self):
+        key = _OPAQUE_KEY
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body(f"中文前缀 {key} 中文后缀"))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.text or "")
+
+    def test_key_with_regex_special_chars(self):
+        key = r"a.b[c](d)\ef$g^h"
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body(f"x {key} y"))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.text or "")
+
+    def test_empty_api_key_does_not_corrupt_text(self):
+        """空 api_key 不得导致文本被逐字符替换。"""
+        result = _provider_for_key(
+            "", _transport_returning(200, _choices_body("normal output"))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert result.text == "normal output"
+
+    def test_whitespace_api_key_does_not_corrupt_text(self):
+        result = _provider_for_key(
+            "   ", _transport_returning(200, _choices_body("hello world"))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert result.text == "hello world"
+
+    def test_benign_content_and_metadata_unchanged(self):
+        body = _choices_body(
+            "an ordinary model answer", usage={"prompt_tokens": 3, "total_tokens": 9}
+        )
+        result = _provider_for_key(_OPAQUE_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.text == "an ordinary model answer"
+        assert result.usage == {"prompt_tokens": 3, "total_tokens": 9}
+
+    def test_sk_regex_redaction_still_works(self):
+        """已知凭据字面量脱敏不得破坏既有正则防线。"""
+        leaked = "Incorrect API key provided: sk-leaked-abcdef123456"
+        result = _provider_for_key(_OPAQUE_KEY, _transport_returning(401, leaked)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert "sk-leaked-abcdef123456" not in (result.error_message or "")
+
+    def test_literal_redaction_helper_direct(self):
+        """redact 接受 secrets 参数，未知文本中的已知凭据被子串替换。"""
+        text = f"prefix {_OPAQUE_KEY} suffix"
+        out = lp.redact(text, secrets=[_OPAQUE_KEY])
+        assert _OPAQUE_KEY not in out
+        assert out.startswith("prefix") and out.endswith("suffix")
+
+    def test_longest_secret_wins_over_substring(self):
+        """短 secret 与长 secret 重叠时，长 secret 必须被完整替换（单次最长优先）。"""
+        short, long = "opaque", "opaque-local-token-12345"
+        out = lp.redact(f"leak {long} end", secrets=[short, long])
+        assert long not in out
+        assert "<redacted" in out
+
+    def test_two_secrets_both_redacted_one_pass(self):
+        out = lp.redact(f"{_OPAQUE_KEY} and {_GSK_KEY}", secrets=[_OPAQUE_KEY, _GSK_KEY])
+        assert _OPAQUE_KEY not in out and _GSK_KEY not in out
+
+    def test_empty_secret_in_list_ignored(self):
+        out = lp.redact("plain text", secrets=["", "   "])
+        assert out == "plain text"
+
+    def test_short_secret_still_redacted(self):
+        """短 key 也必须脱敏（安全优先于文本保真，绝不放过明文 API Key）。"""
+        for key in ("a", "ab", "abc"):
+            out = lp.redact(f"x {key} y", secrets=[key])
+            assert key not in out.split("<redacted-secret>")[0][1:], (
+                f"短 key {key!r} 未脱敏：{out!r}"
+            )
+            assert "<redacted-secret>" in out
+
+    def test_short_secret_never_leaks_in_provider_path(self):
+        """1 字符 API Key 经 provider 回显时不得明文落盘。"""
+        key = "z"
+        result = _provider_for_key(
+            key, _transport_returning(200, _choices_body(f"key is {key}"))[0]
+        ).call([{"role": "user", "content": "hi"}])
+        assert key not in (result.text or "")
+
+    @pytest.mark.parametrize(
+        "key", [r"a.b", r"a[b]c", r"a(b)c", r"a\b", r"a$b", r"a^b", r"a|b", r"a*b+c?"]
+    )
+    def test_regex_special_char_secret_redacted(self, key):
+        """正则特殊字符必须被 re.escape 正确处理，不得因未转义而漏脱敏。"""
+        out = lp.redact(f"pre {key} post", secrets=[key])
+        assert key not in out
+
+    def test_secret_shorter_than_placeholder_ok(self):
+        """secret 与占位符文本重叠时不得循环或破坏结构。"""
+        out = lp.redact("a <redacted> b", secrets=["<redacted>"])
+        assert "<redacted>" not in out
+
+
+class TestKnownCredentialPersistence:
+    """已知凭据不得落盘到 Manifest 或 raw-dir。"""
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_manifest_text_has_no_key(self, tmp_path, monkeypatch, key):
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, key)
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        body = _choices_body(f"key={key}", finish_reason=key, usage={key: 1, "note": key})
+        monkeypatch.setattr(
+            lp, "_urllib_transport", _transport_returning(200, body, {"x-request-id": key})[0]
+        )
+        assert runner.main(["run", str(path)]) == 0
+        assert key not in path.read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("key", _NON_SK_KEYS)
+    def test_raw_dir_has_no_key(self, tmp_path, monkeypatch, key):
+        path = tmp_path / "m.json"
+        raw_dir = tmp_path / "raw"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, key)
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setattr(
+            lp, "_urllib_transport", _transport_returning(200, _choices_body(f"leaked {key}"))[0]
+        )
+        assert runner.main(["run", str(path), "--raw-dir", str(raw_dir)]) == 0
+        for f in raw_dir.iterdir():
+            assert key not in f.read_text(encoding="utf-8")
+
+    def test_stderr_has_no_key_on_run(self, tmp_path, monkeypatch, capsys):
+        """CLI 正常运行（含失败响应）不得把已知凭据写进 stderr。"""
+        key = _OPAQUE_KEY
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, key)
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setattr(
+            lp,
+            "_urllib_transport",
+            _transport_returning(401, json.dumps({"error": f"bad key {key}"}))[0],
+        )
+        runner.main(["run", str(path)])
+        assert key not in capsys.readouterr().err
+
+    def test_metadata_key_collision_still_preserved(self):
+        """既有的 key 碰撞保护必须继续生效（不因新增字面量脱敏而丢项）。"""
+        out = lp.redact_metadata(
+            {"sk-aaaa111111": 1, "sk-bbbb222222": 2}, secrets=[]
+        )
+        assert len(out) == 2
+
+    def test_malicious_str_still_safe(self):
+        """恶意 __str__ 仍不得逃逸。"""
+        class Evil:
+            def __str__(self):
+                raise RuntimeError(f"boom {_OPAQUE_KEY}")
+
+            __repr__ = __str__
+
+        out = lp.redact_metadata({"k": Evil()}, secrets=[_OPAQUE_KEY])
+        assert _OPAQUE_KEY not in json.dumps(out, default=str)
+
+    def test_metrics_still_none(self):
+        key = _OPAQUE_KEY
+        manifest = _manifest_for(["api_500_none_attribute"])
+        plan = lx.build_plan(manifest, skip_measured=False)
+        result = lx.execute_plan(
+            manifest,
+            plan,
+            provider=_provider_for_key(key, _transport_returning(200, _choices_body("ok"))[0]),
+            provider_model="test-model",
+            temperature=0.0,
+            max_tokens=128,
+            timeout_s=5.0,
+            endpoint_host="https://api.example.com/v1",
+        )
+        assert all(
+            v is None for r in result["records"] for v in r["metrics"].values()
+        )
