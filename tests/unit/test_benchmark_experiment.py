@@ -934,3 +934,63 @@ class TestQualityCLI:
         self._install_fake_scorer(monkeypatch, False, (0.0, 0.0, 0.0))
         assert runner.main(["quality"]) == 0
         assert "未启用" in capsys.readouterr().out
+
+# ── M2-B2.3：写盘前纵深校验（保护最后一个有效文件） ──
+
+
+class TestValidatedWrite:
+    """任何 Manifest 写盘前都必须通过 validate_payload，且不得覆盖最后一个有效文件。"""
+
+    def test_write_validated_refuses_invalid_payload(self, tmp_path):
+        from benchmark import llm_experiment as lx
+
+        path = tmp_path / "m.json"
+        path.write_text("LAST-GOOD", encoding="utf-8")
+        bad = exp.build_manifest(BENCHMARK_CASES[:1], repo_sha="0" * 40)
+        bad["records"][0]["temperature"] = float("inf")  # 非法
+        with pytest.raises(ValueError):
+            lx.write_manifest_validated(str(path), bad)
+        assert path.read_text(encoding="utf-8") == "LAST-GOOD"
+
+    def test_write_validated_writes_when_valid(self, tmp_path):
+        from benchmark import llm_experiment as lx
+
+        path = tmp_path / "m.json"
+        good = exp.build_manifest(BENCHMARK_CASES[:1], repo_sha="0" * 40, model="m")
+        lx.write_manifest_validated(str(path), good)
+        assert exp.validate_payload(json.loads(path.read_text(encoding="utf-8"))) == []
+
+    def test_run_does_not_persist_invalid_manifest_on_failure(self, tmp_path, monkeypatch):
+        """若保存点校验失败，磁盘上最后一个有效文件必须保持逐字不变。"""
+        from benchmark import llm_experiment as lx
+        from benchmark import llm_provider as lp
+
+        path = tmp_path / "m.json"
+        manifest = exp.build_manifest(BENCHMARK_CASES[:1], repo_sha="0" * 40, model="test-model")
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        before = path.read_text(encoding="utf-8")
+
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setattr(
+            lp, "_urllib_transport",
+            lambda *a: (
+                200,
+                json.dumps({"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}),
+                {},
+            ),
+        )
+
+        # 注入缺陷：让构造出的 record 携带非法 provenance，模拟上游产出坏数据
+        real_build = lx.build_record_updates
+
+        def _corrupting(*args, **kwargs):
+            updated = real_build(*args, **kwargs)
+            updated["input_hash"] = "a" * 64
+            return updated
+
+        monkeypatch.setattr(lx, "build_record_updates", _corrupting)
+        rc = runner.main(["run", str(path)])
+        assert rc != 0
+        assert path.read_text(encoding="utf-8") == before

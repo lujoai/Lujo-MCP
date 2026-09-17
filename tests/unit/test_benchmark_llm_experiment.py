@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import http.server
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -929,37 +930,58 @@ class TestIsolation:
         assert "[]" in proc.stdout
 
     def test_no_network_calls_without_injected_transport(self, monkeypatch):
-        """未注入 transport 时，测试中也不得真的发起网络请求。"""
+        """未注入 transport 时，测试中也不得真的发起网络请求。
+
+        生产 `_urllib_transport` 走 `_NO_REDIRECT_OPENER.open`（不是
+        `urllib.request.urlopen`），故必须 patch 真实调用路径。
+        """
         def _boom(*_args, **_kwargs):
             raise AssertionError("network call attempted in unit test")
 
-        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        monkeypatch.setattr(lp._NO_REDIRECT_OPENER, "open", _boom)
         transport, calls = _transport_returning(200, _ok_body())
         _run_manifest(_manifest_for(["api_500_none_attribute"]), transport)
         assert len(calls) == 2
+
+    def test_real_transport_is_blocked_by_isolation_guard(self, monkeypatch):
+        """守卫有效性自证：直接调用真实 transport 必须被拦截。"""
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("network call attempted in unit test")
+
+        monkeypatch.setattr(lp._NO_REDIRECT_OPENER, "open", _boom)
+        with pytest.raises(AssertionError):
+            lp._urllib_transport("http://127.0.0.1:1/x", {}, b"{}", 1.0)
 
 
 # ── 重定向安全：Authorization 不得跨 origin 转发 ──
 
 
 @contextlib.contextmanager
-def _loopback_redirect_server(redirect_code: int):
-    """本地回环 server：/redirect 回 3xx 指向 /target，记录 /target 收到的头。
+def _loopback_redirect_server(redirect_code: int, *, same_origin: bool = False):
+    """本地回环 server：/redirect 回 3xx 指向 /target，记录 /target 收到的请求。
 
-    不访问公网：仅绑定 127.0.0.1 随机端口。
+    记录 **(method, path, Authorization)**，并同时实现 GET 与 POST——301/302/303
+    会把 POST 降级为 GET，若 target 只实现 do_POST，跟随后的 GET 会得到 501 且
+    不被记录，令 `received == []` 假阳性通过。两种方法都必须记录才能真实检测跟随。
+
+    `same_origin=True` 时重定向到同一 host 的 /target（同 origin）；
+    否则使用第二个回环端口（跨 origin）。均只绑定 127.0.0.1，不访问公网。
     """
-    received: list[dict[str, str]] = []
+    received: list[tuple[str, str, str | None]] = []
 
     class _Handler(http.server.BaseHTTPRequestHandler):
+        def _record(self) -> None:
+            received.append((self.command, self.path, self.headers.get("Authorization")))
+
         def _read_body(self) -> None:
             length = int(self.headers.get("Content-Length", 0) or 0)
             if length:
                 self.rfile.read(length)
 
-        def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler 接口
+        def _handle(self) -> None:
             self._read_body()
             if self.path.startswith("/target"):
-                received.append(dict(self.headers))
+                self._record()
                 body = _ok_body()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -968,59 +990,81 @@ def _loopback_redirect_server(redirect_code: int):
                 self.wfile.write(body.encode("utf-8"))
                 return
             self.send_response(redirect_code)
-            self.send_header("Location", f"{self.server.target_url}")
+            self.send_header("Location", self.server.target_url)  # type: ignore[attr-defined]
             self.end_headers()
+
+        do_GET = _handle  # noqa: N815 - BaseHTTPRequestHandler 接口
+        do_POST = _handle  # noqa: N815
+        do_PUT = _handle  # noqa: N815
+        do_HEAD = _handle  # noqa: N815
 
         def log_message(self, *args):  # noqa: D401 - 静音
             pass
 
-    # 先用一个临时 server 拿到端口，再设置 target_url（自引用）
     server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     port = server.server_address[1]
-    server.target_url = f"http://127.0.0.1:{port}/target"  # type: ignore[attr-defined]
+    if same_origin:
+        server.target_url = f"http://127.0.0.1:{port}/target"  # type: ignore[attr-defined]
+    else:
+        # 第二个回环端口 = 不同 origin
+        other = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        other.target_url = f"http://127.0.0.1:{other.server_address[1]}/target"  # type: ignore[attr-defined]
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        server.target_url = other.target_url  # type: ignore[attr-defined]
+        server._other = other  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{port}/redirect", received
     finally:
+        other = getattr(server, "_other", None)
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+        if other is not None:
+            other.shutdown()
+            other.server_close()
 
 
 class TestRedirectSafety:
     """默认 transport 必须拒绝重定向，绝不把 Authorization 转发到别处。"""
 
     @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
-    def test_authorization_never_sent_to_redirect_target(self, code):
-        """默认 transport 遇 3xx 必须拒绝跟随：目标 origin 从未收到 Authorization。"""
+    @pytest.mark.parametrize("same_origin", [True, False])
+    def test_authorization_never_sent_to_redirect_target(self, code, same_origin):
+        """默认 transport 遇 3xx 必须拒绝跟随：目标从未收到任何请求。
+
+        覆盖同 origin 与跨 origin；target 同时记录 GET/POST，故 301/302/303
+        降级为 GET 时也能被真实捕获。
+        """
         secret = "sk-LEAKME-abcdef123456"
-        with _loopback_redirect_server(code) as (url, received):
+        with _loopback_redirect_server(code, same_origin=same_origin) as (url, received):
             status, _body, _headers = lp._urllib_transport(
                 url, {"Authorization": f"Bearer {secret}"}, b"{}", 5.0
             )
             assert status == code
-            # 关键断言：重定向目标从未收到任何请求（更未收到 Authorization）
             assert received == [], f"{code} 重定向被跟随，目标收到了 {received}"
+            assert all(auth is None for _m, _p, auth in received)
 
     @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
-    def test_transport_classifies_redirect_as_failure(self, monkeypatch, code):
-        """默认 transport 遇到 3xx 必须落账为明确失败，且不跟随。"""
+    def test_transport_classifies_redirect_as_failure(self, code):
+        """默认 transport 遇到 3xx 必须落账为明确失败，且不跟随、不重试。"""
         secret = "sk-LEAKME-abcdef123456"
         called_urls: list[str] = []
 
         def _spy_transport(url, headers, body, timeout_s):
             called_urls.append(url)
-            # 真实默认 transport 的等价行为：拒绝重定向，返回 (status, body, headers)
             return lp._urllib_transport(url, headers, body, timeout_s)
 
         with _loopback_redirect_server(code) as (url, received):
-            config = _config(base_url=url.rsplit("/", 1)[0], api_key=secret, max_retries=0)
+            # max_retries>0：重定向也必须只调用一次（绝不重试）
+            config = _config(base_url=url.rsplit("/", 1)[0], api_key=secret, max_retries=3)
             provider = lp.LLMProvider(config, transport=_spy_transport)
             result = provider.call([{"role": "user", "content": "hi"}])
             assert result.ok is False
             assert result.error_class == lp.ERROR_REDIRECT
             assert result.text is None
+            assert result.attempts == 1
             assert received == []
         assert len(called_urls) == 1
         assert secret not in (result.error_message or "")
@@ -1031,6 +1075,24 @@ class TestRedirectSafety:
             status, body, headers = lp._urllib_transport(url, {}, b"{}", 5.0)
             assert status == 302
             assert received == []
+
+    def test_followed_redirect_would_be_caught_by_helper(self):
+        """守卫自证：用**跟随重定向**的 opener 打同一 helper，必须被记录到。
+
+        证明 helper 不是空转（301/302/303 降级为 GET 也会被记录）。
+        """
+        for code in (301, 302, 303):
+            with _loopback_redirect_server(code, same_origin=False) as (url, received):
+                follower = urllib.request.build_opener()  # 默认跟随
+                req = urllib.request.Request(
+                    url, data=b"{}", headers={"Authorization": "Bearer sk-X"}, method="POST"
+                )
+                try:
+                    follower.open(req, timeout=5).read()
+                except Exception:
+                    pass
+                assert received, f"{code}: helper 未能记录到跟随后的请求（假阳性守卫失效）"
+                assert any(auth == "Bearer sk-X" for _m, _p, auth in received)
 
 
 # ── provider 元数据不得回显凭据 ──
@@ -1311,3 +1373,183 @@ class TestExperimentIdFilter:
         assert rc == 0
         assert calls == []
         assert "没有" in capsys.readouterr().err
+
+
+# ── M2-B2.3：metadata 字典 key 也必须脱敏 ──
+
+
+def _body_with_usage(usage: object, finish_reason: str = "stop") -> str:
+    return json.dumps(
+        {
+            "choices": [{"message": {"content": "ok"}, "finish_reason": finish_reason}],
+            "usage": usage,
+        }
+    )
+
+
+class TestMetadataKeyRedaction:
+    """远端可控 metadata 的 key 与 value 都必须脱敏，且键不得静默丢失。"""
+
+    def test_secret_as_usage_key_is_redacted(self):
+        """secret 作为 usage 的 **key** 时不得落盘（原缺陷：只脱敏 value）。"""
+        secret = "sk-KEY-LEAK-abcdef123456"
+        transport, _ = _transport_returning(200, _body_with_usage({secret: 1}))
+        manifest = _run_manifest(_manifest_for(["api_500_none_attribute"]), transport)
+        blob = json.dumps(manifest, ensure_ascii=False)
+        assert secret not in blob
+
+    def test_secret_in_nested_key_and_value_both_redacted(self):
+        """顶层 key、多层嵌套 key、value 同时含 secret 时全部脱敏。"""
+        secret = "sk-NESTED-abcdef123456"
+        usage = {
+            secret: 1,
+            "outer": {secret: {"api_key=" + secret: 2}},
+            "list": [{"token=" + secret: 3}, secret],
+        }
+        transport, _ = _transport_returning(200, _body_with_usage(usage))
+        manifest = _run_manifest(_manifest_for(["api_500_none_attribute"]), transport)
+        blob = json.dumps(manifest, ensure_ascii=False)
+        assert secret not in blob
+
+    def test_multiple_sensitive_keys_do_not_collapse(self):
+        """多个敏感 key 脱敏后不得因同名而静默互相覆盖。"""
+        out = lp.redact_metadata({"sk-aaaa111111": 1, "sk-bbbb222222": 2})
+        assert len(out) == 2, f"key 静默丢失：{out}"
+        assert 1 in out.values() and 2 in out.values()
+
+    def test_non_sensitive_keys_are_preserved(self):
+        """非敏感 key 尽量保持原值（不改变既有 metadata 结构）。"""
+        out = lp.redact_metadata({"prompt_tokens": 5, "completion_tokens": 7})
+        assert out == {"prompt_tokens": 5, "completion_tokens": 7}
+
+    def test_throwing_str_on_key_does_not_escape(self):
+        """key 的 __str__ 抛异常时不得向外抛携密异常。"""
+        class Evil:
+            def __str__(self):
+                raise RuntimeError("boom sk-EVILKEY-abcdef123456")
+
+            __repr__ = __str__
+
+        out = lp.redact_metadata({Evil(): 1})  # 不得抛
+        blob = json.dumps(out, ensure_ascii=False)
+        assert "sk-EVILKEY-abcdef123456" not in blob
+
+    def test_throwing_str_on_value_does_not_escape(self):
+        """value 字符串化抛异常时不得向外抛携密异常。"""
+        class Evil:
+            def __str__(self):
+                raise RuntimeError("boom sk-EVILVAL-abcdef123456")
+
+            __repr__ = __str__
+
+        out = lp.redact_metadata({"k": Evil()})
+        blob = json.dumps(out, ensure_ascii=False)
+        assert "sk-EVILVAL-abcdef123456" not in blob
+
+    def test_provider_call_never_raises_on_hostile_metadata(self):
+        """恶意 metadata 不得让 provider.call 抛异常（契约：失败也返回 LLMResult）。
+
+        注入型 transport 可返回字符串化会抛异常的头值——provider 必须降级为
+        安全占位符而非向外抛携密异常。
+        """
+        class Evil:
+            def __str__(self):
+                raise RuntimeError("boom sk-RAISE-abcdef123456")
+
+            __repr__ = __str__
+
+        transport, _ = _transport_returning(200, _ok_body(), {"x-request-id": Evil()})
+        provider = lp.LLMProvider(_config(), transport=transport)
+        result = provider.call([{"role": "user", "content": "hi"}])
+        assert isinstance(result, lp.LLMResult)
+        assert "sk-RAISE-abcdef123456" not in json.dumps(
+            {"r": result.request_id}, ensure_ascii=False, default=str
+        )
+
+    def test_tuple_and_scalar_types_survive(self):
+        """tuple / None / 数字 / bool 经脱敏后仍可 JSON 序列化且不抛。"""
+        out = lp.redact_metadata({"t": (1, 2), "n": None, "i": 3, "f": 1.5, "b": True})
+        json.dumps(out, ensure_ascii=False)  # 不抛即通过
+        assert out["n"] is None and out["i"] == 3 and out["b"] is True
+
+    def test_full_manifest_on_disk_has_no_secret(self, tmp_path, monkeypatch):
+        """写盘后的完整 Manifest 文本不得含原始 secret（含 key 路径）。"""
+        secret = "sk-DISK-LEAK-abcdef123456"
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, secret)
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setattr(
+            lp,
+            "_urllib_transport",
+            _transport_returning(200, _body_with_usage({secret: 1}))[0],
+        )
+        assert runner.main(["run", str(path)]) == 0
+        assert secret not in path.read_text(encoding="utf-8")
+
+
+# ── M2-B2.3：非有限 temperature 必须在任何调用/写盘前拒绝 ──
+
+
+NON_FINITE_TEMPERATURES = ("nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity", "1e999")
+
+
+class TestNonFiniteTemperature:
+    @pytest.mark.parametrize("raw", NON_FINITE_TEMPERATURES)
+    def test_env_temperature_rejected(self, tmp_path, monkeypatch, capsys, raw):
+        """BENCHMARK_LLM_TEMPERATURE 非有限值必须非零退出、不调用、不写盘。"""
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        before = path.read_text(encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setenv(lp.ENV_TEMPERATURE, raw)
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+
+        with pytest.raises(lp.LLMNotConfiguredError):
+            lp.load_config_from_env(env=os.environ)
+
+        rc = runner.main(["run", str(path)])
+        assert rc != 0
+        assert calls == []
+        assert path.read_text(encoding="utf-8") == before
+
+    @pytest.mark.parametrize("raw", NON_FINITE_TEMPERATURES)
+    def test_init_temperature_rejected(self, tmp_path, raw):
+        """init --temperature 非有限值必须非零退出且不写文件。"""
+        path = tmp_path / "plan.json"
+        rc = runner.main(["init", "--output", str(path), "--repo-sha", "0" * 40, "--temperature", raw])
+        assert rc != 0
+        assert not path.exists()
+
+    def test_finite_temperature_still_works(self, tmp_path, monkeypatch):
+        """有限值（含 0.0）必须继续可用并产出可校验 Manifest。"""
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setenv(lp.ENV_TEMPERATURE, "0.0")
+        monkeypatch.setattr(lp, "_urllib_transport", _transport_returning(200, _ok_body())[0])
+        assert runner.main(["run", str(path)]) == 0
+        assert exp.validate_payload(json.loads(path.read_text(encoding="utf-8"))) == []
+
+    def test_non_finite_does_not_overwrite_existing_manifest(self, tmp_path, monkeypatch):
+        """已有 Manifest 在非有限 temperature 下必须逐字不变。"""
+        path = tmp_path / "m.json"
+        path.write_text("KEEP-ME-EXACTLY", encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setenv(lp.ENV_TEMPERATURE, "inf")
+        assert runner.main(["run", str(path)]) != 0
+        assert path.read_text(encoding="utf-8") == "KEEP-ME-EXACTLY"

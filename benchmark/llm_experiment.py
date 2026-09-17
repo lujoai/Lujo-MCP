@@ -15,6 +15,7 @@ metrics 只会在人工/外部评分阶段填写；本模块绝不写非 None �
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -113,6 +114,11 @@ def reconcile_control_variables(
       **绝不静默把历史记录改写成另一个模型或 repo SHA**。
     """
     errors: list[str] = []
+    # 纵深防御：非有限 temperature 会污染顶层与全部 records（写出无法 validate
+    # 的 Manifest），在任何回填/比较之前即拒绝。
+    if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
+        if not math.isfinite(temperature):
+            return [f"provider temperature {temperature!r} is not finite"]
     records = manifest.get("records") or []
     executed = [r for r in records if isinstance(r, dict) and _has_execution(r)]
 
@@ -418,6 +424,21 @@ def write_manifest_atomic(path: str, manifest: dict[str, Any]) -> None:
         raise
 
 
+def write_manifest_validated(path: str, manifest: dict[str, Any]) -> None:
+    """写盘前先 `validate_payload`，非法则抛 `ValueError` 且**不触碰磁盘**。
+
+    纵深防御：任何保存点（最终保存与每次增量保存）都经此函数，保证磁盘上
+    最后一个有效 Manifest 永不被无效内容覆盖。
+    """
+    errors = validate_payload(manifest)
+    if errors:
+        raise ValueError(
+            "refusing to write invalid manifest (existing file left untouched): "
+            + "; ".join(errors[:5])
+        )
+    write_manifest_atomic(path, manifest)
+
+
 def load_manifest(path: str) -> dict[str, Any]:
     """读取 manifest JSON；必须在执行前先通过 validate_payload。"""
     with open(path, encoding="utf-8") as f:
@@ -457,6 +478,7 @@ __all__ = [
     "build_record_updates",
     "execute_plan",
     "write_manifest_atomic",
+    "write_manifest_validated",
     "load_manifest",
     "check_manifest",
     "plan_summary",

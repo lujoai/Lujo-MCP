@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from typing import Any
@@ -142,6 +143,8 @@ def _parse_init_args(argv: list[str]) -> tuple[dict[str, Any] | None, str | None
         opts["temperature"] = float(opts["temperature"])
     except (TypeError, ValueError):
         return None, "temperature must be a number"
+    if not math.isfinite(opts["temperature"]):
+        return None, "temperature must be a finite number"
     try:
         opts["run_count"] = int(opts["run_count"])
     except (TypeError, ValueError):
@@ -412,23 +415,27 @@ def cmd_run(argv: list[str]) -> int:
     output_path = opts.get("output") or manifest_path
 
     def _save(_record: dict[str, Any], _updated: dict[str, Any]) -> None:
-        llm_exp.write_manifest_atomic(output_path, manifest)
+        llm_exp.write_manifest_validated(output_path, manifest)
 
-    llm_exp.execute_plan(
-        manifest,
-        plan,
-        provider=provider,
-        provider_model=config.model,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
-        timeout_s=config.timeout_s,
-        endpoint_host=config.endpoint_host(),
-        context_mode=opts["context_mode"],
-        raw_dir=opts.get("raw_dir"),
-        repo_sha=opts.get("repo_sha"),
-        on_record=_save,
-    )
-    llm_exp.write_manifest_atomic(output_path, manifest)
+    try:
+        llm_exp.execute_plan(
+            manifest,
+            plan,
+            provider=provider,
+            provider_model=config.model,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            timeout_s=config.timeout_s,
+            endpoint_host=config.endpoint_host(),
+            context_mode=opts["context_mode"],
+            raw_dir=opts.get("raw_dir"),
+            repo_sha=opts.get("repo_sha"),
+            on_record=_save,
+        )
+        llm_exp.write_manifest_validated(output_path, manifest)
+    except ValueError as e:
+        print(f"写盘被拒绝（保留既有 Manifest）: {e}", file=sys.stderr)
+        return 1
 
     # 统计只针对**本次 plan 实际执行的槽位**，不混入历史结果；历史失败不得
     # 令本次过滤运行返回非零。

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import time
@@ -71,21 +72,56 @@ def redact(text: Any) -> str:
     return out
 
 
+_SAFE_PLACEHOLDER = "<unavailable>"
+
+
+def _safe_redact_text(value: Any) -> str:
+    """把任意值转成「已脱敏」字符串；字符串化抛异常时返回固定安全占位符。
+
+    绝不再调用可能再次泄漏数据的 `repr()`；绝不让原异常对象逃逸。
+    """
+    try:
+        return redact(value)[:_MAX_METADATA_TEXT]
+    except Exception:  # noqa: BLE001 - 字符串化/脱敏自身失败
+        return _SAFE_PLACEHOLDER
+
+
+def _safe_redact_key(key: Any) -> str:
+    """脱敏 dict key；标量 key 保持原值文本，其余走安全脱敏。"""
+    if key is None or isinstance(key, (bool, int, float)):
+        return str(key)
+    return _safe_redact_text(key)
+
+
 def redact_metadata(value: Any) -> Any:
     """递归脱敏 provider 返回的元数据（usage / finish_reason / request_id 等）。
 
     这些字段由**远端**提供，可能被构造来回显凭据；落盘前必须先脱敏并限长，
-    绝不信任其内容。仅处理 dict / list / str / 标量，保留 JSON 可序列化性。
+    绝不信任其内容。**key 与 value 都必须脱敏**——远端可以把密钥当成 JSON key
+    回显（`{"usage": {"sk-...": 1}}`）。
+
+    - dict / list 递归；tuple 等其它类型退化为已脱敏字符串。
+    - 非敏感 key 经 `redact` 后保持原值文本。
+    - 多个敏感 key 脱敏后同名时**追加数字后缀**（`<redacted-key>`、
+      `<redacted-key-2>`），绝不静默覆盖丢失。
+    - key/value 字符串化抛异常时返回固定占位符，绝不向外抛携密异常。
     """
     if isinstance(value, dict):
-        return {str(k): redact_metadata(v) for k, v in value.items()}
+        out: dict[str, Any] = {}
+        for raw_key, raw_val in value.items():
+            key = _safe_redact_key(raw_key)
+            if key in out:
+                base, n = key, 2
+                while key in out:
+                    key = f"{base}-{n}"
+                    n += 1
+            out[key] = redact_metadata(raw_val)
+        return out
     if isinstance(value, list):
         return [redact_metadata(v) for v in value]
-    if isinstance(value, str):
-        return redact(value)[:_MAX_METADATA_TEXT]
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return redact(value)[:_MAX_METADATA_TEXT]
+    return _safe_redact_text(value)
 
 
 @dataclass(slots=True)
@@ -165,6 +201,12 @@ def load_config_from_env(
         temperature = float(temperature_raw)
     except (TypeError, ValueError) as e:
         raise LLMNotConfiguredError(f"{ENV_TEMPERATURE} must be a number") from e
+    # 非有限值（nan / inf / -inf / 1e999）会写出无法通过 validate 的 Manifest，
+    # 必须在进入 provider 之前拒绝。
+    if not math.isfinite(temperature):
+        raise LLMNotConfiguredError(f"{ENV_TEMPERATURE} must be a finite number")
+    if not math.isfinite(timeout_s):
+        raise LLMNotConfiguredError(f"{ENV_TIMEOUT} must be a finite number")
 
     return LLMConfig(
         base_url=base_url,
