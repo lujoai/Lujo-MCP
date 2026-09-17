@@ -26,6 +26,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from decimal import Decimal
 from dataclasses import fields as _dc_fields
 from pathlib import Path
 
@@ -2160,3 +2161,232 @@ class TestExceptionTextSafety:
         )
         assert result.attempts == 1
         assert result.latency_ms is not None
+
+
+# ── M2-B2.6：封死脱敏崩溃路径 ──
+#
+# 三条崩溃/逃逸路径（6cd67cf 上先红）：
+# 1. sNaN：`Decimal("sNaN")` 可构造但**不可哈希**，`set.add` 抛
+#    `TypeError: Cannot hash a signaling NaN value`，逃出 redact_metadata；
+# 2. __format__ 逃逸：`exception.__str__` 返回 str **子类**时，f-string 触发
+#    其 `__str__`/`__format__`，恶意实现可抛携密异常逃出 provider.call；
+# 3. e.reason 逃逸：恶意 URLError 子类的 `reason` property 可在安全 helper
+#    接管之前抛携密异常。
+#
+# 下列常量均为**测试假值**，不含真实凭据。
+
+_SNON_KEY = "sNaN"
+
+
+class _EvilStr(str):
+    """str 子类：`__str__`/`__format__` 均抛携密异常。"""
+
+    _secret = ""
+
+    def __new__(cls, value: str, secret: str = ""):
+        obj = super().__new__(cls, value)
+        obj._secret = secret
+        return obj
+
+    def __str__(self):
+        raise RuntimeError(f"evil str leak {self._secret}")
+
+    def __format__(self, spec):
+        raise RuntimeError(f"evil format leak {self._secret}")
+
+
+class _FormatBombError(Exception):
+    """`__str__` 返回携弹 str 子类：str() 本身不抛，但后续格式化必炸。"""
+
+    def __new__(cls, secret: str):
+        obj = super().__new__(cls, "ignored")
+        obj._secret = secret
+        return obj
+
+    def __str__(self):
+        return _EvilStr("innocent", self._secret)
+
+
+def _make_name_bomb(secret: str) -> type[Exception]:
+    """类型 `__name__` 被注入为携弹 str 子类的异常类。"""
+
+    class _NameBomb(Exception):
+        pass
+
+    _NameBomb.__name__ = _EvilStr("SafeName", secret)
+    return _NameBomb
+
+
+class _HostileReasonPropertyError(urllib.error.URLError):
+    """`reason` 是抛携密异常的 property（必须绕过 URLError.__init__ 的赋值）。"""
+
+    def __init__(self, secret: str):
+        # 故意不调用 URLError.__init__：它会给只读 property 赋值并立刻 AttributeError。
+        self.args = (secret,)
+        self._secret = secret
+
+    @property
+    def reason(self):
+        raise RuntimeError(f"hostile reason property leak {self._secret}")
+
+
+class TestRedactionCrashSealing:
+    """非有限 Decimal 凭据与恶意异常对象都不得让 provider.call / runner.main 崩溃。"""
+
+    # ── BLOCKER 1：sNaN / NaN / Infinity 脱敏崩溃 ──
+
+    @pytest.mark.parametrize("key", [_SNON_KEY, "snan", "SNAN", "-sNaN"])
+    def test_snan_key_call_does_not_crash(self, key):
+        body = _choices_body("ok", usage={"n": 1})
+        result = _provider_for_key(key, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert isinstance(result, lp.LLMResult)
+        assert result.ok is True
+        assert result.usage == {"n": 1}
+
+    def test_non_finite_decimal_secrets_filtered(self):
+        numeric = lp._numeric_secret_values(
+            ("NaN", "sNaN", "snan", "SNAN", "-sNaN", "Infinity", "-Infinity", "123")
+        )
+        assert numeric == {Decimal("123")}
+
+    def test_snan_string_echo_still_redacted(self):
+        """数值路径跳过 sNaN 后，字符串回显仍必须被字面量脱敏。"""
+        key = _SNON_KEY
+        body = _choices_body("ok", usage={"note": f"token {key} kept"})
+        result = _provider_for_key(key, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        rendered = json.dumps(result.usage, ensure_ascii=False)
+        assert key not in rendered
+        assert "<redacted-secret>" in rendered
+
+    def test_nonfinite_secret_does_not_break_numeric_matching(self):
+        """过滤 sNaN 后，同批其它数字凭据的数值匹配不得回归。"""
+        num_key = "9876543210123456789"
+        out = lp.redact_metadata(
+            {"t": int(num_key), "other": 42, "s": f"has {_SNON_KEY} inside"},
+            secrets=[_SNON_KEY, num_key],
+        )
+        rendered = json.dumps(out, ensure_ascii=False)
+        assert num_key not in rendered
+        assert _SNON_KEY not in rendered
+        assert out["t"] == "<redacted-secret>"
+        assert out["other"] == 42
+        assert isinstance(out["other"], int)
+
+    def test_benign_telemetry_types_preserved_with_nonfinite_secret(self):
+        out = lp.redact_metadata(
+            {"i": 5, "f": 0.5, "b": True, "n": None, "neg": -7},
+            secrets=["NaN"],
+        )
+        assert out["i"] == 5
+        assert isinstance(out["i"], int)
+        assert out["f"] == 0.5
+        assert isinstance(out["f"], float)
+        assert out["b"] is True
+        assert out["n"] is None
+        assert out["neg"] == -7
+
+    # ── BLOCKER 2：__format__ / __str__ 逃逸 ──
+
+    def test_safe_exc_text_never_raises_on_format_bomb(self):
+        text = lp._safe_exc_text(_FormatBombError(_OPAQUE_KEY))
+        assert isinstance(text, str)
+        assert _OPAQUE_KEY not in text
+
+    def test_str_subclass_bomb_does_not_escape_call(self):
+        def _raising(url, headers, body, timeout_s):
+            raise _FormatBombError(_OPAQUE_KEY)
+
+        result = _provider_for_key(_OPAQUE_KEY, _raising).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert isinstance(result, lp.LLMResult)
+        assert result.ok is False
+        assert result.error_class == lp.ERROR_CONNECTION
+        assert result.attempts == 1
+        assert result.latency_ms is not None
+        assert _OPAQUE_KEY not in (result.error_message or "")
+
+    def test_type_name_str_subclass_bomb_does_not_escape_call(self):
+        bomb_cls = _make_name_bomb(_OPAQUE_KEY)
+
+        def _raising(url, headers, body, timeout_s):
+            raise bomb_cls("x")
+
+        result = _provider_for_key(_OPAQUE_KEY, _raising).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert isinstance(result, lp.LLMResult)
+        assert result.error_class == lp.ERROR_CONNECTION
+        assert result.attempts == 1
+        assert result.latency_ms is not None
+        assert _OPAQUE_KEY not in (result.error_message or "")
+
+    # ── BLOCKER 3：URLError.reason 属性读取逃逸 ──
+
+    def test_urlerror_reason_property_raise_does_not_escape_call(self):
+        def _raising(url, headers, body, timeout_s):
+            raise _HostileReasonPropertyError(_OPAQUE_KEY)
+
+        result = _provider_for_key(_OPAQUE_KEY, _raising).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert isinstance(result, lp.LLMResult)
+        assert result.ok is False
+        assert result.error_class == lp.ERROR_CONNECTION
+        assert result.attempts == 1
+        assert result.latency_ms is not None
+        assert _OPAQUE_KEY not in (result.error_message or "")
+
+    # ── 端到端：runner.main 零 traceback、零泄漏 ──
+
+    @pytest.mark.parametrize(
+        "exc_factory",
+        [
+            lambda k: _FormatBombError(k),
+            lambda k: _make_name_bomb(k),
+            lambda k: _HostileReasonPropertyError(k),
+        ],
+        ids=["format_bomb", "name_bomb", "hostile_reason_property"],
+    )
+    def test_runner_main_survives_without_traceback(
+        self, tmp_path, monkeypatch, capsys, exc_factory
+    ):
+        key = _OPAQUE_KEY
+        path = tmp_path / "m.json"
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()  # 失败路径不写 raw 文件；预建目录以便断言零泄漏
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, key)
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+
+        def _raising(url, headers, body, timeout_s):
+            raise exc_factory(key)
+
+        monkeypatch.setattr(lp, "_urllib_transport", _raising)
+        rc = runner.main(["run", str(path), "--raw-dir", str(raw_dir)])  # 不得抛异常
+        assert rc == 1  # 记录失败 → 非零退出，且无 traceback
+        captured = capsys.readouterr()
+        assert key not in captured.err
+        assert key not in captured.out
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert key not in json.dumps(saved, ensure_ascii=False)
+        failed = [
+            r for r in saved["records"] if (r.get("execution") or {}).get("error_class")
+        ]
+        assert failed, "失败记录必须落账"
+        for record in failed:
+            execution = record["execution"]
+            assert execution["error_class"] == lp.ERROR_CONNECTION
+            assert execution["attempts"] == 1
+            assert execution["latency_ms"] is not None
+            for value in (record.get("metrics") or {}).values():
+                assert value is None
+        for raw_file in raw_dir.iterdir():
+            assert key not in raw_file.read_text(encoding="utf-8")

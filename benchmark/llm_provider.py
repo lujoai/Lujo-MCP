@@ -91,13 +91,21 @@ def _numeric_secret_values(secrets: tuple[str, ...]) -> set[Decimal]:
     - 用 `Decimal`（而非 `float`）：`float("9876543210123456789")` 会丢精度，
       可能造成误匹配或漏匹配。
     - 非数字 secret 触发 `InvalidOperation`，静默跳过（它们只走字符串路径）。
+    - **非有限值**（NaN / sNaN / ±Infinity）一律排除：sNaN 不可哈希，`set.add`
+      即抛 `TypeError: Cannot hash a signaling NaN value`；quiet NaN / Infinity
+      虽可哈希，但有限标量永远不与之相等，留着只是死数据。非有限凭据只走
+      字符串字面量路径（`normalize_secrets` + `_literal_pass` 仍然覆盖）。
     """
     values: set[Decimal] = set()
     for s in secrets:
         try:
-            values.add(Decimal(s))
-        except (InvalidOperation, ValueError, ArithmeticError):
+            d = Decimal(s)
+        except (InvalidOperation, ValueError, ArithmeticError, TypeError):
             continue
+        # is_finite() 过滤放在 try 之外：Decimal(s) 对 sNaN 构造成功，
+        # 崩溃发生在 set.add 的哈希步骤，必须先排除再入集。
+        if d.is_finite():
+            values.add(d)
     return values
 
 
@@ -149,6 +157,26 @@ _SAFE_PLACEHOLDER = "<unavailable>"
 _UNKNOWN_EXC_NAME = "Exception"
 
 
+def _to_exact_str(value: Any, fallback: str) -> str:
+    """把疑似 str 的值规范化为**内建** str，不触发任何用户代码。
+
+    f-string / `format()` 会对值调用 `__format__` / `__str__`——str 子类可覆写
+    这两个方法抛携密异常（类型 `__name__` 同样可被注入为 str 子类）。这里用
+    `str.__str__` 直接调用基类实现：对子类实例返回内建 str 拷贝，全程不执行
+    子类代码；无法安全规范化时返回固定 `fallback`。
+    """
+    if type(value) is str:
+        return value
+    if isinstance(value, str):
+        try:
+            out = str.__str__(value)
+        except BaseException:  # noqa: BLE001 - 任何二次异常都不得逃逸
+            return fallback
+        if type(out) is str:
+            return out
+    return fallback
+
+
 def _safe_exc_text(exc: Any, *, prefix: str = "") -> str:
     """安全提取异常的「类型名 + 文本」，供后续 `redact()` 脱敏。
 
@@ -159,21 +187,26 @@ def _safe_exc_text(exc: Any, *, prefix: str = "") -> str:
     - 取类型名不依赖实例的 `__str__`/`__repr__`（`type(exc).__name__` 亦包在
       try 中，防元类 property 抛异常）。
     - `str()` 抛异常时**不再**对二次异常调用 str/repr，降级为固定占位符。
-    - 自身绝不抛异常；输出仍交由 `redact()` 做字面量 + 正则脱敏。
+    - name / detail 一律经 `_to_exact_str` 规范化为内建 str，后续格式化
+      **绝不触发**恶意子类的 `__format__`/`__str__`（`__name__` 被注入为
+      str 子类时同样覆盖）。
+    - 最终拼接处于保护中；自身绝不抛异常。输出仍交由 `redact()` 做字面量 +
+      正则脱敏。
     """
     try:
-        name = type(exc).__name__
-        if not isinstance(name, str) or not name:
+        name = _to_exact_str(type(exc).__name__, "")
+        if not name:
             name = _UNKNOWN_EXC_NAME
     except BaseException:  # noqa: BLE001 - 元类 __name__ property 可抛
         name = _UNKNOWN_EXC_NAME
     try:
-        detail = str(exc)
-        if not isinstance(detail, str):
-            detail = _SAFE_PLACEHOLDER
+        detail = _to_exact_str(str(exc), _SAFE_PLACEHOLDER)
     except BaseException:  # noqa: BLE001 - 二次异常绝不 str/repr
         detail = _SAFE_PLACEHOLDER
-    return f"{prefix}{name}: {detail}"
+    try:
+        return prefix + name + ": " + detail
+    except BaseException:  # noqa: BLE001 - 拼接自身不得逃逸（理论不可达）
+        return _SAFE_PLACEHOLDER
 
 
 def _safe_redact_text(value: Any, secrets: tuple[str, ...] = ()) -> str:
@@ -489,11 +522,18 @@ class LLMProvider:
                 latency_ms=self._elapsed_ms(started),
             )
         except urllib.error.URLError as e:
+            # reason 属性读取必须先于任何格式化：恶意 URLError 子类可让 reason
+            # 是抛携密异常的 property，在安全 helper 接管之前逃出 except 块。
+            # 读取失败时用固定占位文本，绝不对失败的二次异常调用 str/repr。
+            try:
+                reason: Any = e.reason
+            except BaseException:  # noqa: BLE001 - 恶意 property 不得逃逸
+                reason = _SAFE_PLACEHOLDER
             return LLMResult(
                 ok=False,
                 error_class=ERROR_CONNECTION,
                 error_message=redact(
-                    _safe_exc_text(e.reason, prefix="connection error: "), secrets=secrets
+                    _safe_exc_text(reason, prefix="connection error: "), secrets=secrets
                 )[:_MAX_ERROR_TEXT],
                 latency_ms=self._elapsed_ms(started),
             )
