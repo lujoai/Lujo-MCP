@@ -41,20 +41,33 @@ def cmd_list() -> int:
     return 0
 
 
-def cmd_show(case_id: str) -> int:
-    """导出单个 Case 的 Without / With 两版输入（供喂给 AI 对照评估）。"""
+def cmd_show(case_id: str, *, include_gold: bool = False) -> int:
+    """导出单个 Case 的 Without / With 两版输入（供喂给 AI 对照评估）。
+
+    默认**只输出模型可见输入**（`case_id` / `without` / `with`），绝不包含
+    `expected_*`、`title`、`category`——否则把标准答案连同输入一起交给被测模型，
+    使对照失效。
+    `include_gold=True`（CLI：`--include-gold`）为 **evaluator-only** 通道，额外
+    输出 gold label，并在 stderr 明确警告不得发给被测模型。
+    """
     case = get_case(case_id)
     if case is None:
         print(f"未找到 Case: {case_id}", file=sys.stderr)
         return 1
-    payload = {
+    payload: dict[str, Any] = {
         "case_id": case.case_id,
-        "title": case.title,
-        "expected_root_cause": case.expected_root_cause,
-        "expected_evidence": case.expected_evidence,
         "without": case.without_context(),
         "with": case.with_context(),
     }
+    if include_gold:
+        payload["title"] = case.title
+        payload["expected_root_cause"] = case.expected_root_cause
+        payload["expected_evidence"] = case.expected_evidence
+        print(
+            "警告：--include-gold 输出含标准答案（gold label），仅供评估者对照打分；"
+            "严禁把本内容发给被测模型，否则 Benchmark 对照失效。",
+            file=sys.stderr,
+        )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
@@ -325,6 +338,10 @@ def cmd_run(argv: list[str]) -> int:
         return 1
     manifest: dict[str, Any] = payload
 
+    # 全新模板可能 repo_sha 为空（init 未传 --repo-sha）；显式 --repo-sha 先回填，
+    # 否则会被 validate 拒绝。已有执行结果的 Manifest 不会被此处改动。
+    llm_exp.prefill_fresh_repo_sha(manifest, opts.get("repo_sha"))
+
     errors = exp.validate_payload(manifest)
     if errors:
         for message in errors:
@@ -336,6 +353,7 @@ def cmd_run(argv: list[str]) -> int:
         case_ids=opts["case_ids"] or None,
         run_indices=opts["run_indices"] or None,
         groups=_groups_for(opts["group"]),
+        experiment_id=opts.get("experiment_id"),
         skip_measured=not opts["force_rerun"],
         retry_failed=opts["retry_failed"],
     )
@@ -354,6 +372,18 @@ def cmd_run(argv: list[str]) -> int:
         print("没有需要执行的记录（全部已完成，或筛选条件为空）。", file=sys.stderr)
         return 0
 
+    # context-mode=none 与 with_lujo 冲突：在加载 provider / 联网前即拒绝，
+    # 避免写出「带 Context 却标记为 none」的无效 Manifest。
+    if opts["context_mode"] == exp.CONTEXT_MODE_NONE and any(
+        r.get("group") == exp.GROUP_WITH for r in plan
+    ):
+        print(
+            "context-mode='none' 只允许 --group without；with_lujo 必须使用 "
+            "fixture_replay Context。",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         config = llm_provider.load_config_from_env(
             override={
@@ -364,6 +394,18 @@ def cmd_run(argv: list[str]) -> int:
         )
     except llm_provider.LLMNotConfiguredError as e:
         print(f"provider 未配置: {e}", file=sys.stderr)
+        return 1
+
+    # 控制变量对齐：全新 Manifest 回填，resume 则校验一致；不一致在任何调用前失败。
+    control_errors = llm_exp.reconcile_control_variables(
+        manifest,
+        provider_model=config.model,
+        temperature=config.temperature,
+        repo_sha=opts.get("repo_sha"),
+    )
+    if control_errors:
+        for message in control_errors:
+            print(f"控制变量不一致: {message}", file=sys.stderr)
         return 1
 
     provider = llm_provider.LLMProvider(config)
@@ -388,7 +430,19 @@ def cmd_run(argv: list[str]) -> int:
     )
     llm_exp.write_manifest_atomic(output_path, manifest)
 
-    executed = [r for r in manifest.get("records", []) if isinstance(r, dict)]
+    # 统计只针对**本次 plan 实际执行的槽位**，不混入历史结果；历史失败不得
+    # 令本次过滤运行返回非零。
+    plan_keys = {
+        (r.get("experiment_id"), r.get("case_id"), r.get("run_index"), r.get("group"))
+        for r in plan
+    }
+    executed = [
+        r
+        for r in manifest.get("records", [])
+        if isinstance(r, dict)
+        and (r.get("experiment_id"), r.get("case_id"), r.get("run_index"), r.get("group"))
+        in plan_keys
+    ]
     ok_count = sum(
         1 for r in executed if (r.get("execution") or {}).get("status") == "ok"
     )
@@ -405,7 +459,9 @@ def cmd_run(argv: list[str]) -> int:
 
 _USAGE = """用法:
   python -m benchmark.runner list                         # 列出全部 Case
-  python -m benchmark.runner show <case_id>               # 导出单个 Case 两版输入
+  python -m benchmark.runner show <case_id> [--include-gold]
+                                                          # 导出两版输入（默认不含 gold）
+                                                          # --include-gold 仅评估者用
   python -m benchmark.runner quality                      # QualityScorer 旁证评分
   python -m benchmark.runner init [--output F] [--force]  # 生成成对实验清单模板
   python -m benchmark.runner validate <file>              # 校验实验记录
@@ -443,10 +499,13 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "list":
         return cmd_list()
     if cmd == "show":
-        if len(argv) < 2:
+        rest = argv[1:]
+        include_gold = "--include-gold" in rest
+        positional = [a for a in rest if a != "--include-gold"]
+        if len(positional) != 1:
             print(_USAGE)
             return 1
-        return cmd_show(argv[1])
+        return cmd_show(positional[0], include_gold=include_gold)
     if cmd == "quality":
         return cmd_quality()
     if cmd == "init":

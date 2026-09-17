@@ -414,9 +414,11 @@ def validate_records(records: list[Any]) -> list[str]:
                     )
             # M2-B2：两组必须共用同一基础 prompt，但实际发送内容必须不同，
             # 否则说明对照失效（要么漏注入 context，要么给 with 组加了额外提示）。
+            # 仅当**两侧都已执行**（均有 hash）时才比较，避免半执行配对（如
+            # --group without 单侧运行）被误判为不一致。
             w_base = w.get("base_prompt_hash")
             wi_base = wi.get("base_prompt_hash")
-            if w_base is not None or wi_base is not None:
+            if w_base is not None and wi_base is not None:
                 if not _control_equal("base_prompt_hash", w_base, wi_base):
                     errors.append(
                         f"pair={pair_key} base_prompt_hash mismatch between without and with"

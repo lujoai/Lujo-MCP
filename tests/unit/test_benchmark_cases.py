@@ -191,6 +191,36 @@ class TestRunner:
     def test_show_unknown_returns_one(self, capsys):
         assert runner.cmd_show("no-such") == 1
 
+    def test_show_default_excludes_gold(self, capsys):
+        """默认 show 只输出模型可见输入，绝不包含 expected_* 或标题/类别。"""
+        assert runner.main(["show", "api_500_none_attribute"]) == 0
+        out = capsys.readouterr().out
+        payload = json.loads(out)
+        assert "without" in payload and "with" in payload
+        assert "expected_root_cause" not in payload
+        assert "expected_evidence" not in payload
+        assert "title" not in payload
+        case = get_case("api_500_none_attribute")
+        assert case.expected_root_cause not in out
+        for item in case.expected_evidence:
+            assert item not in out
+
+    def test_show_include_gold_requires_explicit_flag(self, capsys):
+        """显式 --include-gold 才输出 gold，且必须带 evaluator-only 警告。"""
+        assert runner.main(["show", "api_500_none_attribute", "--include-gold"]) == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        case = get_case("api_500_none_attribute")
+        assert payload["expected_root_cause"] == case.expected_root_cause
+        assert payload["expected_evidence"] == case.expected_evidence
+        assert captured.err.strip(), "evaluator-only 输出必须在 stderr 给出警告"
+
+    def test_show_include_gold_atom_split(self, capsys):
+        """--include-gold 与 case_id 顺序无关（argv 解析稳健）。"""
+        assert runner.main(["show", "--include-gold", "api_500_none_attribute"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert "expected_root_cause" in payload
+
     def test_main_unknown_command(self, capsys):
         assert runner.main(["bogus"]) == 1
 

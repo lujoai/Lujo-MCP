@@ -66,12 +66,122 @@ def record_context_mode(group: str, context: dict[str, Any] | None, source_mode:
     return source_mode
 
 
+# 控制变量：与 manifest 顶层 _MANIFEST_FIELDS 及 experiment._CONTROL_FIELDS 对齐。
+_CONTROL_KEYS = ("model", "temperature", "repo_sha")
+
+
+def _has_execution(record: dict[str, Any]) -> bool:
+    execution = record.get("execution")
+    return isinstance(execution, dict) and bool(execution.get("status"))
+
+
+def prefill_fresh_repo_sha(manifest: dict[str, Any], repo_sha: str | None) -> None:
+    """仅对**尚无任何执行结果**的 Manifest，把显式 repo_sha 回填到顶层与全部 records。
+
+    必须在 `validate_payload` 之前调用：`init` 生成的模板 `repo_sha` 为空字符串，
+    直接校验会被拒绝；而 `--repo-sha` 正是回填该字段的入口，且不依赖 provider
+    配置。已有执行结果的 Manifest 一律不动（由 resume 一致性校验负责），
+    绝不改写历史。
+    """
+    if repo_sha is None:
+        return
+    records = manifest.get("records") or []
+    if any(isinstance(r, dict) and _has_execution(r) for r in records):
+        return
+    manifest["repo_sha"] = repo_sha
+    for record in records:
+        if isinstance(record, dict):
+            record["repo_sha"] = repo_sha
+
+
+def reconcile_control_variables(
+    manifest: dict[str, Any],
+    *,
+    provider_model: str,
+    temperature: float,
+    repo_sha: str | None = None,
+) -> list[str]:
+    """执行前把 manifest 控制变量对齐到既有事实；返回错误列表（空 = 可执行）。
+
+    不联网、不写盘。语义：
+
+    - **尚无执行结果**（全新 Manifest）：把实际 provider model / temperature
+      以及显式提供的 repo_sha 回填到顶层与**全部** records（绝不只改一侧，
+      以保持 without/with 控制变量一致）。
+    - **已有执行结果**（resume）：以既有记录为权威，provider model / temperature
+      必须与其一致；显式 repo_sha 必须与既有值一致。任何不一致一律返回错误，
+      **绝不静默把历史记录改写成另一个模型或 repo SHA**。
+    """
+    errors: list[str] = []
+    records = manifest.get("records") or []
+    executed = [r for r in records if isinstance(r, dict) and _has_execution(r)]
+
+    if not executed:
+        manifest["model"] = provider_model
+        manifest["temperature"] = temperature
+        if repo_sha is not None:
+            manifest["repo_sha"] = repo_sha
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            record["model"] = provider_model
+            record["temperature"] = temperature
+            if repo_sha is not None:
+                record["repo_sha"] = repo_sha
+        return errors
+
+    established: dict[str, Any] = {}
+    for key in _CONTROL_KEYS:
+        values = {r.get(key) for r in executed}
+        if len(values) > 1:
+            errors.append(
+                f"existing executed records disagree on {key!r}: {sorted(map(repr, values))}"
+            )
+        else:
+            established[key] = next(iter(values))
+    if errors:
+        return errors
+
+    if provider_model != established.get("model"):
+        errors.append(
+            f"provider model {provider_model!r} does not match existing executed "
+            f"model {established.get('model')!r} (refusing to relabel history)"
+        )
+    if temperature != established.get("temperature"):
+        errors.append(
+            f"provider temperature {temperature!r} does not match existing executed "
+            f"temperature {established.get('temperature')!r}"
+        )
+    if repo_sha is not None and repo_sha != established.get("repo_sha"):
+        errors.append(
+            f"repo_sha {repo_sha!r} does not match existing executed "
+            f"repo_sha {established.get('repo_sha')!r}"
+        )
+    if errors:
+        return errors
+
+    # 将待执行记录对齐到既有控制变量，保证两侧一致（顶层同步为权威值）。
+    manifest["model"] = established.get("model")
+    manifest["temperature"] = established.get("temperature")
+    if isinstance(established.get("repo_sha"), str) and established["repo_sha"]:
+        manifest["repo_sha"] = established["repo_sha"]
+    for record in records:
+        if not isinstance(record, dict) or _has_execution(record):
+            continue
+        record["model"] = established.get("model")
+        record["temperature"] = established.get("temperature")
+        if isinstance(established.get("repo_sha"), str) and established["repo_sha"]:
+            record["repo_sha"] = established["repo_sha"]
+    return errors
+
+
 def build_plan(
     manifest: dict[str, Any],
     *,
     case_ids: list[str] | None = None,
     run_indices: list[int] | None = None,
     groups: tuple[str, ...] = VALID_GROUPS_TUPLE,
+    experiment_id: str | None = None,
     skip_measured: bool = True,
     retry_failed: bool = False,
 ) -> list[dict[str, Any]]:
@@ -82,12 +192,15 @@ def build_plan(
     - 默认：已执行过的槽位（status=ok/error）跳过；
     - `retry_failed=True`（--retry-failed）：只重排上次带 error_class 的槽位。
 
+    `experiment_id` 非空时只挑选该 experiment 的记录（缺省不过滤）。
     只挑选 manifest 中已存在的记录槽——绝不新增单侧记录，从而保持配对结构完整。
     """
     records = manifest.get("records") or []
     plan: list[dict[str, Any]] = []
     for record in records:
         if not isinstance(record, dict):
+            continue
+        if experiment_id is not None and record.get("experiment_id") != experiment_id:
             continue
         if case_ids and record.get("case_id") not in case_ids:
             continue
@@ -200,7 +313,28 @@ def execute_plan(
     """执行计划中的槽位并原地更新 manifest（调用方负责落盘）。
 
     `on_record(record, updated)` 在每个槽位执行后回调（用于增量保存）。
+    若计划包含 with_lujo 槽位而 `context_mode=none`，说明会写出「带 Context 却
+    标记为 none」的无效记录，直接抛 `ValueError`（不做任何调用、不写盘）。
     """
+    if context_mode == CONTEXT_MODE_NONE and any(
+        r.get("group") == GROUP_WITH for r in plan
+    ):
+        raise ValueError(
+            "context_mode='none' cannot be used with with_lujo plan slots; "
+            "use --group without or context_mode='fixture_replay'"
+        )
+
+    # 控制变量对齐/校验：全新 Manifest 回填、resume 校验一致；任何不一致在
+    # 发起第一次模型调用前抛错，且保证写出的 Manifest 顶层与 records 一致。
+    control_errors = reconcile_control_variables(
+        manifest,
+        provider_model=provider_model,
+        temperature=temperature,
+        repo_sha=repo_sha,
+    )
+    if control_errors:
+        raise ValueError("control variable conflict: " + "; ".join(control_errors))
+
     plan_keys = {
         (r.get("experiment_id"), r.get("case_id"), r.get("run_index"), r.get("group"))
         for r in plan

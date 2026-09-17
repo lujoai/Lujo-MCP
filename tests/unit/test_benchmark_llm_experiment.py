@@ -17,9 +17,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import http.server
 import json
 import subprocess
 import sys
+import threading
+import urllib.error
+import urllib.request
 from dataclasses import fields as _dc_fields
 from pathlib import Path
 
@@ -925,8 +930,6 @@ class TestIsolation:
 
     def test_no_network_calls_without_injected_transport(self, monkeypatch):
         """未注入 transport 时，测试中也不得真的发起网络请求。"""
-        import urllib.request
-
         def _boom(*_args, **_kwargs):
             raise AssertionError("network call attempted in unit test")
 
@@ -934,3 +937,377 @@ class TestIsolation:
         transport, calls = _transport_returning(200, _ok_body())
         _run_manifest(_manifest_for(["api_500_none_attribute"]), transport)
         assert len(calls) == 2
+
+
+# ── 重定向安全：Authorization 不得跨 origin 转发 ──
+
+
+@contextlib.contextmanager
+def _loopback_redirect_server(redirect_code: int):
+    """本地回环 server：/redirect 回 3xx 指向 /target，记录 /target 收到的头。
+
+    不访问公网：仅绑定 127.0.0.1 随机端口。
+    """
+    received: list[dict[str, str]] = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def _read_body(self) -> None:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            if length:
+                self.rfile.read(length)
+
+        def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler 接口
+            self._read_body()
+            if self.path.startswith("/target"):
+                received.append(dict(self.headers))
+                body = _ok_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+                return
+            self.send_response(redirect_code)
+            self.send_header("Location", f"{self.server.target_url}")
+            self.end_headers()
+
+        def log_message(self, *args):  # noqa: D401 - 静音
+            pass
+
+    # 先用一个临时 server 拿到端口，再设置 target_url（自引用）
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    port = server.server_address[1]
+    server.target_url = f"http://127.0.0.1:{port}/target"  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}/redirect", received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class TestRedirectSafety:
+    """默认 transport 必须拒绝重定向，绝不把 Authorization 转发到别处。"""
+
+    @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+    def test_authorization_never_sent_to_redirect_target(self, code):
+        """默认 transport 遇 3xx 必须拒绝跟随：目标 origin 从未收到 Authorization。"""
+        secret = "sk-LEAKME-abcdef123456"
+        with _loopback_redirect_server(code) as (url, received):
+            status, _body, _headers = lp._urllib_transport(
+                url, {"Authorization": f"Bearer {secret}"}, b"{}", 5.0
+            )
+            assert status == code
+            # 关键断言：重定向目标从未收到任何请求（更未收到 Authorization）
+            assert received == [], f"{code} 重定向被跟随，目标收到了 {received}"
+
+    @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+    def test_transport_classifies_redirect_as_failure(self, monkeypatch, code):
+        """默认 transport 遇到 3xx 必须落账为明确失败，且不跟随。"""
+        secret = "sk-LEAKME-abcdef123456"
+        called_urls: list[str] = []
+
+        def _spy_transport(url, headers, body, timeout_s):
+            called_urls.append(url)
+            # 真实默认 transport 的等价行为：拒绝重定向，返回 (status, body, headers)
+            return lp._urllib_transport(url, headers, body, timeout_s)
+
+        with _loopback_redirect_server(code) as (url, received):
+            config = _config(base_url=url.rsplit("/", 1)[0], api_key=secret, max_retries=0)
+            provider = lp.LLMProvider(config, transport=_spy_transport)
+            result = provider.call([{"role": "user", "content": "hi"}])
+            assert result.ok is False
+            assert result.error_class == lp.ERROR_REDIRECT
+            assert result.text is None
+            assert received == []
+        assert len(called_urls) == 1
+        assert secret not in (result.error_message or "")
+
+    def test_urllib_transport_refuses_redirect_without_following(self):
+        """底层 transport 本身：3xx → 返回状态码而非跟随。"""
+        with _loopback_redirect_server(302) as (url, received):
+            status, body, headers = lp._urllib_transport(url, {}, b"{}", 5.0)
+            assert status == 302
+            assert received == []
+
+
+# ── provider 元数据不得回显凭据 ──
+
+
+class TestProviderMetadataRedaction:
+    def test_request_id_redacted_before_persist(self):
+        """攻击者可控的 x-request-id 不得把凭据带进 manifest。"""
+        secret = "sk-live-REQID-abcdef123456"
+        transport, _ = _transport_returning(
+            200, _ok_body(), {"x-request-id": f"Bearer {secret}"}
+        )
+        manifest = _run_manifest(_manifest_for(["api_500_none_attribute"]), transport)
+        assert secret not in json.dumps(manifest, ensure_ascii=False)
+
+    def test_usage_and_finish_reason_do_not_persist_secrets(self):
+        """恶意 provider 在 usage / finish_reason 里回显密钥时不得落盘。"""
+        secret = "sk-live-USAGE-abcdef123456"
+        body = json.dumps(
+            {
+                "choices": [
+                    {"message": {"content": "ok"}, "finish_reason": f"Bearer {secret}"}
+                ],
+                "usage": {"prompt_tokens": 1, "note": f"api_key={secret}"},
+            }
+        )
+        transport, _ = _transport_returning(200, body)
+        manifest = _run_manifest(_manifest_for(["api_500_none_attribute"]), transport)
+        assert secret not in json.dumps(manifest, ensure_ascii=False)
+
+
+# ── context-mode none：只允许 without 组 ──
+
+
+class TestContextModeNone:
+    def test_context_mode_none_rejects_with_group_before_calls(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """--context-mode none 与 with_lujo 冲突：必须在调用 provider 前失败。"""
+        path = tmp_path / "m.json"
+        path.write_text(
+            json.dumps(_manifest_for(["api_500_none_attribute"])), encoding="utf-8"
+        )
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+        before = path.read_text(encoding="utf-8")
+
+        rc = runner.main(["run", str(path), "--context-mode", "none"])
+        assert rc != 0
+        assert calls == []  # 未发起任何网络调用
+        assert path.read_text(encoding="utf-8") == before  # 未写出无效 Manifest
+        assert "context" in capsys.readouterr().err.lower()
+
+    def test_context_mode_none_without_group_produces_valid_manifest(
+        self, tmp_path, monkeypatch
+    ):
+        """--context-mode none --group without 合法：产物可校验、无 context_hash。"""
+        path = tmp_path / "m.json"
+        path.write_text(
+            json.dumps(_manifest_for(["api_500_none_attribute"])), encoding="utf-8"
+        )
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+
+        rc = runner.main(
+            ["run", str(path), "--context-mode", "none", "--group", "without"]
+        )
+        assert rc == 0
+        assert len(calls) == 1  # 只跑 without 组
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert exp.validate_payload(saved) == []
+        for record in saved["records"]:
+            if record["group"] == exp.GROUP_WITHOUT:
+                assert record["context_mode"] == exp.CONTEXT_MODE_NONE
+                assert record["context_hash"] is None
+
+    def test_execute_plan_rejects_none_with_with_group(self):
+        """直接调用 execute_plan 时，none + with 也必须抛错而非写出无效记录。"""
+        manifest = _manifest_for(["api_500_none_attribute"])
+        plan = lx.build_plan(manifest, skip_measured=False, groups=(exp.GROUP_WITH,))
+        provider = lp.LLMProvider(_config(), transport=_transport_returning(200, _ok_body())[0])
+        with pytest.raises(ValueError):
+            lx.execute_plan(
+                manifest,
+                plan,
+                provider=provider,
+                provider_model="test-model",
+                temperature=0.0,
+                max_tokens=128,
+                timeout_s=5.0,
+                endpoint_host="https://api.example.com/v1",
+                context_mode=exp.CONTEXT_MODE_NONE,
+            )
+
+
+# ── manifest 元数据一致性 ──
+
+
+class TestManifestMetadataConsistency:
+    def test_new_manifest_syncs_top_level_from_provider(self):
+        """init 默认 model=unspecified，run 后顶层必须与 records 一致且可校验。"""
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "unspecified"
+        for record in manifest["records"]:
+            record["model"] = "unspecified"
+        updated = _run_manifest(manifest, _transport_returning(200, _ok_body())[0])
+        assert exp.validate_payload(updated) == []
+        assert updated["model"] == "test-model"
+        assert all(r["model"] == "test-model" for r in updated["records"])
+
+    def test_resume_model_drift_rejected_before_calls(self, tmp_path, monkeypatch, capsys):
+        """已有执行的 manifest 换 model resume 必须在调用前失败。"""
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+        assert runner.main(["run", str(path)]) == 0
+        first_calls = len(calls)
+
+        # 换模型 resume（--force-rerun）必须拒绝
+        monkeypatch.setenv(lp.ENV_MODEL, "different-model")
+        rc = runner.main(["run", str(path), "--force-rerun"])
+        assert rc != 0
+        assert len(calls) == first_calls  # 未发起任何新调用
+        assert "model" in capsys.readouterr().err.lower()
+
+    def test_repo_sha_override_backfills_all_records_and_top(self):
+        """--repo-sha 回填必须同时覆盖顶层与全部 records。"""
+        manifest = _manifest_for(["api_500_none_attribute"])
+        new_sha = "a" * 40
+        updated = _run_manifest(
+            manifest, _transport_returning(200, _ok_body())[0], repo_sha=new_sha
+        )
+        assert updated["repo_sha"] == new_sha
+        assert all(r["repo_sha"] == new_sha for r in updated["records"])
+        assert exp.validate_payload(updated) == []
+
+    def test_cli_repo_sha_backfills_empty_template_before_validate(
+        self, tmp_path, monkeypatch
+    ):
+        """init 未带 --repo-sha（空 repo_sha）时，run --repo-sha 必须先回填再校验。"""
+        path = tmp_path / "m.json"
+        assert runner.main(["init", "--output", str(path), "--force"]) == 0
+        assert json.loads(path.read_text(encoding="utf-8"))["repo_sha"] == ""
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+        rc = runner.main(
+            ["run", str(path), "--case-id", "api_500_none_attribute", "--repo-sha", "b" * 40]
+        )
+        assert rc == 0
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert saved["repo_sha"] == "b" * 40
+        assert exp.validate_payload(saved) == []
+
+    def test_resume_repo_sha_drift_rejected(self, tmp_path, monkeypatch, capsys):
+        """已有执行结果后 --repo-sha 与既有值不同：必须拒绝（不得改写历史）。"""
+        path = tmp_path / "m.json"
+        path.write_text(json.dumps(_manifest_for(["api_500_none_attribute"])), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setattr(lp, "_urllib_transport", _transport_returning(200, _ok_body())[0])
+        assert runner.main(["run", str(path)]) == 0
+
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+        rc = runner.main(["run", str(path), "--force-rerun", "--repo-sha", "c" * 40])
+        assert rc != 0
+        assert calls == []
+
+    def test_one_side_then_resume_keeps_control_vars_consistent(
+        self, tmp_path, monkeypatch
+    ):
+        """只跑 without 再 resume with：两侧控制变量保持一致，全程可校验。"""
+        path = tmp_path / "m.json"
+        path.write_text(json.dumps(_manifest_for(["api_500_none_attribute"])), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setattr(lp, "_urllib_transport", _transport_returning(200, _ok_body())[0])
+        assert (
+            runner.main(
+                ["run", str(path), "--case-id", "api_500_none_attribute", "--group", "without"]
+            )
+            == 0
+        )
+        assert exp.validate_payload(json.loads(path.read_text(encoding="utf-8"))) == []
+
+        monkeypatch.setattr(lp, "_urllib_transport", _transport_returning(200, _ok_body())[0])
+        rc = runner.main(
+            ["run", str(path), "--case-id", "api_500_none_attribute", "--group", "with"]
+        )
+        assert rc == 0
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert exp.validate_payload(saved) == []
+        by_group = {r["group"]: r for r in saved["records"]}
+        assert by_group[exp.GROUP_WITHOUT]["model"] == by_group[exp.GROUP_WITH]["model"]
+        assert by_group[exp.GROUP_WITHOUT]["repo_sha"] == by_group[exp.GROUP_WITH]["repo_sha"]
+
+
+# ── 本次运行统计不得混入历史结果 ──
+
+
+class TestRunStatsScopedToPlan:
+    def test_historical_error_does_not_fail_scoped_run(self, tmp_path, monkeypatch, capsys):
+        """历史失败记录不在本次 plan 内时，本次成功运行必须退出 0。"""
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute", "db_error_null_column"])
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+
+        # 第一次：api case 报 500 → 留下历史失败
+        monkeypatch.setattr(lp, "_urllib_transport", _transport_returning(500, "boom")[0])
+        runner.main(["run", str(path), "--case-id", "api_500_none_attribute"])
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert any(
+            (r.get("execution") or {}).get("error_class") for r in saved["records"]
+        )
+
+        # 第二次：只跑 db case，应成功且退出 0（历史失败不影响）
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+        rc = runner.main(["run", str(path), "--case-id", "db_error_null_column"])
+        assert rc == 0
+        assert len(calls) == 2
+
+    def test_current_run_error_still_exits_nonzero(self, tmp_path, monkeypatch):
+        """本次 plan 内发生失败仍必须返回非零。"""
+        path = tmp_path / "m.json"
+        path.write_text(
+            json.dumps(_manifest_for(["api_500_none_attribute"])), encoding="utf-8"
+        )
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        monkeypatch.setattr(lp, "_urllib_transport", _transport_returning(500, "boom")[0])
+        assert runner.main(["run", str(path)]) == 1
+
+
+# ── experiment-id 过滤 ──
+
+
+class TestExperimentIdFilter:
+    def test_build_plan_filters_by_experiment_id(self):
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["experiment_id"] = "exp-A"
+        for record in manifest["records"]:
+            record["experiment_id"] = "exp-A"
+        assert len(lx.build_plan(manifest, skip_measured=False, experiment_id="exp-A")) == 2
+        assert lx.build_plan(manifest, skip_measured=False, experiment_id="exp-B") == []
+
+    def test_unknown_experiment_id_does_not_call_provider(self, tmp_path, monkeypatch, capsys):
+        path = tmp_path / "m.json"
+        path.write_text(
+            json.dumps(_manifest_for(["api_500_none_attribute"])), encoding="utf-8"
+        )
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, "sk-test-key-abcdef123456")
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        transport, calls = _transport_returning(200, _ok_body())
+        monkeypatch.setattr(lp, "_urllib_transport", transport)
+        rc = runner.main(["run", str(path), "--experiment-id", "does-not-exist"])
+        assert rc == 0
+        assert calls == []
+        assert "没有" in capsys.readouterr().err

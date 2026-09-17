@@ -38,13 +38,16 @@ ERROR_CONNECTION = "connection_error"
 ERROR_RATE_LIMITED = "rate_limited"
 ERROR_HTTP_4XX = "http_4xx"
 ERROR_HTTP_5XX = "http_5xx"
+ERROR_REDIRECT = "redirect_refused"
 ERROR_INVALID_JSON = "invalid_json"
 ERROR_EMPTY_COMPLETION = "empty_completion"
 ERROR_NOT_CONFIGURED = "not_configured"
 
+# 重定向是**拒绝**语义，绝不重试（重试只会再次把凭据送往未知目标）。
 _RETRYABLE = frozenset({ERROR_TIMEOUT, ERROR_RATE_LIMITED, ERROR_HTTP_5XX})
 
 _MAX_ERROR_TEXT = 400
+_MAX_METADATA_TEXT = 200
 
 _SECRET_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"(?i)(authorization\s*[:=]\s*)(bearer\s+)?\S+", r"\1<redacted>"),
@@ -66,6 +69,23 @@ def redact(text: Any) -> str:
     for pattern, replacement in _SECRET_PATTERNS:
         out = re.sub(pattern, replacement, out)
     return out
+
+
+def redact_metadata(value: Any) -> Any:
+    """递归脱敏 provider 返回的元数据（usage / finish_reason / request_id 等）。
+
+    这些字段由**远端**提供，可能被构造来回显凭据；落盘前必须先脱敏并限长，
+    绝不信任其内容。仅处理 dict / list / str / 标量，保留 JSON 可序列化性。
+    """
+    if isinstance(value, dict):
+        return {str(k): redact_metadata(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_metadata(v) for v in value]
+    if isinstance(value, str):
+        return redact(value)[:_MAX_METADATA_TEXT]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return redact(value)[:_MAX_METADATA_TEXT]
 
 
 @dataclass(slots=True)
@@ -183,13 +203,30 @@ class LLMResult:
 Transport = Callable[[str, dict[str, str], bytes, float], tuple[int, str, dict[str, str]]]
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """拒绝一切 HTTP 重定向。
+
+    标准库默认的 `HTTPRedirectHandler` 会把请求（**包括 Authorization 头**）
+    重发到 `Location` 指向的目标，而该目标可能是任意 origin——等于把 API Key
+    交给攻击者控制的服务器。返回 `None` 会让 urllib 停止跟随并抛出携带原始
+    状态码的 `HTTPError`，调用方据此落账为明确的失败。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+# 独立 opener，不装配重定向 handler；无可变全局状态。
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+
+
 def _urllib_transport(
     url: str, headers: dict[str, str], body: bytes, timeout_s: float
 ) -> tuple[int, str, dict[str, str]]:
-    """默认 transport：标准库 HTTP POST（无第三方依赖）。"""
+    """默认 transport：标准库 HTTP POST（无第三方依赖），**拒绝重定向**。"""
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
+        with _NO_REDIRECT_OPENER.open(req, timeout=timeout_s) as resp:  # noqa: S310
             return int(resp.status), resp.read().decode("utf-8", errors="replace"), dict(resp.headers)
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="replace") if e.fp is not None else ""
@@ -214,6 +251,9 @@ def _extract_text(payload: Any) -> tuple[str | None, dict[str, Any], str | None]
 def classify_http_error(status: int) -> str:
     if status == 429:
         return ERROR_RATE_LIMITED
+    if 300 <= status < 400:
+        # 未跟随的重定向：独立分类，绝不与 4xx 混淆，也不可重试。
+        return ERROR_REDIRECT
     if 400 <= status < 500:
         return ERROR_HTTP_4XX
     if status >= 500:
@@ -303,14 +343,17 @@ class LLMProvider:
             )
 
         latency_ms = self._elapsed_ms(started)
-        request_id = resp_headers.get("x-request-id") if resp_headers else None
+        # 远端可控元数据先脱敏再进入 LLMResult，杜绝凭据回显落盘。
+        request_id = (
+            redact_metadata(resp_headers.get("x-request-id")) if resp_headers else None
+        )
         retry_after = self._retry_after(resp_headers)
 
         if status != 200:
             return LLMResult(
                 ok=False,
                 error_class=classify_http_error(status),
-                error_message=redact(text[:_MAX_ERROR_TEXT]),
+                error_message=redact(text)[:_MAX_ERROR_TEXT],
                 http_status=status,
                 latency_ms=latency_ms,
                 retry_after_s=retry_after,
@@ -332,6 +375,8 @@ class LLMProvider:
             )
 
         content, usage, finish_reason = _extract_text(payload)
+        usage = redact_metadata(usage)
+        finish_reason = redact_metadata(finish_reason)
         if not content or not content.strip():
             return LLMResult(
                 ok=False,
@@ -388,6 +433,7 @@ __all__ = [
     "ERROR_RATE_LIMITED",
     "ERROR_HTTP_4XX",
     "ERROR_HTTP_5XX",
+    "ERROR_REDIRECT",
     "ERROR_INVALID_JSON",
     "ERROR_EMPTY_COMPLETION",
     "ERROR_NOT_CONFIGURED",
@@ -398,4 +444,5 @@ __all__ = [
     "load_config_from_env",
     "classify_http_error",
     "redact",
+    "redact_metadata",
 ]
