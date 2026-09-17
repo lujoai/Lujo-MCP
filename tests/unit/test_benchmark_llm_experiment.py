@@ -1854,3 +1854,309 @@ class TestKnownCredentialPersistence:
         assert all(
             v is None for r in result["records"] for v in r["metrics"].values()
         )
+
+
+# ── M2-B2.5：数字标量凭据脱敏 ──
+#
+# provider 可把纯数字形态的 API Key 作为 JSON **number** 回显；json.loads 得到
+# int/float，绕过字符串字面量脱敏并落盘。修复要求：仅当数值**精确匹配**已知凭据
+# 时才替换为 <redacted-secret>，否则保留原数值类型（不得破坏 token 计数等 telemetry）。
+#
+# 下列常量均为**测试假值**，不含真实凭据。
+
+_NUM_KEY = "9876543210123456789"          # 超大整数（float 会丢精度）
+_NEG_KEY = "-42"
+_DEC_KEY = "3.14"
+_SCI_KEY = "1e5"
+
+
+class TestNumericScalarRedaction:
+    """数字形态凭据不得明文进入 Manifest；正常数字必须保持类型。"""
+
+    def test_huge_int_usage_value_redacted(self):
+        body = _choices_body("ok", usage={"token": int(_NUM_KEY)})
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert _NUM_KEY not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_numeric_key_in_nested_dict_and_list(self):
+        body = _choices_body(
+            "ok", usage={"outer": {"token": int(_NUM_KEY)}, "list": [int(_NUM_KEY)]}
+        )
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert _NUM_KEY not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_negative_int_redacted(self):
+        body = _choices_body("ok", usage={"n": int(_NEG_KEY)})
+        result = _provider_for_key(_NEG_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert _NEG_KEY not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_decimal_float_redacted(self):
+        body = _choices_body("ok", usage={"n": float(_DEC_KEY)})
+        result = _provider_for_key(_DEC_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert _DEC_KEY not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_scientific_notation_redacted(self):
+        """secret '1e5' 与 JSON number 1e5（=100000.0）按数值等价匹配。"""
+        body = _choices_body("ok", usage={"n": float(_SCI_KEY)})
+        result = _provider_for_key(_SCI_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert "100000" not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_benign_int_counts_preserved(self):
+        """正常 token 计数必须保持 int 类型，不得被转换成字符串。"""
+        body = _choices_body(
+            "ok", usage={"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
+        )
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.usage["prompt_tokens"] == 5
+        assert result.usage["completion_tokens"] == 7
+        assert result.usage["total_tokens"] == 12
+        assert all(isinstance(v, int) for v in result.usage.values())
+
+    def test_benign_float_preserved(self):
+        body = _choices_body("ok", usage={"score": 0.7, "ratio": 1.5})
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.usage["score"] == 0.7
+        assert result.usage["ratio"] == 1.5
+        assert isinstance(result.usage["score"], float)
+
+    def test_unmatched_number_preserved(self):
+        body = _choices_body("ok", usage={"other": 424242})
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.usage["other"] == 424242
+        assert isinstance(result.usage["other"], int)
+
+    def test_prompt_tokens_matching_key_still_redacted(self):
+        """若 provider 把 key 塞进 prompt_tokens（数值），仍须脱敏。"""
+        body = _choices_body("ok", usage={"prompt_tokens": int(_NUM_KEY)})
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert _NUM_KEY not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_leading_zero_is_distinct_credential(self):
+        """secret '00123' 与 JSON number 123 数值等价（无前导零），视为同一凭据。"""
+        body = _choices_body("ok", usage={"n": 123})
+        result = _provider_for_key("00123", _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert "123" not in json.dumps(result.usage, ensure_ascii=False)
+
+    def test_bool_and_none_preserved(self):
+        body = _choices_body("ok", usage={"flag": True, "empty": None, "zero": 0})
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.usage["flag"] is True
+        assert result.usage["empty"] is None
+        assert result.usage["zero"] == 0
+        assert isinstance(result.usage["zero"], int)
+
+    def test_non_finite_floats_preserved(self):
+        """inf/nan 不匹配任何已知凭据，保持原值（本轮不处理 RFC-8259）。"""
+        body = _choices_body("ok", usage={"a": float("inf"), "b": float("nan")})
+        result = _provider_for_key(_NUM_KEY, _transport_returning(200, body)[0]).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.usage["a"] == float("inf")
+        assert result.usage["b"] != result.usage["b"]  # nan
+
+    def test_manifest_on_disk_has_no_numeric_key(self, tmp_path, monkeypatch):
+        key = _NUM_KEY
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, key)
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+        body = _choices_body(
+            "ok", usage={"a": int(key), "outer": {"b": int(key)}, "list": [int(key)]}
+        )
+        monkeypatch.setattr(lp, "_urllib_transport", _transport_returning(200, body)[0])
+        assert runner.main(["run", str(path)]) == 0
+        assert key not in path.read_text(encoding="utf-8")
+
+    def test_numeric_path_keeps_metrics_none(self):
+        key = _NUM_KEY
+        manifest = _manifest_for(["api_500_none_attribute"])
+        plan = lx.build_plan(manifest, skip_measured=False)
+        result = lx.execute_plan(
+            manifest,
+            plan,
+            provider=_provider_for_key(
+                key, _transport_returning(200, _choices_body("ok", usage={"t": int(key)}))[0]
+            ),
+            provider_model="test-model",
+            temperature=0.0,
+            max_tokens=128,
+            timeout_s=5.0,
+            endpoint_host="https://api.example.com/v1",
+        )
+        assert all(v is None for r in result["records"] for v in r["metrics"].values())
+
+
+# ── M2-B2.5：异常文本安全提取 ──
+
+
+class _HostileStrError(Exception):
+    """__str__ 与 __repr__ 均抛携密异常。"""
+
+    def __init__(self, secret: str):
+        super().__init__("ignored")
+        self._secret = secret
+
+    def __str__(self):
+        raise RuntimeError(f"hostile str leak {self._secret}")
+
+    __repr__ = __str__
+
+
+class _HostileOSError(OSError):
+    def __init__(self, secret: str):
+        super().__init__("ignored")
+        self._secret = secret
+
+    def __str__(self):
+        raise RuntimeError(f"hostile OSError leak {self._secret}")
+
+    __repr__ = __str__
+
+
+class _HostileReason:
+    """URLError.reason 的 __repr__ 抛携密异常。"""
+
+    def __init__(self, secret: str):
+        self._secret = secret
+
+    def __repr__(self):
+        raise RuntimeError(f"hostile reason leak {self._secret}")
+
+    def __str__(self):
+        return "reason"
+
+
+class TestExceptionTextSafety:
+    """异常自身的 __str__/__repr__ 抛异常时，不得逃出 call()，更不得携密进入 traceback。"""
+
+    def test_generic_exception_str_raises(self):
+        key = _OPAQUE_KEY
+
+        def _raising(url, headers, body, timeout_s):
+            raise _HostileStrError(key)
+
+        result = _provider_for_key(key, _raising).call([{"role": "user", "content": "hi"}])
+        assert isinstance(result, lp.LLMResult)
+        assert result.ok is False
+        assert result.error_class == lp.ERROR_CONNECTION
+        assert key not in (result.error_message or "")
+
+    def test_oserror_str_raises(self):
+        key = _OPAQUE_KEY
+
+        def _raising(url, headers, body, timeout_s):
+            raise _HostileOSError(key)
+
+        result = _provider_for_key(key, _raising).call([{"role": "user", "content": "hi"}])
+        assert isinstance(result, lp.LLMResult)
+        assert result.error_class == lp.ERROR_CONNECTION
+        assert key not in (result.error_message or "")
+
+    def test_url_error_reason_repr_raises(self):
+        import urllib.error
+
+        key = _OPAQUE_KEY
+        err = urllib.error.URLError(_HostileReason(key))
+
+        def _raising(url, headers, body, timeout_s):
+            raise err
+
+        result = _provider_for_key(key, _raising).call([{"role": "user", "content": "hi"}])
+        assert isinstance(result, lp.LLMResult)
+        assert result.error_class == lp.ERROR_CONNECTION
+        assert key not in (result.error_message or "")
+
+    def test_call_never_raises_on_hostile_exceptions(self):
+        for exc_factory in (
+            lambda k: _HostileStrError(k),
+            lambda k: _HostileOSError(k),
+        ):
+            def _raising(url, headers, body, timeout_s, f=exc_factory, k=_OPAQUE_KEY):
+                raise f(k)
+
+            result = _provider_for_key(_OPAQUE_KEY, _raising).call(
+                [{"role": "user", "content": "hi"}]
+            )
+            assert isinstance(result, lp.LLMResult)
+
+    def test_secondary_exception_message_never_surfaces(self, tmp_path, monkeypatch, capsys):
+        """携密的二次异常不得逃出 runner.main，也不得出现在 stderr/Manifest。"""
+        key = _OPAQUE_KEY
+        path = tmp_path / "m.json"
+        manifest = _manifest_for(["api_500_none_attribute"])
+        manifest["model"] = "test-model"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setenv(lp.ENV_BASE_URL, "https://api.example.com/v1")
+        monkeypatch.setenv(lp.ENV_API_KEY, key)
+        monkeypatch.setenv(lp.ENV_MODEL, "test-model")
+
+        def _raising(url, headers, body, timeout_s):
+            raise _HostileOSError(key)
+
+        monkeypatch.setattr(lp, "_urllib_transport", _raising)
+        rc = runner.main(["run", str(path)])  # 不得抛异常
+        assert isinstance(rc, int)
+        captured = capsys.readouterr()
+        assert key not in captured.err
+        assert key not in captured.out
+        assert key not in path.read_text(encoding="utf-8")
+
+    def test_safe_exception_still_yields_redacted_text(self):
+        """普通（非抛异常）异常路径仍输出脱敏后的安全说明，且保留类型名。"""
+        key = "sk-test-SECRET-abcdef123456"
+
+        def _raising(url, headers, body, timeout_s):
+            raise OSError(f"connection reset for key {key}")
+
+        result = lp.LLMProvider(_config(), transport=_raising).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.error_class == lp.ERROR_CONNECTION
+        assert key not in (result.error_message or "")
+        assert "OSError" in (result.error_message or "")
+
+    def test_timeout_classification_unchanged(self):
+        def _timeout(url, headers, body, timeout_s):
+            raise TimeoutError("timed out")
+
+        result = lp.LLMProvider(_config(), transport=_timeout).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.error_class == lp.ERROR_TIMEOUT
+        assert result.attempts == 1
+        assert result.latency_ms is not None
+
+    def test_attempts_and_latency_present_on_hostile_path(self):
+        def _raising(url, headers, body, timeout_s):
+            raise _HostileOSError(_OPAQUE_KEY)
+
+        result = _provider_for_key(_OPAQUE_KEY, _raising).call(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert result.attempts == 1
+        assert result.latency_ms is not None

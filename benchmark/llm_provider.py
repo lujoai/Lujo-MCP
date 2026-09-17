@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable
 
 from benchmark.hashing import text_hash
@@ -80,6 +81,49 @@ def normalize_secrets(secrets: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(sorted(uniq, key=len, reverse=True))
 
 
+def _numeric_secret_values(secrets: tuple[str, ...]) -> set[Decimal]:
+    """把已知凭据中**可无损解析为数字**的部分解析为 Decimal 集合。
+
+    远端可把纯数字形态的 API Key 作为 JSON **number** 回显（`{"usage":{"n":123}}`），
+    `json.loads` 得到 int/float，永远不会进入字符串字面量替换。这里预先把数字形态
+    的 secret 解析为 `Decimal`，供数值标量做**精确、无精度损失**的等价比较。
+
+    - 用 `Decimal`（而非 `float`）：`float("9876543210123456789")` 会丢精度，
+      可能造成误匹配或漏匹配。
+    - 非数字 secret 触发 `InvalidOperation`，静默跳过（它们只走字符串路径）。
+    """
+    values: set[Decimal] = set()
+    for s in secrets:
+        try:
+            values.add(Decimal(s))
+        except (InvalidOperation, ValueError, ArithmeticError):
+            continue
+    return values
+
+
+def _matches_numeric_secret(value: bool | int | float, numeric: set[Decimal]) -> bool:
+    """该数值标量是否等价于某个已知数字凭据（无精度损失）。
+
+    bool 在 int 之前处理：`isinstance(True, int)` 为真，若先当数字会把 `True`
+    与 `1` 混同。这里 bool 只在恰好等于数字凭据 `1`/`0` 时才视为匹配。
+    """
+    if not numeric:
+        return False
+    if isinstance(value, bool):
+        # True/False 对应 1/0；仅当凭据恰为 1/0 时才算匹配。
+        return Decimal(1 if value else 0) in numeric
+    if isinstance(value, int):
+        return Decimal(value) in numeric
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return False  # inf/nan 不匹配任何有限凭据
+        try:
+            return Decimal(repr(value)) in numeric
+        except (InvalidOperation, ValueError):
+            return False
+    return False
+
+
 def _literal_pass(text: str, secrets: tuple[str, ...]) -> str:
     """单次、转义后的字面量替换（不重扫替换结果，故无二次污染/循环）。"""
     if not secrets or not text:
@@ -102,6 +146,34 @@ def redact(text: Any, *, secrets: Iterable[str] | None = None) -> str:
 
 
 _SAFE_PLACEHOLDER = "<unavailable>"
+_UNKNOWN_EXC_NAME = "Exception"
+
+
+def _safe_exc_text(exc: Any, *, prefix: str = "") -> str:
+    """安全提取异常的「类型名 + 文本」，供后续 `redact()` 脱敏。
+
+    f-string 的 `f"{e}"` 会**先**调用 `str(e)` 再进入 `redact`——若 `__str__`/
+    `__repr__` 自身抛携密异常，异常会在 `except` 块内逃逸，`redact` 无从执行。
+    本 helper 保证：
+
+    - 取类型名不依赖实例的 `__str__`/`__repr__`（`type(exc).__name__` 亦包在
+      try 中，防元类 property 抛异常）。
+    - `str()` 抛异常时**不再**对二次异常调用 str/repr，降级为固定占位符。
+    - 自身绝不抛异常；输出仍交由 `redact()` 做字面量 + 正则脱敏。
+    """
+    try:
+        name = type(exc).__name__
+        if not isinstance(name, str) or not name:
+            name = _UNKNOWN_EXC_NAME
+    except BaseException:  # noqa: BLE001 - 元类 __name__ property 可抛
+        name = _UNKNOWN_EXC_NAME
+    try:
+        detail = str(exc)
+        if not isinstance(detail, str):
+            detail = _SAFE_PLACEHOLDER
+    except BaseException:  # noqa: BLE001 - 二次异常绝不 str/repr
+        detail = _SAFE_PLACEHOLDER
+    return f"{prefix}{name}: {detail}"
 
 
 def _safe_redact_text(value: Any, secrets: tuple[str, ...] = ()) -> str:
@@ -115,11 +187,47 @@ def _safe_redact_text(value: Any, secrets: tuple[str, ...] = ()) -> str:
         return _SAFE_PLACEHOLDER
 
 
-def _safe_redact_key(key: Any, secrets: tuple[str, ...] = ()) -> str:
-    """脱敏 dict key；标量 key 保持原值文本，其余走安全脱敏。"""
-    if key is None or isinstance(key, (bool, int, float)):
+def _safe_redact_key(
+    key: Any, secrets: tuple[str, ...] = (), numeric: set[Decimal] | None = None
+) -> str:
+    """脱敏 dict key；标量 key 保持原值文本，其余走安全脱敏。
+
+    数值 key 若等价于已知数字凭据，同样替换为占位符（JSON 对象的 key 恒为字符串，
+    此分支主要覆盖直接 API 调用传入 Python `int`/`float` key 的情形）。
+    """
+    if key is None:
+        return "None"
+    if isinstance(key, (bool, int, float)):
+        if numeric and _matches_numeric_secret(key, numeric):
+            return "<redacted-secret>"
         return str(key)
     return _safe_redact_text(key, secrets)
+
+
+def _redact_metadata(value: Any, known: tuple[str, ...], numeric: set[Decimal]) -> Any:
+    """`redact_metadata` 的内部递归实现（`known`/`numeric` 已预计算，避免逐层重算）。"""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for raw_key, raw_val in value.items():
+            key = _safe_redact_key(raw_key, known, numeric)
+            if key in out:
+                base, n = key, 2
+                while key in out:
+                    key = f"{base}-{n}"
+                    n += 1
+            out[key] = _redact_metadata(raw_val, known, numeric)
+        return out
+    if isinstance(value, list):
+        return [_redact_metadata(v, known, numeric) for v in value]
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, float)):
+        # 数字形态凭据可被远端作为 JSON number 回显；仅当**精确匹配**已知凭据时
+        # 才替换为占位符，否则保留原数值类型（不破坏 token 计数等 telemetry）。
+        if _matches_numeric_secret(value, numeric):
+            return "<redacted-secret>"
+        return value
+    return _safe_redact_text(value, known)
 
 
 def redact_metadata(value: Any, *, secrets: Iterable[str] | None = None) -> Any:
@@ -135,24 +243,11 @@ def redact_metadata(value: Any, *, secrets: Iterable[str] | None = None) -> Any:
       `<redacted-key-2>`），绝不静默覆盖丢失。
     - key/value 字符串化抛异常时返回固定占位符，绝不向外抛携密异常。
     - `secrets` 为已知真实凭据（如 `api_key`），按字面量脱敏后再走正则。
+    - **数字标量**：精确匹配已知数字凭据时替换为占位符，否则保留原值。
     """
     known = normalize_secrets(secrets)
-    if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        for raw_key, raw_val in value.items():
-            key = _safe_redact_key(raw_key, known)
-            if key in out:
-                base, n = key, 2
-                while key in out:
-                    key = f"{base}-{n}"
-                    n += 1
-            out[key] = redact_metadata(raw_val, secrets=known)
-        return out
-    if isinstance(value, list):
-        return [redact_metadata(v, secrets=known) for v in value]
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return _safe_redact_text(value, known)
+    numeric = _numeric_secret_values(known)
+    return _redact_metadata(value, known, numeric)
 
 
 @dataclass(slots=True)
@@ -397,14 +492,18 @@ class LLMProvider:
             return LLMResult(
                 ok=False,
                 error_class=ERROR_CONNECTION,
-                error_message=redact(f"connection error: {e.reason!r}", secrets=secrets),
+                error_message=redact(
+                    _safe_exc_text(e.reason, prefix="connection error: "), secrets=secrets
+                )[:_MAX_ERROR_TEXT],
                 latency_ms=self._elapsed_ms(started),
             )
         except OSError as e:
             return LLMResult(
                 ok=False,
                 error_class=ERROR_CONNECTION,
-                error_message=redact(f"network error: {e}", secrets=secrets),
+                error_message=redact(
+                    _safe_exc_text(e, prefix="network error: "), secrets=secrets
+                )[:_MAX_ERROR_TEXT],
                 latency_ms=self._elapsed_ms(started),
             )
         except Exception as e:  # noqa: BLE001 - 兜底：任何异常都必须脱敏后落账，
@@ -412,7 +511,7 @@ class LLMProvider:
             return LLMResult(
                 ok=False,
                 error_class=ERROR_CONNECTION,
-                error_message=redact(f"{type(e).__name__}: {e}", secrets=secrets),
+                error_message=redact(_safe_exc_text(e), secrets=secrets)[:_MAX_ERROR_TEXT],
                 latency_ms=self._elapsed_ms(started),
             )
 
