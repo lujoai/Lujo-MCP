@@ -141,6 +141,65 @@ class TestDeployConfig:
             f"与权威 {authority_raw!r} 不一致"
         )
 
+    # ------------------------------------------------------------------
+    # M2-ENVSYNC：根 .env.example（复制即生效的开发示例）LLM 数值契约
+    # ------------------------------------------------------------------
+
+    def _env_example_llm_value(self, key: str) -> str | None:
+        """提取根 .env.example 中 `KEY=value` 形式的 LLM 键值（标准库解析）。"""
+        content = (_REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+        m = re.search(rf"^{key}=([^\s#]+)", content, re.M)
+        return m.group(1) if m else None
+
+    def test_env_example_llm_values_match_authority(self):
+        """根 .env.example 的 LLM_TIMEOUT/LLM_TEMPERATURE 必须等于权威默认 30/0.3。
+
+        M2-ENVSYNC：原 60/0.7 出自 6a610f0（2026-07-24 无说明杂务提交）的
+        搭车漂移——该文件被用户"复制为 .env"后立即生效，示例值不得偏离
+        app/config.py 源码权威默认。
+        """
+        for key, field, typ in (
+            ("LLM_TIMEOUT", "llm_timeout", int),
+            ("LLM_TEMPERATURE", "llm_temperature", float),
+        ):
+            raw = self._env_example_llm_value(key)
+            authority_raw = _config_field_default(field)
+            assert raw is not None, f".env.example 缺少 {key} 声明"
+            assert authority_raw is not None, f"app/config.py 缺少 {field} 字面默认值"
+            assert raw.strip() != "", f".env.example {key} 为空字符串"
+            assert typ(raw) == typ(authority_raw), (
+                f".env.example {key}={raw!r} 与权威口径 app/config.py.{field}="
+                f"{authority_raw!r} 不一致（历史漂移须对齐权威值）"
+            )
+
+    def test_llm_numeric_defaults_consistent_across_all_surfaces(self):
+        """源码/dev/prod/生产模板/开发示例五个表面的 timeout 与 temperature 全对齐。"""
+        timeout_authority = int(_config_field_default("llm_timeout"))
+        temp_authority = float(_config_field_default("llm_temperature"))
+        dev = _compose_llm_defaults("docker-compose.yaml")
+        prod = _compose_llm_defaults("deploy/docker-compose.prod.yml")
+        prod_tpl = (_REPO_ROOT / "deploy/env.production.example").read_text(encoding="utf-8")
+        surfaces = {
+            "app/config.py": (timeout_authority, temp_authority),
+            "dev compose": (int(dev["LLM_TIMEOUT"]), float(dev["LLM_TEMPERATURE"])),
+            "prod compose": (int(prod["LLM_TIMEOUT"]), float(prod["LLM_TEMPERATURE"])),
+            "env.production.example": (
+                int(re.search(r"^LLM_TIMEOUT=([^\s#]+)", prod_tpl, re.M).group(1)),
+                float(re.search(r"^LLM_TEMPERATURE=([^\s#]+)", prod_tpl, re.M).group(1)),
+            ),
+            ".env.example": (
+                int(self._env_example_llm_value("LLM_TIMEOUT")),
+                float(self._env_example_llm_value("LLM_TEMPERATURE")),
+            ),
+        }
+        for surface, (timeout, temperature) in surfaces.items():
+            assert timeout == timeout_authority, (
+                f"{surface} LLM_TIMEOUT={timeout} 与权威 {timeout_authority} 不一致"
+            )
+            assert temperature == temp_authority, (
+                f"{surface} LLM_TEMPERATURE={temperature} 与权威 {temp_authority} 不一致"
+            )
+
     def test_llm_temperature_consistent_across_deploy_surfaces(self):
         """dev compose / prod compose / env.production.example 三处 temperature
         必须一致且等于 app/config.py 权威默认（M2-CONFIGSYNC 对齐契约）。"""
