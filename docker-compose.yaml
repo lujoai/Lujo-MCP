@@ -24,9 +24,12 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
-      LLM_TIMEOUT: ${LLM_TIMEOUT:-}
-      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-}
-      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-}
+      # M2-DEVFIX：数值变量必须带非空默认值（对齐 app/config.py 权威默认
+      # llm_timeout=30 / llm_temperature=0.3 / llm_max_retries=3）。此前
+      # ${VAR:-} 注入空字符串，pydantic 解析 int/float 失败 → app 启动即崩。
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-30}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
       API_KEY: ${API_KEY:?必须设置}
     ports:
       # FIX(v0.7.1-b6-8): 仅绑定回环 127.0.0.1（对齐 prod compose），不再向
