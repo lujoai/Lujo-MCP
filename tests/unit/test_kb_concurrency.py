@@ -8,23 +8,20 @@
 import threading
 import time
 
-import pytest
-
-import app.rag.knowledge_base as kb_module
 from app.rag.knowledge_base import KnowledgeBaseStore
 from tests.unit.test_kb_persistence import FakeKnowledgeBaseStore
 
 
 def _make_store_with_fake():
+    """AD-1 方案 B：经 persist_store 显式注入持久化替身。"""
     fake = FakeKnowledgeBaseStore()
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake, max_entries=10)
     return store, fake
 
 
-def test_concurrent_upsert_out_of_order_preserves_latest(monkeypatch):
+def test_concurrent_upsert_out_of_order_preserves_latest():
     """B04: 同指纹并发 upsert 锁外持久化倒序时，不得用旧快照覆盖新快照。"""
     store, fake = _make_store_with_fake()
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: fake)
 
     t1_started = threading.Event()
     t2_finished = threading.Event()
@@ -78,10 +75,9 @@ def test_concurrent_upsert_out_of_order_preserves_latest(monkeypatch):
     assert persisted["analysis"]["root_cause"] == "new_cause"
 
 
-def test_concurrent_verification_out_of_order_preserves_latest(monkeypatch):
+def test_concurrent_verification_out_of_order_preserves_latest():
     """B04: 同指纹并发验证回写倒序时，不得用旧统计覆盖新统计。"""
     store, fake = _make_store_with_fake()
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: fake)
 
     store.upsert(
         fingerprint="fp-verify",
@@ -127,10 +123,9 @@ def test_concurrent_verification_out_of_order_preserves_latest(monkeypatch):
     assert persisted["case_confidence"] == 0.9
 
 
-def test_clear_concurrent_with_in_flight_upsert(monkeypatch):
+def test_clear_concurrent_with_in_flight_upsert():
     """B04: clear 执行期间/之后，旧并发写入不得复活落库。"""
     store, fake = _make_store_with_fake()
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: fake)
 
     upsert_started = threading.Event()
     clear_finished = threading.Event()

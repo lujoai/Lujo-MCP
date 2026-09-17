@@ -23,7 +23,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 from app.config import settings
 from app.rag.debug_case import (
@@ -31,12 +31,37 @@ from app.rag.debug_case import (
     compute_type_fingerprint,
 )
 from app.rag.vector_store import get_vector_store
-from app.runtime.core.storage.factory import get_knowledge_store
 
 logger = logging.getLogger("lujo-mcp.knowledge-base")
 
 DEFAULT_MAX_ENTRIES = 100
 EVICTION_POLICY = "lru"
+
+
+class KnowledgePersistStore(Protocol):
+    """RAG 层定义的最小持久化契约（AD-1 方案 B）。
+
+    由上层 Composition Root（HTTP lifespan / stdio / 统一模式启动入口）从
+    Runtime Storage Factory 取得实际 Store 并注入；Runtime 的
+    KnowledgeBaseStorage 实现（SQLite / NoOp）以结构化类型自然满足本协议。
+    RAG 层不感知也不 import 任何 Runtime 类型。
+    """
+
+    def upsert_kb_entry(self, entry: dict[str, Any]) -> None: ...
+
+    def update_kb_verification(
+        self,
+        fingerprint: str,
+        verify_count: int,
+        case_confidence: float,
+        updated_at: float,
+    ) -> bool: ...
+
+    def delete_kb_entry(self, fingerprint: str) -> bool: ...
+
+    def delete_all_kb_entries(self) -> int: ...
+
+    def list_recent_kb_entries(self, limit: int) -> list[dict[str, Any]]: ...
 
 # M1-B: source 优先级——低优先级 source 的 upsert 不得覆盖高优先级的
 # analysis / fix_suggestion。verify_count / case_confidence 总是保留取 max。
@@ -97,12 +122,19 @@ def _extract_case_fields(analysis: dict[str, Any]) -> tuple[str, str]:
 class KnowledgeBaseStore:
     """基于进程内 OrderedDict 的最小知识库实现（含三级 fallback 索引）。"""
 
-    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES):
+    def __init__(
+        self,
+        max_entries: int = DEFAULT_MAX_ENTRIES,
+        persist_store: KnowledgePersistStore | None = None,
+    ):
         if max_entries <= 0:
             raise ValueError("max_entries must be greater than 0")
         self.max_entries = max_entries
         self.eviction_policy = EVICTION_POLICY
         self._entries: "OrderedDict[str, KnowledgeBaseEntry]" = OrderedDict()
+        # AD-1 方案 B：持久化 Store 由上层 Composition Root 注入；未注入时
+        # 保持纯内存行为（等价历史 NoOp 降级）。RAG 层不构造、不获取 Store。
+        self._persist_store = persist_store
         # 归一化指纹 → 精确指纹集合（L1.5）
         self._norm_index: dict[str, set[str]] = {}
         # 类型指纹 → 精确指纹集合（L2）
@@ -114,6 +146,16 @@ class KnowledgeBaseStore:
         self._persisted_generations: dict[str, int] = {}
         self._fp_locks: dict[str, threading.Lock] = {}
         self._fp_locks_guard = threading.Lock()
+
+    def install_persist_store(
+        self, persist_store: KnowledgePersistStore | None
+    ) -> None:
+        """注入/卸载持久化 Store（AD-1 方案 B，供 Composition Root 装配）。
+
+        生产入口经 bootstrap_knowledge_base(persist_store=...) 调用；
+        传 None 表示卸载（无持久层，纯内存语义）。
+        """
+        self._persist_store = persist_store
 
     def _get_fp_lock(self, fingerprint: str) -> threading.Lock:
         with self._fp_locks_guard:
@@ -470,16 +512,11 @@ class KnowledgeBaseStore:
                 exc_info=True,
             )
 
-    # ── PG 写穿持久化（v0.5.3）──
+    # ── 持久化写穿（v0.5.3；AD-1 方案 B：Store 由上层注入）──
 
-    def _persistent_store(self):
-        """获取持久化存储实例；不可用时返回 None（KB 退回纯内存行为）。"""
-        try:
-            return get_knowledge_store()
-        except Exception:
-            logger.warning("KB persistent store unavailable, falling back to memory-only",
-                           exc_info=True)
-            return None
+    def _persistent_store(self) -> KnowledgePersistStore | None:
+        """返回注入的持久化 Store；未注入时返回 None（KB 退回纯内存行为）。"""
+        return self._persist_store
 
     def _persist_upsert(
         self,
@@ -826,11 +863,17 @@ _bootstrap_lock = threading.Lock()
 _bootstrap_done = False
 
 
-def bootstrap_knowledge_base() -> dict[str, int]:
+def bootstrap_knowledge_base(
+    persist_store: KnowledgePersistStore | None = None,
+) -> dict[str, int]:
     """统一知识库启动初始化（回灌 + 种子加载）。
 
-    保证单进程内只执行一次（幂等）。
-    供 HTTP lifespan 与 stdio transport 传输入口共享。
+    保证单进程内只执行一次（幂等）。供 HTTP lifespan 与 stdio transport 传输入口共享。
+
+    AD-1 方案 B：persist_store 由上层 Composition Root 从 Runtime Storage
+    Factory 取得后传入，启动时安装到进程 singleton；未传（None）表示本进程
+    无持久层（纯内存语义）。重复调用（含传不同 Store）在首次完成后整体跳过，
+    不会中途换 Store 或重复 load/seed。
     """
     global _bootstrap_done
     if _bootstrap_done:
@@ -839,6 +882,9 @@ def bootstrap_knowledge_base() -> dict[str, int]:
     with _bootstrap_lock:
         if _bootstrap_done:
             return {"persisted": 0, "seed": 0}
+
+        if persist_store is not None:
+            _knowledge_base.install_persist_store(persist_store)
 
         persisted_count = 0
         try:
@@ -862,7 +908,8 @@ def bootstrap_knowledge_base() -> dict[str, int]:
 
 
 def _reset_bootstrap_state() -> None:
-    """内部辅助：重置 bootstrap 状态（仅供单元测试隔离）。"""
+    """内部辅助：重置 bootstrap 状态并卸载注入的持久层（仅供单元测试隔离）。"""
     global _bootstrap_done
     with _bootstrap_lock:
         _bootstrap_done = False
+        _knowledge_base.install_persist_store(None)

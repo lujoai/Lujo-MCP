@@ -50,8 +50,9 @@ def kb_sqlite(tmp_path, monkeypatch):
     """把 KB 持久化重定向到临时 SQLite，并清空全局 KB 单例，实现测试隔离。"""
     db_path = str(tmp_path / "m1c_kb.sqlite3")
     sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
+    # AD-1 方案 B：经生产装配 API 把 Store 显式注入进程 singleton
     kb = kb_module.get_knowledge_base()
+    kb.install_persist_store(sqlite_store)
     kb.clear()
     return sqlite_store, kb
 
@@ -131,8 +132,8 @@ class TestFullLifecycleChain:
         assert rows[0]["fingerprint"] == FINGERPRINT
         assert rows[0]["verify_count"] == 1
 
-        # 7. 模拟重启：全新 KnowledgeBaseStore + 从持久层回灌
-        store2 = kb_module.KnowledgeBaseStore(max_entries=100)
+        # 7. 模拟重启：全新 KnowledgeBaseStore + 从持久层回灌（注入同一 Store）
+        store2 = kb_module.KnowledgeBaseStore(persist_store=sqlite_store, max_entries=100)
         loaded = store2.load_from_persistent()
         assert loaded == 1
         reloaded = store2.get(FINGERPRINT)
@@ -186,7 +187,7 @@ class TestSourcePriorityAndIndex:
         assert entry["normalized_fingerprint"] == compute_normalized_fingerprint(EXC_TYPE, MESSAGE)
         assert entry["type_fingerprint"] == compute_type_fingerprint(EXC_TYPE)
 
-        store2 = kb_module.KnowledgeBaseStore(max_entries=100)
+        store2 = kb_module.KnowledgeBaseStore(persist_store=sqlite_store, max_entries=100)
         store2.load_from_persistent()
         reloaded = store2.get(FINGERPRINT)
         assert reloaded["source"] == "seed"

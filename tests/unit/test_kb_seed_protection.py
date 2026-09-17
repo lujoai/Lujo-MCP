@@ -7,8 +7,6 @@
 """
 import pytest
 
-from app.config import settings
-import app.rag.knowledge_base as kb_module
 from app.rag.knowledge_base import KnowledgeBaseStore
 from app.rag.seed_data import SEED_CASES
 from app.runtime.core.storage.sqlite_kb_store import SQLiteKnowledgeBaseStore
@@ -23,22 +21,20 @@ def _upsert_learned(store: KnowledgeBaseStore, fp: str):
     )
 
 
-def test_seed_does_not_evict_learned_entries_when_full(tmp_path, monkeypatch):
+def test_seed_does_not_evict_learned_entries_when_full(tmp_path):
     """B06 红测试：满容量重启后，seed 重放不得挤掉既有学习经验。"""
     db_path = str(tmp_path / "b06_full.sqlite3")
     sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
-    monkeypatch.setattr(settings, "kb_persist_enabled", True)
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
 
     # 设容量上限为 3
-    store = KnowledgeBaseStore(max_entries=3)
+    store = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=3)
     _upsert_learned(store, "fp-learned-1")
     _upsert_learned(store, "fp-learned-2")
     _upsert_learned(store, "fp-learned-3")
     assert store.size() == 3
 
     # 模拟重启：新实例回灌持久经验
-    store_restarted = KnowledgeBaseStore(max_entries=3)
+    store_restarted = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=3)
     loaded = store_restarted.load_from_persistent()
     assert loaded == 3
     assert store_restarted.get("fp-learned-1") is not None
@@ -53,15 +49,13 @@ def test_seed_does_not_evict_learned_entries_when_full(tmp_path, monkeypatch):
     assert store_restarted.size() == 3
 
 
-def test_seed_does_not_overwrite_existing_verification_stats(tmp_path, monkeypatch):
+def test_seed_does_not_overwrite_existing_verification_stats(tmp_path):
     """B06 红测试：已有条目的验证统计（verify_count 等）不得被 seed 重放重置。"""
     db_path = str(tmp_path / "b06_stats.sqlite3")
     sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
-    monkeypatch.setattr(settings, "kb_persist_enabled", True)
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
 
     seed_fp = SEED_CASES[0]["fingerprint"]
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=10)
 
     # 先以 seed 插入一条
     store.load_seed_cases([SEED_CASES[0]])
@@ -82,7 +76,7 @@ def test_seed_does_not_overwrite_existing_verification_stats(tmp_path, monkeypat
     assert entry_after["case_confidence"] == 0.95
 
 
-def test_cold_start_loads_all_seeds(monkeypatch):
+def test_cold_start_loads_all_seeds():
     """B06: 首次冷启动（空库且容量充足）仍正常加载全部种子。"""
     store = KnowledgeBaseStore(max_entries=100)
     assert store.size() == 0

@@ -1,15 +1,14 @@
 """v0.5.3 KB 持久化（写穿 + 启动回灌）单元测试。
 
-用内存版 FakeKnowledgeBaseStore 替换 factory 分发的持久化实例，
-验证 KnowledgeBaseStore 的写穿行为与回灌行为；PG 真实落库由
-tests/integration/test_pg_integration.py 覆盖。
+用内存版 FakeKnowledgeBaseStore 经 persist_store 显式注入（AD-1 方案 B），
+验证 KnowledgeBaseStore 的写穿行为与回灌行为；SQLite 真实落库由
+tests/unit/test_sqlite_kb_store.py 用临时路径覆盖。
 """
 
 import time
 
 import pytest
 
-import app.rag.knowledge_base as kb_module
 from app.rag.knowledge_base import KnowledgeBaseStore
 from app.runtime.core.storage.base import KnowledgeBaseStorage
 from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
@@ -74,10 +73,9 @@ class FakeKnowledgeBaseStore(KnowledgeBaseStorage):
 
 
 @pytest.fixture
-def fake_store(monkeypatch):
-    fake = FakeKnowledgeBaseStore()
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: fake)
-    return fake
+def fake_store():
+    """注入用内存版持久化替身（AD-1 方案 B：经 persist_store 显式注入）。"""
+    return FakeKnowledgeBaseStore()
 
 
 def _upsert(store: KnowledgeBaseStore, fp: str, source: str = "llm"):
@@ -95,7 +93,7 @@ def _upsert(store: KnowledgeBaseStore, fp: str, source: str = "llm"):
 
 
 def test_upsert_writes_through_to_persistent_store(fake_store):
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
 
     entry = _upsert(store, "fp-1")
 
@@ -111,7 +109,7 @@ def test_upsert_writes_through_to_persistent_store(fake_store):
 
 
 def test_upsert_eviction_deletes_from_persistent_store(fake_store):
-    store = KnowledgeBaseStore(max_entries=2)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=2)
 
     _upsert(store, "fp-1")
     _upsert(store, "fp-2")
@@ -126,7 +124,7 @@ def test_upsert_eviction_deletes_from_persistent_store(fake_store):
 
 def test_upsert_failure_does_not_evict_old_entry(fake_store):
     """B03: 写穿失败时不得删除被驱逐旧条目，旧条目必须仍在内存与持久层。"""
-    store = KnowledgeBaseStore(max_entries=2)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=2)
     _upsert(store, "fp-1")
     _upsert(store, "fp-2")
     # 此时 LRU 顺序: fp-1 (最旧), fp-2 (最新)
@@ -150,9 +148,8 @@ def test_sqlite_upsert_failure_keeps_old_entry_on_restart(tmp_path, monkeypatch)
 
     db_path = str(tmp_path / "b03_test.sqlite3")
     sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
 
-    store = KnowledgeBaseStore(max_entries=2)
+    store = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=2)
     _upsert(store, "fp-1")
     _upsert(store, "fp-2")
     assert len(sqlite_store.list_recent_kb_entries(limit=10)) == 2
@@ -172,7 +169,7 @@ def test_sqlite_upsert_failure_keeps_old_entry_on_restart(tmp_path, monkeypatch)
     assert "fp-1" in raw_rows
 
     # 3. 模拟重启回灌：新实例从持久层恢复，fp-1 完好无损
-    store_restart = KnowledgeBaseStore(max_entries=2)
+    store_restart = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=2)
     loaded = store_restart.load_from_persistent()
     assert loaded == 2
     assert store_restart.get("fp-1") is not None
@@ -180,7 +177,7 @@ def test_sqlite_upsert_failure_keeps_old_entry_on_restart(tmp_path, monkeypatch)
 
 
 def test_record_verification_writes_through(fake_store):
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
     _upsert(store, "fp-1")
 
     result = store.record_verification("fp-1", 0.85)
@@ -198,7 +195,7 @@ def test_record_verification_writes_through(fake_store):
 
 
 def test_clear_deletes_all_from_persistent_store(fake_store):
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
     _upsert(store, "fp-1")
     _upsert(store, "fp-2")
 
@@ -209,9 +206,8 @@ def test_clear_deletes_all_from_persistent_store(fake_store):
     assert store.size() == 0
 
 
-def test_clear_noop_memory_backend_returns_true(monkeypatch):
-    """约束 1：无持久层（memory 后端，get_knowledge_store 返回 None）时，clear() 返回 True。"""
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: None)
+def test_clear_noop_memory_backend_returns_true():
+    """约束 1：无持久层（未注入 Store，memory 后端语义）时，clear() 返回 True。"""
     store = KnowledgeBaseStore(max_entries=10)
     _upsert(store, "fp-1")
     assert store.size() == 1
@@ -221,7 +217,7 @@ def test_clear_noop_memory_backend_returns_true(monkeypatch):
 
 
 def test_record_verification_missing_entry_skips_persist(fake_store):
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
 
     assert store.record_verification("missing", 0.9) is None
     assert fake_store.verification_calls == []
@@ -234,7 +230,7 @@ def test_record_verification_missing_entry_skips_persist(fake_store):
 
 def test_persist_failure_degrades_gracefully(fake_store):
     fake_store.fail_on_write = RuntimeError("pg down")
-    store = KnowledgeBaseStore(max_entries=2)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=2)
 
     entry = _upsert(store, "fp-1")  # 不应抛异常
     assert entry["fingerprint"] == "fp-1"
@@ -246,7 +242,7 @@ def test_persist_failure_degrades_gracefully(fake_store):
 
 def test_clear_persist_failure_refuses_clear_and_keeps_memory(fake_store, caplog):
     """决策 6 (U12)：持久层删除失败时，clear() 必须返回 False 且不得清空内存，防止重启复活。"""
-    store = KnowledgeBaseStore(max_entries=2)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=2)
     _upsert(store, "fp-1")
     assert store.size() == 1
 
@@ -264,17 +260,19 @@ def test_clear_persist_failure_refuses_clear_and_keeps_memory(fake_store, caplog
 
 def test_load_failure_degrades_gracefully(fake_store):
     fake_store.fail_on_list = RuntimeError("pg down")
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
 
     assert store.load_from_persistent() == 0
 
 
-def test_persistent_store_unavailable_falls_back_to_memory_only(monkeypatch):
-    def _raise():
-        raise RuntimeError("backend init failed")
+def test_persistent_store_unavailable_falls_back_to_memory_only():
+    """注入的 Store 完全故障（方法全抛错）时，KB 主流程不受影响（AD-1 注入语义迁移）。"""
 
-    monkeypatch.setattr(kb_module, "get_knowledge_store", _raise)
-    store = KnowledgeBaseStore(max_entries=10)
+    class _BrokenStore(FakeKnowledgeBaseStore):
+        def upsert_kb_entry(self, entry):
+            raise RuntimeError("backend init failed")
+
+    store = KnowledgeBaseStore(persist_store=_BrokenStore(), max_entries=10)
 
     entry = _upsert(store, "fp-1")  # 不应抛异常
     assert entry["fingerprint"] == "fp-1"
@@ -301,7 +299,7 @@ def test_load_from_persistent_restores_entries_with_stats(fake_store):
         "case_confidence": 0.9,
     }
 
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
     count = store.load_from_persistent()
 
     assert count == 1
@@ -336,7 +334,7 @@ def test_load_from_persistent_respects_max_entries(fake_store):
             "case_confidence": 0.0,
         }
 
-    store = KnowledgeBaseStore(max_entries=3)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=3)
     count = store.load_from_persistent()
 
     assert count == 3
@@ -364,7 +362,7 @@ def test_load_from_persistent_orders_eviction_by_updated_at(fake_store):
             "case_confidence": 0.0,
         }
 
-    store = KnowledgeBaseStore(max_entries=3)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=3)
     store.load_from_persistent()
 
     # 写入第 4 条触发驱逐：应驱逐 updated_at 最旧的 fp-0
@@ -377,7 +375,7 @@ def test_load_from_persistent_orders_eviction_by_updated_at(fake_store):
 
 def test_load_from_persistent_overrides_in_memory_duplicates(fake_store):
     now = time.time()
-    store = KnowledgeBaseStore(max_entries=10)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
     _upsert(store, "fp-1")  # 内存先有旧版本（写穿进 fake rows）
     # 模拟 PG 中存在更新的权威版本（如上次运行写穿的结果）
     fake_store.rows["fp-1"] = {

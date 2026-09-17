@@ -581,14 +581,12 @@ class TestSqliteCompat:
 
     def test_sqlite_write_through_preserves_source_priority(self, tmp_path, monkeypatch):
         """写穿到 SQLite 后回灌，source 优先级保护仍然生效。"""
-        import app.rag.knowledge_base as kb_module
         from app.runtime.core.storage.sqlite_kb_store import SQLiteKnowledgeBaseStore
 
         db_path = str(tmp_path / "priority_test.sqlite3")
         sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
-        monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
 
-        store = KnowledgeBaseStore(max_entries=10)
+        store = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=10)
         # 先写 seed
         store.upsert(
             fingerprint="fp-priority",
@@ -605,7 +603,7 @@ class TestSqliteCompat:
         )
 
         # 模拟重启：新实例回灌
-        store2 = KnowledgeBaseStore(max_entries=10)
+        store2 = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=10)
         loaded = store2.load_from_persistent()
         assert loaded == 1
 

@@ -288,10 +288,12 @@ def _parse_runtime_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def _run_stdio_transport() -> None:
     """运行官方 MCP stdio transport。单独抽出以便统一模式复用。"""
+    # AD-1 方案 B：Composition Root 取得 KB 持久化 Store 并注入 RAG 层。
     try:
         from app.rag.knowledge_base import bootstrap_knowledge_base
+        from app.runtime.core.storage.factory import get_knowledge_store
 
-        bootstrap_knowledge_base()
+        bootstrap_knowledge_base(persist_store=get_knowledge_store())
     except Exception:
         logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
 
@@ -617,21 +619,26 @@ async def main(argv: list[str] | None = None):
         _register_signal_handlers()
     try:
         # ── WP3（Step 3 决策 6）：存储后端 eager gate ──
-        # 必须是本 try 的第一条语句，早于下方 bootstrap_knowledge_base()：后者经
-        # factory.get_knowledge_store() 抵达 _validate_backend()，而它被内层裸
-        # `except Exception` 包住——gate 若落在其作用域内，STORAGE_BACKEND=postgresql
-        # 的拒绝会被吞成一条 warning，进程照常启动并静默回退 memory（DEV_PLAN S3-2
-        # 明令禁止）。放在 try 内而非 try 外，是为了让 finally 的 cleanup_resources()
+        # 必须是本 try 的第一条语句，早于下方 Factory 取 Store 与
+        # bootstrap_knowledge_base()：两者都被内层裸 `except Exception` 包住，
+        # gate 若落在其作用域内，STORAGE_BACKEND=postgresql 的拒绝会被吞成一条
+        # warning，进程照常启动并静默回退 memory（DEV_PLAN S3-2 明令禁止）。
+        # 放在 try 内而非 try 外，是为了让 finally 的 cleanup_resources()
         # 仍然执行：函数开头 ensure_exit_supervisor() 已创建进程级监督线程。
-        from app.runtime.core.storage.factory import _validate_backend
+        from app.runtime.core.storage.factory import _validate_backend, get_knowledge_store
 
         _validate_backend()
+
+        # ── AD-1 方案 B：Composition Root 取得 KB 持久化 Store 并注入 RAG 层 ──
+        # 必须位于下方 bootstrap 的裸 except 之外（gate 之后、容错块之前），
+        # 后端拒绝保持 fail-closed；app/rag 不再依赖 app.runtime。
+        kb_persist_store = get_knowledge_store()
 
         # ── B05: 统一知识库启动初始化（回灌 + 种子加载，stdio/HTTP 共享）──
         try:
             from app.rag.knowledge_base import bootstrap_knowledge_base
 
-            bootstrap_knowledge_base()
+            bootstrap_knowledge_base(persist_store=kb_persist_store)
         except Exception:
             logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
 

@@ -286,10 +286,13 @@ async def lifespan(app: FastAPI):
             startup_cleanup_stack.append(("repair_queue", _undo_repair_queue))
 
         # ── B05: 统一知识库启动初始化（回灌 + 种子加载，失败降级不阻断）──
+        # AD-1 方案 B：Composition Root 从 Runtime Storage Factory 取得 KB
+        # 持久化 Store 并注入 RAG 层（app/rag 不再依赖 app.runtime）。
         try:
             from app.rag.knowledge_base import bootstrap_knowledge_base
+            from app.runtime.core.storage.factory import get_knowledge_store
 
-            bootstrap_knowledge_base()
+            bootstrap_knowledge_base(persist_store=get_knowledge_store())
         except Exception:
             logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
     except BaseException:

@@ -16,11 +16,17 @@ from app.runtime.core.storage.sqlite_kb_store import SQLiteKnowledgeBaseStore
 
 @pytest.fixture
 def sqlite_with_preset(tmp_path, monkeypatch):
-    """预置包含历史经验的 SQLite 数据库。"""
+    """预置包含历史经验的 SQLite 数据库。
+
+    AD-1 方案 B：patch 上层 Storage Factory（而非 rag 层），Composition
+    Root 从 factory 取得 Store 注入 —— 测试与生产装配走同一语义。
+    """
     db_path = str(tmp_path / "bootstrap_test.sqlite3")
     store = SQLiteKnowledgeBaseStore(db_path=db_path)
     monkeypatch.setattr(settings, "kb_persist_enabled", True)
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: store)
+    monkeypatch.setattr(
+        "app.runtime.core.storage.factory.get_knowledge_store", lambda: store
+    )
 
     # 先清理全局内存与持久层，并重置 bootstrap 标志
     clear_knowledge_base()
@@ -39,6 +45,14 @@ def sqlite_with_preset(tmp_path, monkeypatch):
     })
 
     return store
+
+
+def _bootstrap_via_composition_root() -> dict:
+    """按生产装配语义调用 bootstrap：Factory 取 Store → 注入（AD-1 方案 B）。"""
+    from app.rag.knowledge_base import bootstrap_knowledge_base
+    from app.runtime.core.storage.factory import get_knowledge_store
+
+    return bootstrap_knowledge_base(persist_store=get_knowledge_store())
 
 
 @pytest.mark.asyncio
@@ -70,9 +84,7 @@ async def test_stdio_mode_bootstraps_knowledge_base(sqlite_with_preset, monkeypa
 
 def test_unified_mode_bootstraps_knowledge_base(sqlite_with_preset):
     """B05: 统一模式（FastAPI lifespan）启动入口调用的 bootstrap 执行后能命中既有经验。"""
-    from app.rag.knowledge_base import bootstrap_knowledge_base
-
-    res = bootstrap_knowledge_base()
+    res = _bootstrap_via_composition_root()
     assert res["persisted"] >= 1
 
     entry = get_knowledge_entry("fp-preset-b05")
@@ -82,11 +94,9 @@ def test_unified_mode_bootstraps_knowledge_base(sqlite_with_preset):
 
 def test_bootstrap_idempotency(sqlite_with_preset):
     """B05: bootstrap_knowledge_base 在同一进程内只初始化一次。"""
-    from app.rag.knowledge_base import bootstrap_knowledge_base
-
-    r1 = bootstrap_knowledge_base()
+    r1 = _bootstrap_via_composition_root()
     assert r1["persisted"] >= 1
 
     # 第二次调用必须跳过
-    r2 = bootstrap_knowledge_base()
+    r2 = _bootstrap_via_composition_root()
     assert r2 == {"persisted": 0, "seed": 0}

@@ -481,10 +481,12 @@ class TestStdioEagerGate:
 
         try_idx = _find(lambda ln: ln.strip() == "try:", "main() 外层 try")
         gate_idx = _find(lambda ln: ln.strip() == "_validate_backend()", "gate 调用")
-        # 整行精确匹配：gate 的说明注释里也出现了 bootstrap_knowledge_base() 字样，
-        # 用子串匹配会把注释行误判成调用点。
+        # 前缀匹配调用行（AD-1 方案 B 后调用带 persist_store 参数）：
+        # gate 的说明注释里也出现了 bootstrap_knowledge_base() 字样（以 # 开头），
+        # 用子串匹配会把注释行误判成调用点，前缀 + 去注释已足够精确。
         bootstrap_idx = _find(
-            lambda ln: ln.strip() == "bootstrap_knowledge_base()",
+            lambda ln: ln.strip().startswith("bootstrap_knowledge_base(")
+            and not ln.strip().startswith("#"),
             "bootstrap_knowledge_base() 调用",
         )
 

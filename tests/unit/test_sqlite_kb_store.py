@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-import app.rag.knowledge_base as kb_module
 from app.rag.knowledge_base import KnowledgeBaseStore
 from app.runtime.core.storage import factory as storage_factory
 from app.runtime.core.storage.base import KnowledgeBaseStorage
@@ -170,13 +169,12 @@ def test_schema_init_is_idempotent(db_path):
 # ── 3. 端到端：写穿 → 回灌 → 命中（真实链路） ────────────────────────
 
 
-def test_write_through_then_reload_restores_hit(monkeypatch, db_path):
-    """真实链路：KnowledgeBaseStore 写穿 SQLite → 新实例回灌 → 经验可命中。"""
+def test_write_through_then_reload_restores_hit(db_path):
+    """真实链路：注入 SQLite Store 写穿 → 新实例回灌 → 经验可命中。"""
     sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
 
     # 第一次运行：分析结果沉淀（写穿）
-    first = KnowledgeBaseStore(max_entries=10)
+    first = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=10)
     first.upsert(
         fingerprint="fp-e2e",
         analysis={
@@ -190,7 +188,7 @@ def test_write_through_then_reload_restores_hit(monkeypatch, db_path):
     first.record_verification("fp-e2e", 0.9)
 
     # 模拟重启：新进程实例从同一文件回灌
-    second = KnowledgeBaseStore(max_entries=10)
+    second = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=10)
     restored = second.load_from_persistent()
 
     assert restored == 1
@@ -204,12 +202,11 @@ def test_write_through_then_reload_restores_hit(monkeypatch, db_path):
     assert len(second.get_by_type_fingerprint(hit["type_fingerprint"])) == 1
 
 
-def test_write_through_eviction_and_clear_sync_to_sqlite(monkeypatch, db_path):
+def test_write_through_eviction_and_clear_sync_to_sqlite(db_path):
     """LRU 驱逐与 clear 同步删除落库条目（内存与笔记本一致）。"""
     sqlite_store = SQLiteKnowledgeBaseStore(db_path=db_path)
-    monkeypatch.setattr(kb_module, "get_knowledge_store", lambda: sqlite_store)
 
-    store = KnowledgeBaseStore(max_entries=2)
+    store = KnowledgeBaseStore(persist_store=sqlite_store, max_entries=2)
     for fp in ("fp-1", "fp-2", "fp-3"):  # 驱逐 fp-1
         store.upsert(
             fingerprint=fp,
@@ -338,17 +335,20 @@ def test_factory_degrades_to_noop_on_sqlite_init_failure(monkeypatch, db_path):
 def test_factory_wired_end_to_end_write_through_and_reload(monkeypatch, db_path):
     """真实工厂分发链路的端到端：工厂返回的 store 落盘 → 模拟重启回灌命中。
 
-    与 test_write_through_then_reload_restores_hit 的区别：本用例**不 monkeypatch
-    kb_module.get_knowledge_store**，完全经真实 factory 分发（monkeypatch 仅用于
-    配置与单例重置）。若工厂的 KB_PERSIST 分支被删/写反，本用例必红。
+    与 test_write_through_then_reload_restores_hit 的区别：本用例**不直接构造
+    SQLite store**，完全经真实 factory 分发并按 AD-1 方案 B 装配语义注入
+    （monkeypatch 仅用于配置与单例重置）。若工厂的 KB_PERSIST 分支被删/写反，
+    本用例必红。
     """
     monkeypatch.setattr("app.config.settings.storage_backend", "memory")
     monkeypatch.setattr("app.config.settings.kb_persist_enabled", True)
     monkeypatch.setattr("app.config.settings.kb_persist_path", db_path)
     monkeypatch.setattr(storage_factory, "_knowledge_store", None)
 
-    # 第一次运行：经真实工厂拿 store 写穿
-    first = KnowledgeBaseStore(max_entries=10)
+    # 第一次运行：经真实工厂拿 store 注入写穿（Composition Root 装配语义）
+    first = KnowledgeBaseStore(
+        persist_store=storage_factory.get_knowledge_store(), max_entries=10
+    )
     first.upsert(
         fingerprint="fp-factory-e2e",
         analysis={
@@ -363,7 +363,9 @@ def test_factory_wired_end_to_end_write_through_and_reload(monkeypatch, db_path)
 
     # 模拟进程重启：重置工厂单例与 KB 实例，从同一文件回灌
     monkeypatch.setattr(storage_factory, "_knowledge_store", None)
-    second = KnowledgeBaseStore(max_entries=10)
+    second = KnowledgeBaseStore(
+        persist_store=storage_factory.get_knowledge_store(), max_entries=10
+    )
 
     assert second.load_from_persistent() == 1
     hit = second.get("fp-factory-e2e")
