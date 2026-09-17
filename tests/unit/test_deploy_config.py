@@ -109,14 +109,49 @@ class TestDeployConfig:
                 f"{authority_raw!r} 不一致（须以源码默认值为准）"
             )
 
-    def test_prod_numeric_llm_defaults_keep_nonempty(self):
-        """prod compose 三个数值默认非空可解析且未被改坏（锁定现状 30/0.2/3）。
+    def test_prod_numeric_llm_defaults_match_config_authority(self):
+        """prod compose 三个数值默认非空可解析，且必须与 app/config.py 权威一致。
 
-        已知既有不一致：prod 的 LLM_TEMPERATURE 默认 0.2 与 config.py 权威
-        默认 0.3 不同——该不一致先于 M2-DEVFIX 存在，prod 修复不在本轮范围
-        （本轮仅修 dev），此处只锁定 prod 默认值存在、非空、可解析。
+        M2-CONFIGSYNC：prod 的 LLM_TEMPERATURE 原 0.2 经独立审查裁定为
+        无设计依据的历史漂移（commit 84a296f 批量 sync 引入，出生即 0.2，
+        公开 preflight/TROUBLESHOOTING 文档推荐值均为权威 0.3），对齐为 0.3。
+        timeout=30 / max_retries=3 与权威一直一致，一并纳入权威对齐断言。
         """
         defaults = _compose_llm_defaults("deploy/docker-compose.prod.yml")
-        assert int(defaults["LLM_TIMEOUT"]) == 30
-        assert float(defaults["LLM_TEMPERATURE"]) == 0.2
-        assert int(defaults["LLM_MAX_RETRIES"]) == 3
+        for var, field, typ in _NUMERIC_LLM_VARS:
+            raw = defaults[var]
+            authority_raw = _config_field_default(field)
+            assert authority_raw is not None, f"app/config.py 缺少 {field} 字面默认值"
+            assert raw is not None, f"prod compose 缺少 {var}: ${{{var}:-default}} 形式声明"
+            assert raw.strip() != "", f"prod compose {var} 默认值为空字符串（启动崩溃风险）"
+            assert typ(raw) == typ(authority_raw), (
+                f"prod compose {var} 默认 {raw!r} 与权威口径 app/config.py.{field}="
+                f"{authority_raw!r} 不一致（历史漂移须对齐权威值）"
+            )
+
+    def test_env_production_example_temperature_matches_authority(self):
+        """生产配置模板的 LLM_TEMPERATURE 必须与 app/config.py 权威默认一致（0.3）。"""
+        content = (_REPO_ROOT / "deploy/env.production.example").read_text(encoding="utf-8")
+        m = re.search(r"^LLM_TEMPERATURE=([^\s#]+)", content, re.M)
+        assert m is not None, "env.production.example 缺少 LLM_TEMPERATURE 声明"
+        authority_raw = _config_field_default("llm_temperature")
+        assert authority_raw is not None, "app/config.py 缺少 llm_temperature 字面默认值"
+        assert float(m.group(1)) == float(authority_raw), (
+            f"env.production.example LLM_TEMPERATURE={m.group(1)!r} "
+            f"与权威 {authority_raw!r} 不一致"
+        )
+
+    def test_llm_temperature_consistent_across_deploy_surfaces(self):
+        """dev compose / prod compose / env.production.example 三处 temperature
+        必须一致且等于 app/config.py 权威默认（M2-CONFIGSYNC 对齐契约）。"""
+        authority = float(_config_field_default("llm_temperature"))
+        dev = float(_compose_llm_defaults("docker-compose.yaml")["LLM_TEMPERATURE"])
+        prod = float(_compose_llm_defaults("deploy/docker-compose.prod.yml")["LLM_TEMPERATURE"])
+        example_content = (_REPO_ROOT / "deploy/env.production.example").read_text(encoding="utf-8")
+        example_m = re.search(r"^LLM_TEMPERATURE=([^\s#]+)", example_content, re.M)
+        assert example_m is not None, "env.production.example 缺少 LLM_TEMPERATURE"
+        example = float(example_m.group(1))
+        assert dev == prod == example == authority, (
+            f"三处 temperature 漂移：dev={dev} prod={prod} "
+            f"example={example} 权威={authority}"
+        )

@@ -40,7 +40,9 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-gpt-4o-mini}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-30}
-      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      # M2-CONFIGSYNC：0.2 为 84a296f 批量 sync 引入的无依据漂移（公开
+      # preflight/TROUBLESHOOTING 文档推荐值均为 0.3），对齐 config.py 权威默认。
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.3}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
       API_KEY: ${API_KEY:?必须设置 API_KEY}
       SOURCEMAP_ENABLED: ${SOURCEMAP_ENABLED:-true}
