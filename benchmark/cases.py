@@ -108,8 +108,8 @@ _CASE_FRONTEND_BLANK = BenchmarkCase(
         "fault_localization": None,
     },
     expected_root_cause=(
-        "页面初始化依赖 /api/bootstrap，该接口返回 500 导致前端 bootstrap 数据拿不到，"
-        "初始化异常被 try/catch 静默吞掉，形成白屏。"
+        "页面初始化依赖 /api/bootstrap，该接口返回 500 导致 bootstrap 数据拿不到，"
+        "初始化链路抛出 fetch 异常，页面未渲染出内容形成白屏。"
     ),
     expected_evidence=[
         "network_trace 中 /api/bootstrap 返回 500",
@@ -146,8 +146,15 @@ _CASE_DB_ERROR = BenchmarkCase(
         "recent_diffs": [
             {
                 "file": "migrations/0042_users_phone_not_null.py",
-                "author": "alice",
-                "summary": "users.phone 改为 NOT NULL 且未设默认值",
+                "commits_back": 2,
+                "diff": (
+                    "--- a/migrations/0042_users_phone_not_null.py\n"
+                    "+++ b/migrations/0042_users_phone_not_null.py\n"
+                    "@@ -1,4 +1,4 @@\n"
+                    " ALTER TABLE users\n"
+                    "-    ALTER COLUMN phone DROP NOT NULL;\n"
+                    "+    ALTER COLUMN phone SET NOT NULL;\n"
+                ),
             }
         ],
         "git_blame": [
@@ -162,10 +169,10 @@ _CASE_DB_ERROR = BenchmarkCase(
     },
     expected_root_cause=(
         "migration 0042 将 users.phone 改为 NOT NULL 且未设默认值，存量数据 phone 为空，"
-        "导入时 INSERT 违反 not-null 约束；根因是最近一次 schema 变更而非数据本身。"
+        "导入时 INSERT 违反 not-null 约束。"
     ),
     expected_evidence=[
-        "recent_diffs 中 master users.phone NOT NULL 变更",
+        "recent_diffs 中 migration 0042 对 users.phone 的 DDL 变更",
         "trace 中 INSERT 语句",
         "IntegrityError 指向 phone 列",
     ],
@@ -255,8 +262,17 @@ _CASE_PERF = BenchmarkCase(
         "recent_diffs": [
             {
                 "file": "app/services/item_service.py",
-                "summary": "列表查询改为循环内逐条查库（引入 N+1）",
-                "author": "carol",
+                "commits_back": 1,
+                "diff": (
+                    "--- a/app/services/item_service.py\n"
+                    "+++ b/app/services/item_service.py\n"
+                    "@@ -31,6 +31,9 @@ def list_items(self, item_ids):\n"
+                    "     items = Item.objects.filter(id__in=item_ids)\n"
+                    "-    details = ItemDetail.objects.filter(item_id__in=item_ids)\n"
+                    "+    for item in items:\n"
+                    "+        item.detail = ItemDetail.objects.get(item_id=item.id)\n"
+                    "     return items\n"
+                ),
             }
         ],
         "trace": [
@@ -269,12 +285,12 @@ _CASE_PERF = BenchmarkCase(
         "fault_localization": None,
     },
     expected_root_cause=(
-        "item_service 列表查询 recent_diffs 引入循环内逐条查库（N+1 查询），"
+        "item_service 列表查询在循环内逐条查库（N+1 查询），"
         "对 N 个 item 各执行一次 detail 查询，导致单请求 3.2s。"
     ),
     expected_evidence=[
         "trace 中重复的 SELECT FROM item_detail（N+1 模式）",
-        "recent_diffs 中循环内查询变更",
+        "recent_diffs 中 item_service.py 的循环查询变更",
         "network_trace 中 /api/items 耗时 3200ms",
     ],
 )
@@ -378,7 +394,7 @@ _CASE_FRONTEND_SOURCEMAP = BenchmarkCase(
     lujo_context=_FRONTEND_CONTEXT_AFTER,
     expected_root_cause=(
         "submitOrder（src/orders/checkout.ts:87）对 items 里的元素直接读 .price，"
-        "某个 item 为 undefined（后端返回的列表中含空元素），未做判空导致 TypeError。"
+        "某个 item 为 undefined（列表内含空元素），未做判空导致 TypeError。"
     ),
     expected_evidence=[
         "resolved_frames 中 submitOrder @ src/orders/checkout.ts:87",

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import fields as _dc_fields
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ from benchmark import runner
 from benchmark import experiment as exp
 from benchmark import llm_provider as lp
 from benchmark.cases import BENCHMARK_CASES, get_case
+from benchmark.schemas import BenchmarkCase
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -338,6 +340,190 @@ class TestPromptContract:
         case = get_case("db_error_null_column")
         msgs = pr.build_messages(case.user_description, case.lujo_context)
         assert pr.compute_prompt_hash(msgs) == pr.compute_prompt_hash(msgs)
+
+
+# ── 答案泄露守卫：模型可见输入不得含标准答案（含意译，不只字面）──
+
+
+def _model_visible_strings(case) -> list[str]:
+    """模型可见文本：user_description + with 组渲染出的 context 段落。
+
+    不含 system prompt（固定文本）与 case 元数据。without 组可见文本被
+    user_description / system prompt 覆盖（逐字相同），故只取 with 渲染体。
+    """
+    text = (
+        case.user_description
+        + "\n"
+        + pr.render_user_message(case.user_description, case.lujo_context)
+    )
+    return [line for line in text.splitlines() if line.strip()]
+
+
+_LEAK_STOPWORDS = frozenset(
+    {
+        "的", "了", "是", "在", "和", "与", "或", "把", "被", "而", "非", "均",
+        "该", "这", "那", "及", "为", "使", "导致", "问题",
+    }
+)
+
+
+def _is_cjk(ch: str) -> bool:
+    return "一" <= ch <= "鿿"
+
+
+def _content_grams(text: str, n: int = 4) -> set[str]:
+    """抽取**连续中文片段**内的字符 n-gram。
+
+    只在最长中文连续段内取 gram（长度 ≥ n 的段），从而：
+    - 抓到中文件句式复述（如 `且未设默认值` / `循环内逐条查库`）；
+    - 忽略 `NOT NULL` / `item_detail` 这类双方共有的技术记号；
+    - 忽略 `admin 角色` 这类仅共享 2 个中文字符的合法证据（其连续中文段只有 `角色`）。
+    """
+    out: set[str] = set()
+    run = ""
+    for ch in text + "\0":
+        if _is_cjk(ch):
+            run += ch
+            continue
+        if len(run) >= n:
+            for i in range(len(run) - n + 1):
+                gram = run[i : i + n]
+                if all(c in _LEAK_STOPWORDS for c in gram):
+                    continue
+                out.add(gram)
+        run = ""
+    return out
+
+
+def _recent_diff_text(case) -> list[str]:
+    """recent_diffs 各条目里的字符串值（summary / diff / 其它）。"""
+    texts: list[str] = []
+    for entry in case.lujo_context.get("recent_diffs") or []:
+        for value in entry.values():
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+    return texts
+
+
+class TestNoAnswerLeakage:
+    """fixture 不得把标准答案以任何形式（含意译复述）交给模型。"""
+
+    def test_guard_catches_historical_leak_and_keeps_derivable_evidence(self):
+        """守卫有效性 + 证据保留。
+
+        1) 守卫必须能识别**历史上真实存在**的泄露句（Case 3/5 的旧 summary）——
+           把它们与各自 gold 做 n-gram 比对，重叠非空即证明守卫不是空转。
+        2) 当前 fixture 的 recent_diffs 必须仍然非空（保留可推理的运行证据），
+           且不得与 gold 近似重合。
+        """
+        historical = {
+            "db_error_null_column": "users.phone 改为 NOT NULL 且未设默认值",
+            "perf_slow_nplus1": "列表查询改为循环内逐条查库（引入 N+1）",
+        }
+        for case_id, leak in historical.items():
+            case = get_case(case_id)
+            gold = _content_grams(case.expected_root_cause)
+            assert _content_grams(leak) & gold, (
+                f"守卫未能识别 {case_id} 的历史泄露句——n-gram 检测失效"
+            )
+            texts = _recent_diff_text(case)
+            assert texts, f"{case_id} 应保留 recent_diffs 运行证据"
+            for text in texts:
+                overlap = _content_grams(text) & gold
+                assert not overlap, (
+                    f"{case_id} 的 recent_diffs 复述了 expected_root_cause："
+                    f"重叠片段 {sorted(overlap)}（{text!r}）"
+                )
+
+    def test_no_context_field_paraphrases_expected_root_cause(self):
+        """6 个 case：任何模型可见字符串都不得与 expected_root_cause 近似重合。"""
+        for case in BENCHMARK_CASES:
+            gold = _content_grams(case.expected_root_cause)
+            for line in _model_visible_strings(case):
+                overlap = _content_grams(line) & gold
+                assert not overlap, (
+                    f"{case.case_id} 模型可见文本复述根因：重叠片段 {sorted(overlap)}（{line!r}）"
+                )
+
+    def test_prompt_never_leaks_expected_verification_or_metrics(self):
+        """expected_* 与 evaluation_metrics 均不得出现在任何一组的 prompt 中。"""
+        case_fields = {f.name for f in _dc_fields(BenchmarkCase)}
+        assert {"expected_root_cause", "expected_evidence"} <= case_fields
+        # 目前不存在 expected_verification 字段；若日后新增，必须显式纳入泄露守卫。
+        assert "expected_verification" not in case_fields
+        for case in BENCHMARK_CASES:
+            for context in (None, case.lujo_context):
+                text = pr.render_user_message(case.user_description, context)
+                assert case.expected_root_cause not in text
+                for item in case.expected_evidence:
+                    assert item not in text
+                assert case.title not in text
+                assert case.category not in text
+                assert "expected_root_cause" not in text
+                assert "expected_verification" not in text
+                assert "evaluation_metrics" not in text
+
+    def test_evidence_is_derivable_from_context_not_copied(self):
+        """每条 expected_evidence 必须指向真实存在的 context 字段（不得凭空。）
+
+        该断言限定为「evidence 描述的字段在 context 中确实存在」，不做语义匹配。
+        """
+        field_map = {
+            "exception": "exception",
+            "堆栈": "exception",
+            "IntegrityError": "exception",
+            "请求": "request",
+            "network_trace": "network_trace",
+            "ui_events": "ui_events",
+            "console": "console",
+            "recent_diffs": "recent_diffs",
+            "git_blame": "git_blame",
+            "runtime": "runtime",
+            "spec_diffs": "spec_diffs",
+            "related_specs": "related_specs",
+            "trace": "trace",
+            "auth_context": "auth_context",
+            "resolved_frames": "resolved_frames",
+            "original": "resolved_frames",
+            "code_snippets": "code_snippets",
+        }
+        for case in BENCHMARK_CASES:
+            for item in case.expected_evidence:
+                referenced: list[str] = []
+                working = item
+                # 长键优先匹配并抹除，避免 `trace` 命中 `network_trace` 内部。
+                for key in sorted(field_map, key=len, reverse=True):
+                    if key in working:
+                        referenced.append(field_map[key])
+                        working = working.replace(key, "")
+                assert referenced, f"{case.case_id} 的 evidence {item!r} 未指向任何 context 字段"
+                for field in referenced:
+                    assert case.lujo_context.get(field), (
+                        f"{case.case_id} 的 evidence {item!r} 指向空字段 {field!r}"
+                    )
+
+    def test_recent_diff_summary_stays_observational(self):
+        """recent_diffs 的文本只能是可观测的运行证据，不得含结论性措辞。"""
+        forbidden = ("根因", "N+1", "n+1", "导致", "引入", "改为", "未设默认值", "循环内", "判定")
+        for case in BENCHMARK_CASES:
+            for text in _recent_diff_text(case):
+                for token in forbidden:
+                    assert token not in text, (
+                        f"{case.case_id} recent_diffs 含结论性措辞 {token!r}：{text!r}"
+                    )
+
+    def test_gold_labels_are_evidence_backed(self):
+        """Case 2/6 的 gold label 不得包含 context 无法证明的额外子句。
+
+        这两例的 expected_root_cause 曾分别断言「try/catch 静默吞掉」与
+        「后端返回列表含空元素」——context 均无对应证据。
+        """
+        case2 = get_case("frontend_blank_fetch_error")
+        assert "try/catch" not in case2.expected_root_cause
+        assert "静默吞掉" not in case2.expected_root_cause
+        case6 = get_case("frontend_minified_sourcemap")
+        assert "后端" not in case6.expected_root_cause
+        assert "为空" not in case6.expected_root_cause
 
 
 # ── 组语义 ──
