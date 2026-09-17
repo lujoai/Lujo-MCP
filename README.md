@@ -16,19 +16,21 @@
 
 ### 推荐方式：npx 免安装直跑
 
-在 MCP 客户端配置文件中填入：
+在 MCP 客户端配置文件中填入（示例固定使用当前已发布版本 `0.9.1`，保证可复现）：
 
 ```json
 {
   "mcpServers": {
     "lujo": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.1"]
     }
   }
 }
 ```
 
+> **版本口径**：省略 `@0.9.1` 时 npx 会取 npm `latest`（当前 latest 即 0.9.1）。npm 已发布包与仓库 `main` 开发分支不完全等同——`main` 上可能包含尚未发布的维护提交（发布策略见 [RELEASE_NOTES.md](./docs/public/RELEASE_NOTES.md)）；以 npm registry 实际版本为准。
+>
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
 > 📌 npm 入口默认启动**统一本地模式**：同一个进程同时提供 MCP stdio 和 `http://127.0.0.1:8000` HTTP。AI 可以直接使用 MCP 工具，浏览器 SDK 也能把控制台、网络失败和点击链路写入同一份内存上下文；不需要再手动启动第二个服务。
@@ -36,7 +38,7 @@
 ### 替代方式：全局安装
 
 ```bash
-npm install -g @lujoai/lujo-mcp
+npm install -g @lujoai/lujo-mcp@0.9.1
 ```
 
 客户端配置：
@@ -66,6 +68,45 @@ npm install -g @lujoai/lujo-mcp
 | **Cursor** | 项目根目录 `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json` |
 | **Trae** | 设置面板 → `MCP Server` → `添加`（填入上述 JSON） |
 | **其他 MCP 客户端** | 任何支持 MCP 标准 stdio 协议的工具均可直接接入 |
+
+---
+
+## 🧠 先搞清楚：谁负责推理，谁负责采集
+
+用大白话说清分工，可以避开 90% 的上手误区：
+
+- **宿主智能体（Claude / Codex / Cursor / Trae…）负责大模型推理**。你平时在宿主 IDE 里对话、让它改代码，用的是宿主自带的模型能力。
+- **Lujo 只负责一件事：采集、关联、查询真实运行现场**。它把控制台异常、网络失败、UI 事件链、静默失败和调用堆栈组装成结构化现场，喂给宿主 AI 判断。Lujo 不是另一个聊天 Agent，也不替代宿主。
+- **正常通过 MCP 使用 Lujo，不需要给 Lujo 配置任何大模型 API Key。** 推理由宿主完成；Lujo 的内置 LLM 分析是可选项（见下方「如何开启 LLM 分析」），与能不能用 MCP 工具无关。
+- 仓库中的 `BENCHMARK_LLM_BASE_URL` / `BENCHMARK_LLM_API_KEY` / `BENCHMARK_LLM_MODEL` 环境变量**只服务于独立的真实 LLM Benchmark runner（实验工具，见 `docs/internal/BENCHMARK.md`）**，与日常 MCP 调试无关，正常使用完全不需要配置。
+
+### 两条链路：MCP 调用链 ≠ 浏览器采集链
+
+```
+① MCP 调用链（宿主 AI 查现场）
+   宿主智能体 ──MCP──▶ Lujo 进程（工具调用）
+
+② 浏览器采集链（页面产生现场）
+   被调试网页 ──Browser SDK──▶ Lujo HTTP endpoint（/ingest）──▶ Lujo memory runtime
+```
+
+两条链路都必须通，宿主 AI 才能拿到浏览器现场：
+
+- **只有 MCP 连接、没有第②条链路时，Lujo 不会自动知道页面里发生了什么。** MCP 面板显示 Lujo「已连接」，只证明工具可调用，不证明浏览器现场已被采集。
+- Browser SDK 的 `endpoint` 必须指向**当前项目对应的 Lujo HTTP 实例和端口**；同一台机器多项目并行时，每个项目应使用不同 `--http-port`（详见下文「端口即隔离」）。
+- 当前 runtime 默认是 **memory**：运行现场保存在 Lujo 进程内存中，**进程重启后旧现场可能消失**（KB 调试经验的本地 SQLite 笔记本是另一回事，不受影响）。持久化存储不是默认前提，也不需要 `.env` 才能跑。
+- 正确的操作顺序：**保持同一个 Lujo 进程运行 → 在页面复现问题 → 等待采集完成（秒级）→ 立即在宿主会话里查询**。
+
+### 最短可执行流程
+
+1. 在宿主 IDE 里配置并启用 Lujo MCP（上面的 npx 配置即可）。
+2. 只调试后端 / MCP 数据，没有浏览器现场需求？直接让 Agent 调用 Lujo 工具（如 `diagnose_issue`），到此结束。
+3. 需要浏览器现场：确认 Lujo HTTP 已启动（npm 统一模式默认就绪），并让页面里的 Browser SDK `endpoint` 指向它。
+4. 在页面里复现问题。
+5. 在**同一个宿主会话**里先调用 `diagnose_issue({})`（读最近错误）。
+6. 若无结果，再调用 `list_recent_traces`，按返回的 trace_id / request_id 用 `context`、`trace`、`stacktrace`、`get_network_trace` 深挖。
+
+> 全程不需要给 Lujo 额外配置任何 LLM API Key。
 
 ---
 
@@ -245,6 +286,11 @@ AI Agent 自动调用上下文：
 
 > 📖 想看完整还原的实战案例（React 登录静默失败），见 [DEMO.md](./docs/public/DEMO.md)。
 >
+> 📋 **`diagnose_issue` 的准确用法**：
+> - `diagnose_issue({})` —— 读取**最近一次错误**（免 ID 直查）。
+> - `diagnose_issue({"query": "关键词"})` —— 对近期错误的 **type / message 做关键词过滤**。query 不是自然语言全字段检索，不保证匹配 selector、trace 元数据或所有上下文字段。
+> - **query 未命中 ≠ Lujo 没有现场**。推荐回退顺序：`diagnose_issue({})` → `list_recent_traces` → 按返回 ID 调 `context` / `trace` / `stacktrace` / `get_network_trace`。详见 [API_REFERENCE.md](./docs/public/API_REFERENCE.md)。
+>
 > ⚠️ **数据边界说明**：只有纯 stdio（`--no-http` 或未加 `--http` 的源码入口）不会接收浏览器 SDK 的 HTTP 上报；npm 默认统一本地模式已经包含 `/ingest`。Agent 是否调用工具最终由宿主模型决定，本项目通过清晰的统一入口（`diagnose_issue`）与自包含的工具描述**提高**调用概率，但不承诺 100% 强制调用。
 
 ---
@@ -375,11 +421,11 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
   "mcpServers": {
     "lujo-project-a": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp", "--http-port", "8101"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.1", "--http-port", "8101"]
     },
     "lujo-project-b": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp", "--http-port", "8102"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.1", "--http-port", "8102"]
     }
   }
 }
@@ -398,7 +444,7 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 </script>
 ```
 
-**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
+**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp@0.9.1", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
 
 **已知限制（如实说明）**：
 

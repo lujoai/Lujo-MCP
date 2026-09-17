@@ -136,6 +136,8 @@ AiDebug.init({ endpoint: "http://localhost:8000" });
 
 初始化后 Browser SDK 自动安装浏览器采集钩子（错误 / 网络 / XHR / UI / 静默失败 / 控制台 / 页面卸载），无需手动调用。Node 服务端请使用上面的 Node SDK 显式上报。
 
+> **endpoint 指向与运行时边界**：`endpoint` 必须指向**当前项目对应的 Lujo HTTP 实例和端口**——同一台机器多项目并行时，每个项目各用不同 `--http-port`，页面 SDK 的 endpoint 指向各自端口，否则上报只会进入「占住该端口的那个实例」（见 README「端口即隔离」）。现场默认写入 Lujo 进程的 memory runtime：**Lujo 进程重启后旧现场可能消失**，正确顺序是保持同一 Lujo 进程运行 → 复现问题 → 等待采集完成（秒级）→ 立即查询。
+
 ---
 
 ## 2. 初始化配置项

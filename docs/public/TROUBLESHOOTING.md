@@ -22,6 +22,7 @@
 - [J. Docker 部署异常 / Docker Deployment Errors](#j-docker-部署异常--docker-deployment-errors)
 - [K. 测试异常 / Test Errors](#k-测试异常--test-errors)
 - [L. PostgreSQL 后端移除说明 / PostgreSQL Removal](#l-postgresql-后端移除说明--postgresql-removal)
+- [M. 使用误区 / Common Misunderstandings](#m-使用误区--common-misunderstandings)
 - [通用排查流程 / General Diagnostic Flow](#通用排查流程--general-diagnostic-flow)
 
 ---
@@ -987,6 +988,33 @@ pytest tests/ --timeout=120
 ### 历史已知问题（B16–B18/U08）与移除的关系
 
 原实验性后端节列出的已知未修问题（KB 延迟初始化失败可能无法降级、错误计数被节流压低、调度失败后的节流记账抑制有效写入、stdio asyncpg 连接池关闭路径未验证）**已随 PG runtime 代码路径的删除而消失——这是「能力移除」，不代表这些缺陷曾被修复**。仍在 v0.8.x 及更早版本上显式配置 `STORAGE_BACKEND=postgresql` 的用户，这些问题依然存在。
+
+---
+
+## M. 使用误区 / Common Misunderstandings
+
+> 这些条目不是服务故障，而是对 Lujo 分工与工具语义的常见误解。先对照本节，再进入具体异常分类排查。
+
+### M-1. MCP 面板显示已连接，但 AI 查不到浏览器运行现场
+
+- **现象**：宿主 IDE 的 MCP 面板里 Lujo 显示「已连接 / 工具可用」，但让 AI 查页面报错时返回 `found=false` 或空结果。
+- **原因**：Lujo 有两条独立链路——①宿主智能体 → MCP → Lujo（工具调用）；②被调试网页 → Browser SDK → Lujo HTTP `/ingest` → memory runtime（现场采集）。MCP 连接只证明第①条链路可用；**没有第②条链路时，Lujo 不会自动知道页面里发生了什么**。
+- **解决方案**：
+  1. 确认 Lujo HTTP 采集端点在监听（npm 统一模式默认 `http://127.0.0.1:8000`；纯 stdio `--no-http` 模式不接收浏览器上报）。
+  2. 确认页面已加载 Browser SDK 且 `AiDebug.init({ endpoint: ... })` 的 endpoint 指向**当前项目对应的 Lujo 实例和端口**（多项目并行时各用不同 `--http-port`，见 README「端口即隔离」）。
+  3. 按 C-4/F-4 排查内存与 CORS 后，在页面里复现问题，再回宿主会话查询。
+- **验证方法**：浏览器 DevTools Network 面板能看到发往 endpoint 的 `/ingest/batch` 请求且返回 200；随后 `diagnose_issue({})` 能返回现场。
+- **附带说明**：当前 runtime 默认 memory，现场保存在 Lujo 进程内存中，**Lujo 进程重启后旧现场可能消失**。正确顺序是保持同一 Lujo 进程运行 → 复现问题 → 等待采集完成（秒级）→ 立即查询。
+
+### M-2. `diagnose_issue` 带 query 查不到，但不带 query 能查到
+
+- **现象**：`diagnose_issue({"query": "登录按钮"})` 返回 `found=false`，而 `diagnose_issue({})` 或 `list_recent_traces` 能看到错误记录。
+- **原因**：`query` 是对近期错误 **`type` / `message` 字段的关键词过滤**，不是自然语言全字段检索，不保证匹配 selector、trace 元数据或所有上下文字段；错误超出 `since_minutes`（默认 30 分钟）时间窗时也不会命中。**query 未命中不等于 Lujo 没有现场**。
+- **解决方案**（推荐回退顺序）：
+  1. `diagnose_issue({})` —— 先读最近一次错误；
+  2. `list_recent_traces` —— 列出近期全部错误摘要；
+  3. 按返回的 `trace_id` / `request_id` 调 `context` / `trace` / `stacktrace` / `get_network_trace` 深挖。
+- **验证方法**：按上述顺序第 1 步即能取回现场；若需要关键词检索，改用与错误 type/message 实际文案一致的关键词（如异常类型名、接口路径片段）。
 
 ---
 

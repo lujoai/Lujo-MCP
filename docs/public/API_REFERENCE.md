@@ -232,6 +232,19 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | `verify` | `actual`*(object), `spec`/`spec_id`/`sample`(三选一), `trace_id`(可选) | `matched`, `diffs`, `silent_failure` |
 | `verify_ui` | `spec` 或 `spec_id`(二选一), `timeout_ms`(int=30000) | `matched`, `diffs`, `silent_failure`, `interactions[]`, `security?` |
 
+#### `diagnose_issue` 参数语义与推荐回退顺序
+
+- **`diagnose_issue({})`**：不传任何参数 = 读取**最近一次错误**（跨页面/标签的最新一条，可再用 `session_id` 过滤）。
+- **`diagnose_issue({"query": "..."})`**：按关键词过滤近期错误，匹配范围是错误的 **`type` / `message` 字段**。query 是关键词过滤，**不是**自然语言全字段检索，也不保证匹配 selector、trace 元数据（如 trace_kind、extra）或其他上下文字段。
+- **query 未命中不等于 Lujo 没有现场**——可能只是关键词没出现在 type/message 里，或错误超出 `since_minutes`（默认 30 分钟）时间窗。
+
+推荐查询回退顺序（从宽到深）：
+
+1. `diagnose_issue({})` —— 先拿最近错误；
+2. `list_recent_traces` —— 无结果时列出近期全部错误摘要；
+3. 依返回的 `trace_id` / `request_id` 调用 `context`、`trace`、`stacktrace`、`get_network_trace` 深挖完整现场。
+
+
 ### 3.2 数据采集类工具（sdk）
 
 | 工具名 | 角色 | 说明 |
