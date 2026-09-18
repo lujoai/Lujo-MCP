@@ -43,27 +43,29 @@ def _is_private_ip(ip: str) -> bool:
 # 不得静默放宽」；DEV_PLAN 验收口径要求「部署方式不受支持也必须明确拒绝，而非静默放开认证」。
 _DENY_ERROR_CODE = "auth_not_configured"
 _DENY_DETAIL = (
-    "Refusing to serve: bound to a wildcard host ({host}) without any API_KEY/API_KEYS. "
-    "Set API_KEY or API_KEYS, or bind HOST to loopback (127.0.0.1 / ::1)."
+    "Refusing to serve: exposed on {host} without any API_KEY/API_KEYS "
+    "(wildcard bind or non-loopback connection local). "
+    "Set API_KEY or API_KEYS, or ensure the server actually binds to loopback "
+    "(127.0.0.1 / ::1)."
 )
 _deny_logged = False
 _deny_log_lock = threading.Lock()
 
 
-def _deny_unauthenticated_public_bind() -> JSONResponse:
+def _deny_unauthenticated_public_bind(bind_host: str) -> JSONResponse:
     """403 + 机器可读 error_code：让运维能归因到配置缺失，而非笼统鉴权失败。"""
     global _deny_logged
     with _deny_log_lock:
         if not _deny_logged:
             _deny_logged = True
             logger.error(
-                "U06 fail-closed: 通配监听 %s 且未配置 API_KEY/API_KEYS，受保护接口已拒绝访问。"
-                "请配置鉴权或改绑回环地址（本告警仅记录一次）。",
-                settings.host,
+                "U06 fail-closed: 服务暴露在 %s 且未配置 API_KEY/API_KEYS，"
+                "受保护接口已拒绝访问。请配置鉴权或确保实际绑定回环地址（本告警仅记录一次）。",
+                bind_host,
             )
     return JSONResponse(
         status_code=403,
-        content={"detail": _DENY_DETAIL.format(host=settings.host), "error_code": _DENY_ERROR_CODE},
+        content={"detail": _DENY_DETAIL.format(host=bind_host), "error_code": _DENY_ERROR_CODE},
     )
 
 
@@ -91,17 +93,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not self.enabled:
             # U06 兜底：auth 关闭本身是合法的本地模式（HOST=127.0.0.1 零配置自用），
-            # 但"通配监听 + 无凭据"必须 fail-closed。判定按请求实时读 settings，
+            # 但"对外暴露 + 无凭据"必须 fail-closed。判定按请求实时读 settings，
             # 因为 self.enabled 是构造期快照、且外部宿主禁用 lifespan 时启动校验根本没跑。
-            # PUBLIC_PATHS 维持既有免鉴权契约（健康探针等），不扩大拒绝面。
-            from app.auth.startup_guard import unauthenticated_public_bind
+            # scope["server"] 是连接本地端点（服务器权威提供，但绑通配时回环连接也只
+            # 报 127.0.0.1），故只作两条证据使用：本地端点=通配 → 拒；本地端点=可路由
+            # NIC 而配置声明回环（HOST 说谎/擅自改绑）→ 拒。不可解析回落 settings，
+            # 不猜测。PUBLIC_PATHS 维持既有免鉴权契约（健康探针等），不扩大拒绝面。
+            from app.auth.startup_guard import resolve_bind_host, unauthenticated_public_bind
 
+            scope_server = request.scope.get("server")
+            real_host = scope_server[0] if scope_server else None
             if (
                 request.url.path not in self.PUBLIC_PATHS
                 and request.method != "OPTIONS"
-                and unauthenticated_public_bind()
+                and unauthenticated_public_bind(real_host)
             ):
-                return _deny_unauthenticated_public_bind()
+                return _deny_unauthenticated_public_bind(resolve_bind_host(real_host))
             return await call_next(request)
 
         # CORS 预检（OPTIONS）免鉴权，直接放行交由 CORSMiddleware 处理

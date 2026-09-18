@@ -269,3 +269,109 @@ class TestBindPredicateSingleSource:
 
         _configure(monkeypatch, host="127.0.0.1")
         assert unauthenticated_public_bind() is False
+
+
+# ---------------------------------------------------------------------------
+# 6. 监听地址来源与暴露证据：
+#    uvicorn 的 scope["server"] 是"已建立连接的本地端点"（绑 0.0.0.0 经回环进来
+#    也是 127.0.0.1:ephemeral），不能当真实 bind；但它作为**权威暴露证据**可用 ——
+#    配置声明回环本地而连接落在可路由 NIC 地址 = 外部宿主擅自改绑，必须
+#    fail-closed；显式 LAN 配置（HOST=10.x）维持既有 WARNING-only 契约。
+# ---------------------------------------------------------------------------
+
+
+def _wrap_real_bind(inner_app, server_host: str):
+    """ASGI3 包装器：强制注入 scope["server"]=(server_host, 9)，模拟连接本地端点。"""
+
+    async def outer(scope, receive, send):
+        if scope.get("type") in {"http", "websocket"}:
+            scope = dict(scope)
+            scope["server"] = [server_host, 9]
+        await inner_app(scope, receive, send)
+
+    return outer
+
+
+def _client_with_real_bind(server_host: str) -> TestClient:
+    real_app.middleware_stack = None
+    return TestClient(_wrap_real_bind(real_app, server_host))
+
+
+class TestRealBindAddressPreferred:
+    @pytest.mark.parametrize("real_host", WILDCARD_HOSTS)
+    def test_wildcard_local_endpoint_denied_even_if_host_config_says_loopback(
+        self, monkeypatch, real_host
+    ):
+        """服务器填报本地端点即通配（规范允许的实现）→ 即便 HOST 说回环也 403。"""
+        _configure(monkeypatch, host="127.0.0.1")
+        client = _client_with_real_bind(real_host)
+
+        resp = client.get("/api/dashboard/traces")
+        assert _error_code(resp) == DENY_MARKER, (
+            f"连接本地端点 {real_host} 但 HOST={settings.host} 时未 fail-closed"
+            f"（{resp.status_code}）—— guard 只信 settings 的缺口未修复"
+        )
+        assert resp.status_code == 403
+
+    def test_loopback_real_bind_serves(self, monkeypatch):
+        _configure(monkeypatch, host="127.0.0.1")
+        resp = _client_with_real_bind("127.0.0.1").get("/api/dashboard/traces")
+        assert _error_code(resp) != DENY_MARKER
+        assert resp.status_code == 200
+
+    def test_routable_exposure_with_loopback_config_denied(self, monkeypatch):
+        """配置声明本地，但连接实际落在可路由 NIC 地址 → 从未授权对外 → 拒绝。"""
+        _configure(monkeypatch, host="127.0.0.1")
+        resp = _client_with_real_bind("10.0.0.5").get("/api/dashboard/traces")
+        assert _error_code(resp) == DENY_MARKER, "擅自改绑 NIC 地址的宿主未被拦截"
+        assert resp.status_code == 403
+
+    def test_explicit_lan_bind_keeps_warning_only_contract(self, monkeypatch):
+        """显式 HOST=10.0.0.5 的 LAN 部署：既有 WARNING-only 契约不得收紧为拒绝。"""
+        _configure(monkeypatch, host="10.0.0.5")
+        resp = _client_with_real_bind("10.0.0.5").get("/api/dashboard/traces")
+        assert _error_code(resp) != DENY_MARKER
+        assert resp.status_code == 200
+
+    def test_settings_wildcard_but_real_bind_loopback_serves(self, monkeypatch):
+        """反向不误伤：HOST=0.0.0.0 配置但连接本地端点是回环（CLI 覆盖）→ 放行。"""
+        _configure(monkeypatch, host="0.0.0.0")
+        resp = _client_with_real_bind("127.0.0.1").get("/api/dashboard/traces")
+        assert _error_code(resp) != DENY_MARKER
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize("scope_host", ["testserver", "not-an-ip"])
+    def test_unparseable_scope_falls_back_to_settings(self, monkeypatch, scope_host):
+        """ASGI 服务器给了不可解析值（测试栈/定制宿主）→ 回落 settings.host，不猜测。"""
+        _configure(monkeypatch, host="0.0.0.0")
+        resp = _client_with_real_bind(scope_host).get("/api/dashboard/traces")
+        assert _error_code(resp) == DENY_MARKER and resp.status_code == 403
+
+        _configure(monkeypatch, host="127.0.0.1")
+        resp = _client_with_real_bind(scope_host).get("/api/dashboard/traces")
+        assert _error_code(resp) != DENY_MARKER
+        assert resp.status_code == 200
+
+    def test_real_wildcard_bind_with_key_normal_auth(self, monkeypatch):
+        """通配 + 已配 Key：回到常规 401/200，不因证据来源改变认证语义。"""
+        from fastapi import FastAPI
+
+        from app.middleware import AuthMiddleware
+
+        _configure(monkeypatch, host="127.0.0.1", api_key="real-bind-key")
+        fresh = FastAPI()
+
+        @fresh.get("/internal/health")
+        def _ok():
+            return {"ok": True}
+
+        fresh.add_middleware(AuthMiddleware)
+        client = TestClient(_wrap_real_bind(fresh, "0.0.0.0"))
+        assert client.get("/internal/health").status_code == 401
+        assert (
+            client.get("/internal/health", headers={"X-API-Key": "wrong"}).status_code == 401
+        )
+        assert (
+            client.get("/internal/health", headers={"X-API-Key": "real-bind-key"}).status_code
+            == 200
+        )
