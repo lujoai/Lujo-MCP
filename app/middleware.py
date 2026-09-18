@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import threading
 import time
 import logging
 from fastapi import FastAPI, Request, Response
@@ -34,6 +35,38 @@ def _is_private_ip(ip: str) -> bool:
 
 
 # ── API Key 鉴权中间件 ──
+# U06（DEV_PLAN §U06 / CODE_REVIEW §4.3 #6）：
+# `validate_startup_configuration()` 只在 app/main.py 的 lifespan 内执行。外部 ASGI 宿主以
+# `lifespan="off"` 挂载本 app（uvicorn --lifespan off、部分嵌入式/反代部署）时该校验根本不跑，
+# 而 AuthMiddleware 又因 auth_enabled() is False 直接放行 → 「通配监听 + 无凭据」静默对外服务。
+# 因此该不变量必须由中间件**按请求**独立成立：AGENTS.md 要求「认证保持 fail-closed」「安全默认值
+# 不得静默放宽」；DEV_PLAN 验收口径要求「部署方式不受支持也必须明确拒绝，而非静默放开认证」。
+_DENY_ERROR_CODE = "auth_not_configured"
+_DENY_DETAIL = (
+    "Refusing to serve: bound to a wildcard host ({host}) without any API_KEY/API_KEYS. "
+    "Set API_KEY or API_KEYS, or bind HOST to loopback (127.0.0.1 / ::1)."
+)
+_deny_logged = False
+_deny_log_lock = threading.Lock()
+
+
+def _deny_unauthenticated_public_bind() -> JSONResponse:
+    """403 + 机器可读 error_code：让运维能归因到配置缺失，而非笼统鉴权失败。"""
+    global _deny_logged
+    with _deny_log_lock:
+        if not _deny_logged:
+            _deny_logged = True
+            logger.error(
+                "U06 fail-closed: 通配监听 %s 且未配置 API_KEY/API_KEYS，受保护接口已拒绝访问。"
+                "请配置鉴权或改绑回环地址（本告警仅记录一次）。",
+                settings.host,
+            )
+    return JSONResponse(
+        status_code=403,
+        content={"detail": _DENY_DETAIL.format(host=settings.host), "error_code": _DENY_ERROR_CODE},
+    )
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """简单的 Bearer Token / X-API-Key 鉴权（fail-closed）"""
 
@@ -57,6 +90,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if not self.enabled:
+            # U06 兜底：auth 关闭本身是合法的本地模式（HOST=127.0.0.1 零配置自用），
+            # 但"通配监听 + 无凭据"必须 fail-closed。判定按请求实时读 settings，
+            # 因为 self.enabled 是构造期快照、且外部宿主禁用 lifespan 时启动校验根本没跑。
+            # PUBLIC_PATHS 维持既有免鉴权契约（健康探针等），不扩大拒绝面。
+            from app.auth.startup_guard import unauthenticated_public_bind
+
+            if (
+                request.url.path not in self.PUBLIC_PATHS
+                and request.method != "OPTIONS"
+                and unauthenticated_public_bind()
+            ):
+                return _deny_unauthenticated_public_bind()
             return await call_next(request)
 
         # CORS 预检（OPTIONS）免鉴权，直接放行交由 CORSMiddleware 处理
