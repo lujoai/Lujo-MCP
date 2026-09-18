@@ -63,59 +63,177 @@ def test_demo_pages_accessible(page: Page):
 
 def test_sdk_v3_network_error_auto_report(page: Page):
     """
-    验证 SDK V3：fetch/XHR 失败自动上报为 silent failure
+    验证 SDK V3：fetch 网络层失败自动上报，且现场可通过公开 MCP 工具查询。
 
-    步骤：
-    1. 打开 network_capture_demo.html
-    2. 触发一个失败请求（访问不存在的 URL）
-    3. 等待 SDK 自动上报
-    4. 检查服务端是否收到 silent failure 记录
+    完整闭环（M3-A）：
+    页面触发受控网络错误（本地死端口 fetch → 连接拒绝）
+    → Browser SDK V3 自动上报（network 记录 + 静默失败，豁免采样必达）
+    → 服务端 memory runtime
+    → MCP HTTP initialize / initialized
+    → tools/call list_recent_traces（session 隔离）按唯一 marker 命中本次记录
+    → tools/call trace 按返回 ID 深挖
+    → tools/call get_network_trace 命中同一 marker 的网络记录
+
+    唯一性：每次运行生成独立 marker（写入请求 URL，随 SDK 采集进入服务端），
+    查询结果必须包含该 marker，命中历史记录一律失败。
     """
-    # 监听服务端日志（通过 API 查询）
+    import uuid
+    import urllib.request
+
+    marker = f"e2e-m3a-{uuid.uuid4().hex[:12]}"
+
     page.goto(f"{BASE_URL}/demo")
     page.wait_for_load_state("networkidle")
 
-    # 检查 SDK 是否加载成功
-    sdk_loaded = page.evaluate("typeof AiDebug !== 'undefined'")
-    assert sdk_loaded, "SDK 未加载"
+    assert page.evaluate("typeof AiDebug !== 'undefined'"), "SDK 未加载"
+    assert page.evaluate("AiDebug._inited"), "SDK 未完成 init"
 
-    # 检查 SDK 内部状态（SDK 闭包式配置，_inited 经只读 getter 暴露）
-    sdk_inited = page.evaluate("AiDebug._inited")
-    print(f"SDK initialized: {sdk_inited}")
+    sdk_trace_id = page.evaluate("AiDebug.getTraceId()")
+    assert sdk_trace_id and sdk_trace_id.startswith("sdk-trace-"), (
+        f"trace_id 格式错误: {sdk_trace_id}"
+    )
+    page_session = page.evaluate("AiDebug.getSessionId()")
+    assert page_session, "SDK 未生成 session_id"
 
-    # 检查 UI hook 是否安装（_getUIMutationObserver 测试辅助方法）
-    ui_hook_installed = page.evaluate("!!AiDebug._getUIMutationObserver()")
-    print(f"UI mutation observer installed: {ui_hook_installed}")
-
-    # 检查 trace_id 是否自动生成
-    trace_id = page.evaluate("AiDebug.getTraceId()")
-    assert trace_id and trace_id.startswith("sdk-trace-"), f"trace_id 格式错误: {trace_id}"
-
-    # 触发一个失败请求
-    page.evaluate("""
-        fetch('http://localhost:8000/nonexistent-endpoint-404')
-            .catch(() => console.log('fetch failed as expected'))
-    """)
-
-    # 等待 SDK 自动上报（V3 逻辑）
-    time.sleep(2)
-
-    # 通过 API 查询最近的 silent failure 记录
-    resp = page.request.get(
-        f"{BASE_URL}/mcp/tools/get_silent_failures",
-        headers={"X-API-Key": API_KEY},
-        params={"limit": "10"}
+    # 触发网络层失败：本地未监听端口 → 连接拒绝 → fetch reject →
+    # SDK 网络钩子错误路径（status_code=0）→ _autoReportNetworkError 上报
+    # 静默失败 + _reportNetworkRecord 上报网络记录。
+    # 注意：404 等正常 HTTP 响应不会触发 V3 静默失败（SDK 仅在网络异常路径上报）。
+    page.evaluate(
+        "fetch('http://127.0.0.1:59999/" + marker + "').catch(function () {});"
     )
 
-    # 注意：get_silent_failures 可能不是 MCP tool，需要根据实际 API 调整
-    # 这里先检查是否有 ingest 记录
-    if resp.status == 200:
-        data = resp.json()
-        # 检查是否有 silent failure 记录
-        failures = data.get("silent_failures", [])
-        # 至少应该有一条（来自 V3 自动检测）
-        # 如果没有，可能是 SDK 配置或逻辑问题
-        print(f"Found {len(failures)} silent failures")
+    # ── MCP HTTP JSON-RPC 客户端（公开端点 /mcp）──
+    mcp_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "X-API-Key": API_KEY,
+    }
+
+    def _post_rpc(payload: dict, session_id: str | None = None):
+        req = urllib.request.Request(
+            f"{BASE_URL}/mcp",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=mcp_headers,
+            method="POST",
+        )
+        if session_id:
+            req.add_header("mcp-session-id", session_id)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+            raw = resp.read().decode("utf-8")
+            session = resp.headers.get("mcp-session-id")
+        assert status in (200, 202), f"MCP HTTP {status}: {raw[:200]}"
+        return status, raw, session
+
+    def _rpc_request(method: str, params: dict, session_id: str | None, req_id: int) -> dict:
+        status, raw, session = _post_rpc({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": method,
+            "params": params,
+        }, session_id=session_id)
+        assert status == 200, f"{method} 应返回 200，实际 {status}"
+        if raw.lstrip().startswith("{"):
+            envelope = json.loads(raw)
+        else:
+            data_lines = [ln[5:] for ln in raw.splitlines() if ln.startswith("data:")]
+            assert data_lines, f"{method} 响应缺少 data 行: {raw[:200]}"
+            envelope = json.loads(data_lines[-1].strip())
+        assert envelope.get("id") == req_id, f"{method} 响应 id 不匹配"
+        assert "error" not in envelope, f"{method} JSON-RPC error: {envelope.get('error')}"
+        return {"result": envelope.get("result"), "session": session}
+
+    def _call_tool(name: str, arguments: dict, req_id: int) -> dict:
+        """tools/call 并断言协议结构；返回服务端工具结果（content[0].text 的 JSON）。"""
+        rpc = _rpc_request(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            session_id=_mcp_session_holder["session"],
+            req_id=req_id,
+        )
+        result = rpc["result"]
+        assert result is not None, "tools/call 缺少 result"
+        assert result.get("isError") is not True, f"工具 {name} 执行失败: {result}"
+        content = result.get("content") or []
+        assert content and content[0].get("type") == "text", (
+            f"工具 {name} 返回异常 content: {result}"
+        )
+        return json.loads(content[0]["text"])
+
+    _mcp_session_holder = {"session": None}
+
+    init_rpc = _rpc_request("initialize", {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "lujo-e2e-m3a", "version": "0.1.0"},
+    }, session_id=None, req_id=1)
+    server_info = (init_rpc["result"] or {}).get("serverInfo") or {}
+    assert server_info.get("name") == "lujo-mcp", f"serverInfo 异常: {server_info}"
+    _mcp_session_holder["session"] = init_rpc["session"]
+    assert _mcp_session_holder["session"], "initialize 未返回 mcp-session-id"
+
+    # initialized 通知（无 id）：HTTP 202、无 body，不解析 JSON-RPC
+    notify_status, _, _ = _post_rpc({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    }, session_id=_mcp_session_holder["session"])
+    assert notify_status == 202, f"initialized 通知应返回 202，实际 {notify_status}"
+
+    # 条件轮询：list_recent_traces（session 隔离）等待本次静默失败出现。
+    # SDK 批量上报（默认 1s 间隔）+ 服务端入库存在真实延迟，禁止固定长 sleep。
+    deadline = time.time() + 20.0
+    matched = None
+    while time.time() < deadline:
+        listing = _call_tool(
+            "list_recent_traces",
+            {"limit": 20, "session_id": page_session},
+            req_id=100,
+        )
+        assert listing.get("count") == len(listing.get("traces", [])), (
+            f"list_recent_traces 结构异常: {listing}"
+        )
+        for item in listing.get("traces", []):
+            if marker in (item.get("message") or ""):
+                matched = item
+                break
+        if matched:
+            break
+        time.sleep(0.5)
+
+    assert matched is not None, (
+        f"20s 内未通过 list_recent_traces 找到含 {marker!r} 的本次记录；"
+        f"会话 {page_session} 下共 {listing.get('count', 0)} 条"
+    )
+    assert matched.get("type") == "SilentFailure", (
+        f"命中的记录类型应为 SilentFailure: {matched}"
+    )
+    trace_id = matched["trace_id"]
+    assert trace_id, "命中记录缺少 trace_id"
+
+    # 按 ID 深挖：trace 工具返回该记录的完整时序（trace_data 等步骤）
+    detail = _call_tool("trace", {"request_id": trace_id}, req_id=101)
+    assert detail.get("request_id") == trace_id, f"trace 返回的 request_id 不匹配: {detail}"
+    steps = detail.get("trace") or []
+    assert detail.get("step_count") == len(steps) and steps, (
+        f"trace 应返回非空时序: step_count={detail.get('step_count')}"
+    )
+
+    # 网络记录腿：get_network_trace 按页面 sdk_trace_id 命中同一 marker 的记录
+    net_deadline = time.time() + 10.0
+    net_records = []
+    while time.time() < net_deadline:
+        net = _call_tool("get_network_trace", {"trace_id": sdk_trace_id}, req_id=102)
+        if net.get("found") and (net.get("count") or 0) > 0:
+            net_records = net.get("records") or []
+            if any(marker in (r.get("url") or "") for r in net_records):
+                break
+        time.sleep(0.5)
+
+    assert any(marker in (r.get("url") or "") for r in net_records), (
+        f"get_network_trace 未命中含 {marker!r} 的网络记录；"
+        f"共 {len(net_records)} 条"
+    )
 
 
 def test_sdk_v6_ui_silent_failure_detection(page: Page):
