@@ -545,3 +545,97 @@ def test_redact_for_embedding_invalid_extra_pattern_skipped(monkeypatch):
 
     result = _redact_for_embedding("plain text no secret")
     assert result == "plain text no secret"
+
+
+# ---------------------------------------------------------------------------
+# U05-QDRANT-FIX：qdrant 内联副本与 redaction.py 共用 pattern_guard，
+# 危险正则（灾难性回溯形态）不得进入 _extra_rules_cache。
+# ---------------------------------------------------------------------------
+
+
+def _reset_qdrant_extra_cache(monkeypatch):
+    monkeypatch.setattr(qdrant_module, "_extra_rules_cache", None)
+    monkeypatch.setattr(qdrant_module, "_extra_rules_signature", None)
+
+
+def test_dangerous_extra_pattern_not_loaded_into_qdrant_cache(monkeypatch):
+    """危险正则必须被跳过，不得进入 qdrant 的 _extra_rules_cache。"""
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"(a+)+b")
+    _reset_qdrant_extra_cache(monkeypatch)
+
+    rules = qdrant_module._load_extra_redact_rules()
+    assert rules == []
+    assert qdrant_module._extra_rules_cache == []
+
+
+def test_dangerous_extra_pattern_does_not_block_embedding_redaction(monkeypatch):
+    """危险正则被跳过后，28 字符恰配输入必须立即返回（回溯旁路已消除）。"""
+    import time
+
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"(a+)+b")
+    _reset_qdrant_extra_cache(monkeypatch)
+
+    t0 = time.perf_counter()
+    result = _redact_for_embedding("a" * 28 + "X")
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 1.0, f"_redact_for_embedding 被危险正则阻塞: {elapsed:.2f}s"
+    assert result == "a" * 28 + "X"
+
+
+def test_dangerous_extra_pattern_warning_no_leak_in_qdrant(monkeypatch, caplog):
+    """qdrant 路径的危险正则 warning 不得输出完整模式内容。"""
+    import logging
+
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"(a|a)*$")
+    _reset_qdrant_extra_cache(monkeypatch)
+
+    with caplog.at_level(logging.WARNING):
+        qdrant_module._load_extra_redact_rules()
+    assert caplog.text, "危险正则未产生 warning"
+    assert "(a|a)*$" not in caplog.text, "warning 泄漏了完整正则内容"
+
+
+def test_safe_extra_pattern_still_applies_after_guard(monkeypatch):
+    """安全正则不受共享守卫影响，仍作用于 embedding 外发文本。"""
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"secretvalue\s*=\s*\S+")
+    _reset_qdrant_extra_cache(monkeypatch)
+
+    result = _redact_for_embedding("payload secretvalue = abc123 end")
+    assert "abc123" not in result
+    assert "***" in result
+
+
+def test_mixed_config_qdrant_keeps_safe_drops_dangerous(monkeypatch):
+    """混合配置：安全正则保留，危险与非法正则丢弃（与 redaction.py 同语义）。"""
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", "\n".join([
+        r"\d{3}-\d{4}",
+        r"(a+)+b",
+        "(unclosed",
+    ]))
+    _reset_qdrant_extra_cache(monkeypatch)
+
+    rules = qdrant_module._load_extra_redact_rules()
+    assert len(rules) == 1
+    result = _redact_for_embedding("call 555-1234 ok")
+    assert "555-1234" not in result
+
+
+def test_qdrant_cache_rebuild_on_signature_change_both_directions(monkeypatch):
+    """配置签名变更后缓存双向重建：安全→危险清空，危险→安全重装。"""
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"\d{3}-\d{4}")
+    _reset_qdrant_extra_cache(monkeypatch)
+    assert len(qdrant_module._load_extra_redact_rules()) == 1
+
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"(a+)+b")
+    assert qdrant_module._load_extra_redact_rules() == []
+    assert "555-1234" in _redact_for_embedding("call 555-1234")
+
+    monkeypatch.setattr(settings, "redaction_extra_patterns", r"\d{3}-\d{4}")
+    assert len(qdrant_module._load_extra_redact_rules()) == 1
+    assert "555-1234" not in _redact_for_embedding("call 555-1234")

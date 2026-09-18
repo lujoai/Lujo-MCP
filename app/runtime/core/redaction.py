@@ -15,6 +15,7 @@ import threading
 from typing import Any, Optional
 
 from app.config import settings
+from app.utils.pattern_guard import compile_extra_rules
 
 logger = logging.getLogger("lujo-mcp.redaction")
 
@@ -61,33 +62,16 @@ _extra_cache: Optional[list[tuple["re.Pattern[str]", str]]] = None
 _extra_signature: Optional[str] = None
 _extra_lock = threading.Lock()
 
-# U05-FIX：灾难性回溯形态检测（保守策略）。
-# 背景：`(a+)+b` 之类嵌套量词在 ≥28 字符输入上呈指数级回溯（实测 12.7s@28、
-# >15s@30），经 redact() 生产路径可拖死调用线程。风险前提是**作者配置**了
-# 危险正则（P2，非远程 P1）。
-# 处置：沿用本模块既有「不可用规则即跳过、不阻断主流程」的降级语义，在配置期
-# 拒绝装载危险正则。保守判定——只拦已确认的明确结构，宁可漏拦也不误伤常见
-# 安全正则（如 `\b\d{17}[\dXx]\b`、`(?:foo|bar)-baz`、`prefix-\w+`）。
-_DANGEROUS_REPEAT_RE = re.compile(
-    r"\([^()]*[*+][^()]*\)[*+]"      # 组内量词 + 组外量词（嵌套量词）：(a+)+ / (a*)* / (\w+)+
-    r"|\([^()|]*\|[^()|]*\)[*+]"     # 组内交替 + 组外量词（重叠重复）：(a|a)*
-)
-
-
-def _is_dangerous_pattern(pattern: str) -> bool:
-    """检测正则是否含已确认的灾难性回溯形态（嵌套量词 / 重叠重复）。
-
-    保守判定：只识别「括号组内已含量词或交替、且组外再叠加量词」的结构。
-    安全形态（单层量词、非重叠交替、字符类内量词）不会被误判。
-    """
-    return _DANGEROUS_REPEAT_RE.search(pattern) is not None
+# U05-FIX / U05-QDRANT-FIX：灾难性回溯形态检测与逐行编译过滤收敛到中立
+# 纯工具层 app/utils/pattern_guard.py（runtime 与 rag 都允许依赖），
+# 与 qdrant embedding 外发路径共用同一份判定，防止副本语义再次漂移。
 
 
 def _load_extra_rules() -> list[tuple["re.Pattern[str]", str]]:
     """编译并缓存用户配置的额外正则；配置变化时重新编译。线程安全。
 
-    U05-FIX：危险正则（灾难性回溯形态）不进入缓存，仅记 warning 安全摘要
-    （不输出完整正则内容）；非法正则保持既有 warning + skip 行为不变。
+    危险正则（灾难性回溯形态）不进入缓存，仅记 warning 安全摘要（不输出
+    完整正则内容）；非法正则保持既有 warning + skip 行为不变。
     """
     global _extra_cache, _extra_signature
     # 快速路径：缓存命中
@@ -100,31 +84,12 @@ def _load_extra_rules() -> list[tuple["re.Pattern[str]", str]]:
             return _extra_cache
 
         raw = settings.redaction_extra_patterns or ""
-        rules: list[tuple["re.Pattern[str]", str]] = []
-        for index, line in enumerate(raw.splitlines(), 1):
-            pattern = line.strip()
-            if not pattern:
-                continue
-            if _is_dangerous_pattern(pattern):
-                # 安全摘要：只报行号与长度，不输出正则内容——避免把作者可能
-                # 用于匹配敏感数据的模式写进日志。
-                logger.warning(
-                    "跳过存在灾难性回溯风险的脱敏正则（第 %d 行，长度 %d）："
-                    "嵌套量词/重叠重复结构在长输入上会指数级回溯，"
-                    "请改写为单层量词或非重叠交替形式",
-                    index,
-                    len(pattern),
-                )
-                continue
-            try:
-                rules.append((re.compile(pattern), "***"))
-            except re.error as e:
-                logger.warning("跳过无效的脱敏正则 %r: %s", pattern, e)
-                continue
-
-        _extra_cache = rules
+        result = compile_extra_rules(raw)
+        for message in result.warnings:
+            logger.warning(message)
+        _extra_cache = list(result.rules)
         _extra_signature = raw
-        return rules
+        return _extra_cache
 
 
 def redact(text: Optional[str]) -> Optional[str]:

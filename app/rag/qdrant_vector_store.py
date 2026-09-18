@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from app.config import settings
 from app.rag.vector_store import VectorStore, _serialize_doc
+from app.utils.pattern_guard import compile_extra_rules
 
 logger = logging.getLogger("lujo-mcp.qdrant-vector-store")
 
@@ -66,16 +67,23 @@ _REDACT_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "***PHONE***"),
 ]
 
-# 额外脱敏正则缓存（用户 settings.redaction_extra_patterns，换行分隔；与
-# app/runtime/core/redaction.py 的 _load_extra_rules 同语义，架构冻结禁止
-# rag → runtime import 故内联复制）。
+# 额外脱敏正则缓存（用户 settings.redaction_extra_patterns，换行分隔）。
+# U05-QDRANT-FIX：此前整段「逐行编译 + 跳过非法」逻辑为 runtime/redaction.py
+# 的内联复制，且漏掉了危险正则（灾难性回溯形态）检测，构成长文本旁路。
+# 检测与编译过滤已收敛到中立纯工具层 app/utils/pattern_guard.py
+# （架构冻结禁止 rag → runtime import，utils 为双方都允许的下层依赖），
+# 本模块仅保留自己的缓存与配置签名语义。
 _extra_rules_cache: Optional[list[tuple[re.Pattern[str], str]]] = None
 _extra_rules_signature: Optional[str] = None
 _extra_rules_lock = threading.Lock()
 
 
 def _load_extra_redact_rules() -> list[tuple[re.Pattern[str], str]]:
-    """编译并缓存用户配置的额外脱敏正则；配置变化时重建。线程安全。"""
+    """编译并缓存用户配置的额外脱敏正则；配置变化时重建。线程安全。
+
+    危险正则（灾难性回溯形态）与非法正则均 warning + skip，不进入缓存；
+    危险正则的 warning 只报行号与长度，不输出模式内容（与 redaction.py 同语义）。
+    """
     global _extra_rules_cache, _extra_rules_signature
     sig = settings.redaction_extra_patterns or ""
     if _extra_rules_cache is not None and _extra_rules_signature == sig:
@@ -83,19 +91,12 @@ def _load_extra_redact_rules() -> list[tuple[re.Pattern[str], str]]:
     with _extra_rules_lock:
         if _extra_rules_cache is not None and _extra_rules_signature == sig:
             return _extra_rules_cache
-        rules: list[tuple[re.Pattern[str], str]] = []
-        for line in sig.splitlines():
-            pattern = line.strip()
-            if not pattern:
-                continue
-            try:
-                rules.append((re.compile(pattern), "***"))
-            except re.error as e:
-                logger.warning("跳过无效的脱敏正则 %r: %s", pattern, e)
-                continue
-        _extra_rules_cache = rules
+        result = compile_extra_rules(sig)
+        for message in result.warnings:
+            logger.warning(message)
+        _extra_rules_cache = list(result.rules)
         _extra_rules_signature = sig
-        return rules
+        return _extra_rules_cache
 
 
 def _redact_for_embedding(text: str) -> str:
