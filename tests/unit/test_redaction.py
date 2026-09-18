@@ -269,3 +269,181 @@ def test_format_trace_for_ai_redacted():
     output = format_trace_for_ai(exc_data)
     assert "leaked_pwd" not in output
     assert "***" in output
+
+
+# ── U05-FIX：灾难性回溯正则的配置期保护（方案 A：warning + 跳过）──
+#
+# 背景：嵌套量词/重叠重复结构（如 `(a+)+b`）在 ≥28 字符输入上呈指数级回溯，
+# 经 redact() 生产路径实测 12.7s（见 U05-READONLY 审计）。该风险仅在作者配置
+# 危险正则时触发（P2，非远程 P1）。既有契约「无效正则静默跳过，不阻断主流程」
+# 决定了处置方式为跳过；危险正则**不得进入 `_extra_cache`**。
+
+# 安全正则样本：必须保持兼容并继续生效（不得被危险形态检测误伤）
+_SAFE_PATTERNS = [
+    r"\b\d{17}[\dXx]\b",           # 身份证号
+    r"\d{3}-\d{4}",                # 电话分段
+    r"(?i)token[:=]\s*\S+",        # 大小写不敏感前缀
+    r"[a-z]+@[a-z]+\.[a-z]{2,}",   # 邮箱
+    r"(?:foo|bar)-baz",            # 非重叠交替
+    r"prefix-\w+",                 # 单层量词
+]
+
+# 危险正则样本：已确认的明确嵌套量词 / 重叠重复结构
+_DANGEROUS_PATTERNS = [
+    r"(a+)+b",
+    r"(a|a)*$",
+    r"(\w+)+",
+    r"(a*)*b",
+    r"([a-z]+)+x",
+]
+
+
+def _reset_extra_cache():
+    """清空额外规则缓存，使下次调用按当前 settings 重编译。"""
+    import app.runtime.core.redaction as _r
+    _r._extra_cache = None
+    _r._extra_signature = None
+
+
+def test_dangerous_extra_patterns_not_loaded():
+    """危险正则必须被跳过，不得进入 _extra_cache。"""
+    import app.runtime.core.redaction as _r
+    for dangerous in _DANGEROUS_PATTERNS:
+        settings.redaction_extra_patterns = dangerous
+        _reset_extra_cache()
+        rules = _r._load_extra_rules()
+        assert rules == [], f"危险正则未被跳过: {dangerous!r}"
+        assert _r._extra_cache == [], f"危险正则进入了缓存: {dangerous!r}"
+
+
+def test_dangerous_pattern_does_not_block_redact():
+    """危险正则被跳过后，28 字符恰配输入必须毫秒级返回（不阻塞）。"""
+    import time
+    settings.redaction_extra_patterns = r"(a+)+b"
+    _reset_extra_cache()
+    t0 = time.perf_counter()
+    out = redact("a" * 28 + "X")
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 1.0, f"redact 被危险正则阻塞: {elapsed:.2f}s"
+    # 默认规则仍生效（该输入无敏感内容，应原样返回）
+    assert out == "a" * 28 + "X"
+
+
+def test_dangerous_pattern_warning_is_safe_summary(caplog):
+    """warning 不得输出完整正则内容，只输出序号或安全摘要。"""
+    import app.runtime.core.redaction as _r
+    settings.redaction_extra_patterns = r"(a+)+b"
+    _reset_extra_cache()
+    with caplog.at_level("WARNING"):
+        _r._load_extra_rules()
+    assert caplog.text, "危险正则未产生 warning"
+    assert "(a+)+b" not in caplog.text, "warning 泄漏了完整正则内容"
+
+
+def test_safe_extra_patterns_still_apply():
+    """安全正则必须继续兼容并生效（不被危险形态检测误伤）。"""
+    import app.runtime.core.redaction as _r
+    for pattern in _SAFE_PATTERNS:
+        settings.redaction_extra_patterns = pattern
+        _reset_extra_cache()
+        rules = _r._load_extra_rules()
+        assert len(rules) == 1, f"安全正则被误拦: {pattern!r}"
+
+
+def test_safe_pattern_sensitive_and_insensitive_examples():
+    """安全正则的命中与不命中行为保持原样。"""
+    settings.redaction_extra_patterns = r"\b\d{17}[\dXx]\b"
+    _reset_extra_cache()
+    assert "110101199003071234" not in redact("id=110101199003071234 done")
+    assert "***" in redact("id=110101199003071234 done")
+    # 不命中的输入保持原样
+    assert redact("id=123 done") == "id=123 done"
+
+
+def test_invalid_pattern_still_warns_and_skips(caplog):
+    """非法正则保持既有 warning + skip 行为（回退兼容）。"""
+    import app.runtime.core.redaction as _r
+    settings.redaction_extra_patterns = "(unclosed"
+    _reset_extra_cache()
+    with caplog.at_level("WARNING"):
+        rules = _r._load_extra_rules()
+    assert rules == []
+    assert "unclosed" in caplog.text or "无效的脱敏正则" in caplog.text
+
+
+def test_mixed_config_keeps_safe_and_drops_dangerous(caplog):
+    """混合配置：安全正则保留生效，危险正则被丢弃。"""
+    import app.runtime.core.redaction as _r
+    settings.redaction_extra_patterns = "\n".join([
+        r"\d{3}-\d{4}",
+        r"(a+)+b",
+        r"[a-z]+@[a-z]+\.[a-z]{2,}",
+        "(unclosed",
+    ])
+    _reset_extra_cache()
+    with caplog.at_level("WARNING"):
+        rules = _r._load_extra_rules()
+    assert len(rules) == 2, f"应保留 2 条安全规则，实际 {len(rules)}"
+    out = redact("call 555-1234 from a@b.com")
+    assert "555-1234" not in out
+    assert "a@b.com" not in out
+
+
+def test_cache_rebuild_after_config_change_drops_old_rules():
+    """配置变化后缓存必须重建，不复用旧规则（危险 → 安全、安全 → 危险 双向）。"""
+    import app.runtime.core.redaction as _r
+    # 先配置安全正则并确认生效
+    settings.redaction_extra_patterns = r"\d{3}-\d{4}"
+    _reset_extra_cache()
+    assert len(_r._load_extra_rules()) == 1
+    assert "555-1234" not in redact("call 555-1234")
+
+    # 改为危险正则：缓存必须重建且不含旧的安全规则
+    settings.redaction_extra_patterns = r"(a+)+b"
+    rules = _r._load_extra_rules()
+    assert rules == [], "配置变更后仍复用旧规则"
+    # 旧安全检查不再命中（旧规则已被正确丢弃）
+    assert redact("call 555-1234") == "call 555-1234"
+
+    # 再改回安全正则：必须重新生效
+    settings.redaction_extra_patterns = r"\d{3}-\d{4}"
+    assert len(_r._load_extra_rules()) == 1
+    assert "555-1234" not in redact("call 555-1234")
+
+
+def test_dangerous_pattern_no_timeout_in_isolated_subprocess():
+    """隔离子进程超时回归：危险正则 + 30 字符输入必须在硬超时内返回。
+
+    U05-READONLY 审计证据：修复前 `(a+)+b` + 30 字符 >15s（子进程被杀）；
+    28 字符 12.7s。本用例在独立可杀死子进程中验证修复后的实际耗时，
+    pytest 主进程永远不会被拖死（10s 硬超时 + kill）。
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = str(Path(__file__).resolve().parents[2])
+    code = (
+        "import sys, time\n"
+        f"sys.path.insert(0, r'{repo}')\n"
+        "from app.config import settings\n"
+        "settings.redaction_enabled = True\n"
+        "settings.redaction_extra_patterns = r'(a+)+b'\n"
+        "from app.runtime.core.redaction import redact\n"
+        "t0 = time.perf_counter()\n"
+        "out = redact('a' * 30 + 'X')\n"
+        "print('ELAPSED_MS=', round((time.perf_counter() - t0) * 1000))\n"
+    )
+    # 说明：子进程 warning 含中文，Windows 默认 stderr 编码（GBK）会让
+    # subprocess.run 的 UTF-8 解码失败；显式指定 errors="replace" 规避。
+    # env 不裁剪 PATH —— 避免与本次修复无关的进程启动副作用。
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, timeout=10,
+        cwd=repo, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 0, f"子进程失败: {(proc.stderr or '')[-200:]}"
+    line = [ln for ln in proc.stdout.splitlines() if ln.startswith("ELAPSED_MS=")]
+    assert line, f"未取到耗时: {(proc.stdout or '')[-200:]}"
+    elapsed_ms = int(line[0].split("=")[1])
+    assert elapsed_ms < 3000, f"危险正则仍导致回溯：{elapsed_ms}ms（修复前 >15000ms）"
