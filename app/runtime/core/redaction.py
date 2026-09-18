@@ -85,11 +85,16 @@ def _load_extra_rules() -> list[tuple["re.Pattern[str]", str]]:
 
         raw = settings.redaction_extra_patterns or ""
         result = compile_extra_rules(raw)
-        for message in result.warnings:
-            logger.warning(message)
         _extra_cache = list(result.rules)
         _extra_signature = raw
-        return _extra_cache
+
+    # U06 收尾修复：warning 必须在锁释放后发出。app/utils/logging 的
+    # JSONFormatter/RedactingFormatter 在 format() 里回调 redact()，若在本线程
+    # 持 _extra_lock（非重入）期间发日志，会重入同一把锁造成自死锁
+    # （py-spy 现场：全量 unit 卡死于 test_qdrant invalid-pattern）。
+    for message in result.warnings:
+        logger.warning(message)
+    return _extra_cache
 
 
 def redact(text: Optional[str]) -> Optional[str]:
@@ -124,8 +129,10 @@ def _warn_redaction_disabled_once() -> None:
     with _redaction_disabled_lock:
         if _redaction_disabled_warned:
             return
-        logger.warning("redaction is disabled — sensitive data will NOT be masked")
         _redaction_disabled_warned = True
+    # 与 _load_extra_rules 同理：redact() 在脱敏关闭时会回调本函数，
+    # 持锁发日志将被 formatter 的 redact() 回调同线程重入死锁。
+    logger.warning("redaction is disabled — sensitive data will NOT be masked")
 
 
 # ── 结构化数据脱敏（dict/list 递归 + 键名白名单）────────────────────────────

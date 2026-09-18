@@ -92,6 +92,56 @@ def test_invalid_extra_pattern_skipped():
     assert redact('password = "x"') == 'password="***"'
 
 
+# ── U06 收尾：持锁日志 × JSONFormatter 回调 redact() 的自死锁回归 ──
+#
+# 现场（py-spy dump 实测）：setup_logging 装上的 JSONFormatter/RedactingFormatter
+# 在 format() 里回调 redact()；若 _load_extra_rules / _warn_redaction_disabled_once
+# 在持有各自非重入锁期间 logger.warning，同线程会再次进入同一把锁 → 全量 unit
+# 卡死在 58%（本地与挂死现场均复现）。契约：warning 必须在锁释放后才发出。
+
+
+def _thread_completes(target, timeout=5.0):
+    import threading
+
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout)
+    return not worker.is_alive()
+
+
+def test_load_extra_rules_no_self_deadlock_under_reentrant_formatter(monkeypatch):
+    """非法正则的 warning 回调 redact()（模拟 formatter）时不得自锁。"""
+    import app.runtime.core.redaction as _r
+
+    settings.redaction_extra_patterns = "(unclosed"
+    _reset_extra_cache()
+
+    def reentrant_warning(*args, **kwargs):
+        # 模拟 JSONFormatter.format → redact() → _load_extra_rules 的同线程回入
+        _r.redact('password = "x"')
+
+    monkeypatch.setattr(_r.logger, "warning", reentrant_warning)
+    finished = _thread_completes(_r._load_extra_rules)
+    assert finished, "_load_extra_rules 持锁发日志导致同线程重入 _extra_lock 自死锁"
+    assert _r._extra_cache == [], "重建完成后缓存应为空规则（非法正则被跳过）"
+
+
+def test_disabled_warning_no_self_deadlock_under_reentrant_formatter(monkeypatch):
+    """redaction 关闭的一次性 warning 同样不得在 _redaction_disabled_lock 内发出。"""
+    import app.runtime.core.redaction as _r
+
+    _r._redaction_disabled_warned = False
+    settings.redaction_enabled = False
+
+    def reentrant_warning(*args, **kwargs):
+        _r.redact("whatever")
+
+    monkeypatch.setattr(_r.logger, "warning", reentrant_warning)
+    finished = _thread_completes(lambda: _r.redact("input text"))
+    assert finished, "_warn_redaction_disabled_once 持锁发日志导致自死锁"
+    _r._redaction_disabled_warned = False
+
+
 def test_json_password_masked():
     assert redact('{"password":"123456"}') == '{"password":"***"}'
     assert redact('{"pwd":"secret"}') == '{"pwd":"***"}'

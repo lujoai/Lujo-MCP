@@ -639,3 +639,28 @@ def test_qdrant_cache_rebuild_on_signature_change_both_directions(monkeypatch):
     monkeypatch.setattr(settings, "redaction_extra_patterns", r"\d{3}-\d{4}")
     assert len(qdrant_module._load_extra_redact_rules()) == 1
     assert "555-1234" not in _redact_for_embedding("call 555-1234")
+
+
+def test_qdrant_warning_reentrant_runtime_redact_no_deadlock(monkeypatch):
+    """U06 收尾：qdrant warning 在持锁期回调 runtime redact()（JSONFormatter 实测链路）
+    不得导致同线程自死锁；warning 应在锁释放后发出。"""
+    import threading
+
+    import app.runtime.core.redaction as runtime_redaction
+
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    monkeypatch.setattr(settings, "redaction_extra_patterns", "([invalid")
+    _reset_qdrant_extra_cache(monkeypatch)
+    monkeypatch.setattr(runtime_redaction, "_extra_cache", None)
+    monkeypatch.setattr(runtime_redaction, "_extra_signature", None)
+
+    def formatter_like_warning(*args, **kwargs):
+        runtime_redaction.redact('password = "x"')
+
+    monkeypatch.setattr(qdrant_module.logger, "warning", formatter_like_warning)
+
+    worker = threading.Thread(target=qdrant_module._load_extra_redact_rules, daemon=True)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert not worker.is_alive(), "qdrant _load_extra_redact_rules 与 runtime redact() 交叉死锁"
+    assert qdrant_module._extra_rules_cache == []

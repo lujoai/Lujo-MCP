@@ -92,11 +92,14 @@ def _load_extra_redact_rules() -> list[tuple[re.Pattern[str], str]]:
         if _extra_rules_cache is not None and _extra_rules_signature == sig:
             return _extra_rules_cache
         result = compile_extra_rules(sig)
-        for message in result.warnings:
-            logger.warning(message)
         _extra_rules_cache = list(result.rules)
         _extra_rules_signature = sig
-        return _extra_rules_cache
+
+    # 与 runtime/redaction._load_extra_rules 同口径：warning 在锁释放后发出，
+    # 避免 JSONFormatter.format → redact() 同线程重入非重入锁的死锁。
+    for message in result.warnings:
+        logger.warning(message)
+    return _extra_rules_cache
 
 
 def _redact_for_embedding(text: str) -> str:
