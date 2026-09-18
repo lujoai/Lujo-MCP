@@ -36,12 +36,30 @@
     .failed { color: #f85149; }
     .pending { color: #d29922; }
     .config-panel { background: #161b22; padding: 12px; border-radius: 6px; margin-bottom: 16px; }
+    .status-panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+    .status-panel h2 { margin-top: 0; }
+    .status-row { margin: 6px 0; font-size: 14px; }
+    .status-chip { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: bold; margin-right: 8px; }
+    .chip-ok { background: #1a4731; color: #3fb950; }
+    .chip-bad { background: #5c1a1a; color: #f85149; }
+    .chip-wait { background: #4a3a12; color: #d29922; }
+    .chip-idle { background: #30363d; color: #8b949e; }
+    .status-detail { font-family: monospace; font-size: 12px; color: #8b949e; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>AI Debug Network Capture Demo - XHR Hook 验证</h1>
     
+    <div class="status-panel" id="ingestion-status">
+      <h2>接入状态（真实证据驱动）</h2>
+      <div class="status-row"><span class="status-chip chip-idle" id="chip-sdk">等待</span>SDK 初始化 <span class="status-detail" id="detail-sdk"></span></div>
+      <div class="status-row"><span class="status-chip chip-idle" id="chip-sent">未发送</span>事件发送 <span class="status-detail" id="detail-sent"></span></div>
+      <div class="status-row"><span class="status-chip chip-idle" id="chip-query">未查询</span>服务端接收（MCP 可查询性） <span class="status-detail" id="detail-query"></span></div>
+      <button onclick="lujoDemo.probeNetworkError()">触发受控网络错误探针</button>
+      <span class="status-detail">探针自动生成 marker 并走 SDK → /ingest → MCP 查询全链路</span>
+    </div>
+
     <div class="config-panel">
       <strong>SDK 配置：</strong>
       <label>networkSampleRate: <input type="number" id="sampleRate" value="1" step="0.1" min="0" max="1"></label>
@@ -440,6 +458,268 @@
     }
 
     console.log('Demo page loaded. Start backend server first: python -m uvicorn app.main:app --reload');
+
+    // ══ M3-B：接入状态可见化（真实证据驱动，不由 captureCount 推断）══
+    // 状态阶梯：
+    //   sdkStatus      — 证据：AiDebug._inited（SDK 是否成功初始化）
+    //   sent           — 证据：SDK 回调 onSilentFailureReport / onNetworkCapture
+    //                    （"已发送"只能由 SDK 实际发送路径/回调确认）
+    //   queryStatus    — 证据：页面自身经公开 MCP /mcp（initialize → initialized →
+    //                    tools/call）查询命中本次 marker（"服务端已收到"必须由
+    //                    公开查询证据确认）
+    //   queryReason    — 失败原因（MCP 查询失败 / 服务端未返回记录 / 查询超时）
+    var lujoDemo = (function () {
+      var state = {
+        sdkStatus: 'pending',          // pending | initialized | init-failed
+        endpoint: window.location.origin,
+        sent: null,                    // {marker, kind, at} — 由 SDK 回调写入
+        queryStatus: 'idle',           // idle | querying | queried | failed
+        queryReason: null,
+        marker: null,
+        recordCount: 0,
+        silentFailureCount: 0,         // 页面观察到的静默失败回调数
+        lastError: null
+      };
+      var POLL_DEADLINE_MS = 15000;
+      var POLL_INTERVAL_MS = 500;
+
+      function getStatus() {
+        // 深拷贝快照，外部（E2E）只读
+        return JSON.parse(JSON.stringify(state));
+      }
+
+      function render() {
+        function setChip(id, cls, text) {
+          var el = document.getElementById(id);
+          if (!el) return;
+          el.className = 'status-chip ' + cls;
+          el.textContent = text;
+        }
+        var sdkCls = state.sdkStatus === 'initialized' ? 'chip-ok'
+          : state.sdkStatus === 'init-failed' ? 'chip-bad' : 'chip-wait';
+        setChip('chip-sdk', sdkCls,
+          state.sdkStatus === 'initialized' ? '已初始化'
+            : state.sdkStatus === 'init-failed' ? '初始化失败' : '等待');
+        var sdkDetail = document.getElementById('detail-sdk');
+        if (sdkDetail) sdkDetail.textContent = 'endpoint: ' + state.endpoint;
+
+        if (state.sent) {
+          setChip('chip-sent', 'chip-ok', '已发送');
+          var sentDetail = document.getElementById('detail-sent');
+          if (sentDetail) {
+            sentDetail.textContent = state.sent.kind + ' · marker: ' + state.sent.marker;
+          }
+        } else {
+          setChip('chip-sent', 'chip-idle', '未发送');
+        }
+
+        var queryChip = document.getElementById('chip-query');
+        var queryDetail = document.getElementById('detail-query');
+        if (state.queryStatus === 'queried') {
+          setChip('chip-query', 'chip-ok', '已收到并可查询');
+          if (queryDetail) {
+            queryDetail.textContent = 'MCP 命中 marker: ' + state.marker
+              + ' · 记录数: ' + state.recordCount;
+          }
+        } else if (state.queryStatus === 'failed') {
+          setChip('chip-query', 'chip-bad', '查询失败');
+          if (queryDetail) queryDetail.textContent = state.queryReason || '未知原因';
+        } else if (state.queryStatus === 'querying') {
+          setChip('chip-query', 'chip-wait', '查询中');
+          if (queryDetail) queryDetail.textContent = 'marker: ' + (state.marker || '');
+        } else {
+          setChip('chip-query', 'chip-idle', '未查询');
+        }
+      }
+
+      // ── SDK 初始化证据 ──
+      if (typeof AiDebug === 'undefined') {
+        state.sdkStatus = 'init-failed';
+        state.lastError = 'SDK 脚本未加载（AiDebug 未定义）';
+      } else {
+        state.sdkStatus = AiDebug._inited ? 'initialized' : 'init-failed';
+        if (state.sdkStatus === 'init-failed') {
+          state.lastError = 'SDK init 未完成';
+        }
+      }
+
+      // ── "已发送"证据：SDK 实际回调（回调 = SDK 发送路径确认）──
+      if (typeof AiDebug !== 'undefined') {
+        AiDebug.onSilentFailureReport(function (payload) {
+          state.silentFailureCount++;
+          var desc = (payload && (payload.description || payload.message)) || '';
+          var m = state.marker && desc.indexOf(state.marker) >= 0 ? state.marker : null;
+          state.sent = {
+            marker: m || ('auto-' + state.silentFailureCount),
+            kind: 'silent-failure(V3/V6 自动上报)',
+            at: Date.now()
+          };
+          render();
+        });
+      }
+
+      // ── 公开 MCP 查询客户端（同源 /mcp：initialize → initialized → tools/call）──
+      function mcpRpc(method, params, sessionId, reqId) {
+        var body = JSON.stringify({ jsonrpc: '2.0', id: reqId, method: method, params: params });
+        var headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream'
+        };
+        if (sessionId) headers['mcp-session-id'] = sessionId;
+        return fetch('/mcp', {
+          method: 'POST',
+          headers: headers,
+          body: body
+        }).then(function (resp) {
+          if (resp.status !== 200) {
+            throw new Error('MCP 查询失败 (HTTP ' + resp.status + ')');
+          }
+          var sid = resp.headers.get('mcp-session-id');
+          return resp.text().then(function (raw) {
+            var envelope;
+            if (raw.replace(/^\s+/, '').indexOf('{') === 0) {
+              envelope = JSON.parse(raw);
+            } else {
+              var dataLines = raw.split('\n').filter(function (ln) {
+                return ln.indexOf('data:') === 0;
+              });
+              if (!dataLines.length) {
+                throw new Error('MCP 查询失败 (响应缺少 data 行)');
+              }
+              envelope = JSON.parse(dataLines[dataLines.length - 1].slice(5).trim());
+            }
+            if (envelope.error) {
+              throw new Error('MCP 查询失败 (JSON-RPC error: '
+                + envelope.error.code + ' ' + (envelope.error.message || '') + ')');
+            }
+            return { result: envelope.result, session: sid };
+          });
+        });
+      }
+
+      function callTool(name, args, sessionId, reqId) {
+        return mcpRpc('tools/call', { name: name, arguments: args }, sessionId, reqId)
+          .then(function (rpc) {
+            var result = rpc.result;
+            if (!result) throw new Error('MCP 查询失败 (tools/call 缺少 result)');
+            if (result.isError === true) {
+              throw new Error('MCP 查询失败 (工具执行错误)');
+            }
+            var content = result.content || [];
+            if (!content.length || content[0].type !== 'text') {
+              throw new Error('MCP 查询失败 (content 结构异常)');
+            }
+            return JSON.parse(content[0].text);
+          });
+      }
+
+      function queryServerForMarker(marker, sdkTraceId, pageSession, onDone) {
+        state.queryStatus = 'querying';
+        state.marker = marker;
+        state.queryReason = null;
+        render();
+
+        mcpRpc('initialize', {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'lujo-demo-status', version: '0.1.0' }
+        }, null, 1).then(function (init) {
+          if (!init.session) throw new Error('MCP 查询失败 (initialize 未返回 session)');
+          return fetch('/mcp', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/event-stream',
+              'mcp-session-id': init.session
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })
+          }).then(function () { return init.session; });
+        }).then(function (sessionId) {
+          var deadline = Date.now() + POLL_DEADLINE_MS;
+          function attempt() {
+            if (Date.now() > deadline) {
+              state.queryStatus = 'failed';
+              state.queryReason = '服务端未返回记录 (marker: ' + marker + ')';
+              render();
+              onDone();
+              return;
+            }
+            callTool('get_network_trace', { trace_id: sdkTraceId }, sessionId, 10)
+              .then(function (net) {
+                var records = (net && net.records) || [];
+                var hit = records.some(function (r) {
+                  return (r.url || '').indexOf(marker) >= 0;
+                });
+                if (hit) {
+                  state.queryStatus = 'queried';
+                  state.recordCount = records.length;
+                  render();
+                  onDone();
+                  return;
+                }
+                return callTool('list_recent_traces',
+                  { limit: 20, session_id: pageSession }, sessionId, 11)
+                  .then(function (listing) {
+                    var traces = (listing && listing.traces) || [];
+                    hit = traces.some(function (t) {
+                      return (t.message || '').indexOf(marker) >= 0;
+                    });
+                    if (hit) {
+                      state.queryStatus = 'queried';
+                      state.recordCount = traces.length;
+                      render();
+                      onDone();
+                      return;
+                    }
+                    setTimeout(attempt, POLL_INTERVAL_MS);
+                  });
+              })
+              .catch(function (err) {
+                state.queryStatus = 'failed';
+                state.queryReason = (err && err.message) || 'MCP 查询超时';
+                render();
+                onDone();
+              });
+          }
+          attempt();
+        }).catch(function (err) {
+          state.queryStatus = 'failed';
+          state.queryReason = (err && err.message) || 'MCP 查询超时';
+          render();
+          onDone();
+        });
+      }
+
+      // ── 探针入口：受控网络错误 → SDK 自动上报 → 状态阶梯推进 ──
+      function probeNetworkError(marker) {
+        marker = marker || ('e2e-m3b-' + Math.random().toString(16).slice(2, 10));
+        state.marker = marker;
+        state.sent = null;
+        state.queryStatus = 'querying';
+        state.queryReason = null;
+        state.recordCount = 0;
+        render();
+
+        var sdkTraceId = (typeof AiDebug !== 'undefined' && AiDebug.getTraceId())
+          ? AiDebug.getTraceId() : '';
+        var pageSession = (typeof AiDebug !== 'undefined' && AiDebug.getSessionId())
+          ? AiDebug.getSessionId() : '';
+
+        // 受控网络错误：本地未监听端口 → 连接拒绝 → fetch reject →
+        // SDK 网络钩子错误路径自动上报（404 等正常响应不会触发静默失败）
+        fetch('http://127.0.0.1:59999/' + marker).catch(function () {});
+
+        queryServerForMarker(marker, sdkTraceId, pageSession, function () {});
+        return marker;
+      }
+
+      render();
+      return {
+        getStatus: getStatus,
+        probeNetworkError: probeNetworkError
+      };
+    })();
+    window.__lujoDemo = lujoDemo;
   </script>
 </body>
 </html>
