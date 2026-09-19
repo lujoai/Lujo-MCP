@@ -42,9 +42,13 @@ def _is_private_ip(ip: str) -> bool:
 # 因此该不变量必须由中间件**按请求**独立成立：AGENTS.md 要求「认证保持 fail-closed」「安全默认值
 # 不得静默放宽」；DEV_PLAN 验收口径要求「部署方式不受支持也必须明确拒绝，而非静默放开认证」。
 _DENY_ERROR_CODE = "auth_not_configured"
+# S2-F4：响应体不回显具体 bind 地址（那是服务端 NIC 信息，本响应面向
+# 【未认证】调用方——尤其当其经域名/别名连接时，回显等于泄露内网拓扑）。
+# 真实地址只进服务端 logger（见 _deny_unauthenticated_public_bind 的
+# logger.error，保留 bind_host 参数用于运维归因）。
 _DENY_DETAIL = (
-    "Refusing to serve: exposed on {host} without any API_KEY/API_KEYS "
-    "(wildcard bind or non-loopback connection local). "
+    "Refusing to serve: exposed on a non-loopback interface without any "
+    "API_KEY/API_KEYS (wildcard bind or non-loopback connection local). "
     "Set API_KEY or API_KEYS, or ensure the server actually binds to loopback "
     "(127.0.0.1 / ::1)."
 )
@@ -65,7 +69,7 @@ def _deny_unauthenticated_public_bind(bind_host: str) -> JSONResponse:
             )
     return JSONResponse(
         status_code=403,
-        content={"detail": _DENY_DETAIL.format(host=bind_host), "error_code": _DENY_ERROR_CODE},
+        content={"detail": _DENY_DETAIL, "error_code": _DENY_ERROR_CODE},
     )
 
 
