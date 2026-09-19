@@ -288,7 +288,10 @@ def test_reader_thread_aliveness_is_recorded_not_assumed():
     attempt.result.start_reader()
     # 关闭前：alive 未定（None=未记录），不谎报
     assert attempt.result.reader_alive is None
-    time.sleep(0.3)  # 给读取器时间观察 EOF
+    # 等事件而非睡固定时长：EOF / EOFError / _fail 三条路径都会 set result_ready，
+    # 它才是"读取线程已得出结论"的可靠信号；原先的 sleep(0.3) 是竞态窗口——
+    # 满载时读取线程来不及观察 EOF（本机实测 12 个 CPU 燃烧进程时 10 次全败）
+    assert attempt.result.result_ready.wait(timeout=10.0) is True
     assert attempt.result.eof_seen is True
     hs.terminate_and_reap(attempt, grace=5.0)
     assert attempt.result.closed
