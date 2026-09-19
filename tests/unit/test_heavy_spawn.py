@@ -28,7 +28,10 @@ def _worker_cmd(mode: str) -> list[str]:
     return [sys.executable, "-m", FAKE, mode]
 
 
-def _deadline(seconds: float = 10.0) -> float:
+def _deadline(seconds: float = 30.0) -> float:
+    # 这些用例断言的是「异常分类是否正确」，不是「握手有多快」：默认 10s 在
+    # 1.5× CPU 负载下不够真实子进程冷启动，预算先耗尽会让 HeavyHandshakeTimeout
+    # 顶替掉期望的分类异常（负载实测多个用例各失败过一次）。
     return time.monotonic() + seconds
 
 
