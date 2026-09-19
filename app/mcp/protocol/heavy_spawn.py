@@ -509,7 +509,7 @@ def handshake(
             raise HeavySpawnBroken("result reader thread died before ready")
         if remaining() <= 0:
             raise HeavyHandshakeTimeout(
-                f"heavy worker ready not observed within budget ({attempt.proc.pid})"
+                f"heavy worker ready not observed within budget (pid={attempt.proc.pid})"
             )
     if attempt.result.error is not None:
         raise HeavySpawnBroken(attempt.result.error)
@@ -534,7 +534,7 @@ def handshake(
             raise HeavySpawnBroken("result reader thread died before result")
         if remaining() <= 0:
             raise HeavyHandshakeTimeout(
-                f"heavy worker result not observed within budget ({attempt.proc.pid})"
+                f"heavy worker result not observed within budget (pid={attempt.proc.pid})"
             )
     if attempt.result.error is not None:
         raise HeavySpawnBroken(attempt.result.error)
