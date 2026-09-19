@@ -51,6 +51,24 @@ def test_validate_rejects_ipv6_unspecified_without_api_key(monkeypatch):
         validate_startup_configuration(host="::", api_key=None)
 
 
+# S2-F3: HOST 为空串/纯空白 = INADDR_ANY（CPython bind(("",port)) 语义；
+# uvicorn 0.49 config.py 直接 sock.bind((self.host, self.port)) 透传），
+# 必须与 0.0.0.0 / :: 同判为通配。此前 is_unspecified_bind('') 因 ValueError
+# 返回 False，启动期只打 WARNING 不拒绝 —— 两道守卫同时沉默的根因之一。
+def test_validate_rejects_empty_host_without_api_key(monkeypatch):
+    """HOST=''（.env 空值，pydantic 实测不回落默认而是得到 ''）→ 启动期硬拒绝。"""
+    monkeypatch.setattr(settings, "api_key", None)
+    with pytest.raises(RuntimeError):
+        validate_startup_configuration(host="", api_key=None)
+
+
+def test_validate_rejects_whitespace_host_without_api_key(monkeypatch):
+    """HOST='   '（引号包裹的空白串，pydantic 实测不 strip）→ 同样硬拒绝。"""
+    monkeypatch.setattr(settings, "api_key", None)
+    with pytest.raises(RuntimeError):
+        validate_startup_configuration(host="   ", api_key=None)
+
+
 def test_validate_not_misled_by_address_containing_zero_subnet(monkeypatch, caplog):
     """合法地址 10.0.0.0 / 100.0.0.0 含 "0.0.0.0" 子串：不再被误杀成硬拒绝，
     走"非回环 + 无鉴权"WARNING 路径。"""

@@ -247,13 +247,16 @@ class TestConfiguredKeysUnaffected:
 
 
 class TestBindPredicateSingleSource:
-    @pytest.mark.parametrize("host", WILDCARD_HOSTS)
+    @pytest.mark.parametrize("host", [*WILDCARD_HOSTS, ""])
     def test_unspecified_addresses(self, host):
+        # S2-F3：空串 host 在 syscall 层等价 INADDR_ANY（CPython bind(("",port))；
+        # uvicorn 0.49 直接透传 sock.bind((host, port))），归入通配组。
+        # 此前 "" 被断言为 False —— 该断言写的正是缺陷本身，现移入本组（详见 S2 报告）。
         assert is_unspecified_bind(host) is True
 
     @pytest.mark.parametrize(
         "host",
-        ["127.0.0.1", "::1", "10.0.0.0", "100.0.0.0", "localhost", "", "192.168.1.5"],
+        ["127.0.0.1", "::1", "10.0.0.0", "100.0.0.0", "localhost", "192.168.1.5"],
     )
     def test_not_unspecified(self, host):
         assert is_unspecified_bind(host) is False
@@ -330,6 +333,47 @@ class TestRealBindAddressPreferred:
         """显式 HOST=10.0.0.5 的 LAN 部署：既有 WARNING-only 契约不得收紧为拒绝。"""
         _configure(monkeypatch, host="10.0.0.5")
         resp = _client_with_real_bind("10.0.0.5").get("/api/dashboard/traces")
+        assert _error_code(resp) != DENY_MARKER
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize(
+        ("host_setting", "real_host"),
+        [
+            ("0.0.0.0", "192.168.1.50"),  # S2-F1 主格：通配配置 + LAN 端点
+            ("0.0.0.0", "8.8.8.8"),       # 通配配置 + 公网端点
+            ("::", "2001:db8::5"),        # S2-F2：IPv6 同形
+            ("::", "fc00::1"),            # S2-F2：IPv6 ULA
+            ("", "192.168.1.50"),         # S2-F3 请求层：空串 host + LAN 端点
+        ],
+    )
+    def test_wildcard_settings_with_routable_real_bind_denied(
+        self, monkeypatch, host_setting, real_host
+    ):
+        """S2-F1/F2/F3：配置口径为通配（含空串）时，可路由连接端点必须 fail-closed。
+
+        修复前缺陷：resolve_bind_host 让 real_host 顶掉通配配置（F-1/F-2）；
+        空串 host 则让两条证据同时沉默（F-3 请求层）—— 全部 200 放行。
+        证据路径 1 必须始终查询配置口径的 settings.host，不得被连接端点顶掉。
+        """
+        _configure(monkeypatch, host=host_setting)
+        resp = _client_with_real_bind(real_host).get("/api/dashboard/traces")
+        assert _error_code(resp) == DENY_MARKER, (
+            f"host={host_setting!r} + 连接端点 {real_host!r} 时未 fail-closed"
+            f"（{resp.status_code} / {resp.text[:100]!r}）—— 通配配置被连接端点顶掉"
+        )
+        assert resp.status_code == 403
+
+    def test_empty_host_with_loopback_real_bind_serves(self, monkeypatch):
+        """S2-F3 定界：HOST='' 的拦截责任在启动期，请求层只对非回环端点收紧。
+
+        空串 host 在 syscall 层等价 INADDR_ANY（C1 已把 is_unspecified_bind('')
+        归为通配），但按单用户本地定位，回环连接端点仍放行（与下方
+        test_settings_wildcard_but_real_bind_loopback_serves 同一取舍）。
+        本用例锁定该分工：空串 host 的硬拒绝由启动期守卫承担
+        （test_main.py::test_validate_rejects_empty_host_without_api_key）。
+        """
+        _configure(monkeypatch, host="")
+        resp = _client_with_real_bind("127.0.0.1").get("/api/dashboard/traces")
         assert _error_code(resp) != DENY_MARKER
         assert resp.status_code == 200
 
