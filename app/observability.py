@@ -113,6 +113,8 @@ def _init_otel():
     if not _OTEL_AVAILABLE or not settings.otel_enabled:
         return None, None, None, None, None
 
+    # 预置于 try 之外：异常降级路径需要看到 reader 才能回收它
+    reader = None
     try:
         resource = Resource(attributes={
             "service.name": settings.otel_service_name,
@@ -224,6 +226,14 @@ def _init_otel():
 
     except Exception as e:
         logger.error("OpenTelemetry 初始化失败，降级为仅 Prometheus 文本端点: %s", e)
+        # provider 构造失败时 reader 的周期导出线程已经启动，不显式 shutdown
+        # 它就会成为永久重试导出的孤儿线程；关闭本身失败也不能让降级路径
+        # 再抛异常（否则连 Prometheus 文本端点都起不来）
+        if reader is not None:
+            try:
+                reader.shutdown()
+            except Exception:
+                logger.warning("降级时关闭 OpenTelemetry MetricReader 失败", exc_info=True)
         return None, None, None, None, None
 
 

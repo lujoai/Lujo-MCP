@@ -3,6 +3,33 @@
 from unittest.mock import patch, MagicMock
 
 
+def _reset_otel_globals(module) -> None:
+    """关闭并清空 module 中全部 ``_otel_*`` 模块级全局。
+
+    程序化遍历而非逐个手写：app/observability.py 的 OTel 面现有 18 个全局
+    （11 counter + 5 histogram + meter + shutdown），手写清单漏项会让残留的
+    MagicMock instrument 静默顶替全局，从而在进程内破坏「OTel 关闭即不做
+    OTel 双写」的不变量，且行为随测试执行顺序漂移。
+
+    匹配用 ``str.startswith("_otel_")``（小写、大小写敏感）：``_OTEL_AVAILABLE``
+    是全大写常量，天然不被匹配；不要改成大小写不敏感匹配，否则会把「SDK 是否
+    可用」这一环境事实一并清掉，让降级路径的断言失去意义。
+    """
+    # 先关再清：若某个测试意外建出真实 provider，置 None 前不调用 shutdown
+    # 会把已启动的导出线程孤儿化；关闭本身失败也不能让 teardown 自己抛异常
+    shutdown = getattr(module, "_otel_shutdown", None)
+    if shutdown is not None:
+        try:
+            shutdown()
+        except Exception:
+            pass
+
+    # 先对 vars(module) 取名字快照再遍历，避免边迭代模块字典边改属性
+    names = [name for name in vars(module) if name.startswith("_otel_")]
+    for name in names:
+        setattr(module, name, None)
+
+
 class TestOtelConfig:
     """测试 OTel 配置项"""
 
@@ -29,14 +56,10 @@ class TestOtelInitialization:
     """测试 OTel 初始化"""
 
     def teardown_method(self):
-        """每个测试后重置 OTel 全局状态"""
+        """每个测试后重置 OTel 全局状态（含 v0.6.0+ 扩展 instrument）"""
         import app.observability as obs_module
 
-        obs_module._otel_meter = None
-        obs_module._otel_request_counter = None
-        obs_module._otel_error_counter = None
-        obs_module._otel_latency_histogram = None
-        obs_module._otel_shutdown = None
+        _reset_otel_globals(obs_module)
 
     def test_otel_init_disabled_when_setting_off(self, monkeypatch):
         """otel_enabled=False 时不初始化 OTel"""
@@ -53,7 +76,7 @@ class TestOtelInitialization:
         assert shutdown is None
 
     def test_otel_init_enabled_when_setting_on(self, monkeypatch):
-        """otel_enabled=True 时初始化 OTel（mock OTel SDK）"""
+        """otel_enabled=True 时初始化 OTel（mock OTel SDK，并断言构造参数）"""
         from app.observability import _init_otel
 
         monkeypatch.setattr("app.config.settings.otel_enabled", True)
@@ -65,17 +88,26 @@ class TestOtelInitialization:
         mock_counter2 = MagicMock()
         mock_histogram = MagicMock()
         mock_meter = MagicMock()
-        mock_meter.create_counter.side_effect = [mock_counter1, mock_counter2]
-        mock_meter.create_histogram.return_value = mock_histogram
+        # _init_otel 会创建 11 个 counter / 5 个 histogram（含 v0.6.0+ 扩展面），
+        # 前几个固定 mock 以断言返回值对应关系，其余补足避免 StopIteration
+        mock_meter.create_counter.side_effect = (
+            [mock_counter1, mock_counter2] + [MagicMock() for _ in range(9)]
+        )
+        mock_meter.create_histogram.side_effect = (
+            [mock_histogram] + [MagicMock() for _ in range(4)]
+        )
 
         mock_provider = MagicMock()
         mock_provider.get_meter.return_value = mock_meter
 
-        with patch("opentelemetry.sdk.metrics.MeterProvider", return_value=mock_provider), \
+        # set_meter_provider 走"模块对象 + 运行时属性查找"，patch 上游有效；
+        # 其余四个在 app.observability 里是 from-import 的直接引用，
+        # 必须 patch app.observability.* 才能命中，patch 上游完全无效
+        with patch("app.observability.MeterProvider", return_value=mock_provider) as mock_provider_cls, \
              patch("opentelemetry.metrics.set_meter_provider"), \
-             patch("opentelemetry.exporter.otlp.proto.grpc.metric_exporter.OTLPMetricExporter"), \
-             patch("opentelemetry.sdk.metrics.export.PeriodicExportingMetricReader"), \
-             patch("opentelemetry.sdk.resources.Resource"):
+             patch("app.observability.OTLPMetricExporter") as mock_exporter_cls, \
+             patch("app.observability.PeriodicExportingMetricReader") as mock_reader_cls, \
+             patch("app.observability.Resource") as mock_resource_cls:
 
             meter, req_counter, err_counter, latency_hist, shutdown = _init_otel()
 
@@ -84,6 +116,52 @@ class TestOtelInitialization:
         assert err_counter is not None
         assert latency_hist is not None
         assert shutdown is not None
+        # 返回值与 mock 的对应关系成立（而非仅仅"不是 None"）
+        assert meter is mock_meter
+        assert req_counter is mock_counter1
+        assert err_counter is mock_counter2
+        assert latency_hist is mock_histogram
+        mock_provider.get_meter.assert_called_once_with("lujo-mcp")
+
+        # 构造参数：endpoint 为空走无参构造分支；interval 用测试注入的 10000
+        mock_exporter_cls.assert_called_once_with()
+        mock_reader_cls.assert_called_once_with(
+            mock_exporter_cls.return_value, export_interval_millis=10000
+        )
+        mock_provider_cls.assert_called_once_with(
+            resource=mock_resource_cls.return_value,
+            metric_readers=[mock_reader_cls.return_value],
+        )
+        shutdown()
+        mock_provider.shutdown.assert_called_once()
+
+    def test_otel_init_passes_endpoint_when_configured(self, monkeypatch):
+        """otel_exporter_endpoint 非空时必须以 endpoint= 关键字传给 exporter。
+
+        9999 是刻意选的、本机不会有服务的端口；exporter 已被 mock，不会真连。
+        """
+        from app.observability import _init_otel
+
+        monkeypatch.setattr("app.config.settings.otel_enabled", True)
+        monkeypatch.setattr(
+            "app.config.settings.otel_exporter_endpoint", "http://127.0.0.1:9999"
+        )
+
+        mock_meter = MagicMock()
+        mock_meter.create_counter.side_effect = [MagicMock() for _ in range(11)]
+        mock_meter.create_histogram.side_effect = [MagicMock() for _ in range(5)]
+        mock_provider = MagicMock()
+        mock_provider.get_meter.return_value = mock_meter
+
+        with patch("app.observability.MeterProvider", return_value=mock_provider), \
+             patch("opentelemetry.metrics.set_meter_provider"), \
+             patch("app.observability.OTLPMetricExporter") as mock_exporter_cls, \
+             patch("app.observability.PeriodicExportingMetricReader"), \
+             patch("app.observability.Resource"):
+            result = _init_otel()
+
+        assert result[0] is mock_meter
+        mock_exporter_cls.assert_called_once_with(endpoint="http://127.0.0.1:9999")
 
     def test_otel_init_failure_degrades_gracefully(self, monkeypatch):
         """OTel 初始化失败时降级为仅 Prometheus 文本端点"""
@@ -91,7 +169,13 @@ class TestOtelInitialization:
 
         monkeypatch.setattr("app.config.settings.otel_enabled", True)
 
-        with patch("app.observability.MeterProvider", side_effect=RuntimeError("OTel init failed")):
+        # 只让 MeterProvider 注入失败；exporter/reader/Resource 同样要 mock，
+        # 否则注入失败点之前（exporter → reader → provider）会先建出真实
+        # exporter 与已启动导出线程的 reader
+        with patch("app.observability.MeterProvider", side_effect=RuntimeError("OTel init failed")), \
+             patch("app.observability.PeriodicExportingMetricReader"), \
+             patch("app.observability.OTLPMetricExporter"), \
+             patch("app.observability.Resource"):
             meter, req_counter, err_counter, latency_hist, shutdown = _init_otel()
 
         assert meter is None
@@ -100,32 +184,53 @@ class TestOtelInitialization:
         assert latency_hist is None
         assert shutdown is None
 
+    def test_otel_init_failure_shuts_down_created_reader(self, monkeypatch):
+        """provider 注入失败时，已创建并启动导出线程的 reader 必须被显式关闭。
+
+        _init_otel 的构造顺序是 exporter → reader → provider：在 provider 处
+        抛异常时 reader 的周期导出线程已经启动，降级路径若不调用其 shutdown，
+        该线程会永久重试导出（孤儿线程 + 持续向 endpoint 发起真实连接）。
+        """
+        from app.observability import _init_otel
+
+        monkeypatch.setattr("app.config.settings.otel_enabled", True)
+
+        mock_reader_cls = MagicMock()
+        with patch("app.observability.MeterProvider", side_effect=RuntimeError("OTel init failed")), \
+             patch("app.observability.PeriodicExportingMetricReader", mock_reader_cls), \
+             patch("app.observability.OTLPMetricExporter"), \
+             patch("app.observability.Resource"):
+            result = _init_otel()
+
+        assert result == (None, None, None, None, None)
+        mock_reader_cls.return_value.shutdown.assert_called()
+
     def test_otel_init_is_idempotent(self, monkeypatch):
         """OTel 初始化是幂等的"""
         from app.observability import _init_otel
 
         monkeypatch.setattr("app.config.settings.otel_enabled", True)
 
-        mock_counter1 = MagicMock()
-        mock_counter2 = MagicMock()
-        mock_histogram = MagicMock()
         mock_meter = MagicMock()
-        mock_meter.create_counter.side_effect = [mock_counter1, mock_counter2]
-        mock_meter.create_histogram.return_value = mock_histogram
-
+        mock_meter.create_counter.side_effect = [MagicMock() for _ in range(11)]
+        mock_meter.create_histogram.side_effect = [MagicMock() for _ in range(5)]
         mock_provider = MagicMock()
         mock_provider.get_meter.return_value = mock_meter
 
-        with patch("opentelemetry.sdk.metrics.MeterProvider", return_value=mock_provider), \
+        # 靶点说明同 test_otel_init_enabled_when_setting_on：除
+        # set_meter_provider（模块属性查找）外必须 patch app.observability.*
+        with patch("app.observability.MeterProvider", return_value=mock_provider) as mock_provider_cls, \
              patch("opentelemetry.metrics.set_meter_provider"), \
-             patch("opentelemetry.exporter.otlp.proto.grpc.metric_exporter.OTLPMetricExporter"), \
-             patch("opentelemetry.sdk.metrics.export.PeriodicExportingMetricReader"), \
-             patch("opentelemetry.sdk.resources.Resource"):
+             patch("app.observability.OTLPMetricExporter"), \
+             patch("app.observability.PeriodicExportingMetricReader"), \
+             patch("app.observability.Resource"):
 
             result1 = _init_otel()
             result2 = _init_otel()
 
         assert result1 == result2
+        # 第二次走 _otel_meter 缓存早返回，provider 只能被构造一次
+        mock_provider_cls.assert_called_once()
 
 
 class TestMetricsMiddlewareOtelIntegration:
@@ -139,11 +244,7 @@ class TestMetricsMiddlewareOtelIntegration:
         obs_module._error_total.clear()
         obs_module._latency_sum.clear()
         obs_module._latency_count.clear()
-        obs_module._otel_meter = None
-        obs_module._otel_request_counter = None
-        obs_module._otel_error_counter = None
-        obs_module._otel_latency_histogram = None
-        obs_module._otel_shutdown = None
+        _reset_otel_globals(obs_module)
 
     def test_middleware_records_to_both_stores_when_otel_enabled(self, monkeypatch):
         """OTel 启用时，指标同时写入内存存储和 OTel instruments"""
@@ -224,6 +325,13 @@ class TestMetricsMiddlewareOtelIntegration:
 
 class TestShutdownObservability:
     """测试 shutdown_observability"""
+
+    def teardown_method(self):
+        """每个测试后重置 OTel 全局状态：本类用例会把 _otel_shutdown 置为
+        MagicMock / None，不清理则子集运行（-k）或随机排序下残留会外溢"""
+        import app.observability as obs_module
+
+        _reset_otel_globals(obs_module)
 
     def test_shutdown_calls_otel_shutdown(self):
         """shutdown_observability 调用 OTel shutdown"""
@@ -414,3 +522,89 @@ class TestMetricCardinalityBounds:
             obs_module._trim_metric_tables_if_needed()
 
         assert len(obs_module._request_total) == 0
+
+
+class TestOtelGlobalReset:
+    """B1 回归：OTel 全局清理必须覆盖全部 _otel_*（含 v0.6.0+ 扩展面）。
+
+    修复前 _init_otel 成功路径会填充 18 个模块级全局（11 counter + 5 histogram
+    + meter + shutdown），而清理只重置其中 5 个，残留的 MagicMock instrument
+    会静默顶替全局，使「OTel 关闭即不做 OTel 双写」的不变量依赖测试执行顺序。
+    """
+
+    def teardown_method(self):
+        """兜底清理：即使断言失败，本类也不留下残留全局与脏指标表"""
+        import app.observability as obs_module
+
+        _reset_otel_globals(obs_module)
+        # record_llm_request 一次调用会写 4 张表，按文件既有 .clear() 约定逐个清空；
+        # 放 teardown 而非用例内，断言失败时也不会留下脏数据（本类是文件最后一个类）
+        obs_module._llm_requests_total.clear()
+        obs_module._llm_latency_sum.clear()
+        obs_module._llm_latency_count.clear()
+        obs_module._llm_tokens_total.clear()
+
+    @staticmethod
+    def _fill_otel_globals(monkeypatch):
+        """按既有测试相同的 mock 靶点跑一次真实 _init_otel()，填充全部 _otel_* 全局"""
+        import app.observability as obs_module
+
+        monkeypatch.setattr("app.config.settings.otel_enabled", True)
+
+        mock_meter = MagicMock()
+        # 数量与 app/observability.py 当前实现一致：11 counter / 5 histogram
+        mock_meter.create_counter.side_effect = [MagicMock() for _ in range(11)]
+        mock_meter.create_histogram.side_effect = [MagicMock() for _ in range(5)]
+        mock_provider = MagicMock()
+        mock_provider.get_meter.return_value = mock_meter
+
+        with patch("app.observability.MeterProvider", return_value=mock_provider), \
+             patch("opentelemetry.metrics.set_meter_provider"), \
+             patch("app.observability.OTLPMetricExporter"), \
+             patch("app.observability.PeriodicExportingMetricReader"), \
+             patch("app.observability.Resource"):
+            obs_module._init_otel()
+
+        return obs_module
+
+    def test_reset_clears_all_otel_globals(self, monkeypatch):
+        """全局清空不变量：helper 后不存在任何非 None 的 _otel_* 全局"""
+        obs_module = self._fill_otel_globals(monkeypatch)
+
+        # 先证明扩展面确实被填充，否则下面的清空断言可能因"本来就没建"而假绿
+        assert obs_module._otel_llm_req_counter is not None
+        assert obs_module._otel_kb_hit_counter is not None
+
+        _reset_otel_globals(obs_module)
+
+        assert [
+            name
+            for name in vars(obs_module)
+            if name.startswith("_otel_") and getattr(obs_module, name) is not None
+        ] == []
+        # 前缀匹配大小写敏感的边界：环境常量 _OTEL_AVAILABLE 不得被误伤
+        assert obs_module._OTEL_AVAILABLE is True
+        # 收尾：避免本用例自己成为新的污染源
+        _reset_otel_globals(obs_module)
+
+    def test_record_llm_request_does_not_double_write_when_otel_disabled(self, monkeypatch):
+        """顺序无关性：清空后 OTel 关闭时 record_llm_request 不得再做 OTel 双写"""
+        obs_module = self._fill_otel_globals(monkeypatch)
+        stale_counter = obs_module._otel_llm_req_counter
+        assert stale_counter is not None
+
+        _reset_otel_globals(obs_module)
+
+        monkeypatch.setattr("app.config.settings.otel_enabled", False)
+        assert obs_module._otel_llm_req_counter is None
+
+        # 用增量而非绝对值断言，避免依赖其它测试留下的累计值
+        key = ("openai", "gpt", "ok")
+        before = obs_module._llm_requests_total.get(key, 0)
+        obs_module.record_llm_request("openai", "gpt", "ok", 0.5, 10, 20)
+
+        # 修复前残留的 MagicMock 会在这里被 .add() 一次，即"OTel 关闭仍双写"
+        assert obs_module._otel_llm_req_counter is None
+        stale_counter.add.assert_not_called()
+        # 清理 OTel 全局不得影响 Prometheus 文本指标主路径的累加
+        assert obs_module._llm_requests_total[key] == before + 1
