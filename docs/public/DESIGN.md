@@ -1671,7 +1671,7 @@ analyze(context)
 |----------|------|----------|
 | `vector_store_enabled=False` | 返回 `NullVectorStore`，add=no-op，search=[] | [vector_store.py:157-158](../../app/rag/vector_store.py#L157-L158) |
 | qdrant-client 未安装 | 静默降级为 no-op，warning 日志 | [qdrant_vector_store.py:_get_qdrant_client](../../app/rag/qdrant_vector_store.py) |
-| Qdrant 连接失败 | `_qdrant_collection_ready=True` 后不再重试 | [qdrant_vector_store.py:_get_qdrant_client](../../app/rag/qdrant_vector_store.py) |
+| Qdrant 连接失败 | 进入 TTL 冷却，冷却期内不重试，冷却期后自动重试 | [qdrant_vector_store.py:_get_qdrant_client](../../app/rag/qdrant_vector_store.py) |
 | Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op | [qdrant_vector_store.py:_embed_texts](../../app/rag/qdrant_vector_store.py) |
 | 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM | [kb_integration.py](../../app/llm/kb_integration.py) |
 
