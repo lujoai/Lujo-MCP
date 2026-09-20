@@ -99,6 +99,16 @@ def _load_extra_redact_rules() -> list[tuple[re.Pattern[str], str]]:
     # 避免 JSONFormatter.format → redact() 同线程重入非重入锁的死锁。
     for message in result.warnings:
         logger.warning(message)
+    if result.dropped:
+        reason_counts: dict[str, int] = {}
+        for _, reason in result.dropped:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        reasons = ",".join(f"{reason}={count}" for reason, count in sorted(reason_counts.items()))
+        logger.warning(
+            "额外脱敏规则未生效 count=%d reasons=%s ——这些规则本应遮蔽的内容将原样进入存储与外发",
+            len(result.dropped),
+            reasons,
+        )
     return _extra_rules_cache
 
 
