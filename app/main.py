@@ -65,6 +65,13 @@ def validate_startup_configuration(host: str | None = None, api_key: str | None 
                 "所有能路由到本机的客户端均可未授权访问；生产环境请配置鉴权。",
                 bind_host,
             )
+    # S9: 脱敏关闭是受支持的显式 opt-out，但后果不可逆（已入库/已 embedding 的内容
+    # 事后不可擦除，且 KB 写入边界的拒写防护同时失效），必须在启动期显式可见。
+    if not settings.redaction_enabled:
+        logger.warning(
+            "REDACTION_DISABLED_AT_STARTUP 脱敏已关闭：未脱敏内容会写入知识库、日志与向量索引并被 embedding，"
+            "事后不可擦除；知识库写入边界的拒写防护同时失效。除非确有需要，请保持脱敏开启。"
+        )
 
 
 @asynccontextmanager

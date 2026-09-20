@@ -94,6 +94,40 @@ def test_validate_no_warn_on_non_loopback_bind_with_api_key(caplog):
     assert "非回环" not in caplog.text
 
 
+# S9: 脱敏关闭是受支持的显式 opt-out，但必须在启动校验里显式告警（不可事后补）。
+def test_validate_warns_when_redaction_disabled(monkeypatch, caplog):
+    """redaction_enabled=False → 启动校验恰好产生一条含固定标记的 warning。"""
+    monkeypatch.setattr(settings, "redaction_enabled", False)
+    with caplog.at_level(logging.WARNING):
+        validate_startup_configuration(host="127.0.0.1", api_key="secret")
+    marked = [
+        record
+        for record in caplog.records
+        if "REDACTION_DISABLED_AT_STARTUP" in record.getMessage()
+    ]
+    assert len(marked) == 1
+    # 干净场景（回环 + 有鉴权）下校验函数自身恰好一条 warning。注意不要断言
+    # caplog.records 总数：全量套件中 logging formatter 已装载，其 redact() 回调
+    # 会追加 "lujo-mcp.redaction" 子 logger 的既有一次性告警（FIX(v0.7.1-b4-6)），
+    # 那是环境产物而非校验函数产物；同理也不得靠 import 顺序屏蔽它。
+    own = [
+        record
+        for record in caplog.records
+        if record.name == "lujo-mcp" and record.levelno == logging.WARNING
+    ]
+    assert len(own) == 1
+    # 固定文案，不含配置值/敏感内容（不出现 key=value 形态）
+    assert "=" not in marked[0].getMessage()
+
+
+def test_validate_no_warning_when_redaction_enabled(monkeypatch, caplog):
+    """redaction_enabled=True（默认）→ 不产生该标记的 warning。"""
+    monkeypatch.setattr(settings, "redaction_enabled", True)
+    with caplog.at_level(logging.WARNING):
+        validate_startup_configuration(host="127.0.0.1", api_key="secret")
+    assert "REDACTION_DISABLED_AT_STARTUP" not in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # P3-13: /internal/health 反代部署下不得信任 client.host 私网判定
 # ---------------------------------------------------------------------------
