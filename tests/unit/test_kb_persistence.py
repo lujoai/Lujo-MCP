@@ -410,3 +410,220 @@ def test_noop_knowledge_store_is_inert():
     assert noop.delete_kb_entry("fp") is False
     assert noop.delete_all_kb_entries() == 0
     assert noop.list_recent_kb_entries() == []
+
+
+# ---------------------------------------------------------------------------
+# S7：知识库存储边界拒写未脱敏内容
+# ---------------------------------------------------------------------------
+
+
+_REDACTION_REJECTION_MARKER = "KB_UNREDACTED_CONTENT_REJECTED"
+
+
+def _has_items(items) -> bool:
+    """以布尔值检查拦截副作用，避免失败输出打印未脱敏样本。"""
+    return bool(items)
+
+
+class _RecordingVectorStore:
+    """记录 KB 边界是否把内容送入向量索引。"""
+
+    def __init__(self):
+        self.docs: list[dict] = []
+
+    def add(self, docs):
+        self.docs.extend(docs)
+
+
+def test_unredacted_upsert_is_rejected_before_persistence_and_vector_write(
+    fake_store, monkeypatch, caplog
+):
+    """未脱敏写入应在任何存储副作用前拒绝，并留下不含原文的固定标记。"""
+    vector_store = _RecordingVectorStore()
+    monkeypatch.setattr(
+        "app.rag.knowledge_base.get_vector_store", lambda: vector_store
+    )
+    monkeypatch.setattr("app.rag.knowledge_base.settings.kb_vector_index_autosync", True)
+    monkeypatch.setattr("app.rag.knowledge_base.settings.redaction_enabled", True)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
+
+    with caplog.at_level("WARNING"):
+        try:
+            store.upsert(
+                fingerprint="fp-unredacted",
+                analysis={"message": 'password = "secret123"'},
+                fix_suggestion="safe fix",
+                source="llm",
+            )
+        except Exception:
+            # 边界可用异常或既有跳过路径拒写；下方断言验证外部契约。
+            pass
+
+    has_memory_write = store.get("fp-unredacted") is not None
+    has_persistent_write = _has_items(fake_store.upsert_calls)
+    has_vector_write = _has_items(vector_store.docs)
+    assert not has_memory_write
+    assert not has_persistent_write
+    assert not has_vector_write
+    assert _REDACTION_REJECTION_MARKER in caplog.text
+    assert "secret123" not in caplog.text
+
+
+def test_pre_redacted_upsert_is_stored_byte_identically_when_enabled(
+    fake_store, monkeypatch, caplog
+):
+    """已脱敏内容在默认开关下应作为不动点原样写入持久层和向量索引。"""
+    vector_store = _RecordingVectorStore()
+    monkeypatch.setattr(
+        "app.rag.knowledge_base.get_vector_store", lambda: vector_store
+    )
+    monkeypatch.setattr("app.rag.knowledge_base.settings.kb_vector_index_autosync", True)
+    monkeypatch.setattr("app.rag.knowledge_base.settings.redaction_enabled", True)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
+    masked = {
+        "message": 'password="***"',
+        "phone": "*******PHONE*******",
+    }
+
+    with caplog.at_level("WARNING"):
+        result = store.upsert(
+            fingerprint="fp-masked",
+            analysis=masked,
+            fix_suggestion="safe fix",
+            source="llm",
+        )
+
+    assert fake_store.rows["fp-masked"]["analysis"] == masked
+    assert vector_store.docs[0]["analysis"] == masked
+    assert result["analysis"] == masked
+    assert _REDACTION_REJECTION_MARKER not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ('password = "secret123"', True),
+        ('password="***"', False),
+        ({"analysis": [{"message": 'password = "secret123"'}]}, True),
+        ('{"analysis":[{"message":"password = \\"secret123\\""}]}', True),
+    ],
+    ids=["raw-value", "masked-value", "nested-dict-list", "json-string"],
+)
+def test_unredacted_secret_detector_uses_fixed_point_contract(payload, expected):
+    """检测器只判定内置规则替换前后是否相同，并递归检查字符串叶子。"""
+    from app.utils import pattern_guard
+
+    detector = getattr(pattern_guard, "contains_unredacted_secret", None)
+    assert callable(detector)
+    assert detector(payload) is expected
+
+
+def test_verification_miss_fallback_rejects_unredacted_persistent_write(
+    fake_store, caplog
+):
+    """verification miss 直调持久层 upsert 时也必须拒绝并安全留痕。"""
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
+    unsafe_entry = {
+        "fingerprint": "fp-verification-unsafe",
+        "analysis": {"message": 'password = "secret123"'},
+        "fix_suggestion": "safe fix",
+        "source": "llm",
+        "verify_count": 1,
+        "case_confidence": 0.9,
+        "updated_at": time.time(),
+    }
+
+    with caplog.at_level("WARNING"):
+        store._persist_verification(unsafe_entry)
+
+    assert not fake_store.verification_calls
+    has_upsert_fallback = _has_items(fake_store.upsert_calls)
+    has_persisted_row = _has_items(fake_store.rows)
+    assert not has_upsert_fallback
+    assert not has_persisted_row
+    assert _REDACTION_REJECTION_MARKER in caplog.text
+    assert "secret123" not in caplog.text
+
+
+@pytest.mark.parametrize("sync_all", [False, True], ids=["single-entry", "full-sync"])
+def test_vector_sync_rejects_unredacted_entries(
+    sync_all, fake_store, monkeypatch, caplog
+):
+    """单条与回灌后全量向量同步均不得接收未脱敏条目。"""
+    from app.rag.knowledge_base import KnowledgeBaseStore
+
+    vector_store = _RecordingVectorStore()
+    monkeypatch.setattr(
+        "app.rag.knowledge_base.get_vector_store", lambda: vector_store
+    )
+    monkeypatch.setattr("app.rag.knowledge_base.settings.redaction_enabled", True)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
+    unsafe_entry = {
+        "fingerprint": "fp-vector-unsafe",
+        "analysis": {"message": 'password = "secret123"'},
+        "fix_suggestion": "safe fix",
+        "source": "llm",
+    }
+
+    if sync_all:
+        fake_store.rows[unsafe_entry["fingerprint"]] = {
+            **unsafe_entry,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+        assert store.load_from_persistent() == 1
+        with caplog.at_level("WARNING"):
+            store._sync_all_to_vector_store()
+    else:
+        with caplog.at_level("WARNING"):
+            store._sync_entry_to_vector_store(unsafe_entry)
+
+    has_vector_write = _has_items(vector_store.docs)
+    assert not has_vector_write
+    assert _REDACTION_REJECTION_MARKER in caplog.text
+    assert "secret123" not in caplog.text
+
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["enabled", "disabled"])
+def test_redaction_switch_controls_kb_write_rejection(
+    enabled, fake_store, monkeypatch, caplog
+):
+    """开关开启时拒写，显式关闭时保持原有写入行为且无拒写日志。"""
+    vector_store = _RecordingVectorStore()
+    monkeypatch.setattr(
+        "app.rag.knowledge_base.get_vector_store", lambda: vector_store
+    )
+    monkeypatch.setattr("app.rag.knowledge_base.settings.kb_vector_index_autosync", True)
+    monkeypatch.setattr("app.rag.knowledge_base.settings.redaction_enabled", enabled)
+    store = KnowledgeBaseStore(persist_store=fake_store, max_entries=10)
+    raw_analysis = {"message": 'password = "secret123"'}
+
+    with caplog.at_level("WARNING"):
+        if enabled:
+            try:
+                store.upsert(
+                    fingerprint="fp-switch",
+                    analysis=raw_analysis,
+                    fix_suggestion="safe fix",
+                    source="llm",
+                )
+            except Exception:
+                # 边界拒写可以抛异常或走已有跳过路径。
+                pass
+            has_persistent_write = _has_items(fake_store.upsert_calls)
+            has_vector_write = _has_items(vector_store.docs)
+            assert not has_persistent_write
+            assert not has_vector_write
+            assert _REDACTION_REJECTION_MARKER in caplog.text
+            assert "secret123" not in caplog.text
+        else:
+            result = store.upsert(
+                fingerprint="fp-switch",
+                analysis=raw_analysis,
+                fix_suggestion="safe fix",
+                source="llm",
+            )
+            assert result["analysis"] == raw_analysis
+            assert fake_store.rows["fp-switch"]["analysis"] == raw_analysis
+            assert vector_store.docs[0]["analysis"] == raw_analysis
+            assert _REDACTION_REJECTION_MARKER not in caplog.text

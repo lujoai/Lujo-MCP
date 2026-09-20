@@ -55,6 +55,25 @@ DEFAULT_REDACT_RULES: tuple[tuple[str, str], ...] = (
     (r"(?<!\d)1[3-9]\d{9}(?!\d)", "***PHONE***"),
 )
 
+_COMPILED_DEFAULT_REDACT_RULES = tuple(
+    (re.compile(pattern), replacement)
+    for pattern, replacement in DEFAULT_REDACT_RULES
+)
+
+
+def contains_unredacted_secret(value: object) -> bool:
+    """按内置规则的不动点判据检测字符串叶子，不修改传入内容。"""
+    if isinstance(value, str):
+        return any(
+            pattern.sub(replacement, value) != value
+            for pattern, replacement in _COMPILED_DEFAULT_REDACT_RULES
+        )
+    if isinstance(value, dict):
+        return any(contains_unredacted_secret(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(contains_unredacted_secret(item) for item in value)
+    return False
+
 _DANGEROUS_REPEAT_RE = re.compile(
     # 嵌套量词：组内量词 + 组外无界量词 —— (a+)+ / (a*)* / (\w+)+ / (a+){2,}
     # S3-R2 C4(a)：量词部分从 [*+] 扩为 (?:[*+]|\{\d+,\})，覆盖 (a+){2,} 类

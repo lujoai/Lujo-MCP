@@ -31,11 +31,23 @@ from app.rag.debug_case import (
     compute_type_fingerprint,
 )
 from app.rag.vector_store import get_vector_store
+from app.utils.pattern_guard import contains_unredacted_secret
 
 logger = logging.getLogger("lujo-mcp.knowledge-base")
 
 DEFAULT_MAX_ENTRIES = 100
 EVICTION_POLICY = "lru"
+_UNREDACTED_CONTENT_REJECTION_MARKER = "KB_UNREDACTED_CONTENT_REJECTED"
+
+
+def _reject_unredacted_payload(payload: object, *, boundary: str) -> bool:
+    """开关开启时仅检测并安全留痕；返回是否应拒绝当前写入。"""
+    if not settings.redaction_enabled or not contains_unredacted_secret(payload):
+        return False
+    logger.warning(
+        "%s boundary=%s", _UNREDACTED_CONTENT_REJECTION_MARKER, boundary
+    )
+    return True
 
 
 class KnowledgePersistStore(Protocol):
@@ -240,6 +252,17 @@ class KnowledgeBaseStore:
         case_confidence: float | None = None,
         _skip_autosync: bool = False,
     ) -> dict[str, Any]:
+        """调用方应传已脱敏内容；本边界仅检测，遵循开关并在检出时拒写留痕。"""
+        if _reject_unredacted_payload(
+            {
+                "fingerprint": fingerprint,
+                "analysis": analysis,
+                "fix_suggestion": fix_suggestion,
+                "source": source,
+            },
+            boundary="upsert",
+        ):
+            raise ValueError(_UNREDACTED_CONTENT_REJECTION_MARKER)
         if not fingerprint:
             raise ValueError("fingerprint is required")
         if not isinstance(analysis, dict):
@@ -396,7 +419,7 @@ class KnowledgeBaseStore:
     def record_verification(
         self, fingerprint: str, confidence: float
     ) -> Optional[dict[str, Any]]:
-        """记录一次验证反馈：递增 verify_count，并提升 case_confidence。
+        """记录验证反馈；写入前仅检测内容，遵循开关并在检出时拒写留痕。
 
         M4 Verify Loop 写回。按指纹精确命中条目后更新统计；未命中返回 None。
         更新后同步到向量库（幂等），失败静默降级。
@@ -406,6 +429,10 @@ class KnowledgeBaseStore:
         with self._lock:
             entry = self._entries.get(fingerprint)
             if entry is None:
+                return None
+            if _reject_unredacted_payload(
+                entry.to_dict(), boundary="record_verification"
+            ):
                 return None
             self._generation += 1
             current_gen = self._generation
@@ -480,7 +507,9 @@ class KnowledgeBaseStore:
     # ── 向量双写同步 ──
 
     def _sync_entry_to_vector_store(self, entry: dict[str, Any]) -> None:
-        """把单条 KB entry 同步到向量库（幂等，失败静默降级）。"""
+        """仅检测并同步安全条目；遵循开关，检出未脱敏内容时跳过并留痕。"""
+        if _reject_unredacted_payload(entry, boundary="vector_sync"):
+            return
         try:
             get_vector_store().add([entry])
         except Exception:
@@ -491,9 +520,16 @@ class KnowledgeBaseStore:
             )
 
     def _sync_all_to_vector_store(self) -> None:
-        """把当前全部 KB 条目同步到向量库（种子加载后重建向量索引）。"""
+        """仅检测并同步安全条目；遵循开关，检出未脱敏内容时跳过并留痕。"""
         with self._lock:
             entries = [e.to_dict() for e in self._entries.values()]
+        if not entries:
+            return
+        entries = [
+            entry
+            for entry in entries
+            if not _reject_unredacted_payload(entry, boundary="vector_sync")
+        ]
         if not entries:
             return
         try:
@@ -588,9 +624,11 @@ class KnowledgeBaseStore:
         gen: int = 0,
         snap_clear_gen: int = 0,
     ) -> None:
-        """验证统计写穿回写（失败 warning 降级）。"""
+        """仅检测后写回验证统计；遵循开关，检出未脱敏内容即拒绝本次验证写入并留痕。"""
         store = self._persistent_store()
         if store is None:
+            return
+        if _reject_unredacted_payload(entry, boundary="persist_verification"):
             return
 
         fp = entry.get("fingerprint", "")
