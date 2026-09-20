@@ -869,7 +869,7 @@ sequenceDiagram
 | 缓存层 | 位置 | 策略 | 失效机制 |
 |--------|------|------|----------|
 | 规范文件扫描 | `collectors/spec.py:59,185-209` | 进程级 `_spec_cache` dict，按 `mtime` 检查 | 文件修改时刷新 |
-| 脱敏正则编译 | `core/redaction.py:56-87` | `_extra_cache` + 配置签名比对 | 配置变化时重建 |
+| 脱敏正则编译 | [`app/runtime/core/redaction.py:_load_extra_rules`](../../app/runtime/core/redaction.py) | `_extra_cache` + 配置签名比对 | 配置变化时重建 |
 | 源码行读取 | `collectors/code_locator.py` | 依赖 Python 内置 `linecache` | linecache 自带 |
 | 异常指纹去重 | `core/errors.py:37-75` | `deque(maxlen=200)` + fingerprint 聚合 | 容量淘汰 |
 
@@ -1605,7 +1605,7 @@ def _tokenize(text: str) -> set[str]:
 
 **Step 3 — Embedding**（仅 QdrantVectorStore 用）：
 ```python
-# qdrant_vector_store.py:180-217
+# app/rag/qdrant_vector_store.py:_embed_texts
 def _embed_texts(texts: list[str]) -> Optional[list[list[float]]]:
     for i in range(0, len(texts), 2048):  # 2048 条/批，API 限制
         chunk = texts[i : i + 2048]
@@ -1670,9 +1670,9 @@ analyze(context)
 | 故障场景 | 行为 | 代码位置 |
 |----------|------|----------|
 | `vector_store_enabled=False` | 返回 `NullVectorStore`，add=no-op，search=[] | [vector_store.py:157-158](../../app/rag/vector_store.py#L157-L158) |
-| qdrant-client 未安装 | 静默降级为 no-op，warning 日志 | [qdrant_vector_store.py:70-76](../../app/rag/qdrant_vector_store.py#L70-L76) |
-| Qdrant 连接失败 | `_qdrant_collection_ready=True` 后不再重试 | [qdrant_vector_store.py:126-134](../../app/rag/qdrant_vector_store.py#L126-L134) |
-| Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op | [qdrant_vector_store.py:214-216](../../app/rag/qdrant_vector_store.py#L214-L216) |
+| qdrant-client 未安装 | 静默降级为 no-op，warning 日志 | [qdrant_vector_store.py:_get_qdrant_client](../../app/rag/qdrant_vector_store.py) |
+| Qdrant 连接失败 | `_qdrant_collection_ready=True` 后不再重试 | [qdrant_vector_store.py:_get_qdrant_client](../../app/rag/qdrant_vector_store.py) |
+| Embedding API 失败 | `_embed_texts` 返回 None，add/search 均 no-op | [qdrant_vector_store.py:_embed_texts](../../app/rag/qdrant_vector_store.py) |
 | 向量召回异常 | `_try_vector_rag` catch → return None → 继续走 LLM | [kb_integration.py](../../app/llm/kb_integration.py) |
 
 ##### Agent 侧 RAG 消费
