@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 from app.config import settings
 from app.rag.vector_store import VectorStore, _serialize_doc
-from app.utils.pattern_guard import compile_extra_rules
+from app.utils.pattern_guard import DEFAULT_REDACT_RULES, compile_extra_rules
 
 logger = logging.getLogger("lujo-mcp.qdrant-vector-store")
 
@@ -37,34 +37,9 @@ _PROVIDER_BASE_URLS = {
     "custom": "",
 }
 
-# ── 脱敏正则（与 app/runtime/core/redaction.py 的 _DEFAULT_RULES 保持一致）────
-# 架构冻结禁止 rag → runtime import，故此处内联复制（与 _PROVIDER_BASE_URLS 同样手法）。
-# embedding 把文档原文发往外部 LLM 服务，必须先脱敏，否则密钥/token/手机号会外发。
-# FIX: CR-2 —— 键名匹配改为"包含敏感词干"语义，覆盖 refresh_token / client_secret
-# 等下划线复合键（\b 词边界在 '_' 处不成立导致此前漏脱敏），与 redaction.py 同步。
-_SENSITIVE_KEY_NAME = (
-    r"[\w.-]*(?:password|passwd|pwd|secret|token|apikey|credential|private[_-]?key)[\w.-]*"
-    r"|[\w.-]*[_-]key"
-)
-_REDACT_RULES: list[tuple[re.Pattern[str], str]] = [
-    # password = "x", pwd: xxx, refresh_token=eyJ..., client_secret=xxx ...
-    (
-        re.compile(
-            r"(?i)\b(" + _SENSITIVE_KEY_NAME + r")\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
-        ),
-        r'\1="***"',
-    ),
-    # Authorization: Bearer xxx
-    (re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+))(?:'[^']*'|\"[^\"]*\"|\S+)"), r"\1***"),
-    # JSON 格式: {"password":"xxx"}, {"refresh_token":"xxx"}, {"api_key":"xxx"} ...
-    (
-        re.compile(
-            r"(?i)\"(" + _SENSITIVE_KEY_NAME + r"|authorization)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
-        ),
-        r'"\1":"***"',
-    ),
-    # 中国大陆 11 位手机号
-    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "***PHONE***"),
+# 内置规则文本来自 runtime/rag 共用的中立来源；保持模块导入时编译。
+_COMPILED_REDACT_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(pattern), replacement) for pattern, replacement in DEFAULT_REDACT_RULES
 ]
 
 # 额外脱敏正则缓存（用户 settings.redaction_extra_patterns，换行分隔）。
@@ -124,7 +99,7 @@ def _redact_for_embedding(text: str) -> str:
     if not settings.redaction_enabled:
         logger.warning("redaction disabled — embedding 外发可能包含敏感数据")
         return text
-    for pattern, repl in _REDACT_RULES:
+    for pattern, repl in _COMPILED_REDACT_RULES:
         text = pattern.sub(repl, text)
     # FIX(v0.7.1-b10-2): 应用用户 redaction_extra_patterns——此前内联副本遗漏，
     # 自定义敏感字段在 embedding 外发路径漏脱敏。

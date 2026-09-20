@@ -497,3 +497,22 @@ def test_dangerous_pattern_no_timeout_in_isolated_subprocess():
     assert line, f"未取到耗时: {(proc.stdout or '')[-200:]}"
     elapsed_ms = int(line[0].split("=")[1])
     assert elapsed_ms < 3000, f"危险正则仍导致回溯：{elapsed_ms}ms（修复前 >15000ms）"
+
+
+def test_builtin_redaction_rules_have_single_source():
+    """默认规则同源且保持有效；代表串改前输出为 password=\"***\"。"""
+    import re
+
+    from app.rag import qdrant_vector_store
+    from app.runtime.core import redaction as redaction_module
+    from app.utils import pattern_guard
+
+    rules = pattern_guard.DEFAULT_REDACT_RULES
+    assert redaction_module.DEFAULT_REDACT_RULES is rules
+    assert qdrant_vector_store.DEFAULT_REDACT_RULES is rules
+    assert len(rules) == 4
+    for pattern, _replacement in rules:
+        re.compile(pattern)
+        assert pattern_guard.is_dangerous_pattern(pattern) is False
+
+    assert redact('password = "secret123"') == 'password="***"'

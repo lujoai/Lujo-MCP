@@ -548,7 +548,7 @@ class TestRedactionNonRegression:
         got = get_trace(error_id)
         msg = got["message"]
 
-        # 手机号脱敏为 ***PHONE***（grep 确认 redaction.py:51）
+        # 手机号脱敏为 ***PHONE***（规则由 app/utils/pattern_guard.py 的 DEFAULT_REDACT_RULES 提供）
         assert "13800138000" not in msg
         assert "***PHONE***" in msg, f"手机号未脱敏: {msg!r}"
 

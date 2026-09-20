@@ -15,46 +15,13 @@ import threading
 from typing import Any, Optional
 
 from app.config import settings
-from app.utils.pattern_guard import compile_extra_rules
+from app.utils.pattern_guard import DEFAULT_REDACT_RULES, compile_extra_rules
 
 logger = logging.getLogger("lujo-mcp.redaction")
 
-# 敏感键名模式（FIX: CR-2）：
-# 此前用 \b(固定键名列表) 匹配，词边界在 '_' 处不成立（_ 是 word 字符），
-# refresh_token / client_secret / session_token / api_secret 等下划线复合键
-# 整体漏脱敏。改为"键名包含敏感词干"语义：
-# - 词干：password / passwd / pwd / secret / token / apikey / credential /
-#   private[_-]?key（覆盖 refresh_token、client_secret、my_secret_value 等）
-# - 复合键后缀：[_-]key（覆盖 api_key / access_key / consumer_key / secret_key）
-# 词干不包含裸 "key"（keyword / monkey 不误伤）与裸 "auth"（author 不误伤）。
-_SENSITIVE_KEY_NAME = (
-    r"[\w.-]*(?:password|passwd|pwd|secret|token|apikey|credential|private[_-]?key)[\w.-]*"
-    r"|[\w.-]*[_-]key"
-)
-
-# 默认脱敏规则：(编译后的正则, 替换串)
-_DEFAULT_RULES: list[tuple["re.Pattern[str]", str]] = [
-    # password = "x", pwd: xxx, refresh_token=eyJ..., client_secret=xxx ...
-    (
-        re.compile(
-            r"(?i)\b(" + _SENSITIVE_KEY_NAME + r")\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
-        ),
-        r'\1="***"',
-    ),
-    # Authorization: Bearer xxx
-    (
-        re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+))(?:'[^']*'|\"[^\"]*\"|\S+)"),
-        r"\1***",
-    ),
-    # JSON 格式: {"password":"xxx"}, {"refresh_token":"xxx"}, {"api_key":"xxx"} ...
-    (
-        re.compile(
-            r"(?i)\"(" + _SENSITIVE_KEY_NAME + r"|authorization)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)"
-        ),
-        r'"\1":"***"',
-    ),
-    # 中国大陆 11 位手机号
-    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "***PHONE***"),
+# 默认规则的字符串来源集中在 pattern_guard；仍在模块导入时编译，保持原时机。
+_COMPILED_DEFAULT_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(pattern), replacement) for pattern, replacement in DEFAULT_REDACT_RULES
 ]
 
 # 额外规则缓存（按配置内容签名，配置变化时重建）
@@ -120,7 +87,7 @@ def redact(text: Optional[str]) -> Optional[str]:
     if not settings.redaction_enabled:
         _warn_redaction_disabled_once()
         return text
-    for pattern, repl in _DEFAULT_RULES:
+    for pattern, repl in _COMPILED_DEFAULT_RULES:
         text = pattern.sub(repl, text)
     for pattern, repl in _load_extra_rules():
         text = pattern.sub(repl, text)

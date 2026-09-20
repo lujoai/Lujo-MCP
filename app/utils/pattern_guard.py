@@ -23,6 +23,7 @@ U05-QDRANT-FIX：`settings.redaction_extra_patterns` 有两个消费方
 已知未覆盖形态（形态法保守检测的既有接受项，触发前提是作者自行配置，P2 非
 远程 P1）：如 `(\d{1,3})+`（内层有界量词 + 外层无界重复）的分段歧义、更深层
 的组合嵌套等。本模块不追求完备判定，但保证「无法证明安全时不放行」。
+「无法证明安全时不放行」仅指已进入分析但未能证明互斥的形态；已知未覆盖形态未进入分析，仍会放行。
 
 已知取舍（fail-closed 误伤）：`((a|b)+x)+` 的内层互斥分支带确定性分隔符，
 实际安全仍会被嵌套无界组规则拦截，属有意取舍。
@@ -32,6 +33,27 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Union
+
+_SENSITIVE_KEY_NAME = (
+    r"[\w.-]*(?:password|passwd|pwd|secret|token|apikey|credential|private[_-]?key)[\w.-]*"
+    r"|[\w.-]*[_-]key"
+)
+
+DEFAULT_REDACT_RULES: tuple[tuple[str, str], ...] = (
+    (
+        r"(?i)\b(" + _SENSITIVE_KEY_NAME + r")\s*[:=]\s*(?:'[^']*'|\"[^\"]*\"|\S+)",
+        r'\1="***"',
+    ),
+    (
+        r"(?i)(authorization\s*[:=]\s*(?:bearer\s+))(?:'[^']*'|\"[^\"]*\"|\S+)",
+        r"\1***",
+    ),
+    (
+        r"(?i)\"(" + _SENSITIVE_KEY_NAME + r"|authorization)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)",
+        r'"\1":"***"',
+    ),
+    (r"(?<!\d)1[3-9]\d{9}(?!\d)", "***PHONE***"),
+)
 
 _DANGEROUS_REPEAT_RE = re.compile(
     # 嵌套量词：组内量词 + 组外无界量词 —— (a+)+ / (a*)* / (\w+)+ / (a+){2,}
