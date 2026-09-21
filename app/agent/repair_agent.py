@@ -14,6 +14,7 @@ from app.agent.base import AgentContext, AgentResult, AgentStatus, BaseAgent
 from app.agent.utils import parse_llm_json, truncate_field
 from app.config import settings
 from app.llm.injection_guard import wrap_evidence, INJECTION_GUARD
+from app.runtime.core.redaction import redact_nested
 
 logger = logging.getLogger("lujo-mcp.agent.repair")
 
@@ -142,7 +143,14 @@ class RepairAgent(BaseAgent):
             # 无上一轮（首轮）时为 None，保持与原行为一致
             "prior_repair_plan": repair_ctx.get("repair_plan"),
         }
-        user_content = json.dumps(user_payload, ensure_ascii=False, default=str)
+        # W9 / P1-SEC-1：序列化**之前**先做结构化脱敏。debug_context 带源码片段
+        # 与原始请求体、git_context 带 diff 原文，此前整包 json.dumps 直接外发
+        # 第三方 LLM。键名掩码（is_sensitive_key → ***REDACTED***）只有在结构
+        # 还在的时候才做得到；序列化之后 BaseAgent._create_completion 的出口
+        # 守卫只能按正则命中，是第二道而不是等价的一道。
+        user_content = json.dumps(
+            redact_nested(user_payload), ensure_ascii=False, default=str
+        )
 
         # FIX: P1-B1 —— Agent 链路的 prompt 大小上限。
         # analyzer 链路有 truncate_context（max_context_tokens 预算），Agent 链路

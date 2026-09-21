@@ -18,6 +18,7 @@ from app.middleware import setup_middleware
 from app.error_handlers import setup_error_handlers
 from app.observability import setup_observability
 from app.runtime.core.logs import create_request_id, add_log, get_logs
+from app.runtime.core.redaction import redact_nested
 from app.runtime.context.builder import build_context
 from app.api.debug import router as debug_router
 from app.api.mcp_routes import router as mcp_router
@@ -571,7 +572,11 @@ def debug(req: dict):
     try:
         add_log(request_id, "request_start", req)
         add_log(request_id, "processing")
-        result = {"echo": req}
+        # W9 / P3-SEC-4：回显必须用脱敏副本。add_log 内部已过 redact_nested，
+        # 所以落库那份是干净的；但响应体此前原样回显入参，等于把调用方 POST
+        # 进来的密钥/凭据再从 HTTP 响应送回一遍（对照 app/api/debug.py 的
+        # POST /api/debug/debug，那里一直是 redact_nested(req.payload)）。
+        result = {"echo": redact_nested(req)}
         add_log(request_id, "response_ready", result)
     except Exception as e:
         logger.error(str(e), exc_info=True)

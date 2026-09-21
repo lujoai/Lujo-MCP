@@ -70,7 +70,10 @@ class Settings(BaseSettings):
     source_path_map: str = ""
     # 生成的可点击链接协议：vscode | file
     ide_scheme: str = "vscode"
-    # 允许生成 file:// 链接的路径白名单前缀（逗号分隔），为空=不限制
+    # 允许生成 file:// 链接的路径白名单前缀（逗号分隔）。
+    # ⚠️ 为空 **不等于**不限制：消费方（runtime/collectors/code_locator.py 的
+    # SEC-01 校验）在空值时收敛到**进程工作目录**并拒绝其外的路径。
+    # W9 / P3-SEC-1：原注释写「为空=不限制」，与实际语义相反。
     whitelist_path_prefix: str = ""
 
     # ── Source Map 解析（v0.5.1）──
@@ -157,7 +160,10 @@ class Settings(BaseSettings):
     # ── Git 归因（M5）──
     # git 命令超时秒数，超时返回 None，不阻断主流程
     git_timeout: int = 10
-    # 允许执行 git 操作的路径白名单前缀（逗号分隔绝对路径）；为空=不限制（生产建议限定项目根）
+    # 允许执行 git 操作的路径白名单前缀（逗号分隔绝对路径）。
+    # ⚠️ 为空 **不等于**不限制：消费方（runtime/core/git.py 的 _is_allowed）在
+    # 空值时收敛到**进程工作目录**并拒绝其外的路径（防跨仓库探测历史）。
+    # W9 / P3-SEC-1：原注释写「为空=不限制」，与实际语义相反。
     git_path_whitelist: str = ""
 
     # ── inbound 网络采集（M6）──

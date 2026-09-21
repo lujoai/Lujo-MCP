@@ -3,8 +3,10 @@ Git 信息集成 —— 为堆栈帧提供 blame 与最近 diff，帮助 AI 判�
 
 安全设计（proj1 增强，proj2 缺失）：
 - 所有 git 命令带超时（settings.git_timeout），超时/失败返回 None，不阻断主流程。
-- 路径白名单（settings.git_path_whitelist）：非空时仅允许白名单前缀下的文件，
-  防止通过任意路径探测其他 git 仓库内容（信息泄露）。
+- 路径白名单（settings.git_path_whitelist）：非空时仅允许白名单前缀下的文件；
+  **为空时收敛到进程工作目录**（不是「不限制」——配置项注释曾写反，W9 / P3-SEC-1
+  已更正），两种情况都默认拒绝允许根之外的路径，防止通过任意路径探测其他 git
+  仓库内容（信息泄露）。
 - commits_back 限制在 1..50，防滥用。
 按 proj1 架构重写（非复制 proj2）。
 """

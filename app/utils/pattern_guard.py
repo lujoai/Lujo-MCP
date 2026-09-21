@@ -60,9 +60,31 @@ _COMPILED_DEFAULT_REDACT_RULES = tuple(
     for pattern, replacement in DEFAULT_REDACT_RULES
 )
 
+# W9 / P3-SEC-3：非法正则告警里模式原文的可见前缀长度。规则来自运维者自己的
+# 配置、告警也写回运维者自己的日志，看似无泄露；但「规则里直接写了字面密钥」
+# 时就形成自泄漏面（与同模块对危险回溯正则只报行号+长度是同一动机）。保留
+# 一段前缀是为了可诊断——能认出是哪一条规则写错了。
+_INVALID_PATTERN_LOG_CHARS = 32
+
+
+def _pattern_for_log(pattern: str) -> str:
+    """按 :data:`_INVALID_PATTERN_LOG_CHARS` 截断模式原文（只用于告警文本）。"""
+    if len(pattern) <= _INVALID_PATTERN_LOG_CHARS:
+        return pattern
+    return pattern[:_INVALID_PATTERN_LOG_CHARS] + "…"
+
 
 def contains_unredacted_secret(value: object) -> bool:
-    """按内置规则的不动点判据检测字符串叶子，不修改传入内容。"""
+    """按内置规则的不动点判据检测字符串叶子，不修改传入内容。
+
+    ⚠️ **已知边界（W9 / P4-安全，裁定见 CODE_REVIEW §0.6.2 第 5 条：不扩）**：
+    判据只覆盖 :data:`DEFAULT_REDACT_RULES` 那 4 条内置规则，因此检出面**窄于**
+    脱敏能力——AKIA / ghp_ / xoxb / eyJ 这类形态若未被上游脱敏，本函数不会拦。
+    这是有意的：KB 边界现在是「不动点检测 + fail-closed 拒写」，扩宽内置规则
+    会**直接扩大拒写面**，一条宽泛规则就可能把种子条目或正常经验误拒。要加形态
+    只能走 ``redaction_extra_patterns`` 用户配置，且加完必须重跑误拒验收门
+    （45 条种子 + KB 单测全部内容，检出数须为 0）。
+    """
     if isinstance(value, str):
         return any(
             pattern.sub(replacement, value) != value
@@ -92,8 +114,9 @@ class GuardResult:
 
     rules: 编译成功且通过危险形态检测的 (正则, 替换串) 列表。
     warnings: 已格式化的 warning 文案，调用方逐条 logger.warning 输出。
-        危险正则只报行号与长度（不泄露模式内容）；非法正则保持既有
-        「warning 含模式原文 + skip」行为不变。
+        危险正则只报行号与长度（不泄露模式内容）；非法正则报行号、长度与
+        **截断后的**模式前缀（W9 / P3-SEC-3：整条回显会在「规则里写了字面
+        密钥」时形成自泄漏面），skip 降级语义不变。
     dropped: 被丢弃规则的 (行号, 原因码) 元组，原因码为 "dangerous" / "invalid"。
         供消费方在逐条 warning 之外输出「哪些规则未生效」的汇总；默认空元组，
         兼容 GuardResult(rules, warnings) 的旧构造方式。
@@ -311,6 +334,10 @@ def compile_extra_rules(
             # 兜底，等于一条配置让全部脱敏与错误记录崩溃）。不改为裸
             # except Exception，避免吞掉编程错误。
             dropped.append((index, "invalid"))
-            warnings.append(f"跳过无效的脱敏正则 {pattern!r}: {e}")
+            # W9 / P3-SEC-3：原文按前缀截断 + 报行号与长度（不再整条回显）
+            warnings.append(
+                f"跳过无效的脱敏正则（第 {index} 行，长度 {len(pattern)}）"
+                f"{_pattern_for_log(pattern)!r}: {e}"
+            )
             continue
     return GuardResult(rules=tuple(rules), warnings=tuple(warnings), dropped=tuple(dropped))

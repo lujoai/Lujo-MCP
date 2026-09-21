@@ -1,7 +1,9 @@
 """共享状态后端 —— 限流计数与指标计数可插拔（内存 / Redis）
 
-生产多实例部署时必须使用 Redis，否则每个 worker 各自计数，
-限流形同虚设、指标只反映单实例。
+产品定位是**单用户、本地自用**（AGENTS.md §3）：默认 ``memory`` 即可，
+一个 Lujo 进程自己计数、自己限流。Redis 只是可选的跨实例共享手段——
+真的把多个实例指向同一 Redis 时，各实例才会共享限流窗口与计数；这属
+知情混存，不是本产品承诺的部署形态。
 """
 
 import logging
@@ -14,6 +16,29 @@ from typing import List, Optional
 from app.config import settings
 
 logger = logging.getLogger("lujo-mcp.state")
+
+# 合法状态后端（与 app/config.py 的 state_backend 注释同源）
+_VALID_STATE_BACKENDS = frozenset({"memory", "redis"})
+
+
+def _validate_state_backend() -> None:
+    """校验 state_backend 配置值，非法值 fail-fast（W9 / P3-SEC-2）。
+
+    与 ``runtime/core/storage/factory.py::_validate_backend`` 同一纪律：此前
+    ``!= "redis"`` 一律落到 memory，拼写错误（``Redis`` / ``rediss`` / 空串）
+    **静默回退**——用户以为限流与 beacon 令牌状态在多实例间共享，实际全留在
+    进程内存里，且没有任何告警。
+
+    拒绝点同样留在使用点而不是 ``Settings`` 构造阶段：构造期抛出会让 ``.env``
+    写错的既有部署在**导入期**崩溃，pytest 连 collection 都过不去。
+    """
+    backend = settings.state_backend
+    if backend not in _VALID_STATE_BACKENDS:
+        raise ValueError(
+            f"Invalid STATE_BACKEND={backend!r}. "
+            f"Valid values: {sorted(_VALID_STATE_BACKENDS)}. "
+            f"Check .env or environment variable spelling (case-sensitive)."
+        )
 
 
 class StateStore(ABC):
@@ -199,11 +224,16 @@ _store_lock = threading.Lock()
 
 
 def get_state_store() -> StateStore:
-    """根据配置返回状态后端（懒初始化 + 线程安全）"""
+    """根据配置返回状态后端（懒初始化 + 线程安全）
+
+    非法 ``state_backend`` 在此 fail-fast（:func:`_validate_state_backend`），
+    不静默回退 memory。
+    """
     global _store
     if _store is None:
         with _store_lock:
             if _store is None:
+                _validate_state_backend()
                 if settings.state_backend == "redis":
                     _store = RedisStateStore(settings.redis_url)
                 else:

@@ -166,3 +166,27 @@ def test_internal_health_forwarded_with_valid_key_allowed(monkeypatch):
     resp = internal_health(_FakeRequest)
     assert isinstance(resp, dict)
     assert resp["status"] in ("ok", "degraded", "unhealthy")
+
+
+# ---------------------------------------------------------------------------
+# W9 / P3-SEC-4: POST /debug 的回显必须是脱敏副本
+# ---------------------------------------------------------------------------
+
+def test_debug_echo_is_redacted():
+    """/debug 不得把调用方 POST 进来的密钥原样回显到 HTTP 响应里。
+
+    落库那份一直是干净的（add_log 内部过 redact_nested），漏的只有响应体；
+    对照 app/api/debug.py 的同名端点，那里一直是 redact_nested(req.payload)。
+    """
+    import json
+
+    from app.main import debug
+
+    secret = "hunter2-super-secret"
+    resp = debug({"password": secret, "note": "keep-me"})
+
+    echoed = resp["result"]["echo"]
+    assert echoed["password"] != secret, "响应体原样回显了密钥（P3-SEC-4）"
+    assert secret not in json.dumps(echoed, ensure_ascii=False)
+    assert echoed["note"] == "keep-me", "非敏感字段不得被一并抹掉"
+    assert resp["request_id"]

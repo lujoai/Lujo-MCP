@@ -343,3 +343,100 @@ class TestCreateCompletionBreaker:
             )
         # 熔断 OPEN 时不得发起任何真实 LLM 调用
         client.chat.completions.create.assert_not_awaited()
+
+
+class TestAgentEgressRedaction:
+    """W9 / P1-SEC-1：Agent 出口必须脱敏。
+
+    所有 Agent（Repair / Test / Security / Git）的主模型与 fallback 调用都经
+    ``BaseAgent._create_completion`` 上线，故这里是唯一能一次性覆盖全部 Agent
+    的收口点。此前 Agent 链路完全不过 redact：debug_context（源码片段、原始
+    请求体）与 git_context（diff 原文）被直接 json.dumps 外发第三方 LLM。
+    """
+
+    @staticmethod
+    def _make_agent():
+        class FakeAgent(BaseAgent):
+            name = "fake"
+
+            async def run(self, ctx: AgentContext) -> AgentResult:
+                return AgentResult(
+                    agent_name=self.name, status=AgentStatus.SUCCESS, output={}
+                )
+
+        return FakeAgent()
+
+    @pytest.mark.asyncio
+    async def test_create_completion_redacts_message_content(self, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.llm import analyzer as analyzer_mod
+
+        monkeypatch.setattr(analyzer_mod, "_get_llm_circuit_breaker", lambda: None)
+
+        secret = "hunter2-super-secret"
+        raw = json.dumps(
+            {
+                "password": secret,
+                "note": "keep-me",
+                "diff": "- api_token = %s" % secret,
+            }
+        )
+        messages = [{"role": "user", "content": raw}]
+
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value="resp")
+        await self._make_agent()._create_completion(client, "m", messages, 0.3)
+
+        sent = client.chat.completions.create.await_args.kwargs["messages"]
+        assert secret not in sent[0]["content"], "密钥随 prompt 外发第三方 LLM（P1-SEC-1）"
+        assert "***" in sent[0]["content"]
+        assert "keep-me" in sent[0]["content"], "非敏感内容不得被一并抹掉"
+        # 不得就地改写入参：调用方仍持有原文用于本地日志/审计
+        assert secret in messages[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_path_is_redacted_too(self, monkeypatch):
+        """fallback 模型走同一个出口，脱敏不得只覆盖主模型。"""
+        import json
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from openai import APIError
+        from app.llm import analyzer as analyzer_mod
+
+        monkeypatch.setattr(analyzer_mod, "_get_llm_circuit_breaker", lambda: None)
+
+        secret = "hunter2-super-secret"
+        messages = [
+            {"role": "user", "content": json.dumps({"password": secret})}
+        ]
+
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=None,
+        )
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[
+                APIError("boom", request=None, body=None),
+                fake_response,
+            ]
+        )
+        out = await self._make_agent()._call_llm(
+            client=client,
+            model="primary",
+            messages=messages,
+            temperature=0.3,
+            max_retries=0,
+            validate_fn=lambda content: {"ok": True},
+            fallback_model="fallback",
+        )
+        assert out["analysis"] == {"ok": True}
+
+        fallback_kwargs = client.chat.completions.create.await_args_list[-1].kwargs
+        assert fallback_kwargs["model"] == "fallback"
+        assert secret not in fallback_kwargs["messages"][0]["content"], (
+            "fallback 调用绕过了出口脱敏（P1-SEC-1）"
+        )

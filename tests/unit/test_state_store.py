@@ -83,3 +83,37 @@ def test_redis_store_methods_fail_closed():
     assert store.incr_float("k", 1.0) == 0.0
     assert store.get("k") == 0.0
     assert store.keys("p") == []
+
+
+# ---------------------------------------------------------------------------
+# W9 / P3-SEC-2：state_backend 必须 fail-fast，不得静默回落 memory
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_state_backend_fails_fast(monkeypatch):
+    """拼写错误的后端必须显式拒绝。
+
+    此前 ``!= "redis"`` 一律落到 memory：用户以为限流窗口与 beacon 令牌状态在
+    多实例间共享，实际全留在进程内存里，且没有任何告警。
+    """
+    import pytest
+
+    import app.state.store as store_mod
+    from app.config import settings
+
+    for bad in ("Redis", "rediss", "", "postgresql"):
+        monkeypatch.setattr(store_mod, "_store", None)
+        monkeypatch.setattr(settings, "state_backend", bad)
+        with pytest.raises(ValueError, match="Invalid STATE_BACKEND"):
+            store_mod.get_state_store()
+        assert store_mod._store is None, "拒绝路径不得留下半初始化的单例"
+
+
+def test_valid_state_backends_still_resolve(monkeypatch):
+    """合法值行为不变（memory 直接可用；redis 不在本机跑，只验拒绝面）。"""
+    import app.state.store as store_mod
+    from app.config import settings
+
+    monkeypatch.setattr(store_mod, "_store", None)
+    monkeypatch.setattr(settings, "state_backend", "memory")
+    assert isinstance(store_mod.get_state_store(), store_mod.MemoryStateStore)

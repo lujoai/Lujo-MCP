@@ -349,3 +349,37 @@ class TestRepairAgentBuildMessages:
         )
         messages = agent._build_messages(ctx)
         assert "payload truncated" not in messages[1]["content"]
+
+
+class TestRepairAgentEgressRedaction:
+    """W9 / P1-SEC-1：结构化 payload 必须在**序列化之前**脱敏。
+
+    键名掩码（is_sensitive_key → ***REDACTED***）只有在结构还在的时候才做得到；
+    序列化之后 BaseAgent._create_completion 的出口守卫只能按正则命中，是第二道
+    而不是等价的一道。
+    """
+
+    def test_build_messages_masks_sensitive_keys_and_diff_secrets(self):
+        secret = "hunter2-super-secret"
+        ctx = AgentContext(
+            debug_context={"request_id": "req-1"},
+            repair_context={
+                "debug_context": {
+                    "request_id": "req-1",
+                    "request_body": {"password": secret},
+                },
+                "prior_analysis": None,
+                "vector_recall": [],
+                "debug_experience": None,
+                "git_context": [{"diff": "- api_token = %s" % secret}],
+                "quality_report": None,
+                "repair_plan": None,
+            },
+        )
+
+        content = RepairAgent()._build_messages(ctx)[1]["content"]
+
+        assert secret not in content, "源码/diff 里的密钥随 repair prompt 外发（P1-SEC-1）"
+        assert "***" in content
+        assert "req-1" in content, "非敏感结构必须保持可用，否则修复方案没有上下文"
+        assert "git_context" in content

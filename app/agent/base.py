@@ -17,6 +17,8 @@ from typing import Any, Callable, Optional
 
 from openai import APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
+from app.runtime.core.redaction import redact_nested
+
 logger = logging.getLogger("lujo-mcp.agent.base")
 
 
@@ -120,7 +122,17 @@ class BaseAgent(ABC):
         - 成功/失败计入熔断计数，与 analyzer 主链路共享同一状态机；
         - 熔断器未启用（circuit_breaker_enabled=False，默认）或 pybreaker
           不可用时直连调用，行为与旧实现完全一致。
+
+        W9 / P1-SEC-1 —— **Agent 出口统一脱敏**。此前只有主分析链路
+        （``app/llm/context_prep.py``）过 redact，Agent 链路把 ``debug_context``
+        （源码片段、请求体）与 ``git_context``（diff 原文）直接 json.dumps 后
+        外发第三方 LLM：源码或 git 历史里的硬编码密钥、内网地址、个人信息
+        随之出网，多轮 ``verify_loop`` 还会重复外发。所有 Agent（Repair /
+        Test / Security / Git）的主模型与 fallback 调用都经本方法上线，故在
+        这里收口，新增 Agent 自动继承。各 Agent 仍应在**结构化** payload 上
+        先过一遍 ``redact_nested``（键名掩码只有序列化之前才做得到）。
         """
+        messages = redact_nested(messages)
         kwargs = {
             "model": model,
             "messages": messages,

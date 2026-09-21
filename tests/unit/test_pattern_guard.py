@@ -66,12 +66,46 @@ def test_safe_compiled_with_default_replacement(pattern):
 
 
 def test_invalid_pattern_skipped_warning_keeps_original_semantics():
-    """非法正则：跳过 + warning 含模式原文（保持两侧既有行为）。"""
+    """非法正则：跳过 + warning 含模式原文。
+
+    W9 / P3-SEC-3 起原文按 32 字符前缀截断（短模式仍完整可见，故本用例的
+    断言不变）；截断行为由下面那条用例锁定。
+    """
     result = compile_extra_rules("(unclosed")
     assert result.rules == ()
     assert len(result.warnings) == 1
     assert "无效的脱敏正则" in result.warnings[0]
     assert "(unclosed" in result.warnings[0]
+
+
+def test_invalid_pattern_warning_truncates_long_pattern():
+    """W9 / P3-SEC-3：长模式的告警只回显截断前缀 + 行号 + 长度。
+
+    **有意变更既有行为**（裁定见 CODE_REVIEW §0.6.2 第 4 条）：此前告警回显
+    模式原文，GuardResult 的文档也明写「含模式原文」。规则来自运维者自己的
+    配置、日志也写回运维者，但「规则里直接写了字面密钥」时就是自泄漏面——
+    与同模块对危险回溯正则只报行号+长度是同一动机。保留前缀是为了可诊断。
+    """
+    long_pattern = "(unclosed-" + "x" * 200
+    result = compile_extra_rules(long_pattern)
+    assert result.rules == ()
+    assert len(result.warnings) == 1
+
+    msg = result.warnings[0]
+    assert long_pattern not in msg, "非法正则告警回显了完整模式原文（P3-SEC-3）"
+    assert long_pattern[:32] in msg, "前缀必须保留，否则认不出是哪条规则写错了"
+    assert str(len(long_pattern)) in msg, "必须报长度，便于判断是否被截断"
+    assert "第 1 行" in msg
+
+
+def test_secret_literal_in_invalid_pattern_is_not_echoed():
+    """规则里写了字面密钥时，告警不得把密钥整条回显（P3-SEC-3 的真实动机）。"""
+    pattern = "sk-live-" + "A" * 120 + "("  # 尾部未闭合 → 非法
+    result = compile_extra_rules(pattern)
+    assert result.rules == ()
+    assert len(result.warnings) == 1
+    assert pattern not in result.warnings[0]
+    assert "A" * 40 not in result.warnings[0], "截断后仍回显了大段模式正文"
 
 
 def test_dangerous_warning_is_safe_summary_no_pattern_leak():
