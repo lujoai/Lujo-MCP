@@ -5,6 +5,12 @@
 scrape_configs:
   - job_name: "lujo-mcp"
     metrics_path: "/metrics"
+    # W10 / P2-SEC-2：/metrics 的免鉴权豁免只在 app 绑回环时成立。容器内 app 绑
+    # 0.0.0.0（否则 ports 发布与容器间抓取都打不通），故抓取必须带凭据。
+    # 值由 compose 的 LUJO_API_KEY 经 --config.expand-env 展开，不落盘明文。
+    authorization:
+      type: Bearer
+      credentials: ${LUJO_API_KEY}
     static_configs:
       - targets: ["app:8000"]
         labels:

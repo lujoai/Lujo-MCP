@@ -214,3 +214,72 @@ class TestDeployConfig:
             f"三处 temperature 漂移：dev={dev} prod={prod} "
             f"example={example} 权威={authority}"
         )
+
+    # ------------------------------------------------------------------
+    # W10：监听地址默认收紧（P2-SEC-1）与 /metrics 豁免收紧（P2-SEC-2）的
+    # 跨表面一致性。这两条不是文案检查：默认值一改，容器可达性与监控链路
+    # 都会静默失效（healthcheck 在容器内跑，照样显示健康）。
+    # ------------------------------------------------------------------
+
+    def test_host_default_is_loopback_and_surfaces_agree(self):
+        """源码默认必须是回环，且 .env.example 与之一致。"""
+        src = (_REPO_ROOT / "app" / "config.py").read_text(encoding="utf-8")
+        m = re.search(r"^\s*host:\s*str\s*=\s*\"([^\"]+)\"", src, re.M)
+        assert m is not None, "app/config.py 找不到 host 字面默认值"
+        assert m.group(1) == "127.0.0.1", (
+            f"默认监听地址应为回环（单用户本地定位），实际={m.group(1)!r}（P2-SEC-1）"
+        )
+
+        env = (_REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+        env_m = re.search(r"^HOST=([^\s#]+)", env, re.M)
+        assert env_m is not None, ".env.example 缺少 HOST 声明（复制即生效的示例必须写清）"
+        assert env_m.group(1) == m.group(1), (
+            f".env.example HOST={env_m.group(1)!r} 与权威默认 {m.group(1)!r} 不一致"
+        )
+
+    def test_container_surfaces_pin_wildcard_host(self):
+        """容器表面必须显式绑 0.0.0.0，同时端口发布仍限回环。
+
+        源码默认收紧为 127.0.0.1 后，容器若继承默认就只监听容器回环：
+        ports 发布与容器间抓取全部打不通，而 healthcheck 在容器内执行仍会
+        显示健康 —— 这是最难发现的一类故障，故用断言钉住。
+        """
+        dockerfile = (_REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        assert re.search(r"^ENV HOST=0\.0\.0\.0$", dockerfile, re.M), (
+            "Dockerfile 缺少 ENV HOST=0.0.0.0（docker run 直接跑会不可达）"
+        )
+        for compose_relpath in ("docker-compose.yaml", "deploy/docker-compose.prod.yml"):
+            content = (_REPO_ROOT / compose_relpath).read_text(encoding="utf-8")
+            assert re.search(r"^\s*HOST:\s*0\.0\.0\.0\s*$", content, re.M), (
+                f"{compose_relpath} 的 app 服务缺少 HOST: 0.0.0.0"
+            )
+            assert "127.0.0.1:" in content, (
+                f"{compose_relpath} 的端口发布必须仍限回环（P2-F1 不得回退）"
+            )
+
+    def test_prometheus_scrape_carries_credentials(self):
+        """绑非回环后 /metrics 不再免鉴权 → 抓取必须带凭据，且密钥不落盘。"""
+        prom = (_REPO_ROOT / "deploy" / "prometheus.yml").read_text(encoding="utf-8")
+        assert "authorization:" in prom, (
+            "prometheus.yml 缺少 authorization —— /metrics 豁免收紧后抓取会恒 401"
+        )
+        assert "credentials: ${LUJO_API_KEY}" in prom, (
+            "凭据必须经环境变量展开，不得把 API Key 明文写进配置文件"
+        )
+        compose = (_REPO_ROOT / "deploy" / "docker-compose.prod.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "LUJO_API_KEY: ${API_KEY:" in compose, (
+            "prod compose 未把 API_KEY 传给 prometheus 容器"
+        )
+        assert "--config.expand-env=true" in compose, (
+            "prometheus 未开启 --config.expand-env，${LUJO_API_KEY} 不会被展开"
+        )
+
+    def test_env_production_example_documents_host(self):
+        content = (_REPO_ROOT / "deploy" / "env.production.example").read_text(
+            encoding="utf-8"
+        )
+        assert re.search(r"^HOST=", content, re.M), (
+            "env.production.example 缺少 HOST 声明"
+        )

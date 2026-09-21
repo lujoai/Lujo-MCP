@@ -7,6 +7,30 @@
 
 ## [Unreleased]
 
+> 以下为 v0.9.1 之后的维护批次（审查修复 W 系列），尚未随任何发布版本出厂。
+
+### Changed
+
+- **默认监听地址收紧为 `127.0.0.1`**（原 `0.0.0.0`）：单用户本地定位下默认装机即全网监听不合理，且统一 stdio 模式（`--http-host`）早已是回环，HTTP 独立入口未对齐属遗漏。需要对外服务时显式设 `HOST`（并按既有 SEC-03 规则配 `API_KEY`；通配地址 + 无 Key 仍会被启动校验硬拒绝）。**容器部署不受影响但必须显式设 `HOST=0.0.0.0`**——`Dockerfile` 与两份 compose 已设置，否则服务只监听容器回环、端口发布打不通而 healthcheck 仍显示健康。
+- **`/metrics` 的免鉴权豁免只在回环绑定时成立**：此前只要 `METRICS_AUTH_ENABLED=false` 就全局豁免，绑到可路由地址时等于把调用量/错误率/延迟/工具名无偿开放给整个网段。判据取配置绑定地址而非 `request.client.host`（反代部署下对端恒为代理，按对端判会 fail-open）。`deploy/prometheus.yml` 已改为带 Bearer 凭据抓取（经 `--config.expand-env` 从 compose 的 `LUJO_API_KEY` 展开，密钥不落盘）。
+- **重型工具在「服务关闭中」的错误码由 `TOOL_TIMEOUT` 改为 `TOOL_BUSY`**：关闭路径从未消耗任何超时预算，旧文案「工具执行超时(>60s)」是虚构的，指标也被误记为 timeout。
+
+### Fixed
+
+- **重型工具槽位在外部取消时被提前归还**：结算此前挂在 `run_in_executor` 返回的 asyncio 包装 future 上，宿主取消请求（`notifications/cancelled`、HTTP 断连）会立刻释放许可，而收割线程还要跑最长 `TOOL_TIMEOUT` + 终止宽限——取消重试风暴下并发上限被击穿、浏览器子进程无界堆积。现改为挂在真实 `concurrent.futures.Future` 上（与轻量路径同构），HTTP 与 stdio 两条传输同步修正。
+- **Agent 链路把未脱敏的源码片段与 git diff 原文外发第三方 LLM**：此前只有主分析链路过脱敏。现在 `BaseAgent._create_completion` 是所有 Agent（含 fallback 模型调用）的统一出口守卫，`RepairAgent` 另在序列化前对结构化载荷做键名脱敏。
+- **`POST /debug` 的响应体原样回显入参**：落库副本一直是脱敏的，漏的只有响应体；现与 `app/api/debug.py` 的同名端点一致走 `redact_nested`。
+- **`STATE_BACKEND` 拼写错误静默回落 memory**：现按 `STORAGE_BACKEND` 同一纪律在使用点 fail-fast（大小写敏感，报错列出合法值）。
+- **非法脱敏正则的告警不再整条回显模式原文**：改为「行号 + 长度 + 32 字符前缀」。规则里写了字面密钥时，旧行为会把它整条写进日志。
+- **重型子进程的两处资源缺口**：换胎（breakaway）收口此前不关父侧 stdin 与结果通道读端（Windows 每次泄漏 2 个句柄）；spawn 成功到 `try/finally` 之间的登记/日志若抛异常，子进程会脱离回收成为孤儿。
+- **结果读取器线程不再无声死亡**：此前只捕获 `EOFError`/`OSError`，其它异常会让线程直接退出且不发布任何事件，等待方只能报无信息量的「result reader thread died」。现在任何异常都归类为带真实异常类型的协议错误。
+
+### Security
+
+- **GO 提交闸门接线**：`allow_commit` 此前恒为 `True`，四条件闸门是空壳、`CommitRefused` 是死代码、换胎作废标记 `aborted` 无生产消费者。现在闸门真实反映 closing / kill_due / aborted，关闭窗口内业务不再可能被提交执行。
+- **指标埋点全函数防御**：`record_mcp_tool_*` 此前无兜底，而调用点位于「已取得执行许可、尚未登记 token」的窗口——OTel 抛异常会让许可永久丢失、该池此后恒 `TOOL_BUSY`。现埋点异常一律吞掉记 debug，且 token 登记先于任何埋点。
+- **路径白名单注释与实际语义相反已更正**：`GIT_PATH_WHITELIST` / `WHITELIST_PATH_PREFIX` 为空时**不是**「不限制」，而是收敛到进程工作目录并拒绝其外路径。
+
 ---
 
 ## [0.9.1] - 2026-09-14

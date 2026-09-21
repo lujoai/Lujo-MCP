@@ -356,13 +356,17 @@ curl http://localhost:8000/health
 
 ```bash
 # 安全规则:
+#   HOST 默认 127.0.0.1（源码权威默认，单用户本地定位）
 #   HOST=0.0.0.0 → 必须设置 API_KEY（否则服务拒绝启动）
 #   HOST=127.0.0.1 → API_KEY 可选（仅本地访问）
+#   绑非回环地址后 /metrics 不再免鉴权，抓取方必须带 API Key
 
 # 判定标准 / Pass Criteria: 符合上述安全规则
 # 异常处理 / Contingency:
 #   - 生产环境: 建议 HOST=0.0.0.0 + API_KEY 必须设置
-#   - 开发环境: HOST=127.0.0.1 即可
+#   - 开发环境: HOST=127.0.0.1 即可（默认值，可不写）
+#   - 容器部署: 容器内必须 HOST=0.0.0.0（Dockerfile 与两份 compose 已设），
+#     对外暴露面由 ports 的 127.0.0.1 发布地址控制
 ```
 
 ### 6.3 诊断端点

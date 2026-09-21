@@ -765,9 +765,10 @@ def metrics(request: Request):
     """Prometheus 指标端点
 
     SEC-08 独立鉴权 toggle：
-    - METRICS_AUTH_ENABLED=False（默认）：不额外鉴权。P2-F2 起全局 AuthMiddleware 同时
-      豁免 /metrics，即端点无鉴权可访问（供 Prometheus 等监控栈无凭据抓取；生产应按安全
-      策略只把该端点发布到可信内网）。
+    - METRICS_AUTH_ENABLED=False（默认）：端点层不额外鉴权。全局 AuthMiddleware
+      的 /metrics 豁免自 W10 / P2-SEC-2 起**只在回环绑定时成立**——绑到可路由
+      地址后本端点受全局中间件保护，抓取方必须带 API Key（容器化部署见
+      deploy/prometheus.yml 的 Bearer 凭据）。回环绑定时仍供本机监控栈无凭据抓取。
     - METRICS_AUTH_ENABLED=True：端点层独立校验 API Key（Bearer/X-API-Key），
       与全局中间件解耦（全局中间件对其保持保护），防止 AuthMiddleware 配置疏漏导致指标泄露。
       支持 API_KEYS 多 key 轮换 + API_KEY 向后兼容（复用 key_rotation.verify_api_key）。

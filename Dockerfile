@@ -22,5 +22,12 @@ USER appuser
 # 暴露端口
 EXPOSE 8000
 
+# W10 / P2-SEC-1：app/config.py 的 host 默认值已收紧为 127.0.0.1（单用户本地
+# 定位）。容器内必须绑 0.0.0.0，否则服务只监听容器回环 —— 端口发布（-p /
+# ports）与容器间访问全部打不通，而 healthcheck 在容器内执行仍会显示健康，
+# 故障极难发现。对外暴露面由发布地址控制（两份 compose 都只发布到 127.0.0.1），
+# 需要改变监听地址时在 compose 的 environment 里覆盖本值即可。
+ENV HOST=0.0.0.0
+
 # 启动
 CMD ["python", "-m", "app.main"]

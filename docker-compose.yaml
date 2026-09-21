@@ -14,6 +14,11 @@ services:
       redis:
         condition: service_healthy
     environment:
+      # W10 / P2-SEC-1：app/config.py 的 host 默认值已收紧为 127.0.0.1（单用户
+      # 本地定位）。容器内必须显式绑 0.0.0.0，否则服务只监听容器回环、
+      # 下方 ports 发布会完全打不通（healthcheck 在容器内跑，仍会显示健康 →
+      # 故障极难发现）。对外暴露面由 ports 的 127.0.0.1 发布地址控制。
+      HOST: 0.0.0.0
       # WP6（Step 3）：PostgreSQL 服务已移除，运行时后端固定 memory
       # （KB 经验由本地 SQLite 笔记本持久化，KB_PERSIST_ENABLED 默认开启）
       STORAGE_BACKEND: memory

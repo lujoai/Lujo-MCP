@@ -399,7 +399,15 @@ class Settings(BaseSettings):
         return self
 
     # ── 服务 ──
-    host: str = "0.0.0.0"
+    # W10 / P2-SEC-1：默认只监听回环。此前默认 "0.0.0.0" —— 单用户本地自用的
+    # 产品却默认装机即全网监听，只要设了任意 API_KEY（含弱 key）就在网络上
+    # 开放且无任何告警；统一 stdio 模式（app/mcp_server.py 的 --http-host）
+    # 早就是 127.0.0.1，HTTP 独立入口未对齐属遗漏。这是收紧而非放宽，符合
+    # 「安全默认值不得静默放宽」。需要对外服务时显式设 HOST（并按 SEC-03
+    # 配 API_KEY；通配地址 + 无 Key 仍会被启动校验硬拒绝）。
+    # ⚠️ 容器内必须显式 HOST=0.0.0.0（Dockerfile 与两份 compose 已设），
+    # 否则服务只监听容器回环，端口发布打不通而 healthcheck 仍显示健康。
+    host: str = "127.0.0.1"
     port: int = 8000
     debug: bool = False
     service_name: str = "lujo-mcp"

@@ -128,8 +128,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # 中间件放行（observability.metrics 端点此时也不额外鉴权，供 Prometheus 抓取）；
         # METRICS_AUTH_ENABLED=True 时保留全局中间件保护（端点层本身还会再校验一次）。
         # 修复生产强制 API_KEY 下 Prometheus 抓 /metrics 恒 401、监控链路静默失效的问题。
+        #
+        # W10 / P2-SEC-2 —— 该豁免**只在回环绑定时成立**。此前只要
+        # METRICS_AUTH_ENABLED=False 就无条件豁免，于是"绑到可路由地址 + 配了
+        # API Key"的部署把调用量/错误率/延迟/工具名这些运营情报无偿开放给整个
+        # 网段（标签已消毒不代表没有情报价值）。判据取**配置绑定地址**而不是
+        # request.client.host：反代部署下对端恒为代理（常常就是回环），按对端判
+        # 等于对所有经代理的请求 fail-open（与 internal_health 遇转发头即
+        # fail-closed 是同一教训，P3-13）。容器化部署因此在
+        # deploy/prometheus.yml 里带 Bearer 凭据抓取。
         if request.url.path == "/metrics" and not settings.metrics_auth_enabled:
-            return await call_next(request)
+            # 惰性导入与本函数其余鉴权判定同源（startup_guard 是绑定语义的单一来源）
+            from app.auth.startup_guard import bind_is_local_only
+
+            if bind_is_local_only():
+                return await call_next(request)
 
         # 多 key 轮换：恒定时间比较在 app.auth.key_rotation 内部完成（遍历所有 key 不短路）
         key = self._extract_key(request)

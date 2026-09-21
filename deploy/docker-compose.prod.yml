@@ -29,6 +29,12 @@ services:
       redis:
         condition: service_healthy
     environment:
+      # W10 / P2-SEC-1：app/config.py 的 host 默认值已收紧为 127.0.0.1（单用户
+      # 本地定位）。容器内必须显式绑 0.0.0.0，否则服务只监听容器回环、下方
+      # ports 发布与 prometheus 的容器间抓取都会打不通（healthcheck 在容器内
+      # 跑，仍会显示健康 → 故障极难发现）。对外暴露面由 ports 的 127.0.0.1
+      # 发布地址控制。
+      HOST: 0.0.0.0
       # WP6（Step 3）：PostgreSQL 服务已移除，运行时后端固定 memory
       # （KB 经验由本地 SQLite 笔记本持久化，KB_PERSIST_ENABLED 默认开启）
       STORAGE_BACKEND: memory
@@ -77,11 +83,17 @@ services:
     image: prom/prometheus:v2.51.0
     container_name: lujo-prometheus
     restart: unless-stopped
+    environment:
+      # W10 / P2-SEC-2：/metrics 的免鉴权豁免现在只在**回环绑定**时成立。容器内
+      # app 必须绑 0.0.0.0（见上方 HOST 说明），故抓取要带 API Key —— 经
+      # --config.expand-env 从本变量展开，避免把密钥明文写进 prometheus.yml。
+      LUJO_API_KEY: ${API_KEY:?必须设置 API_KEY}
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - promdata:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--config.expand-env=true"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
     # 安全：Prometheus 无内置认证。

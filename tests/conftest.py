@@ -94,6 +94,8 @@ settings.api_key = None
 settings.api_keys = ""
 # FIX: e2e 误杀——HOST env 哨兵因导入链抢跑失效，此处直接重置单例 host
 # 为回环地址（与 e2e/conftest.py 的 uvicorn bind 一致），SEC-03 守卫放行。
+# W10 后源码默认值本身就是 127.0.0.1，本行不再是「纠正默认值」，而是隔离
+# 开发者本机 .env 里可能存在的 HOST（例如 0.0.0.0）——保留，勿删。
 settings.host = "127.0.0.1"
 
 # ── FIX: pytest-current 损坏 junction 防崩补丁（Windows 11 24H2+）──

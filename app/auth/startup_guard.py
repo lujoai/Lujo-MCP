@@ -84,6 +84,21 @@ def _host_claims_local_only(bind_host: object) -> bool:
     return ip.is_loopback
 
 
+def bind_is_local_only(bind_host: object = None) -> bool:
+    """**配置口径**下服务是否只监听回环（W10 / P2-SEC-2 的判据来源）。
+
+    与 :func:`unauthenticated_public_bind` 共用 :func:`_host_claims_local_only`，
+    保证"什么算本地绑定"全仓只有一个定义。默认读 ``settings.host``。
+
+    为什么按**配置绑定地址**判、而不是按 ``request.client.host``：反代部署下
+    对端恒为代理（常常就是回环），按对端判等于对所有经代理的请求 fail-open
+    —— 与 ``internal_health`` 遇转发头即 fail-closed 是同一教训（P3-13）。
+    """
+    return _host_claims_local_only(
+        settings.host if bind_host is None else bind_host
+    )
+
+
 def _routable_exposure(real_host: Optional[str]) -> bool:
     """本连接实际落在可路由 NIC 地址上，而配置却声明只绑本地 → 配置与真实绑定不一致。
 

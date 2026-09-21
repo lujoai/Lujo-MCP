@@ -2,6 +2,8 @@
 
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 
 def _reset_otel_globals(module) -> None:
     """关闭并清空 module 中全部 ``_otel_*`` 模块级全局。
@@ -447,6 +449,47 @@ class TestMetricsAuthExemption:
 
         resp = self._run(mw.dispatch, self._make_request("/metrics"), call_next)
         assert resp.status_code == 200
+
+    # ------------------------------------------------------------------
+    # W10 / P2-SEC-2：豁免只在回环绑定时成立
+    # ------------------------------------------------------------------
+
+    def _dispatch_metrics(self, monkeypatch, host: str):
+        """按给定配置绑定地址跑一次 /metrics 请求，返回响应。"""
+        from app.config import settings
+        from app.middleware import AuthMiddleware
+        from starlette.responses import JSONResponse
+
+        monkeypatch.setattr(settings, "metrics_auth_enabled", False)
+        monkeypatch.setattr(settings, "host", host)
+        mw = AuthMiddleware.__new__(AuthMiddleware)
+        mw.enabled = True  # 鉴权开启：只考 /metrics 的豁免分支
+
+        async def call_next(req):
+            return JSONResponse(content={"ok": True})
+
+        return self._run(mw.dispatch, self._make_request("/metrics"), call_next)
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
+    def test_metrics_still_exempt_on_loopback_bind(self, monkeypatch, host):
+        """回环绑定 → 豁免保留（P2-F2 的原始动机：本机监控栈无凭据抓取）。"""
+        assert self._dispatch_metrics(monkeypatch, host).status_code == 200
+
+    @pytest.mark.parametrize(
+        "host", ["0.0.0.0", "::", "", "   ", "10.0.0.5", "192.168.1.50"]
+    )
+    def test_metrics_not_exempt_on_non_loopback_bind(self, monkeypatch, host):
+        """绑到可路由/通配地址 → /metrics 必须鉴权。
+
+        此前只要 METRICS_AUTH_ENABLED=False 就全局豁免，等于把调用量、错误率、
+        延迟、工具名这些运营情报无偿开放给整个网段（标签已消毒不代表没有情报
+        价值）。判据用**配置绑定地址**而不是 request.client.host：反代部署下
+        对端恒为代理（常常就是回环），按对端判会直接 fail-open（P3-13 同源教训）。
+        """
+        resp = self._dispatch_metrics(monkeypatch, host)
+        assert resp.status_code == 401, (
+            "非回环绑定 %r 下 /metrics 仍免鉴权（P2-SEC-2）" % host
+        )
 
 
 class TestPrometheusEndpointBackwardCompat:
