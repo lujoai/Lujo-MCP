@@ -3,15 +3,22 @@
 覆盖：
 - python -m app.mcp_server 启动后 stdin/stdout JSON-RPC 握手
 - python -m app.main 启动后 /health 返回 200
-- 进程终止后 PG 连接池正确关闭（无连接泄漏）
+- stdio 子进程在 EOF / 信号退出时的资源回收（见下文 N3 段落）
 
 设计要点：
 - 所有子进程在 finally 中先 terminate 再读 stderr，避免读 stderr 阻塞
 - 断言放在 finally 之后，确保进程已清理
 - 所有 skip 必须给出明确原因（环境变量未配 / 依赖未就绪）
 - 不引入 pytest-asyncio 等新依赖
-- 子进程不读项目根 .env（避免 .env 含未知键触发 pydantic extra_forbidden，
-  即 M9 问题），通过环境变量传完整配置；测试期间 .env 被临时备份
+- 子进程关键配置（STORAGE_BACKEND=memory、API_KEY="" 等）由用例经环境变量
+  显式传入，优先级高于 app.config.Settings 的 env_file 加载
+- P1-TEST-10：旧实现把仓库根真实 .env 原子改名备份、finally 还原（H12，
+  当时为规避 M9 的 pydantic extra_forbidden 启动崩溃）。进程在"移走后、
+  还原前"被杀会让真实配置永久悬空在备份名上。现改为在 pytest tmp_path
+  （仓库外临时目录）中对无害假 .env 重演同一备份/恢复时序，真实 .env
+  全程不被测试触碰（Settings 的 env_file 为仓库根绝对路径且
+  extra="ignore"，M9 的 extra_forbidden 崩溃路径已不存在，无需再搬移
+  真实文件）
 """
 import json
 import os
@@ -22,7 +29,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
@@ -30,47 +36,43 @@ import pytest
 
 from app.config import settings
 
-# 项目根目录（tests/integration/test_process_boundary.py → parents[2]）
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_ENV_PATH = _PROJECT_ROOT / ".env"
-_ENV_BACKUP = _PROJECT_ROOT / ".env.h12_test_bak"
-
 
 # ── .env 隔离 fixture ──
 
 @pytest.fixture
-def _isolated_env():
-    """临时备份项目根 .env，让子进程只通过环境变量接收配置。
+def _isolated_env(tmp_path):
+    """在仓库外临时目录重演 .env 备份/恢复时序，真实 .env 全程不被触碰。
 
-    解决 .env 含未知键（如 POSTGRES_PASSWORD、DATABASE_URL）触发 pydantic
-    extra_forbidden 启动崩溃的问题（M9，不在本任务修复范围）。
+    P1-TEST-10：旧实现直接 ``os.replace`` 仓库根真实 .env 到备份名、
+    finally 还原。进程在"移走后、还原前"被杀（Ctrl-C / OOM / 超时 kill）
+    时 finally 得不到执行，用户的 .env 永久悬空在备份名上，下次启动读不到
+    配置——跑一次测试就可能伤到开发者本机。
 
-    时序：
-    1. fixture 进入：备份 .env → .env.h12_test_bak（原子 rename）
-    2. yield：测试函数启动子进程（读不到 .env，只从 env 读取）
-    3. fixture 退出：恢复 .env.h12_test_bak → .env
+    修法（结构性消除，而非加兜底）：备份/恢复时序原样保留，但作用对象改为
+    pytest ``tmp_path``（仓库外临时目录）里的无害假 .env。测试进程在任何
+    时刻死亡，最坏结果只是系统临时目录里残留一个假文件，由操作系统清理
+    兜底；本模块中不再存在任何指向仓库根 .env 的路径常量。
 
-    子进程启动后已读完配置，不会重新读 .env，所以 fixture 退出时恢复 .env
-    不影响已运行的子进程。
+    假 .env 内容是无害测试值，不从真实 .env 复制任何内容。
     """
-    env_existed = _ENV_PATH.exists()
-    if env_existed:
-        # 原子重命名
-        os.replace(str(_ENV_PATH), str(_ENV_BACKUP))
-        try:
-            yield
-        finally:
-            # 恢复 .env
-            if _ENV_BACKUP.exists():
-                if _ENV_PATH.exists():
-                    # 测试期间又生成了 .env，删掉再恢复
-                    try:
-                        _ENV_PATH.unlink()
-                    except OSError:
-                        pass
-                os.replace(str(_ENV_BACKUP), str(_ENV_PATH))
-    else:
+    fake_env = tmp_path / ".env"
+    fake_env.write_text("STORAGE_BACKEND=memory\n", encoding="utf-8")
+    fake_backup = tmp_path / ".env.h12_test_bak"
+
+    # 与原 H12 时序一致：备份 →（用例运行）→ 恢复，但全程只作用于假文件
+    os.replace(str(fake_env), str(fake_backup))
+    try:
         yield
+    finally:
+        # 恢复（tmp 目录内的假文件）
+        if fake_backup.exists():
+            if fake_env.exists():
+                # 用例期间又生成了 .env，删掉再恢复
+                try:
+                    fake_env.unlink()
+                except OSError:
+                    pass
+            os.replace(str(fake_backup), str(fake_env))
 
 
 # ── 辅助函数 ──
