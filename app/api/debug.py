@@ -30,6 +30,50 @@ logger = logging.getLogger("lujo-mcp.api")
 router = APIRouter(prefix="/api/debug", tags=["debug"])
 
 
+def _augment_context_from_trace(context: dict, trace: list) -> None:
+    """P2-API-1 补位：把 ingest 落库的 trace_data 载荷补进 context["errors"]。
+
+    背景：``build_context`` 的 step 词汇表只认 ``request_start`` /
+    ``response_ready`` / ``error``，而 ``trace_repo.save_trace``（``/ingest/error``
+    与 silent_failure 的落库路径）写的是 ``trace_meta`` / ``trace_link`` /
+    ``trace_data``——于是 ingest 来源的 ``context["errors"]`` 恒空，下游
+    ``_get_error_signal`` 取不到 type/message/fingerprint，KB 精确指纹命中与
+    分析结果回写必然落空；端点却不报错、照样烧一次 LLM（P2-API-1）。
+    ``trace_data`` 载荷的键（type/message/frames/fingerprint）与 errors 条目
+    形状天然一致，无需任何适配层。
+
+    为什么改在调用点而不是 ``build_context``：``build_context`` 有 11 个
+    调用点（含 3 个 MCP 工具，工具面被跨传输 parity 测试锁定），爆炸半径与
+    该缺陷严重度不成比例（CODE_REVIEW §0.6.2 第 10 条硬约束）。
+
+    语义：
+    - **仅当 ``context["errors"]`` 为空时**补位——既有 ``step="error"`` 路径
+      零影响，不会产生重复条目；
+    - 同一 key 下可能有多条 ``trace_data``（``errors.record`` 对同指纹复用
+      error_id，重复上报会追加）——取**最后一条**，与
+      ``trace_repo._rebuild_trace_from_store`` 的既有回读口径一致；
+    - 单条畸形日志只告警不阻断（与 ``build_context`` 风格一致），但不静默
+      让 context 保持空。
+    """
+    if context.get("errors"):
+        return
+    if not trace:
+        return
+    for item in reversed(trace):
+        try:
+            if not isinstance(item, dict) or item.get("step") != "trace_data":
+                continue
+            data = item.get("data")
+            if not isinstance(data, dict):
+                logger.warning("trace_data 载荷非 dict，已跳过该条补位")
+                continue
+            context["errors"] = [data]
+            return
+        except Exception:
+            logger.warning("trace_data 补位解析失败，已跳过该条", exc_info=True)
+            continue
+
+
 @router.post("/run", dependencies=[Depends(require_role("admin", "developer"))])
 def debug_run(req: DebugRequest) -> DebugResponse:
     """执行调试流程：记录请求 → 处理 → 构建上下文"""
@@ -103,6 +147,10 @@ def debug_analyze(req: AnalyzeRequest):
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
+    # P2-API-1：ingest 来源的现场（step=trace_data）补位到 errors，
+    # 必须位于下方 exception 提升循环之前，使提升/KB/回写自然生效
+    _augment_context_from_trace(context, trace)
+
     # 若 errors 中含堆栈帧，提升到 exception（供 LLM 分析）
     for err in context.get("errors", []):
         if isinstance(err, dict) and err.get("frames"):
@@ -150,6 +198,10 @@ async def debug_analyze_stream(req: AnalyzeRequest):
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
+    # P2-API-1：与 /analyze 同口径补位（本端点无 exception 提升循环，
+    # 下游 analyze_stream_async 直接消费 context["errors"]）
+    _augment_context_from_trace(context, trace)
+
     try:
         context["runtime"] = collect_runtime_snapshot()
     except Exception:
@@ -195,6 +247,9 @@ async def debug_analyze_async(req: AnalyzeRequest):
     except Exception as e:
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+    # P2-API-1：与 /analyze 同口径补位（必须位于下方提升循环之前）
+    _augment_context_from_trace(context, trace)
 
     # 与 /analyze 保持一致：errors 中含堆栈帧则提升到 exception
     for err in context.get("errors", []):
