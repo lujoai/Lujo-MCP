@@ -1,5 +1,30 @@
 """集成测试：端到端调试流程"""
 
+import pytest
+
+
+def _assert_two_step_trace(trace: list, index: int) -> None:
+    """P3-TEST-5：单个 request_id 的 trace 必须恰好是本用例 setup 写入的两条。
+
+    期望值由用例自身 setup 推出（``test_concurrent_requests`` 里 5 个
+    request_id × 每个 2 次 ``add_log``），不是 ``len(trace) >= 2`` 这类
+    不可能失败的宽松断言；同时校验每条 data 的 index 归属，使"并发请求
+    互不干扰"这一被断言的语义真的可失败（条数、首尾 step、归属三者都锁）。
+    """
+    assert len(trace) == 2, (
+        f"request_id 的 trace 应恰为 setup 写入的 2 条，实际 {len(trace)} 条："
+        f"{[e.get('step') for e in trace]}"
+    )
+    assert [e.get("step") for e in trace] == ["start", "end"], (
+        f"首/尾 step 应为 start → end，实际 {[e.get('step') for e in trace]}"
+    )
+    assert trace[0].get("data") == {"index": index}, (
+        f"首条 data 应属于本次请求 index={index}，实际 {trace[0].get('data')}"
+    )
+    assert trace[1].get("data") == {"index": index}, (
+        f"末条 data 应属于本次请求 index={index}，实际 {trace[1].get('data')}"
+    )
+
 
 class TestDebugFlow:
 
@@ -47,11 +72,28 @@ class TestDebugFlow:
             add_log(rid, "start", {"index": i})
             add_log(rid, "end", {"index": i})
 
+        # 断言自检（先红后绿）：证明新断面对不合规 trace 确实会失败——
+        # ① 多出一条（旧 >= 2 会放行）② index 归属错位（串场）两种形态都必须红
+        with pytest.raises(AssertionError):
+            _assert_two_step_trace(
+                [
+                    {"step": "start", "data": {"index": 0}},
+                    {"step": "end", "data": {"index": 0}},
+                    {"step": "leak", "data": {"index": 1}},
+                ],
+                0,
+            )
+        with pytest.raises(AssertionError):
+            _assert_two_step_trace(
+                [
+                    {"step": "start", "data": {"index": 1}},
+                    {"step": "end", "data": {"index": 1}},
+                ],
+                0,
+            )
+
         for i, rid in enumerate(ids):
-            trace = get_logs(rid)
-            assert len(trace) >= 2
-            assert trace[0]["step"] == "start"
-            assert trace[-1]["step"] == "end"
+            _assert_two_step_trace(get_logs(rid), i)
 
         for rid in ids:
             delete_logs(rid)

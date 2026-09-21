@@ -1,10 +1,13 @@
 """集成测试：环境启用链路 smoke tests。
 
 这些用例专门验证“需要额外环境或 feature flag 才能启用”的能力：
-- PostgreSQL / asyncpg
 - Redis 状态后端
 - OpenTelemetry
 - 熔断器
+
+（PostgreSQL / asyncpg 曾列在本清单里，但 PG runtime 已在 Step 3 正式移除：
+STORAGE_BACKEND 白名单收窄为仅 memory、PG 实现与测试同批删除，故不再是被
+本文件验证的能力；陈旧 docstring 由 W6/P3-TEST-2 按现状改写。）
 
 默认开发环境下允许 skip；一旦对应环境变量显式启用，则失败应被视为真实问题。
 """

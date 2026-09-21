@@ -7,7 +7,8 @@ Browser SDK V3/V6 端到端联调测试
 3. SDK V6 UI 静默失败自动检测全链路（真实断言：必须真的产出上报）
 4. trace_id 贯穿（SDK 生成 → payload → 服务端存储，真实断言）
 5. /ingest/batch 批量入库
-6. 知识库命中优先返回（受 LLM 环境门禁 + 端点契约限制，见该用例 docstring）
+6. 知识库命中优先返回（断言面 = POST /api/debug/analyze；受 LLM 环境门禁限制，
+   见该用例 docstring）
 
 运行方式：
     .venv/Scripts/python.exe -m pytest tests/e2e/test_sdk_full_chain.py -v
@@ -69,15 +70,26 @@ def _assert_network_trace_payload(data: dict, sdk_trace_id: str, marker: str) ->
 def _assert_kb_hit_priority(first: dict, second: dict) -> None:
     """P1-TEST-6：KB 命中优先级的无条件断言（先断言前置，再断言结论）。
 
+    参数是 `POST /api/debug/analyze` 响应里的 ``analysis`` 对象（即
+    ``analyzer.analyze`` 的返回值，含 analysis / analysis_source /
+    knowledge_base_hit 三个字段）。W6 按 §0.6.2 第 9 条把断言对象从
+    `/ingest/error`（结构上不产出分析字段）迁到真正产出分析结论的端点。
+
     原实现把整段断言包在 `if "analysis" in data1` 里，字段缺失时静默跳过；
     改为无条件断言后，前置不成立会直接失败而不是"测了个寂寞"。
     """
-    assert "analysis" in first, (
-        f"首次响应缺少 analysis 字段，无法据此判定分析来源: {first}"
+    assert isinstance(first, dict) and "analysis" in first, (
+        f"首次分析响应缺少 analysis 字段，无法据此判定分析来源: {first}"
     )
     assert first.get("analysis_source") == "llm", f"首次应走 LLM 分析: {first}"
     assert first.get("knowledge_base_hit") is False, f"首次不应命中知识库: {first}"
-    assert second.get("knowledge_base_hit") is True, f"第二次应命中知识库: {second}"
+    assert isinstance(second, dict) and "analysis" in second, (
+        f"第二次分析响应缺少 analysis 字段: {second}"
+    )
+    assert second.get("knowledge_base_hit") is True, (
+        "第二次应命中知识库（前置：首次 LLM 分析须已把结果回写 KB）: "
+        f"{second}"
+    )
     assert second.get("analysis_source") == "knowledge_base", f"第二次应来自知识库: {second}"
 
 
@@ -513,65 +525,116 @@ def test_knowledge_base_hit_priority(page: Page):
     """
     验证知识库命中优先返回 + 自动沉淀（P1-TEST-6：无条件断言）
 
+    端点归属（W6 按 §0.6.2 第 9 条裁定迁移）：
+    - `POST /ingest/error` 只承诺「落库成功 + trace_id 可回查」，其响应体
+      {trace_id, saved, frame_count}（app/mcp/tools/ingest_api.py）不含分析字段；
+    - analysis / analysis_source / knowledge_base_hit 只由分析链
+      （app/llm/analyzer.py + app/llm/kb_integration.py）产生，HTTP 入口是
+      `POST /api/debug/analyze`（app/api/debug.py）。
+
     步骤：
-    1. 先通过 /ingest/error 上报一个错误，断言响应带 LLM 分析结果（analysis）
-    2. 再次上报相同指纹的错误
-    3. 断言第二次命中知识库（knowledge_base_hit=true / analysis_source=knowledge_base）
+    1. `POST /ingest/error` 上报一个错误 → 断言 saved / frame_count，并断言返回的
+       trace_id 可通过 `GET /api/dashboard/trace/{trace_id}` 回查（回查结果含本次
+       上报消息的 marker，证明"落库成功 + trace_id 可回查"）
+    2. `POST /api/debug/analyze` 首次 → LLM 分析（analysis_source=llm，
+       knowledge_base_hit=false）
+    3. 再次 `POST /api/debug/analyze` → 断言命中知识库（knowledge_base_hit=true，
+       analysis_source=knowledge_base）
 
     改动说明：原实现把全部结论断言包在 `if "analysis" in data1` 里，字段缺失时
     整段静默跳过——用例无论功能好坏都绿。现改为无条件断言：先断言前置成立
-    （首次响应必须含 analysis 三字段），再断言结论。
+    （首次分析必须含 analysis 三字段），再断言结论。
 
     注意（既有环境门禁，未新增）：需要 LLM 配置才能完整测试，否则跳过。
 
-    ⚠️ 已知契约缺口（待裁定，未在本包抹平）：`POST /ingest/error`
-    （app/api/ingest.py → app/mcp/tools/ingest_api.py::tool_ingest_error）只返回
-    {trace_id, saved, frame_count}，不含 analysis / analysis_source /
-    knowledge_base_hit——这三个字段只在 /api/debug/analyze 的分析链路上产生。
-    因此「先断言前置成立」这一步在当前契约下必然失败，详见 W4 执行报告。
+    变更记录（W6，取代原「⚠️ 已知契约缺口（待裁定）」段落）：原用例在
+    `/ingest/error` 上断言分析字段——该端点结构上不产出分析字段，这是用例写错了
+    对象、不是产品缺陷。裁定结论：方案 A（给 /ingest/error 加分析回执）永久否决
+    （等于把 LLM 调用挂到采集热路径，违反产品定位与 Architecture Frozen 第 5 条）；
+    采用方案 B：断言迁到真正产出分析结论的 `POST /api/debug/analyze`，
+    `/ingest/error` 只保留它真正承诺的断言；未向 /ingest/error 索取分析回执，
+    也未给它新增任何 LLM 调用。
+
+    ⚠️ W6 实测边界（停点上报，本包未改产品代码）：本用例在本机恒 skip
+    （health.llm_configured=False），且仓库外只读取证显示 `/api/debug/analyze`
+    的 context 组装（app/api/debug.py → build_context）只提升 `step=="error"`
+    条目，而 `/ingest/error` 落库的 step 是 `trace_meta` / `trace_data` →
+    分析链取不到异常指纹 → KB 查询必 miss、分析回写被 skipped，故第 3 步在
+    LLM 配置环境下当前必然红。根因在 `app/**`（批次 1 禁改），按 §0.6.9 ③
+    停点上报等裁决；本包未放宽断言、未新增 skip、未给 /ingest/error 加分析回执。
     """
+    import uuid
+
     # 检查 LLM 是否配置
     resp = page.request.get(f"{BASE_URL}/health")
     health = resp.json()
     if not health.get("llm_configured"):
         pytest.skip("LLM 未配置，跳过知识库测试")
 
-    # 上报第一个错误
+    api_headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
+
+    # 1) /ingest/error：只断言它真正承诺的（落库成功 + trace_id 可回查）
+    marker = f"e2e-kb-{uuid.uuid4().hex[:12]}"
     payload1 = {
         "exc_type": "KnowledgeBaseTestError",
-        "message": "Test error for knowledge base",
+        "message": f"Test error for knowledge base {marker}",
         "frames": [{"file": "test.py", "line": 1, "function": "test_func"}],
         "source": "e2e_test"
     }
 
     resp1 = page.request.post(
-        f"{BASE_URL}/ingest/error",
-        headers={"X-API-Key": API_KEY, "Content-Type": "application/json"},
-        data=json.dumps(payload1)
+        f"{BASE_URL}/ingest/error", headers=api_headers, data=json.dumps(payload1)
     )
 
-    assert resp1.status == 200
+    assert resp1.status == 200, f"/ingest/error 应返回 200，实际 {resp1.status}"
     data1 = resp1.json()
+    assert data1.get("saved") is True, f"/ingest/error 未落库: {data1}"
+    assert data1.get("frame_count") == len(payload1["frames"]), (
+        f"frame_count 与上报帧数不一致: {data1}"
+    )
+    trace_id = data1.get("trace_id")
+    assert trace_id, f"/ingest/error 未返回 trace_id: {data1}"
 
-    # 上报第二个相同错误（第二次应命中知识库）
-    resp2 = page.request.post(
-        f"{BASE_URL}/ingest/error",
-        headers={"X-API-Key": API_KEY, "Content-Type": "application/json"},
-        data=json.dumps(payload1)
+    detail = page.request.get(
+        f"{BASE_URL}/api/dashboard/trace/{trace_id}", headers=api_headers
+    )
+    assert detail.status == 200, (
+        f"trace_id={trace_id} 不可回查：GET /api/dashboard/trace/{{trace_id}} "
+        f"返回 {detail.status}: {detail.text()[:200]}"
+    )
+    detail_data = detail.json()
+    assert detail_data.get("trace_id") == trace_id, f"回查到的 trace 不匹配: {detail_data}"
+    assert marker in json.dumps(detail_data.get("exception") or {}), (
+        f"回查到的 trace 不含本次上报消息（marker={marker}）: "
+        f"{detail_data.get('exception')}"
     )
 
-    assert resp2.status == 200
-    data2 = resp2.json()
+    # 2)/3) 分析链：KB 命中优先级只能在这里断言（唯一产出分析字段的 HTTP 入口）
+    def _analyze() -> dict:
+        r = page.request.post(
+            f"{BASE_URL}/api/debug/analyze",
+            headers=api_headers,
+            data=json.dumps({"request_id": trace_id}),
+        )
+        assert r.status == 200, (
+            f"/api/debug/analyze 应返回 200，实际 {r.status}: {r.text()[:200]}"
+        )
+        body = r.json()
+        assert body.get("request_id") == trace_id, f"分析响应 request_id 不匹配: {body}"
+        return body.get("analysis")
 
-    # 断言自检（先红后绿）：证明这套断言对不合规响应确实会失败
+    first = _analyze()
+    second = _analyze()
+
+    # 断言自检（先红后绿）：证明这套断言对不合规分析结果确实会失败
     with pytest.raises(AssertionError):
         _assert_kb_hit_priority(
             {"analysis": {}, "analysis_source": "knowledge_base", "knowledge_base_hit": True},
             {"analysis": {}, "analysis_source": "llm", "knowledge_base_hit": False},
         )
 
-    # 无条件断言：前置（首次响应须含分析结论）+ 结论（第二次命中知识库）
-    _assert_kb_hit_priority(data1, data2)
+    # 无条件断言：前置（首次分析须含分析结论）+ 结论（第二次命中知识库）
+    _assert_kb_hit_priority(first, second)
 
 
 if __name__ == "__main__":

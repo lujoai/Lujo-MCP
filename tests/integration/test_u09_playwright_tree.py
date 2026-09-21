@@ -8,8 +8,11 @@
 - ``chromium user-data-dir`` 锁：本链路 chromium 为非持久化（headless 无
   ``--user-data-dir``），锁核对如实记录为 n/a。
 
-取证输出：``docs/internal/c_batch/evidence__w3_5__u09_evidence.json``（可复现命令 =
-本文件的 pytest 运行）。
+取证输出（**仓库外**，不写工作树）：``tempfile.gettempdir()/lujo_u09_evidence/``
+下的 ``evidence__w3_5__u09_evidence.json``（Windows 上即 ``%TEMP%`` 目录）。
+可复现命令 = ``.venv/Scripts/python.exe -m pytest tests/integration/test_u09_playwright_tree.py -q``，
+取证 JSON 落上述临时目录（P3-TEST-3：此前写进工作树的 ``docs/internal/c_batch/``，
+即便该目录已 gitignore，产物也不应留在工作树内）。
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import os
 import pickle
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -37,9 +41,8 @@ pytestmark = [
     ),
 ]
 
-_EVIDENCE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "docs", "internal", "c_batch"
-)
+# P3-TEST-3：取证 JSON 落仓库外临时目录（%TEMP%），不再写工作树
+_EVIDENCE_DIR = os.path.join(tempfile.gettempdir(), "lujo_u09_evidence")
 
 _BROWSER_IMAGES = {
     "chrome.exe", "chrome-headless-shell.exe", "chromedriver.exe", "headless_shell.exe",
@@ -87,11 +90,28 @@ def _page_server():
     return server
 
 
-def test_u09_real_playwright_tree_reclaim(tmp_path):
+@pytest.fixture
+def _ui_allow_private(monkeypatch):
+    """P1-TEST-9：把 ``UI_URL_ALLOW_PRIVATE`` 的开启收敛到 fixture，用例结束自动还原。
+
+    原写法 ``os.environ.setdefault("UI_URL_ALLOW_PRIVATE", "true")`` 只设不还原，
+    该变量会泄漏给同进程后续用例（用例 A 设置 → 用例 B 读到），使本文件的执行
+    顺序对后续用例产生隐式影响。``monkeypatch.setenv`` 在 teardown 时把变量恢复
+    为改动前的状态（原本不存在则删除）。
+
+    边界（§0.6.9 ⑤）：只修环境变量泄漏这一件事，本文件的时序 / 样本数 N /
+    断言 / skip 逻辑一律未改动。
+    """
+    monkeypatch.setenv("UI_URL_ALLOW_PRIVATE", "true")
+    yield
+
+
+def test_u09_real_playwright_tree_reclaim(tmp_path, _ui_allow_private):
     """U09：真实 auto_test（chromium headless）超时终止 → 整树回收取证。
 
-    样本 N=3；取证 JSON 落 docs/internal/c_batch/，文件名保留波次前缀。定级纪律：
-    残留以快照差集为准，不定级为「未看到」。
+    样本 N=3；取证 JSON 落**仓库外**临时目录 ``tempfile.gettempdir()/lujo_u09_evidence/``
+    （Windows 上即 %TEMP%），文件名保留波次前缀。定级纪律：残留以快照差集为准，
+    不定级为「未看到」。
     """
     from app.runtime.verifier import ui_runner
 
@@ -99,7 +119,6 @@ def test_u09_real_playwright_tree_reclaim(tmp_path):
         pytest.skip("playwright 未安装（环境理由）")
 
     baseline = _snapshot_browser_pids()  # 运行前基线（本机可能已有无关 chrome）
-    os.environ.setdefault("UI_URL_ALLOW_PRIVATE", "true")
     samples: list[dict] = []
 
     try:

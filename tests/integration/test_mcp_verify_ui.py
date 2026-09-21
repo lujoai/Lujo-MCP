@@ -486,6 +486,29 @@ class TestVerifyUiDoesNotBlockEventLoop:
         asyncio.run(scenario())
 
 
+def _fail_stdio_case(
+    stage: str, exc: BaseException, *, elapsed_s: float, budget_s: float
+) -> None:
+    """把 stdio 子进程的「启动失败 / 响应超时」登记为**测试失败**（P1-TEST-7）。
+
+    与「环境缺失门禁」的边界（后者原样保留，未动）：playwright / mcp SDK
+    未安装之类"环境根本不具备"仍是 pytest.skip；而本文件里被测链路**自己**
+    拉不起子进程、或在预算内不回响应，属被测功能失败，必须让用例红。
+    原实现用 pytest.skip 把这两类失败伪装成"环境异常"（"可能环境异常"），
+    使 verify_ui 的失效模式长期零覆盖——断言失败被 skip 吸收后，用例无论
+    功能好坏都绿。超时预算数值（30s / 60s）保持原样，未被放宽。
+
+    失败信息保留原有诊断内容（异常类型 + 消息），并补上耗时与预算：
+    stdio SDK 客户端不向调用方暴露子进程 stderr，故无法在此附 stderr 摘要。
+    """
+    raise AssertionError(
+        f"stdio MCP 链路{stage}：{type(exc).__name__}: {exc}；"
+        f"elapsed={elapsed_s:.1f}s / budget={budget_s:.0f}s。"
+        "P1-TEST-7：子进程启动失败或响应超时均为被测链路自身失败，"
+        "不是环境缺失门禁，不得用 pytest.skip 表达。"
+    ) from exc
+
+
 class TestVerifyUiViaStdioSubprocess:
     """经真实 stdio MCP 通道调用 verify_ui —— 拉起 app.mcp_server 子进程。
 
@@ -543,12 +566,32 @@ class TestVerifyUiViaStdioSubprocess:
                         assert payload["matched"] is False
                         assert payload["error"] == "must provide spec or spec_id"
             except (OSError, RuntimeError) as e:
-                pytest.skip(f"stdio 子进程启动失败，跳过：{type(e).__name__}: {e}")
+                _fail_stdio_case(
+                    "子进程启动失败",
+                    e,
+                    elapsed_s=time.monotonic() - started,
+                    budget_s=30.0,
+                )
 
+        # 断言自检（先红后绿）：证明启动失败/超时会被转成 AssertionError 而不是 skip
+        with pytest.raises(AssertionError):
+            _fail_stdio_case(
+                "响应超时（>30s）",
+                asyncio.TimeoutError(),
+                elapsed_s=30.0,
+                budget_s=30.0,
+            )
+
+        started = time.monotonic()
         try:
             asyncio.run(asyncio.wait_for(scenario(), timeout=30.0))
-        except asyncio.TimeoutError:
-            pytest.skip("stdio 子进程响应超时（>30s），可能环境异常")
+        except asyncio.TimeoutError as e:
+            _fail_stdio_case(
+                "响应超时（>30s）",
+                e,
+                elapsed_s=time.monotonic() - started,
+                budget_s=30.0,
+            )
 
 
 class TestU04RealStdioHeavyChain:
@@ -607,10 +650,16 @@ class TestU04RealStdioHeavyChain:
                     payload = json.loads(result.content[0].text)
                     assert payload.get("saved") is True
 
+        started = time.monotonic()
         try:
             asyncio.run(asyncio.wait_for(scenario(), timeout=60.0))
-        except asyncio.TimeoutError:
-            pytest.skip("stdio 子进程响应超时（>60s），可能环境异常")
+        except asyncio.TimeoutError as e:
+            _fail_stdio_case(
+                "响应超时（>60s）",
+                e,
+                elapsed_s=time.monotonic() - started,
+                budget_s=60.0,
+            )
 
     def test_timeout_via_tiny_deadline_still_pure_stdout(self):
         """超时态：TOOL_TIMEOUT_SECONDS=0（子进程 spawn 开销必然超限）→
@@ -630,7 +679,13 @@ class TestU04RealStdioHeavyChain:
                     text = result.content[0].text
                     assert ("timed out" in text) or ("超时" in text) or ("timeout" in text)
 
+        started = time.monotonic()
         try:
             asyncio.run(asyncio.wait_for(scenario(), timeout=60.0))
-        except asyncio.TimeoutError:
-            pytest.skip("stdio 子进程响应超时（>60s），可能环境异常")
+        except asyncio.TimeoutError as e:
+            _fail_stdio_case(
+                "响应超时（>60s）",
+                e,
+                elapsed_s=time.monotonic() - started,
+                budget_s=60.0,
+            )
