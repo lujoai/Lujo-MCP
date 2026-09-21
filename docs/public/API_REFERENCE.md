@@ -400,7 +400,6 @@ Node SDK 在发送前递归脱敏错误、网络记录和 `extra`；默认敏感
 ## 相关文档
 
 - [README.md](../../README.md) — 项目总览与快速启动
-- [DESIGN.md](./DESIGN.md) — 技术设计
-- [KNOWLEDGE_BASE.md](./KNOWLEDGE_BASE.md) — 知识库（RAG 经验积累）
+- [DESIGN.md](./DESIGN.md) — 技术设计与知识库（RAG 经验积累）架构
 - [SDK_GUIDE.md](./SDK_GUIDE.md) — 浏览器 SDK 使用手册
 - [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — 异常排查

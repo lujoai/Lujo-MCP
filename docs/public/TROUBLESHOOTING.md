@@ -1060,9 +1060,10 @@ DEBUG=true    # 仅开发环境！
 
 ### 获取帮助
 
-1. 查阅 [发布说明 / Release Notes](./RELEASE_NOTES.md) 了解版本变更
-2. 查阅 [启动前检查清单 / Pre-flight Checklist](./PREFLIGHT_CHECKLIST.md) 全面检查环境
-3. 查阅内部文档了解功能详情与已知问题
+1. 查阅 [变更与发布说明 / CHANGELOG](./CHANGELOG.md) 了解版本演进与最新修复
+2. 查阅 [启动前检查与功能启用综合手册 / Pre-flight Checklist](./PREFLIGHT_CHECKLIST.md) 全面检查环境
+3. 查阅 [API_REFERENCE.md](./API_REFERENCE.md) 与 [SDK_GUIDE.md](./SDK_GUIDE.md) 核实接口契约
+4. 在 GitHub Issues 提交问题反馈与复现现场日志
 
 ---
 

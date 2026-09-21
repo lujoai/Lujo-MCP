@@ -2582,3 +2582,84 @@ DebugContext.resolved_frames（21 字段）；exception.frames 保留 minified �
 - 新增 94 项：`test_sourcemap_resolver.py`（43：VLQ 往返/段边界/sourcesContent/缓存/性能）、`test_sourcemap_store.py`（29：TTL/LRU/自动选路/白名单/端点）、`test_sourcemap_integration.py`（22：工具 handler/builder 降级矩阵/schema 兼容/Quality 联动/A-B 实证）。
 - Benchmark Case 6 `frontend_minified_sourcemap` + `frontend_sourcemap_ab()`：断言还原后 QualityScorer 评分 > 还原前（CODE_SNIPPET 维度从缺失到命中）——v0.4.0「Debug Context 价值可量化」目标的直接证据。
 - 全量回归：1087 passed / 6 skipped / 0 failed；ruff All checks passed。
+
+---
+
+## 22. 架构冻结与历史决议（Architecture Frozen & Historical Decisions）
+
+> 整合自原 `ARCHITECTURE_REVIEW_V1.md`。为保证代码演进中系统的纯净性与可维护性，确立以下架构边界规范与历史决议。
+
+### 22.1 正向依赖规则（Dependency Rules）
+
+```
+api / main / mcp_server ──▶ mcp ──▶ runtime ──▶ config
+                          └──▶ llm / agent / rag（编排）
+api ──▶ runtime · llm · agent · rag（HTTP facade 组合）
+agent ──▶ runtime（公开能力）· llm · rag
+llm ──▶ rag（知识检索）
+rag ──▶ 外部向量库（qdrant）
+```
+
+### 22.2 六大核心不变量
+
+1. **Runtime 纯净性**：Runtime 核心层绝对禁止反向依赖 `app/mcp`、`app/agent`、`app/rag`、`app/llm` 或 `app/api`。
+2. **MCP 保持纯协议**：`app/mcp` 只承载 JSON-RPC 协议、工具注册与传输通道；业务实现一律下沉 runtime。
+3. **Agent 走公开接口**：Agent 访问 trace/context/verifier 只能通过 `app.runtime` 公开符号，禁止触碰底层 storage 实现。
+4. **LLM 不做状态存储**：LLM 仅负责模型交互与 Prompt 编排，不得自行管理持久化数据。
+5. **RAG 专职检索**：RAG 专注于经验知识检索与向量存储，不修改运行时 trace。
+6. **边界禁止逆流**：任何跨层交互必须通过公开符号，严禁破坏单向依赖流水线。
+
+### 22.3 历史架构决议记录（ADR / Findings）
+
+- **F1（已接受）— tools 直接调用 LLM**：`mcp/tools` 作为 Application Adapter / Composition Layer，负责编排 runtime/llm/agent。不额外引入过度封装的 service facade 层。
+- **F2（已接受）— tools 直接调用 Agent**：与 F1 一致，tools 作为编排边界。
+- **F3（已批准）— LLM 显式依赖 RAG**：允许 `llm → rag` 获取检索增强上下文；严格禁止反向 `rag → llm`。
+- **F4（已清理）— app/services 空壳包删除**：原为占位空包，已于 2026-09-21 正式清理删除，不引入冗余的 service 层。
+- **F5（已完成）— Schema 职责拆分**：清晰拆分 `TraceStep`（流程步骤模型）与 `TraceEntry`（完整链路上下文模型），消除模型职责重叠。
+
+---
+
+## 23. 调试经验知识库架构（Knowledge Base & Experience RAG）
+
+> 整合自原 `KNOWLEDGE_BASE.md`。Lujo-MCP 不只是让 AI 看到 Bug 现场，更将每次调试的结论沉淀为可复用的经验；这些经验跨进程重启保留、越验证越可信。
+
+### 23.1 写穿流水线（Write-through Pipeline）
+
+每次 AI 调试产生的结论都会实时落库（write-through），不等定时同步、不丢最后一刻的数据：
+
+```text
+AI 调试完成
+    │
+    ▼
+KnowledgeBaseStore.upsert()          ← 进程内主存（毫秒级命中）
+    │  ├── analysis（根因分析，JSON）
+    │  ├── fix_suggestion（修复建议）
+    │  └── fingerprint（错误指纹，主键去重）
+    │
+    ▼ 同步写穿
+kb_entries（本地 SQLite 笔记本）       ← 持久层（跨重启，工作目录 lujo-kb.sqlite3）
+```
+
+### 23.2 三级指纹检索机制
+
+同一个 Bug 换了变量值、换了报错消息也能命中历史经验：
+
+- **L1 精确指纹** —— 完全相同的错误直接命中。
+- **L1.5 归一化指纹** —— 去掉动态变量与内存地址后的“模式指纹”匹配（例如 `IndexError: list index out of range at line 42` 归一为模式）。
+- **L2 类型级 Jaccard** —— 同类型异常兜底相似度召回。
+
+### 23.3 置信度进化体系
+
+经验不是写完就定型的，每条经验带两个动态演进统计字段：
+
+| 字段 | 含义 | 进化机制 |
+|------|------|----------|
+| `verify_count` | 验证次数 | 每次该经验的修复建议被验证成功（verifier）时累加 1 |
+| `case_confidence` | 置信度 | 只升不降（取历史最大值），反复验证成功的方案优先复用 |
+
+### 23.4 本地持久化与启动回灌
+
+- **本地 SQLite 笔记本**：`KB_PERSIST_ENABLED=true`（默认开启），首次写入自动建表，零配置、免安装外部数据库，数据完全不出本机。
+- **启动回灌（Load on Startup）**：服务重启时按 `updated_at` 从持久层加载最近 `max_entries` 条经验正序插入内存字典，热数据秒级就绪。
+
+

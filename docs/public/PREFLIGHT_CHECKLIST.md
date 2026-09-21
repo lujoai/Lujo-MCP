@@ -1,8 +1,9 @@
-# 启动前检查清单 / Pre-flight Checklist
+# 启动前检查与功能启用综合手册 / Pre-flight Checklist & Enablement Guide
 
 **适用版本 / Applicable Version**: v0.9.1
-**最后更新 / Last Updated**: 2026-09-14
+**最后更新 / Last Updated**: 2026-09-21
 
+> **说明**：本文档已整合原独立文件 `ENABLEMENT_GUIDE.md`（功能启用指南）全部内容，为 Lujo-MCP 的环境部署、配置检查与可选功能启用（Redis、Playwright、熔断器、OTel）提供一站式操作与验证手册。
 > **发布状态**：v0.9.1 已发布（npm registry `latest=0.9.1`）。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。发布页：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.1。
 
 ---
@@ -282,6 +283,16 @@ cp .env.example .env
 
 > 注：`CB_*_WINDOW_SIZE` 已随 v0.5.0 死配置收敛移除（pybreaker 用 fail_max 计数 + reset_timeout 复位，无时间窗参数）。
 
+**启用与验证命令**：
+```bash
+# 单元测试验证
+python -m pytest tests/unit/test_circuit_breaker.py -q
+
+# 真实环境集成验证
+python -m pytest tests/integration/test_runtime_enablement.py -q -k circuit
+python -m pytest tests/integration/test_circuit_breaker_recovery.py -q
+```
+
 ---
 
 ## 4. 数据库（PostgreSQL 已移除）
@@ -330,6 +341,14 @@ redis-cli CONFIG GET maxmemory-policy
 #   maxmemory-policy: allkeys-lru
 
 # 判定标准 / Pass Criteria: maxmemory > 0 且策略合理
+```
+
+### 5.3 启用与验证测试
+
+```bash
+# 验证 Redis 状态后端与缓存集成
+python -m pytest tests/integration/test_runtime_enablement.py -q -k redis
+python -m pytest tests/integration/test_redis_cache_integration.py -q
 ```
 
 ---
@@ -470,6 +489,14 @@ curl -I <target_url>
 #     或将主机添加到 UI_URL_ALLOWLIST
 ```
 
+### 7.3 启用与验证测试
+
+```bash
+# 验证 UI 验证与浏览器真实交互
+python -m pytest tests/integration/test_mcp_verify_ui.py -q
+python -m pytest tests/integration/test_ui_verify_live.py -q
+```
+
 ---
 
 ## 8. 可观测性检查 / Observability Check
@@ -504,6 +531,15 @@ curl http://localhost:8000/metrics
 
 # 判定标准 / Pass Criteria: 返回 Prometheus 文本格式指标数据
 # 注意: 如 METRICS_AUTH_ENABLED=true，需携带 API_KEY
+```
+
+### 8.3 启用与验证测试
+
+```bash
+# 验证 OpenTelemetry 埋点与上报集成
+python -m pytest tests/unit/test_otel.py -q
+python -m pytest tests/integration/test_runtime_enablement.py -q -k otel
+python -m pytest tests/integration/test_otel_collector_integration.py -q
 ```
 
 ---
@@ -762,7 +798,7 @@ Write-Host "=== Check Complete ==="
 
 ## 相关文档 / Related Documents
 
-- [发布说明 / Release Notes](./RELEASE_NOTES.md)
+- [变更与发布说明 / CHANGELOG & Release Notes](./CHANGELOG.md)
 - [异常排查指南 / Troubleshooting Guide](./TROUBLESHOOTING.md)
 - [环境配置模板 / Environment Template](../../.env.example)
 - [Docker Compose 配置](../../docker-compose.yaml)

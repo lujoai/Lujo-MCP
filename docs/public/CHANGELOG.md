@@ -1,7 +1,7 @@
-# 变更记录（CHANGELOG）
+# 变更与发行记录（CHANGELOG & Release Notes）
 
-> 本文件记录 Lujo-MCP 项目对外文档与代码的变更历史。
-> 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+> 本文件整合了 Lujo-MCP 项目历次发布的详细变更日志（Changelog）与发行说明（Release Notes），为项目版本演进与发布历史的**单一真源**（原 `RELEASE_NOTES.md` 已并入本文件）。
+> 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
 

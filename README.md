@@ -29,7 +29,7 @@
 }
 ```
 
-> **版本口径**：省略 `@0.9.1` 时 npx 会取 npm `latest`（当前 latest 即 0.9.1）。npm 已发布包与仓库 `main` 开发分支不完全等同——`main` 上可能包含尚未发布的维护提交（发布策略见 [RELEASE_NOTES.md](./docs/public/RELEASE_NOTES.md)）；以 npm registry 实际版本为准。
+> **版本口径**：省略 `@0.9.1` 时 npx 会取 npm `latest`（当前 latest 即 0.9.1）。npm 已发布包与仓库 `main` 开发分支不完全等同——`main` 上可能包含尚未发布的维护提交（发布策略见 [CHANGELOG.md](./docs/public/CHANGELOG.md)）；以 npm registry 实际版本为准。
 >
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
@@ -80,7 +80,7 @@ npm install -g @lujoai/lujo-mcp@0.9.1
 - **宿主智能体（Claude / Codex / Cursor / Trae…）负责大模型推理**。你平时在宿主 IDE 里对话、让它改代码，用的是宿主自带的模型能力。
 - **Lujo 只负责一件事：采集、关联、查询真实运行现场**。它把控制台异常、网络失败、UI 事件链、静默失败和调用堆栈组装成结构化现场，喂给宿主 AI 判断。Lujo 不是另一个聊天 Agent，也不替代宿主。
 - **正常通过 MCP 使用 Lujo，不需要给 Lujo 配置任何大模型 API Key。** 推理由宿主完成；Lujo 的内置 LLM 分析是可选项（见下方「如何开启 LLM 分析」），与能不能用 MCP 工具无关。
-- 仓库中的 `BENCHMARK_LLM_BASE_URL` / `BENCHMARK_LLM_API_KEY` / `BENCHMARK_LLM_MODEL` 环境变量**只服务于独立的真实 LLM Benchmark runner（实验工具，见 `docs/internal/BENCHMARK.md`）**，与日常 MCP 调试无关，正常使用完全不需要配置。
+- 仓库中的 `BENCHMARK_LLM_BASE_URL` / `BENCHMARK_LLM_API_KEY` / `BENCHMARK_LLM_MODEL` 环境变量**只服务于独立的真实 LLM Benchmark runner（基准评测实验工具）**，与日常 MCP 调试无关，正常使用完全不需要配置。
 
 ### 两条链路：MCP 调用链 ≠ 浏览器采集链
 
@@ -466,15 +466,11 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 | **接入与实战** | 📖 [DEMO.md](./docs/public/DEMO.md) | 端到端实战演示（以 React 登录 Bug 为例的完整调试链路与零依赖样例） |
 | | 💻 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | Browser SDK 与 Node SDK 使用手册（运行时边界、上报、脱敏、重试与体积截断限制） |
 | | 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | 18 个 MCP 工具详细入参、返回值、双传输错误码规范与 REST 端点参考 |
-| **系统架构** | 🏗️ [DESIGN.md](./docs/public/DESIGN.md) | 核心六层系统架构、数据流转设计与架构分层规则 |
-| | 🧠 [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md) | 调试经验知识库：指纹匹配、跨会话沉淀与本地 SQLite 笔记本持久化机制 |
+| **系统架构** | 🏗️ [DESIGN.md](./docs/public/DESIGN.md) | 核心系统架构、调试经验知识库（RAG 进化机制）与架构冻结规范（整合原 KNOWLEDGE_BASE 与 ARCHITECTURE_REVIEW） |
 | | 📋 [PRD.md](./docs/public/PRD.md) | 产品功能需求规格与设计边界承诺 |
-| | 🌐 [PROJECT_SUMMARY.md](./docs/public/PROJECT_SUMMARY.md) | 项目技术全景与能力模块速查 |
-| **运维与排障** | 🚦 [PREFLIGHT_CHECKLIST.md](./docs/public/PREFLIGHT_CHECKLIST.md) | 环境依赖、回环绑定验证、Docker 部署前预检清单 |
+| **部署与排障** | 🚦 [PREFLIGHT_CHECKLIST.md](./docs/public/PREFLIGHT_CHECKLIST.md) | 环境依赖、功能启用（Redis/Playwright/OTel）与 Docker 部署前预检综合手册（整合原 ENABLEMENT_GUIDE） |
 | | 🛠️ [TROUBLESHOOTING.md](./docs/public/TROUBLESHOOTING.md) | 启动异常、配置错误、网络与 MCP 协议异常排查指南 |
-| **发版与记录** | 📜 [CHANGELOG.md](./docs/public/CHANGELOG.md) | 完整版本变更历史与未发布维护批次修复记录 |
-| | 📝 [RELEASE_NOTES.md](./docs/public/RELEASE_NOTES.md) | 历史版本发布说明与里程碑功能总结 |
-| | 🏛️ [ARCHITECTURE_REVIEW_V1.md](./docs/public/ARCHITECTURE_REVIEW_V1.md) | 架构审查历史决议与边界归档记录 |
+| **发版与演进** | 📜 [CHANGELOG.md](./docs/public/CHANGELOG.md) | 完整版本变更历史、各版本发行说明（Release Notes）与未发布维护批次修复记录 |
 
 ---
 
