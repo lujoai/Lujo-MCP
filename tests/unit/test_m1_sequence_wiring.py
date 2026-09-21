@@ -61,8 +61,13 @@ def test_cleanup_resources_m1_order_terminate_before_pool_shutdown(monkeypatch):
 
     fake_light_exec = _FakeExecutor(order)
     fake_stdio_exec = _FakeExecutor(order)
+    fake_heavy_dispatch_exec = _FakeExecutor(order)
     monkeypatch.setattr(protocol_server, "_LIGHT_TOOL_EXECUTOR", fake_light_exec)
     monkeypatch.setattr(stdio, "_TOOL_EXECUTOR", fake_stdio_exec)
+    # W12：heavy 派发池也进 M1 ⑤（此前它不存在；不 fake 掉会真关生产池）
+    monkeypatch.setattr(
+        protocol_server, "_HEAVY_DISPATCH_EXECUTOR", fake_heavy_dispatch_exec
+    )
 
     # B23 幂等键重置（隔离本用例）
     monkeypatch.setattr(stdio, "_cleaned_executor", None)
@@ -75,8 +80,8 @@ def test_cleanup_resources_m1_order_terminate_before_pool_shutdown(monkeypatch):
     assert order[0] == "step3_terminate"
     shutdown_positions = [i for i, e in enumerate(order) if e[0] == "executor_shutdown"]
     assert all(pos > order.index("step3_terminate") for pos in shutdown_positions)
-    # 两个池分别 shutdown（不统一双池），且 wait=False + cancel_futures
-    assert len(shutdown_positions) == 2
+    # 三个池分别 shutdown（不合并任何两池），且 wait=False + cancel_futures
+    assert len(shutdown_positions) == 3
     for pos in shutdown_positions:
         _, wait, cancel = order[pos]
         assert wait is False and cancel is True
@@ -110,15 +115,23 @@ def test_cleanup_resources_b23_idempotency_preserved(monkeypatch):
 
     monkeypatch.setattr(protocol_server, "_LIGHT_TOOL_EXECUTOR", _FakeExecutor())
     monkeypatch.setattr(stdio, "_TOOL_EXECUTOR", _FakeExecutor())
+    monkeypatch.setattr(protocol_server, "_HEAVY_DISPATCH_EXECUTOR", _FakeExecutor())
 
     stdio.cleanup_resources()
     stdio.cleanup_resources()  # 同代幂等
     assert calls["terminate"] == 1
-    assert calls["shutdown"] == 2  # 两个池各一次
+    assert calls["shutdown"] == 3  # 三个池各一次（W12 起含 heavy 派发池）
 
 
 def test_run_heavy_tool_blocking_rejects_when_closing(monkeypatch):
-    """① 停止接纳：closing 置位后 run_heavy_tool_blocking 拒绝（不再 spawn）。"""
+    """① 停止接纳：closing 置位后 run_heavy_tool_blocking 拒绝（不再 spawn）。
+
+    **W12 有意变更既有预期**：原断言写的是 ``pytest.raises(asyncio.TimeoutError)``
+    ——那正是缺陷本身（P1-HEAVY-2 / P3-HEAVY-5：closing 被当成超时，两个传输
+    据此错标 TOOL_TIMEOUT 并虚构「>60s」文案、指标误记 timeout）。现按
+    ``executor_lifecycle`` 早已写明的「服务关闭中 / TOOL_BUSY」语义，拒绝由
+    ``HeavyServiceClosing``（RuntimeError 子类，**不是** TimeoutError）承载。
+    """
     import asyncio
 
     import app.mcp.protocol.heavy_process as hp
@@ -141,12 +154,12 @@ def test_run_heavy_tool_blocking_rejects_when_closing(monkeypatch):
             timeout=10,
         )
 
-    try:
-        with pytest.raises(asyncio.TimeoutError):
-            asyncio.run(_scenario())
-        assert spawned == []  # closing 后未 spawn
-    finally:
-        pass
+    with pytest.raises(hp.HeavyServiceClosing) as excinfo:
+        asyncio.run(_scenario())
+    assert not isinstance(excinfo.value, asyncio.TimeoutError), (
+        "关闭中拒绝不得再由 TimeoutError 承载，否则又会被映射成 TOOL_TIMEOUT"
+    )
+    assert spawned == []  # closing 后未 spawn
 
 
 def test_lifespan_wires_m1_sequence():

@@ -16,8 +16,19 @@
    **停止重试**——当前（未收编）尝试本身就是 direct-child，继续用它，不得用
    superseded 标记冒充退出。
 
+⚠️ **direct-child 的已知边界（W12 / P3-HEAVY-3；无干净修法，勿当待办重开）**：
+没有 Job 就只能对**直接子进程**发 terminate/kill，孙进程（Playwright 拉起的
+浏览器树）必然孤儿化，``close_all_jobs`` 对 direct-child 条目也是空操作。
+Windows 上缺了 Job 就没有整树终止的原生手段——``taskkill /T`` 要额外起进程、
+``psutil`` 是新增依赖（须作者批准），两者都属**新增终止机制**而不是修复本项。
+故按「已知边界 + 可见告警」处置：三条降级路径均打 warning，``backend`` 字段随
+结构化通告对外可见（``test_u09_playwright_tree.py`` 即断言它）。
+
 防误发闸门：换胎前经 ``gate`` 复查 closing / kill_due（C1 §1.2：kill_due 跨
 尝试不清零；不允许继续则返回 ``aborted=True`` 的当前尝试，调用方不得写 go）。
+**该标记自 W12 起有生产消费者**：``heavy_process.run_heavy_tool_blocking``
+在 spawn 后短路 ``aborted`` 的尝试，并把它同时喂给 GO 提交闸门
+（``allow_commit``）——此前两者都不消费，闸门是空壳（P2-HEAVY-1）。
 
 协作级（CTRL_BREAK）按**条目能力快照** ``console_reachable`` 判定（C3 §2.2
 R14）——不按宿主实时控制台推断；快照为 False（如 CREATE_NO_WINDOW 子进程）
@@ -168,21 +179,47 @@ class _ExternalAttempt:
         self.result = None
 
 
+def _close_attempt_parent_handles(attempt) -> None:
+    """关闭父侧 stdin 写端与结果通道读端（幂等；缺失属性容忍）。
+
+    ``SpawnedAttempt`` 的 stdin 藏在 ``_stdin``、公开面是 ``proc.stdin``，而
+    ``_ExternalAttempt`` 两者都可能为 None —— 一律按 getattr 取，取不到就跳过。
+    """
+    stdin = getattr(attempt, "stdin", None)
+    if stdin is None:
+        stdin = getattr(getattr(attempt, "proc", None), "stdin", None)
+    if stdin is not None and not getattr(stdin, "closed", True):
+        try:
+            stdin.close()
+        except OSError:
+            pass
+    result = getattr(attempt, "result", None)
+    if result is not None:
+        result.close()
+
+
 def _closeout_old_attempt(attempt, grace: float) -> bool:
     """旧尝试收口：terminate → 有界确认退出（实际退出证据）→ 仍未退出则
-    kill → 确认。返回是否取得退出证据。"""
+    kill → 确认 → 关父侧句柄。返回是否取得退出证据。"""
     proc = attempt.proc
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    try:
+        if proc.poll() is None:
+            proc.terminate()
             try:
                 proc.wait(timeout=grace)
             except subprocess.TimeoutExpired:
-                return False  # 无法确认退出：调用方停止重试
-    return proc.poll() is not None
+                proc.kill()
+                try:
+                    proc.wait(timeout=grace)
+                except subprocess.TimeoutExpired:
+                    return False  # 无法确认退出：调用方停止重试
+        return proc.poll() is not None
+    finally:
+        # W12 / P3-HEAVY-1：无论是否取得退出证据，父侧句柄都必须关闭。此前只
+        # terminate + wait，Windows 上每次换胎泄漏 2 个父侧句柄（stdin 写端 +
+        # 结果管道读端），且读端不关会让结果读取器线程长挂。旧尝试在本函数
+        # 返回后即被丢弃，其父侧资源由这里唯一收口。
+        _close_attempt_parent_handles(attempt)
 
 
 def terminate_attempt(attempt, decision, *, grace: float = 5.0, cooperative_grace: float = 2.0):
@@ -226,17 +263,7 @@ def terminate_attempt(attempt, decision, *, grace: float = 5.0, cooperative_grac
         except OSError:
             pass
 
-    stdin = getattr(attempt, "stdin", None)
-    if stdin is None:
-        stdin = getattr(proc, "stdin", None)
-    if stdin is not None and not getattr(stdin, "closed", True):
-        try:
-            stdin.close()
-        except OSError:
-            pass
-    result = getattr(attempt, "result", None)
-    if result is not None:
-        result.close()
+    _close_attempt_parent_handles(attempt)
 
     if decision.job is not None:
         decision.job.close_once()

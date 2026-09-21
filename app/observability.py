@@ -13,6 +13,7 @@ v0.6.0 增强：
 
 import re
 import time
+import functools
 import threading
 import logging
 from collections import defaultdict
@@ -287,6 +288,28 @@ def _trim_metric_tables_if_needed() -> None:
 
 # ── v0.6.0: LLM 记录辅助函数 ──
 
+def _never_raise(fn):
+    """埋点全函数防御：任何异常吞掉记 debug，绝不影响业务返回值/异常传播。
+
+    W12 / P3-HEAVY-4：MCP 工具埋点被调用在「已取得执行许可、尚未登记 token」
+    的窗口内（``server.py`` / ``mcp_server.py`` 的 ``record_mcp_tool_wait``
+    调用点），OTel 一抛异常许可就永久丢失、该池此后恒 TOOL_BUSY；LLM 与存储
+    埋点同理位于业务路径上。KB 系列（``record_kb_*``）早已内联同一防御，
+    其余 ``record_*`` 由此装饰器统一承担。
+    """
+
+    @functools.wraps(fn)
+    def _guarded(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception:
+            logger.debug("%s 埋点失败（忽略）", fn.__name__, exc_info=True)
+            return None
+
+    return _guarded
+
+
+@_never_raise
 def record_llm_request(
     provider: str,
     model: str,
@@ -324,6 +347,7 @@ def record_llm_request(
             _otel_llm_token_counter.add(int(completion_tokens), {"type": "completion"})
 
 
+@_never_raise
 def record_llm_cache_hit(cache_type: str) -> None:
     """记录 LLM 缓存命中"""
     ct = _sanitize_label(cache_type or "unknown")
@@ -338,6 +362,7 @@ def record_llm_cache_hit(cache_type: str) -> None:
 
 # ── v0.6.0: 存储层记录辅助函数 ──
 
+@_never_raise
 def record_storage_operation(
     store: str,
     operation: str,
@@ -365,6 +390,7 @@ def record_storage_operation(
 
 # ── v0.6.2: MCP 工具记录辅助函数 ──
 
+@_never_raise
 def record_mcp_tool_call(
     tool_name: str,
     status: str,
@@ -389,6 +415,7 @@ def record_mcp_tool_call(
         _otel_mcp_tool_lat_hist.record(dur, {"tool": t, "status": s})
 
 
+@_never_raise
 def record_mcp_tool_busy(
     tool_name: str,
     pool_type: str = "light",
@@ -413,6 +440,7 @@ def record_mcp_tool_busy(
         _otel_mcp_wait_lat_hist.record(w, {"tool": t, "pool": pool})
 
 
+@_never_raise
 def record_mcp_tool_wait(
     tool_name: str,
     pool_type: str = "light",

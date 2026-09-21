@@ -287,6 +287,24 @@ def test_m1_sequence_records_over_budget_steps():
     assert over, "超预算步骤未记录结构化事件"
 
 
+class _FakeLiveAttemptStore:
+    """与 ``_LiveAttemptStore`` 同形状的假件。
+
+    **W12 有意变更既有测试假件**：此前这两个用例传的是 ``{"attempts": [裸 attempt]}``
+    ——形状与生产注册表（``(attempt, decision, tool_name)`` 三元组 + ``unregister``）
+    不一致，迫使生产代码为它保留 ``isinstance(store, dict)`` /
+    ``isinstance(entry, tuple)`` 两条兼容分支（审查报告记为「死分支两处」）。
+    假件改成同形状后，那两条分支已从生产删除，注销路径也第一次被真正覆盖。
+    """
+
+    def __init__(self, attempts):
+        self.attempts = [(a, None, "fake-tool") for a in attempts]
+        self.unregistered = []
+
+    def unregister(self, attempt_id):
+        self.unregistered.append(attempt_id)
+
+
 def test_terminate_active_processes_parallel_bounded(monkeypatch):
     """M1 ③：全量终止对每个在途尝试并行执行三级终止，10s 并行硬上限。"""
     import app.mcp.protocol.heavy_process as hp
@@ -315,26 +333,30 @@ def test_terminate_active_processes_parallel_bounded(monkeypatch):
             self.proc.pid = pid
             self.attempt_id = pid
 
-    live = {"attempts": [_FakeAttempt(60001), _FakeAttempt(60002)]}
+    live = _FakeLiveAttemptStore([_FakeAttempt(60001), _FakeAttempt(60002)])
     monkeypatch.setattr(hp, "_live_attempts", live)
 
     terminated = []
-    monkeypatch.setattr(
-        hp, "terminate_attempt",
-        lambda attempt, decision, **kw: terminated.append(attempt.attempt_id) or 1,
-        raising=False,
-    )
+
+    def _fake_terminate(attempt, decision, **kw):
+        terminated.append(attempt.attempt_id)
+        attempt.proc.returncode = 1  # 模拟「确认收割」，驱动注销分支
+        return 1
+
+    monkeypatch.setattr(hp, "terminate_attempt", _fake_terminate, raising=False)
     started = time.monotonic()
     hp.terminate_active_processes()
     assert time.monotonic() - started < 10.0
     assert sorted(terminated) == [60001, 60002]
+    # 确认收割的条目必须注销（此前 dict 假件让这条路径恒被跳过）
+    assert sorted(live.unregistered) == [60001, 60002]
 
 
 def test_terminate_active_processes_empty_registry_fast(monkeypatch):
     """空注册表（服务从未接纳/已清空）：快速返回，不阻塞。"""
     import app.mcp.protocol.heavy_process as hp
 
-    live = {"attempts": []}
+    live = _FakeLiveAttemptStore([])
     monkeypatch.setattr(hp, "_live_attempts", live)
     started = time.monotonic()
     hp.terminate_active_processes()

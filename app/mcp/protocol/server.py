@@ -11,7 +11,10 @@ from app import __version__
 from app.config import settings
 from app.mcp.protocol.executor_lifecycle import SlotPool
 from app.mcp.protocol.executor_lifecycle import lifecycle as _slot_lifecycle
-from app.mcp.protocol.heavy_process import run_heavy_tool_blocking
+from app.mcp.protocol.heavy_process import (
+    HeavyServiceClosing,
+    run_heavy_tool_blocking,
+)
 from app.mcp.protocol.tool_errors import (
     ERROR_TOOL_BUSY,
     ERROR_TOOL_INTERNAL,
@@ -77,6 +80,21 @@ _LIGHT_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=settings.tool_executor_wor
 _TOOL_EXECUTOR = _LIGHT_TOOL_EXECUTOR
 _executor_lock = threading.Lock()
 
+# 3. heavy 派发/收割线程池（W12 / P1-HEAVY-1）：**只承载等待子进程的那个线程**，
+#    不执行任何业务（业务在 heavy_process 的子进程里）。此前 heavy 走
+#    ``loop.run_in_executor(None, ...)``，结算只能挂在它返回的 **asyncio 包装
+#    future** 上：外层请求被取消（MCP notifications/cancelled、HTTP 断连）时包装
+#    future 立刻进入 cancelled 态并触发 done_callback → 许可被提前归还，而收割
+#    线程还要跑最长 tool_timeout + 终止宽限，容量=2 的门控在取消重试风暴下被击穿。
+#    改用真实 ``concurrent.futures.Future`` 后语义与轻量路径同构：排队中被取消
+#    （子进程从未启动）→ 回调即结算；已在运行 → cancel() 返回 False，回调只在
+#    真实完成时触发。上界取 heavy 槽位容量即可——每个在途收割线程恰好持有一个
+#    许可、许可在真实完成时才归还，故并发线程数恒 ≤ 容量，池内永不排队。
+_HEAVY_DISPATCH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(1, settings.tool_heavy_executor_workers),
+    thread_name_prefix="lujo-heavy-dispatch",
+)
+
 # DESIGN C1 §3.4/§5.1：容量代际属主 + token 状态机（**结算**与**许可归还**分离）。
 # 信号量由代际属主持有并按代际替换；本模块不再持有任何裸 Semaphore
 # （「槽位共享、池分立」不变，不统一 _TOOL_EXECUTOR 与 _LIGHT_TOOL_EXECUTOR）。
@@ -92,11 +110,35 @@ def _pool_for(pool_type: str) -> SlotPool:
 def _get_tool_slots(pool_type: str) -> asyncio.Semaphore:
     """B20（DESIGN C1 §5）：返回 pool_type 池**当前代际**的信号量句柄。
 
-    每次调用都从代际属主重读当前代，禁止缓存裸对象——代际重建
-    （begin_close → retire → start_new_generation）后旧对象随旧代废弃，
-    新调用自然拿到新代信号量（容量恢复、等待者不迁移）。
+    每次调用都从代际属主重读当前代，禁止缓存裸对象。
+
+    ⚠️ 现状（W12 更正，此前这里写的是一条**从未兑现的契约**）：生产只调用
+    ``begin_close()``（``app/main.py`` 与 ``app/mcp_server.py`` 的 M1 ①），
+    **从不调用** ``retire()`` / ``start_new_generation()`` —— 代际重建只在
+    ``tests/unit/test_executor_generations.py`` / ``test_executor_lifecycle.py``
+    里作为记账原语被验证。因此同一进程内一旦 closing，重读到的仍是同一个
+    （已 closing 的）代际信号量：heavy 侧按 ``HeavyServiceClosing`` →
+    TOOL_BUSY fast-fail，不是「换新代后容量恢复」。接线代际重建被明确否决
+    （CODE_REVIEW §0.6.2 第 2 条：等于新增一套无人使用的生命周期机制）。
     """
     return _pool_for(pool_type).semaphore
+
+
+def _get_heavy_dispatch_executor() -> ThreadPoolExecutor:
+    """heavy 派发/收割线程池；已被 shutdown 时自愈重建同规格的有界池。
+
+    与 :func:`_get_light_tool_executor` 同一套理由：关闭动作发生在本模块之外
+    （``app/mcp_server.py`` 的 M1 ⑤、``app/main.py`` 的 lifespan M1 ⑤、测试
+    直接 shutdown），自持标记没有任何路径能置位。
+    """
+    global _HEAVY_DISPATCH_EXECUTOR
+    with _executor_lock:
+        if _HEAVY_DISPATCH_EXECUTOR._shutdown:
+            _HEAVY_DISPATCH_EXECUTOR = ThreadPoolExecutor(
+                max_workers=max(1, settings.tool_heavy_executor_workers),
+                thread_name_prefix="lujo-heavy-dispatch",
+            )
+        return _HEAVY_DISPATCH_EXECUTOR
 
 
 def _get_light_tool_executor() -> ThreadPoolExecutor:
@@ -464,19 +506,22 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": ERROR_TOOL_BUSY,
                 "_busy": True,
             })
-        # FIX(v0.7.1-b1-5): async 工具取得槽位后补记 record_mcp_tool_wait，
-        # 与同步分支口径一致（此前 async 排队耗时是指标盲区）。
-        record_mcp_tool_wait(tool_name, pool_type, time.perf_counter() - wait_start)
         # DESIGN C1 §3.2 / §3.4：async 轻量的真实任务即 asyncio Task。
         # 在 **task** 上挂结算，槽位跟随「真实任务终结」归还；超时与取消都
         # **不再**由 awaiter 直接释放许可（旧实现 finally 无条件 release 是 B07 根因）。
+        # W12 / P3-HEAVY-4：token 登记**先于**任何埋点。埋点若落在「已取得许可、
+        # 尚未登记 token」的窗口里，它一抛异常许可就永久丢失（该池恒 TOOL_BUSY）。
         _async_pool = _pool_for(pool_type)
         _token = _async_pool.acquire_token(loop=asyncio.get_running_loop(), semaphore=slots)
-        _task = asyncio.ensure_future(handler(arguments))
-        _task.add_done_callback(
-            lambda _t, _tok=_token, _p=_async_pool: _p.settle(_tok)
-        )
+        _task = None
         try:
+            # FIX(v0.7.1-b1-5): async 工具取得槽位后补记 record_mcp_tool_wait，
+            # 与同步分支口径一致（此前 async 排队耗时是指标盲区）。
+            record_mcp_tool_wait(tool_name, pool_type, time.perf_counter() - wait_start)
+            _task = asyncio.ensure_future(handler(arguments))
+            _task.add_done_callback(
+                lambda _t, _tok=_token, _p=_async_pool: _p.settle(_tok)
+            )
             result = await asyncio.wait_for(_task, timeout=timeout)
         except asyncio.TimeoutError:
             record_mcp_tool_call(tool_name, "timeout", timeout)
@@ -495,6 +540,10 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         except Exception:
             record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
             logger.exception("工具 %s 执行失败", tool_name)
+            # 任务从未创建（埋点 / ensure_future 抛错）→ 补偿结算，否则许可永久
+            # 丢失；任务已创建则其 done_callback 负责结算，此处不得重复。
+            if _task is None:
+                _async_pool.settle(_token)
             return make_response(req.id, {
                 "content": [
                     {
@@ -534,42 +583,48 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
             })
 
         wait_sec = time.perf_counter() - wait_start
-        record_mcp_tool_wait(tool_name, pool_type, wait_sec)
-
-        # FIX: C2 —— 重型工具在子进程执行，父进程内存态（如 spec_store）对子进程
-        # 不可见，派发前先经 prepare_args 在父进程预处理入参（如 spec_id→spec）。
-        if pool_type == "heavy":
-            prepare = tool.get("prepare_args")
-            if prepare is not None:
-                try:
-                    arguments = prepare(arguments)
-                except Exception:
-                    logger.exception("工具 %s prepare_args 预处理失败，沿用原入参", tool_name)
 
         # DESIGN C1 §3.1 / §3.4：结算挂到**真实任务**上，槽位跟随真实执行终结归还。
+        # W12 / P3-HEAVY-4：token 登记**先于**埋点与 prepare_args。那两步若落在
+        # 「已取得许可、尚未登记 token」的窗口里抛异常（例如 OTel 导出器炸了），
+        # 许可就永久丢失、该池此后恒 TOOL_BUSY。
         _sync_pool = _pool_for(pool_type)
         _sync_loop = asyncio.get_running_loop()
         _sync_token = _sync_pool.acquire_token(loop=_sync_loop, semaphore=slots)
-        sync_future: asyncio.Future | None = None
         real_future = None
         try:
+            record_mcp_tool_wait(tool_name, pool_type, wait_sec)
+
+            # FIX: C2 —— 重型工具在子进程执行，父进程内存态（如 spec_store）对子进程
+            # 不可见，派发前先经 prepare_args 在父进程预处理入参（如 spec_id→spec）。
+            if pool_type == "heavy":
+                prepare = tool.get("prepare_args")
+                if prepare is not None:
+                    try:
+                        arguments = prepare(arguments)
+                    except Exception:
+                        logger.exception("工具 %s prepare_args 预处理失败，沿用原入参", tool_name)
+
             if pool_type == "heavy":
                 # FIX: C2 —— 重活进程隔离：子进程执行 + 超时 terminate() 强杀。
-                # 等待动作放在默认线程池的一个线程里（内部按 timeout 自限并强杀子进程），
-                # 事件循环只 await 该线程结果，不阻塞；超时后无僵尸、不打满任何池。
-                # W1 阶段：结算挂在「收割线程返回」上；W2 将改为由条目 REAPED 驱动。
-                sync_future = _sync_loop.run_in_executor(
-                    None,
+                # W12 / P1-HEAVY-1：派发改走 heavy 专用池，拿**真实** concurrent
+                # future 并把结算挂它上面（与轻量路径同构）。此前用
+                # loop.run_in_executor 返回的 asyncio 包装 future：外层请求被取消
+                # （notifications/cancelled、HTTP 断连）会立刻触发它的 done_callback
+                # 归还许可，而收割线程还要跑最长 timeout + 终止宽限 —— 取消重试
+                # 风暴下容量=2 的门控被击穿、浏览器子进程无界堆积。
+                real_future = _get_heavy_dispatch_executor().submit(
                     run_heavy_tool_blocking,
                     handler.__module__,
                     handler.__name__,
                     arguments,
                     float(timeout),
                 )
-                sync_future.add_done_callback(
-                    lambda _f, _tok=_sync_token, _p=_sync_pool: _p.settle(_tok)
-                )
-                result = await sync_future
+                _sync_pool.attach(real_future, _sync_token)
+                # heavy 自带绝对截止（run_heavy_tool_blocking 内部按 timeout 强杀
+                # 子进程并回收），此处不叠 wait_for：叠加只会把「真实超时」与
+                # 「停止等待」混为一谈，并重新引入取消竞态。
+                result = await asyncio.wrap_future(real_future)
             else:
                 # 关键：用 executor.submit 拿到**真实 concurrent.futures.Future**，
                 # 回调挂它上面（不是 asyncio 包装 future）。这样「超时响应早已返回、
@@ -586,8 +641,6 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
             # 返回 False，槽位继续由真实 future 的回调在任务真正终结时归还。
             if real_future is not None:
                 real_future.cancel()
-            elif sync_future is not None:
-                sync_future.cancel()
             if pool_type == "heavy":
                 logger.warning(
                     "工具 %s (heavy/子进程) 执行超时(>%ss)，子进程已强杀回收，无僵尸残留",
@@ -612,6 +665,31 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": ERROR_TOOL_TIMEOUT,
                 "_timed_out": True,
             })
+        except HeavyServiceClosing:
+            # W12 / P1-HEAVY-2 + P3-HEAVY-5：服务关闭中（代际 closing / kill_due /
+            # 换胎闸门作废 / GO 提交被拒）从未消耗任何超时预算，必须按
+            # executor_lifecycle 写明的「服务关闭中 / TOOL_BUSY」fast-fail。
+            # 此前它由 asyncio.TimeoutError 承载 → 错标 TOOL_TIMEOUT + 虚构的
+            # 「>60s」文案 + 指标误记 timeout。
+            record_mcp_tool_busy(tool_name, pool_type, 0.0)
+            record_mcp_tool_call(tool_name, "busy", time.monotonic() - _tool_start)
+            logger.warning(
+                "工具 %s (%s池) 被拒绝：服务正在关闭，已 fast-fail（TOOL_BUSY）",
+                tool_name, pool_type,
+            )
+            if real_future is None:
+                _sync_pool.settle(_sync_token)
+            return make_response(req.id, {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "服务正在关闭，已拒绝执行，请稍后重试。",
+                    }
+                ],
+                "isError": True,
+                "error_code": ERROR_TOOL_BUSY,
+                "_busy": True,
+            })
         except asyncio.CancelledError:
             # DESIGN C1 §1.4a/b：仅「从未运行」的任务可补偿结算；已运行/已完成
             # 的交给真实 future 回调。两条路径由同一 token 闸门互斥，不会双结算。
@@ -621,9 +699,10 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
         except Exception:
             record_mcp_tool_call(tool_name, "error", time.monotonic() - _tool_start)
             logger.exception("工具 %s 执行失败", tool_name)
-            # submit 抛错（executor 已关闭）等「任务从未入队」路径需补偿结算；
-            # handler 自身抛错时 real_future 已完成、回调已结算，此处幂等空转。
-            _sync_pool.settle(_sync_token)
+            # submit 抛错（executor 已关闭）/ 埋点抛错等「任务从未入队」路径需补偿
+            # 结算；已入队则真实 future 的回调负责结算，此处不得重复。
+            if real_future is None:
+                _sync_pool.settle(_sync_token)
             return make_response(req.id, {
                 "content": [
                     {

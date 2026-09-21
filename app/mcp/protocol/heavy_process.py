@@ -31,9 +31,22 @@ import time
 from app.mcp.protocol import heavy_spawn
 from app.mcp.protocol.termination import backend as termination_backend
 from app.mcp.protocol.termination.backend import terminate_attempt
-from app.mcp.protocol.termination.probe import CAPABILITY_PROBE as capability_probe
+from app.mcp.protocol.termination.probe import (
+    CAPABILITY_PROBE as capability_probe,
+    ProbeAborted,
+)
 
 logger = logging.getLogger("lujo-mcp.mcp.heavy")
+
+
+class HeavyServiceClosing(RuntimeError):
+    """服务关闭中（代际 closing / kill_due / 换胎闸门拒绝）→ 拒绝接纳 heavy 调用。
+
+    调用方**必须**映射为 ``TOOL_BUSY`` fast-fail（``executor_lifecycle`` 早已
+    写明的「服务关闭中 / TOOL_BUSY」语义），**不得**映射 ``TOOL_TIMEOUT``：
+    这条路径从未消耗过任何超时预算，记成 timeout 会同时污染错误语义、
+    用户可见文案（虚构的「>60s」）与指标。
+    """
 
 # 强杀后等待子进程真正退出的宽限（秒）
 _KILL_JOIN_GRACE = 5.0
@@ -67,7 +80,9 @@ _live_attempts = _LiveAttemptStore()
 # console 程序，multiprocessing 的内部 ``--multiprocessing-fork`` 启动路径
 # 可能在 stdio 已被 bootloader 关闭后落入 ``ValueError: I/O operation on
 # closed file``，导致重型工具没有任何结果。冻结版改用本项目自己的 worker
-# 参数和 pickle 标准流协议；源码运行仍使用 multiprocessing Pipe。
+# 参数和 pickle 标准流协议。源码与冻结**共用** :mod:`heavy_spawn` 的每尝试
+# 独立结果通道（不再有「源码用 multiprocessing Pipe」的分叉，见
+# :func:`run_heavy_tool_blocking`），本 flag 只用于冻结产物的入口分流。
 _FROZEN_WORKER_FLAG = "--lujo-heavy-worker"
 
 
@@ -151,6 +166,8 @@ def run_heavy_tool_blocking(
 
     Raises:
         asyncio.TimeoutError: 调用截止（子进程已被 terminate 回收）。
+        HeavyServiceClosing: 服务关闭中 / 换胎闸门拒绝 / GO 提交被拒——调用方
+            必须映射 TOOL_BUSY fast-fail，不得映射 TOOL_TIMEOUT。
         RuntimeError: 握手断裂（TOOL_INTERNAL 口径）、子进程异常退出、
             结果不可序列化或未返回结果。
     """
@@ -181,28 +198,50 @@ def run_heavy_tool_blocking(
         raise asyncio.TimeoutError(
             f"heavy tool {handler_name} timed out after {timeout}s (subprocess killed)"
         ) from exc
+    except ProbeAborted as exc:
+        # 探测等待被 gate 拒绝 = closing / kill_due 已成立，**不是**超时
+        raise HeavyServiceClosing(
+            f"heavy tool {handler_name} rejected: service is closing"
+        ) from exc
 
     if not _accepting():
-        raise asyncio.TimeoutError(
+        raise HeavyServiceClosing(
             f"heavy tool {handler_name} rejected: service is closing"
         )
     attempt, backend_decision = termination_backend.spawn_with_backend(
         0, command, gate=_accepting,
     )
-    _live_attempts.register(attempt.attempt_id, attempt, backend_decision, handler_name)
-    logger.info(
-        "heavy worker %s 派发：attempt_id=%s backend=%s pid=%s",
-        handler_name, attempt.attempt_id, backend_decision.backend, attempt.proc.pid,
-    )
+    # spawn 成功即进入 try/finally —— 登记与派发日志本身抛异常时，子进程仍必须
+    # 被终止回收（这两句曾在 try 之外，异常会让子进程既不在注册表也无人收割）。
     try:
+        # 换胎闸门（closing / kill_due）作废的尝试不得写 go：直接按关闭中拒绝，
+        # 由 finally 终止回收该子进程。
+        if getattr(backend_decision, "aborted", False):
+            raise HeavyServiceClosing(
+                f"heavy tool {handler_name} rejected: "
+                f"termination gate aborted the attempt"
+            )
+        _live_attempts.register(attempt.attempt_id, attempt, backend_decision, handler_name)
+        logger.info(
+            "heavy worker %s 派发：attempt_id=%s backend=%s pid=%s",
+            handler_name, attempt.attempt_id, backend_decision.backend, attempt.proc.pid,
+        )
         payload = heavy_spawn.handshake(
             attempt, request, deadline=call_deadline,
-            allow_commit=lambda: True,  # 注册表四条件闸门自 W4 接入
+            # C2 §2.3 的 GO 提交闸门：closing / kill_due 成立，或本尝试已被换胎
+            # 闸门作废时拒绝提交（go 永不写出）。此前恒为 True，闸门是空壳——
+            # 关闭窗口内业务仍可被 GO 提交并执行数秒。
+            allow_commit=lambda: _accepting()
+            and not getattr(backend_decision, "aborted", False),
         )
         status, detail = pickle.loads(payload)
         if status == "ok":
             return detail
         raise RuntimeError(f"heavy tool {handler_name} failed: {detail}")
+    except heavy_spawn.CommitRefused as exc:
+        raise HeavyServiceClosing(
+            f"heavy tool {handler_name} rejected: go commit refused (service closing)"
+        ) from exc
     except heavy_spawn.HeavyHandshakeTimeout as exc:
         raise asyncio.TimeoutError(
             f"heavy tool {handler_name} timed out after {timeout}s (subprocess killed)"
@@ -230,12 +269,14 @@ def close_all_jobs() -> int:
     """M1 ④：对在途条目的 Job 句柄幂等 close_once（整树兜底，C4 §3 ④）。
 
     已被 terminate_attempt 关闭的 Job（close_once 幂等）为空操作；
-    deadline-exceeded 条目此刻关闭交 OS 杀树。POSIX 无 Job 为空操作。
+    deadline-exceeded 条目此刻关闭交 OS 杀树。POSIX 无 Job 为空操作；
+    Windows direct-child 条目没有 Job，同样为空操作（已知边界见
+    ``termination/backend.py`` 模块文档的 P3-HEAVY-3 段）。
     """
     closed = 0
-    for entry in _live_attempts.attempts:
-        decision = entry[1] if isinstance(entry, tuple) and len(entry) > 1 else None
-        job = getattr(decision, "job", None) if decision is not None else None
+    # 注册表条目恒为 (attempt, decision, tool_name) 三元组（_LiveAttemptStore）
+    for _attempt, decision, _tool_name in _live_attempts.attempts:
+        job = getattr(decision, "job", None)
         if job is not None and not getattr(job, "closed", True):
             job.close_once()
             closed += 1
@@ -249,8 +290,11 @@ def terminate_active_processes() -> int:
     join 受 10s 硬上限约束 → 确认收割的条目注销。返回发起终止的条目数。
     空注册表（服务从未接纳 / 已清空）快速返回。
     """
-    store = _live_attempts
-    entries = store["attempts"] if isinstance(store, dict) else store.attempts
+    # 注册表条目恒为 (attempt, decision, tool_name) 三元组（_LiveAttemptStore）。
+    # W12：此前的 ``isinstance(store, dict)`` / ``isinstance(entry, tuple)`` 兼容
+    # 分支是**为测试假件而存在**的生产死代码（假件传 dict + 裸 attempt），
+    # 已随假件改为同形状而删除。
+    entries = _live_attempts.attempts
     if not entries:
         return 0
 
@@ -259,12 +303,7 @@ def terminate_active_processes() -> int:
     def _terminate_one(attempt, decision):
         terminate_attempt(attempt, decision, grace=10.0)
 
-    for entry in entries:
-        if isinstance(entry, tuple):
-            attempt = entry[0]
-            decision = entry[1] if len(entry) > 1 else None
-        else:
-            attempt, decision = entry, None
+    for attempt, decision, _tool_name in entries:
         t = threading.Thread(
             target=_terminate_one, args=(attempt, decision),
             name="lujo-heavy-terminator", daemon=True,
@@ -279,8 +318,7 @@ def terminate_active_processes() -> int:
 
     # 确认收割的条目注销（deadline-exceeded 条目由 OS 兜底：KILL_ON_JOB_CLOSE /
     # SIGKILL 已发；保持注册直至进程退出不算错误）
-    for entry in entries:
-        attempt = entry[0] if isinstance(entry, tuple) else entry
-        if attempt.proc.poll() is not None and not isinstance(store, dict):
-            store.unregister(attempt.attempt_id)
+    for attempt, _decision, _tool_name in entries:
+        if attempt.proc.poll() is not None:
+            _live_attempts.unregister(attempt.attempt_id)
     return len(entries)

@@ -348,6 +348,7 @@ async def lifespan(app: FastAPI):
         _heavy_pool as _proto_heavy_pool,
         _light_pool as _proto_light_pool,
         _LIGHT_TOOL_EXECUTOR as _proto_light_executor,
+        _HEAVY_DISPATCH_EXECUTOR as _proto_heavy_dispatch_executor,
     )
 
     def _m1_1():
@@ -363,8 +364,14 @@ async def lifespan(app: FastAPI):
 
     def _m1_5():
         # HTTP 侧新增关协议池（现状无关池动作）；stdio 侧 _TOOL_EXECUTOR 由
-        # 其自身 cleanup 关闭（两池分别 shutdown，仍不统一双池）
-        _proto_light_executor.shutdown(wait=False, cancel_futures=True)
+        # 其自身 cleanup 关闭（分别 shutdown，仍不统一双池）。
+        # heavy 派发池一并关闭：cancel_futures=True 让「排队中尚未启动」的派发
+        # 被取消（其 attach 回调即结算，许可不丢），避免退出后再拉起子进程。
+        for _executor in (_proto_light_executor, _proto_heavy_dispatch_executor):
+            try:
+                _executor.shutdown(wait=False, cancel_futures=True)
+            except Exception as _exc:
+                logger.warning("HTTP 退出关闭线程池失败: %s", _exc)
 
     try:
         _shutdown_mod.run_m1_sequence(

@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import time
+import types
 
 import pytest
 
@@ -348,3 +349,60 @@ def test_posix_backend_is_pgroup_and_two_tier(tmp_path):
         if child.poll() is None:
             child.kill()
             child.wait(timeout=10)
+
+
+class _CloseSpyStdin:
+    def __init__(self):
+        self.closed = False
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+        self.closed = True
+
+
+class _CloseSpyResult:
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+def test_closeout_old_attempt_closes_stdin_and_result_channel():
+    """P3-HEAVY-1：换胎收口必须关父侧 stdin 与结果通道读端。
+
+    旧实现只 terminate + wait，Windows 上每次换胎泄漏 2 个父侧句柄
+    （stdin 写端 + 结果管道读端），且读端不关则读取器线程可能长挂。
+    """
+
+    class _AlreadyExitedProc:
+        pid = 41999
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    stdin = _CloseSpyStdin()
+    result = _CloseSpyResult()
+    proc = _AlreadyExitedProc()
+    proc.stdin = stdin
+    attempt = types.SimpleNamespace(proc=proc, stdin=stdin, result=result)
+
+    assert backend_mod._closeout_old_attempt(attempt, 0.5) is True
+    assert stdin.close_calls == 1, "父侧 stdin 未关闭 → 句柄泄漏（P3-HEAVY-1）"
+    assert result.close_calls == 1, "结果通道读端未关闭 → 句柄泄漏（P3-HEAVY-1）"
+
+
+def test_closeout_old_attempt_tolerates_missing_stdin_and_result():
+    """外部尝试适配（无 stdin / 无 result）不得让收口崩掉。"""
+
+    class _AlreadyExitedProc:
+        pid = 41998
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    attempt = backend_mod._ExternalAttempt(_AlreadyExitedProc(), 0)
+    assert backend_mod._closeout_old_attempt(attempt, 0.5) is True

@@ -62,6 +62,7 @@ from app.mcp.protocol.server import (
 from app.mcp.protocol import shutdown as shutdown_mod
 from app.mcp.protocol import server as protocol_server
 from app.mcp.protocol.heavy_process import (
+    HeavyServiceClosing,
     close_all_jobs,
     run_heavy_tool_blocking,
     terminate_active_processes,
@@ -173,9 +174,15 @@ def cleanup_resources() -> None:
         close_all_jobs()
 
     def _m1_5():
-        # 两个池**分别** shutdown，仍不统一双池（硬禁区）；wait=False 不等
-        # 运行中任务——被阻塞线程交看门狗收口（§2.2）
-        for executor in (_TOOL_EXECUTOR, protocol_server._LIGHT_TOOL_EXECUTOR):
+        # 三个池**分别** shutdown，仍不统一双池（硬禁区）；wait=False 不等
+        # 运行中任务——被阻塞线程交看门狗收口（§2.2）。
+        # heavy 派发池同样在此关闭：cancel_futures=True 让「排队中尚未启动」的
+        # 派发被取消（其 attach 回调即结算，许可不丢），避免退出后再拉子进程。
+        for executor in (
+            _TOOL_EXECUTOR,
+            protocol_server._LIGHT_TOOL_EXECUTOR,
+            protocol_server._HEAVY_DISPATCH_EXECUTOR,
+        ):
             try:
                 executor.shutdown(wait=False, cancel_futures=True)
             except Exception as e:
@@ -443,19 +450,21 @@ async def _run_registered_tool(name: str, tool: dict, arguments: dict, *, token=
                 arguments = prepare(arguments)
             except Exception:
                 logger.warning("工具 %s prepare_args 失败，沿用原入参", name, exc_info=True)
-        loop = asyncio.get_running_loop()
-        # W1 阶段：结算挂在「收割线程返回」上；W2 将改为由条目 REAPED 驱动。
-        fut = loop.run_in_executor(
-            None,
+        # W12 / P1-HEAVY-1：派发改走 heavy 专用池，拿**真实** concurrent future
+        # 并把结算挂它上面（与下方轻量同步路径同构）。此前用 run_in_executor 返回
+        # 的 asyncio 包装 future：外层取消（notifications/cancelled、宿主断开）会
+        # 立刻触发它的 done_callback 归还许可，而收割线程还要跑最长 timeout +
+        # 终止宽限 —— 许可提前归还即并发上限被击穿（HTTP 侧同型缺陷已同批修）。
+        real_future = protocol_server._get_heavy_dispatch_executor().submit(
             run_heavy_tool_blocking,
             handler.__module__,
             handler.__name__,
             arguments,
             float(timeout),
         )
-        if token is not None and pool is not None:
-            fut.add_done_callback(lambda _f: pool.settle(token))
-        return await fut
+        _bind(real_future)
+        # heavy 自带绝对截止（内部按 timeout 强杀子进程），不叠 wait_for。
+        return await asyncio.wrap_future(real_future)
 
     # FIX P3-12: 轻量同步 handler 走专用有界线程池 _TOOL_EXECUTOR，不占默认池；
     # 超时只取消 await，线程继续运行但池有界不增长。
@@ -544,13 +553,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             {"error": "工具执行队列已满，请稍后重试。", "error_code": ERROR_TOOL_BUSY, "_busy": True},
             ensure_ascii=False,
         ))
-    record_mcp_tool_wait(name, pool_type, time.perf_counter() - wait_start)
-
     # DESIGN C1 §3.1/§3.4：登记 ACTIVE token，把**结算**挂到真实任务上；
     # 删除运行期无条件 slots.release()（B07「超发」根因）。
+    # W12 / P3-HEAVY-4：token 登记**先于**埋点。埋点若落在「已取得许可、尚未
+    # 登记 token」的窗口里抛异常（例如 OTel 导出器炸了），许可就永久丢失、
+    # 该池此后恒 TOOL_BUSY。
     _pool = _pool_for(pool_type)
     _token = _pool.acquire_token(loop=asyncio.get_running_loop(), semaphore=slots)
     try:
+        record_mcp_tool_wait(name, pool_type, time.perf_counter() - wait_start)
         result = await _run_registered_tool(name, tool, arguments, token=_token, pool=_pool)
     except asyncio.TimeoutError:
         # 不结算：真实任务可能仍在运行，槽位由真实 future/task 的回调在终结时归还
@@ -564,6 +575,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             },
             ensure_ascii=False,
         ))
+    except HeavyServiceClosing:
+        # W12 / P1-HEAVY-2 + P3-HEAVY-5：服务关闭中（代际 closing / kill_due /
+        # 换胎闸门作废 / GO 提交被拒）从未消耗任何超时预算，必须按
+        # executor_lifecycle 写明的「服务关闭中 / TOOL_BUSY」fast-fail。
+        # 此前它由 asyncio.TimeoutError 承载 → 错标 TOOL_TIMEOUT + 虚构的
+        # 「>60s」文案 + 指标误记 timeout（与 HTTP 侧同批修正，保持双传输同口径）。
+        record_mcp_tool_busy(name, pool_type, 0.0)
+        record_mcp_tool_call(name, "busy", time.monotonic() - _tool_start)
+        logger.warning("工具 %s (%s池) 被拒绝：服务正在关闭，已 fast-fail（TOOL_BUSY）", name, pool_type)
+        raise ToolExecutionError(json.dumps(
+            {
+                "error": "服务正在关闭，已拒绝执行，请稍后重试。",
+                "error_code": ERROR_TOOL_BUSY,
+                "_busy": True,
+            },
+            ensure_ascii=False,
+        ))
     except ToolExecutionError:
         # 工具已实际执行并产出失败结果：结算已由回调完成，此处不重复
         raise
@@ -573,8 +601,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     except Exception as e:
         record_mcp_tool_call(name, "error", time.monotonic() - _tool_start)
         logger.error(str(e), exc_info=True)
-        # submit 抛错（池已关闭）等「任务从未入队」路径需补偿结算；
-        # handler 自身抛错时真实 future/task 已完成、回调已结算，此处幂等空转。
+        # submit 抛错（池已关闭）/ 埋点抛错等「任务从未入队」路径需补偿结算。
+        # settle 是幂等的（只有 ACTIVE→RETURN_PENDING 的第一次赢得结算）：任务
+        # 已入队时真实 future/task 的回调已结算，此处空转。
         _pool.settle(_token)
         raise ToolExecutionError(json.dumps(
             {"error": "Tool execution failed", "error_code": ERROR_TOOL_INTERNAL},

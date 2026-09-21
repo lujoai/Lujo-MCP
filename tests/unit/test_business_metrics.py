@@ -115,3 +115,39 @@ class TestBusinessMetrics:
         assert 'tool="badtool"' in rendered
         assert 'pool="pool"' in rendered
 
+
+class TestMcpToolMetricsAreDefensive:
+    """W12 / P3-HEAVY-4：MCP 工具埋点必须与 KB 系列一样全函数防御。
+
+    这三个函数被调用在「已取得执行许可、尚未登记 token」的窗口内
+    （server.py / mcp_server.py 的 record_mcp_tool_wait 调用点），
+    一旦 OTel 抛异常就会把许可永久带走 → 该池恒 TOOL_BUSY。
+    """
+
+    def test_otel_failure_never_propagates_and_local_counters_survive(self, monkeypatch):
+        import app.observability as obs
+
+        class _Boom:
+            def add(self, *args, **kwargs):
+                raise RuntimeError("OTel exporter exploded")
+
+            def record(self, *args, **kwargs):
+                raise RuntimeError("OTel exporter exploded")
+
+        monkeypatch.setattr(obs, "_init_otel", lambda: None)
+        monkeypatch.setattr(obs, "_otel_mcp_tool_counter", _Boom())
+        monkeypatch.setattr(obs, "_otel_mcp_tool_lat_hist", _Boom())
+        monkeypatch.setattr(obs, "_otel_mcp_busy_counter", _Boom())
+        monkeypatch.setattr(obs, "_otel_mcp_wait_lat_hist", _Boom())
+
+        before_call = obs._mcp_tool_calls_total[("w12_defensive", "ok")]
+        before_busy = obs._mcp_tool_busy_rejected_total[("w12_defensive", "heavy")]
+
+        obs.record_mcp_tool_call("w12_defensive", "ok", 0.25)
+        obs.record_mcp_tool_busy("w12_defensive", "heavy", 0.5)
+        obs.record_mcp_tool_wait("w12_defensive", "heavy", 0.5)
+
+        assert obs._mcp_tool_calls_total[("w12_defensive", "ok")] == before_call + 1
+        assert obs._mcp_tool_busy_rejected_total[("w12_defensive", "heavy")] == before_busy + 1
+        assert obs._mcp_tool_wait_latency_count[("w12_defensive", "heavy")] >= 1
+

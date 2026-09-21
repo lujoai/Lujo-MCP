@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import struct
 import subprocess
 import sys
 import threading
@@ -322,3 +323,83 @@ def test_spawn_failure_cleans_partial_resources(monkeypatch):
     with pytest.raises(OSError):
         hs.spawn_attempt(1, _worker_cmd("echo"))
     # 未创建任何 attempt；父侧临时资源由 spawn_attempt 内部 finally 收口（无全局状态）
+
+
+class _ExplodingFile:
+    """读取即抛非 EOFError/OSError 的假文件对象（模拟通道被并发关闭等意外）。"""
+
+    def __init__(self, exc: BaseException):
+        self._exc = exc
+
+    def read(self, _n):
+        raise self._exc
+
+    def close(self):
+        return None
+
+
+class TestResultReaderNeverDiesSilently:
+    """W12：读取器线程绝不无声死亡 —— 任何异常都必须发布到 result_ready。
+
+    背景：``_read_loop`` 此前只捕获 EOFError / OSError，其它异常（如通道被
+    并发关闭时的 ``ValueError: read of closed file``、分帧 ``struct.error``）
+    会让线程直接死掉且**不发布任何事件**，等待方只能报无信息量的
+    「result reader thread died」——2026-09-21 W8 收尾时该形态在负载下真实
+    出现过一次，事后无法定位根因。
+    """
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ValueError("read of closed file"),
+            struct.error("unpack requires a buffer of 8 bytes"),
+            RuntimeError("unexpected reader failure"),
+        ],
+        ids=["ValueError", "struct.error", "RuntimeError"],
+    )
+    def test_unexpected_reader_exception_is_published(self, exc):
+        channel = hs.ResultChannel(_ExplodingFile(exc))
+        channel.start_reader()
+
+        assert channel.result_ready.wait(5.0), (
+            "读取器线程已死亡但没有发布任何事件（等待方只能盲报 thread died）"
+        )
+        assert channel.error is not None, "意外异常必须被归类为协议错误"
+        assert type(exc).__name__ in channel.error, (
+            "错误文本必须带真实异常类型以便定位，实际=%r" % channel.error
+        )
+        assert channel.result_bytes is None
+        # 线程真实结束后 reader_thread_dead 才为真（不靠 EOF 推断）
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not channel.reader_thread_dead():
+            time.sleep(0.02)
+        assert channel.reader_thread_dead() is True
+
+    def test_eof_and_oserror_classification_unchanged(self):
+        """既有两类归类不得被兜底捕获改变语义。"""
+
+        class _EofFile:
+            def read(self, _n):
+                return b""
+
+            def close(self):
+                return None
+
+        class _OSErrorFile:
+            def read(self, _n):
+                raise OSError(22, "Invalid argument")
+
+            def close(self):
+                return None
+
+        eof_channel = hs.ResultChannel(_EofFile())
+        eof_channel.start_reader()
+        assert eof_channel.result_ready.wait(5.0)
+        assert eof_channel.eof_seen is True
+        assert eof_channel.error is None
+
+        err_channel = hs.ResultChannel(_OSErrorFile())
+        err_channel.start_reader()
+        assert err_channel.result_ready.wait(5.0)
+        assert err_channel.error is not None
+        assert "handshake broken on result channel" in err_channel.error

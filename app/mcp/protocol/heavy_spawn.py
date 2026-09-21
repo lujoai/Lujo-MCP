@@ -276,6 +276,12 @@ class ResultChannel:
             self.result_ready.set()
         except OSError as exc:
             self._fail(f"handshake broken on result channel: {exc}")
+        except BaseException as exc:
+            # W12：读取器线程**绝不无声死亡**。任何未预期异常（通道被并发关闭
+            # 时的 ValueError、分帧 struct.error 等）都必须发布到 result_ready，
+            # 否则等待方只能报无信息量的「result reader thread died」——该形态
+            # 2026-09-21 在负载下真实出现过一次，事后无法定位根因。
+            self._fail(f"result reader crashed: {type(exc).__name__}: {exc}")
         finally:
             # 关闭权归 ResultChannel.close()（父侧读端唯一最终关闭者）
             pass
