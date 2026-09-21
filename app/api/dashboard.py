@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.auth.rbac import require_role
 from app.observability import get_kb_metric_snapshot
 from app.runtime.core import errors, logs
+from app.runtime.core.invalidation import register_invalidation_listener
 from app.llm.cache import _get_redis_cache
 
 logger = logging.getLogger("lujo-mcp.dashboard")
@@ -60,8 +61,10 @@ def _redis_cache_key(tier: int) -> str:
 def invalidate_cache(source: str | None = None) -> None:
     """清除 Dashboard 概览缓存（L1 内存 + L2 Redis），使新写入的 trace 立即可见。
 
-    由 trace 写入路径（logs.add_log 的 save_entry 路径、以及 errors.record）
-    在持久化新数据后调用，避免 30s TTL 期间 Dashboard 仍展示旧数据。
+    trace 写入路径（``logs.add_log`` 的 save_entry 路径、``logs.add_logs_batch``、
+    ``errors.record``）在持久化新数据后**广播**失效事件，本函数作为订阅者被调用
+    （见文件末的 ``register_invalidation_listener``；W14 之前是写入侧直接反向
+    import 本函数）。避免 30s TTL 期间 Dashboard 仍展示旧数据。
 
     DASH-SSE-001：同时广播 SSE 变更信号，订阅了 /api/dashboard/stream 的前端
     收到后即时 re-fetch（叠加在轮询之上）。无订阅者或功能关闭时为 no-op。
@@ -119,6 +122,17 @@ def invalidate_cache(source: str | None = None) -> None:
         })
     except Exception:
         pass
+
+
+# W14 / P1-ARC-1：本模块**订阅** runtime 的「运行现场已写入」广播，依赖方向
+# 由此恢复为 api → runtime（此前是 runtime/core/logs.py 与 errors.py 三处惰性
+# 反向 import 本模块的 invalidate_cache，并包在 except-pass 里）。
+# 纯 stdio 模式不导入本模块 → 没有监听器 → 广播是空操作，符合预期。
+# 注册的必须是**晚绑定**包装而不是函数对象本身：
+# tests/unit/test_batch_writes.py 用 monkeypatch 替换
+# ``app.api.dashboard.invalidate_cache`` 断言「批量写入只失效一次」，直接注册
+# 函数对象会让那条既有断言静默失效（mock 永远不被调用、断言恒真）。
+register_invalidation_listener("dashboard", lambda: invalidate_cache())
 
 
 def _safe_int(value, default=0):

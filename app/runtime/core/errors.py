@@ -18,6 +18,7 @@ import logging
 import threading
 from collections import deque, OrderedDict
 
+from app.runtime.core.invalidation import notify_data_written
 from app.runtime.core.redaction import redact, redact_nested
 
 # 最多保留最近 200 条，超出丢弃最旧的
@@ -174,14 +175,12 @@ def record(
                 "session_id": session_id,
             })
 
-    # 写入/刷新异常后失效 Dashboard 概览缓存，使新数据立即可见
+    # 写入/刷新异常后广播失效，使 Dashboard 概览缓存立即反映新数据
     # （覆盖 exception_hook 直接 record、不经过 add_log 的路径）。
-    # 用惰性 import 打破 core→api 的潜在循环依赖；失败不影响记录主流程。
-    try:
-        from app.api.dashboard import invalidate_cache
-        invalidate_cache()
-    except Exception:
-        pass
+    # W14 / P1-ARC-1：此处曾是惰性 `from app.api.dashboard import invalidate_cache`
+    # 包在 `except Exception: pass` 里（同一份代码在 logs.py 还有两处）——下层
+    # 反向依赖上层，且失效故障被静默吞掉。现改为只广播、由 api 层订阅。
+    notify_data_written()
 
     return err_id
 

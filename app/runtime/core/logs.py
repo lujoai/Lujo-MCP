@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import Any
 
+from app.runtime.core.invalidation import notify_data_written
 from app.runtime.core.redaction import redact_nested
 from app.runtime.core.storage.factory import get_trace_store
 
@@ -41,14 +42,13 @@ def add_log(request_id: str, step: str, data=None) -> None:
         # FIX(R8) —— 字符串 payload 先按 A2 契约归一成结构化值，两种后端一致
         "data": redact_nested(_coerce_structured_payload(data)),
     })
-    # 持久化新 trace 数据后失效 Dashboard 概览缓存，使新数据立即可见
+    # 持久化新 trace 数据后广播失效，使 Dashboard 概览缓存立即反映新数据
     # （save_entry 路径：覆盖 save_trace/network/ui/console 等所有写入）。
-    # 用惰性 import 打破 core→api 的潜在循环依赖；失败不影响写入主流程。
-    try:
-        from app.api.dashboard import invalidate_cache
-        invalidate_cache()
-    except Exception:
-        pass
+    # W14 / P1-ARC-1：此处曾是惰性 `from app.api.dashboard import invalidate_cache`
+    # 包在 `except Exception: pass` 里 —— 下层反向依赖上层（与
+    # app/runtime/__init__.py 的「本包不依赖任何协议层」矛盾），且缓存失效故障
+    # 被静默吞掉。现改为只广播、由 api 层订阅；失败由广播方记 warning。
+    notify_data_written()
 
 
 def add_logs_batch(request_id: str, items: list[tuple[str, Any]]) -> None:
@@ -67,12 +67,8 @@ def add_logs_batch(request_id: str, items: list[tuple[str, Any]]) -> None:
         for step, data in items
     ]
     store.save_entries(request_id, entries)
-    # 批量写入后单次失效缓存，替代逐条失效
-    try:
-        from app.api.dashboard import invalidate_cache
-        invalidate_cache()
-    except Exception:
-        pass
+    # 批量写入后单次广播失效，替代逐条失效（W14 / P1-ARC-1：不再反向 import api）
+    notify_data_written()
 
 
 def get_logs(request_id: str) -> list[dict]:

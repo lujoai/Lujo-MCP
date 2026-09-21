@@ -274,3 +274,88 @@ def test_injected_store_survives_concurrent_upserts():
     assert errors == []
     assert len(fake.upsert_calls) == 8
     assert store.size() == 8
+
+
+# ---------------------------------------------------------------------------
+# 6. runtime 层边界：不得反向依赖 api 层（W14 / P1-ARC-1）
+# ---------------------------------------------------------------------------
+
+_RUNTIME_DIR = _REPO_ROOT / "app" / "runtime"
+
+
+class TestRuntimeLayerBoundary:
+    """``app/runtime/__init__.py`` 声明「本包不依赖任何协议层」，本类把它变成可执行断言。
+
+    旧实现在 ``runtime/core/logs.py``（2 处）与 ``runtime/core/errors.py``（1 处）
+    惰性 ``from app.api.dashboard import invalidate_cache`` 并包在
+    ``except Exception: pass`` 里：既构成 runtime→api 的反向依赖（与声明矛盾、
+    也是跨层循环依赖的一半），又把缓存失效故障静默吞掉。现改为
+    ``runtime/core/invalidation.py`` 的订阅/广播，由 api 层注册监听器。
+    """
+
+    def test_runtime_source_has_no_api_import(self):
+        """AST 级判定：模块级与函数内的惰性 import 都算，注释/docstring 不算。
+
+        用 AST 而不是文本匹配——文本匹配会把 explanatory docstring 里引用的
+        ``from app.api.dashboard import ...`` 误判成违规（本轮就踩到了）。
+        """
+        import ast
+
+        offenders: list[str] = []
+        for py in sorted(_RUNTIME_DIR.rglob("*.py")):
+            tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+            rel = py.relative_to(_REPO_ROOT).as_posix()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if (node.module or "").startswith("app.api"):
+                        offenders.append(f"{rel}:{node.lineno}: from {node.module}")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("app.api"):
+                            offenders.append(f"{rel}:{node.lineno}: import {alias.name}")
+        assert offenders == [], (
+            f"app/runtime 仍存在 api import（P1-ARC-1 反向依赖）: {offenders}"
+        )
+
+    def test_importing_runtime_core_does_not_load_api(self):
+        """干净子进程 import 写入侧并**真实写一条**，sys.modules 不得出现 app.api。
+
+        只 import 不够：旧实现的反向依赖是函数内的惰性 import，导入期看不见，
+        必须走一次 add_log 才会现形。
+        """
+        code = (
+            "import sys; import app.runtime.core.logs as L; "
+            "import app.runtime.core.errors as E; "
+            "L.add_log('w14-subprocess-probe', 'processing', {'k': 'v'}); "
+            "mods = sorted(m for m in sys.modules if m.startswith('app.api')); "
+            "print('API_MODULES=' + ','.join(mods))"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO_ROOT),
+            timeout=60,
+        )
+        assert proc.returncode == 0, f"子进程执行失败: {proc.stderr[-500:]}"
+        marker = [
+            ln for ln in proc.stdout.splitlines() if ln.startswith("API_MODULES=")
+        ]
+        assert marker, f"子进程未输出标记: {proc.stdout[-300:]}"
+        assert marker[0] == "API_MODULES=", (
+            f"写入一条 trace 就拉起了 api 层: {marker[0]}"
+        )
+
+    def test_writes_broadcast_invalidation_without_importing_api(self):
+        """写入侧确实广播（否则 Dashboard 会一直显示旧数据），且不认识具体消费者。"""
+        from app.runtime.core import invalidation, logs
+
+        received: list[int] = []
+        invalidation.register_invalidation_listener(
+            "probe", lambda: received.append(1)
+        )
+        try:
+            logs.add_log("w14-boundary-probe", "processing", {"k": "v"})
+            assert received, "add_log 未广播失效事件（Dashboard 会显示旧数据）"
+        finally:
+            invalidation.unregister_invalidation_listener("probe")
