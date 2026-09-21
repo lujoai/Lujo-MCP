@@ -35,6 +35,19 @@ def test_authorization_bearer_masked():
 
 def test_phone_masked():
     assert redact("contact 13800138000 now") == "contact ***PHONE*** now"
+    assert redact("tel:13912345678") == "tel:***PHONE***"
+    assert redact("手机号13700001111，请联系") == "手机号***PHONE***，请联系"
+
+
+def test_hex_and_uuid_identifiers_not_masked_as_phone():
+    """hex、uuid、标识符中恰好包含 11 位数字加字母的片段不得被误判为手机号。
+
+    此前 (?<!\\d)1[3-9]\\d{9}(?!\\d) 会把 'ui-13730849717c' 中的 13730849717
+    误脱敏为 'ui-***PHONE***c'，导致 event_id / record_id 损坏。
+    """
+    assert redact("ui-13730849717c") == "ui-13730849717c"
+    assert redact("commit_13800138000a") == "commit_13800138000a"
+    assert redact("0x13800138000f") == "0x13800138000f"
 
 
 def test_disabled_returns_original():

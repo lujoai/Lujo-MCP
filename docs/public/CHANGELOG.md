@@ -14,6 +14,10 @@
 - **默认监听地址收紧为 `127.0.0.1`**（原 `0.0.0.0`）：单用户本地定位下默认装机即全网监听不合理，且统一 stdio 模式（`--http-host`）早已是回环，HTTP 独立入口未对齐属遗漏。需要对外服务时显式设 `HOST`（并按既有 SEC-03 规则配 `API_KEY`；通配地址 + 无 Key 仍会被启动校验硬拒绝）。**容器部署不受影响但必须显式设 `HOST=0.0.0.0`**——`Dockerfile` 与两份 compose 已设置，否则服务只监听容器回环、端口发布打不通而 healthcheck 仍显示健康。
 - **`/metrics` 的免鉴权豁免只在回环绑定时成立**：此前只要 `METRICS_AUTH_ENABLED=false` 就全局豁免，绑到可路由地址时等于把调用量/错误率/延迟/工具名无偿开放给整个网段。判据取配置绑定地址而非 `request.client.host`（反代部署下对端恒为代理，按对端判会 fail-open）。`deploy/prometheus.yml` 已改为带 Bearer 凭据抓取（经 `--config.expand-env` 从 compose 的 `LUJO_API_KEY` 展开，密钥不落盘）。
 - **重型工具在「服务关闭中」的错误码由 `TOOL_TIMEOUT` 改为 `TOOL_BUSY`**：关闭路径从未消耗任何超时预算，旧文案「工具执行超时(>60s)」是虚构的，指标也被误记为 timeout。
+- **RBAC 鉴权拒绝错误码规范化**：HTTP 端点鉴权失败时原先使用通用 `-32600 (Invalid Request)`，现对齐为自定义 `AUTH_ERROR (-32003)`，保留清晰鉴权语义。
+- **消除 runtime 反向依赖 api 架构环**：建立 `app.runtime.core.invalidation` 观察者注册中心，由上层主动订阅下层写入通知，彻底移除 runtime 对 `app.api.dashboard` 的逆向导入，并通过 AST 静态边界测试防止依赖倒置回潮。
+- **知识库清空单点线性化**：`KnowledgeBase.clear()` 持锁覆盖代际推进、持久层删除与内存字典清空全生命周期，消除重启回灌导致的已清除经验复活问题。
+- **双端 SDK 客户端上报体积收敛**：Browser SDK 与 Node SDK 在脱敏之后统一对 `url`（2000 字符）与 `request_body`/`response_body`（10176 字符）实施硬上限收敛并追加客户端截断标记，保护服务端内存免受超长非压缩请求冲击。
 
 ### Fixed
 
@@ -24,6 +28,14 @@
 - **非法脱敏正则的告警不再整条回显模式原文**：改为「行号 + 长度 + 32 字符前缀」。规则里写了字面密钥时，旧行为会把它整条写进日志。
 - **重型子进程的两处资源缺口**：换胎（breakaway）收口此前不关父侧 stdin 与结果通道读端（Windows 每次泄漏 2 个句柄）；spawn 成功到 `try/finally` 之间的登记/日志若抛异常，子进程会脱离回收成为孤儿。
 - **结果读取器线程不再无声死亡**：此前只捕获 `EOFError`/`OSError`，其它异常会让线程直接退出且不发布任何事件，等待方只能报无信息量的「result reader thread died」。现在任何异常都归类为带真实异常类型的协议错误。
+- **stdio 结果序列化缺失 `default=str` 导致非 JSON 类型崩溃**：与 HTTP 传输序列化参数对齐，防止非常规类型在 stdio 通道抛出未捕获 TypeError。
+- **KB 本地持久化降级状态不透明**：当 SQLite 笔记本无法写入或降级为 NoOp 时，通过 Storage Factory 向 `/health` 暴露 `kb_persist` 真实运行状态，避免静默数据丢失。
+- **向量索引删除全量重分词 O(n) 性能陷阱**：改为并行保留过滤，消除条目驱逐时的性能抖动。
+- **MemoryTraceStore 过期清理健壮性**：`cleanup_expired` 访问条目时间戳改为防防御式 `.get("timestamp")`，避免空条目引发 KeyError 异常。
+- **手机号正则在 hex/UUID 标识符上的误脱敏消除**：此前 `(?<!\d)1[3-9]\d{9}(?!\d)` 在前后非数字但紧邻字母时（如 `ui-13730849717c`）仍会触发匹配，导致随机生成的 12 位十六进制 ID 被破坏性掩码为 `ui-***PHONE***c`；现改为前后均不得紧邻字母或数字 `(?<![a-zA-Z\d])1[3-9]\d{9}(?![a-zA-Z\d])`。
+- **Browser SDK 非法 endpoint 格式防静默丢现场**：`init()` 严格校验 http(s) 绝对地址前缀，非法或漏 scheme 时拒绝初始化并保留一条 console.warn，避免错误解析为相对路径将现场发往宿主业务服务器。
+- **Node SDK 错误状态捕获与 TS 类型支持**：`flush()` 在批次被非 2xx 状态拒绝时保留 `lastErrorStatus`；补充完整的 `index.d.ts` 类型声明文件。
+- **分发完整性与架构清理**：npm 元包及三平台包补齐 `README.md` 与根目录一致的 `LICENSE` 授权文件；清理历史空壳 `app/services/` 包；纠正全仓多处关于 PostgreSQL 的陈旧注释与配置。
 
 ### Security
 

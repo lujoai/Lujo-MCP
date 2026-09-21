@@ -52,7 +52,10 @@ DEFAULT_REDACT_RULES: tuple[tuple[str, str], ...] = (
         r"(?i)\"(" + _SENSITIVE_KEY_NAME + r"|authorization)\"\s*:\s*(?:'[^']*'|\"[^\"]*\"|\S+)",
         r'"\1":"***"',
     ),
-    (r"(?<!\d)1[3-9]\d{9}(?!\d)", "***PHONE***"),
+    # 中国大陆 11 位手机号：不能直接用 (?<!\d)...(?!\d)，否则 hex/uuid/代码标识符
+    # 中恰好由 11 位数字加字母组成的片段（如 ui-13730849717c）会被误判为手机号
+    # 导致 event_id / record_id / commit hash 被破坏性掩码。必须要求前后均不能紧邻字母与数字。
+    (r"(?<![a-zA-Z\d])1[3-9]\d{9}(?![a-zA-Z\d])", "***PHONE***"),
 )
 
 _COMPILED_DEFAULT_REDACT_RULES = tuple(
