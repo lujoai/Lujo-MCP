@@ -32,7 +32,20 @@ _storage_factory._knowledge_store = None
 
 
 @pytest.fixture(autouse=True)
-def _isolate_errors_store():
+def _isolate_storage():
+    """逐用例隔离 storage factory 进程级单例 + errors 近期缓冲（P2-TEST-1）。
+
+    memory 后端的 store 是进程级单例（``app/runtime/core/storage/factory.py``
+    的五个引用：trace / session / error / spec / knowledge），此前仅在
+    conftest 导入时重置一次，用例间数据累积、顺序敏感。正确范式已存在于
+    tests/unit/test_factory.py 的 ``_reset_factory_cache``，这里上移为公共
+    autouse fixture；重置项与 factory 单例清单一一对应，errors._recent 沿用
+    既有清理，与 tests/integration/conftest.py 同口径。
+    """
     errors._recent.clear()
+    for _name in ("_trace_store", "_session_store", "_error_store", "_spec_store", "_knowledge_store"):
+        setattr(_storage_factory, _name, None)
     yield
     errors._recent.clear()
+    for _name in ("_trace_store", "_session_store", "_error_store", "_spec_store", "_knowledge_store"):
+        setattr(_storage_factory, _name, None)

@@ -63,9 +63,21 @@ import pytest  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolate_storage():
-    """每条用例前后重置存储单例，避免用例间通过缓存的 store 互相污染。"""
+    """逐用例隔离 storage factory 进程级单例 + errors 近期缓冲（P2-TEST-1）。
+
+    此前名实不符：docstring 声称"重置存储单例"，实际只清 ``errors._recent``——
+    memory 后端的进程级单例（``app/runtime/core/storage/factory.py`` 的五个
+    引用：trace / session / error / spec / knowledge）只在上方导入时重置一次，
+    用例间数据累积、顺序敏感。现与 tests/unit/conftest.py 同口径：每个用例
+    前后重置全部五个 factory 引用（惰性 getter 下次调用即重建空 store），
+    errors._recent 沿用既有清理。
+    """
     from app.runtime.core import errors
 
     errors._recent.clear()
+    for _name in ("_trace_store", "_session_store", "_error_store", "_spec_store", "_knowledge_store"):
+        setattr(_storage_factory, _name, None)
     yield
     errors._recent.clear()
+    for _name in ("_trace_store", "_session_store", "_error_store", "_spec_store", "_knowledge_store"):
+        setattr(_storage_factory, _name, None)
