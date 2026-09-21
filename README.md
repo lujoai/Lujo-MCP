@@ -34,6 +34,8 @@
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
 > 📌 npm 入口默认启动**统一本地模式**：同一个进程同时提供 MCP stdio 和 `http://127.0.0.1:8000` HTTP。AI 可以直接使用 MCP 工具，浏览器 SDK 也能把控制台、网络失败和点击链路写入同一份内存上下文；不需要再手动启动第二个服务。
+>
+> 📄 可直接复制的机器可读版本在仓库根目录：[`mcp_config_example.json`](./mcp_config_example.json) —— 里面 `lujo`（npx 免安装）与 `lujo-from-source`（跑本地源码，已带 `--http`）是两条等价配置，**二选一**即可；用源码那条时把 `cwd` 换成你的仓库绝对路径，Windows 下建议把 `command` 指向项目的 `.venv/Scripts/python.exe`。
 
 ### 替代方式：全局安装
 

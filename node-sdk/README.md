@@ -26,6 +26,8 @@ await client.close();
 ```
 
 The client sends `/ingest/batch` events with `source: "node-sdk"` by default.
-Each HTTP request contains at most 100 events. `400`/`401`/`403` and other
-permanent client errors are sent once; `429`, `5xx`, timeouts, and network
-failures use a bounded retry policy controlled by `maxRetries`.
+Each HTTP request contains at most 100 events. Network fields (`url`, `request_body`,
+`response_body`) are bounded after redaction to keep wire payloads predictable.
+`400`/`401`/`403` and other permanent client errors are sent once; `429`, `5xx`,
+timeouts, and network failures use a bounded retry policy controlled by `maxRetries`.
+When an HTTP response rejects a batch, `flush()` surfaces `lastErrorStatus`.

@@ -75,8 +75,8 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     与 /api/debug/repair/async 端点共享逻辑：build_debug_context → enqueue。
 
     FIX: P1-C1 —— 本 handler 为 async（enqueue 需 await），但前置三步是同步
-    重 IO（get_logs 走 PG 查询、build_context 全量日志聚合、
-    collect_runtime_snapshot 含 psutil.cpu_percent(interval=0.1) 阻塞采样），
+    阻塞调用（get_logs 要遍历该 request 的全部 trace 条目、build_context 做全量
+    日志聚合、collect_runtime_snapshot 含 psutil.cpu_percent(interval=0.1) 阻塞采样），
     此前直接跑在事件循环线程——执行期间整个服务（HTTP/stdio/心跳/SSE）停摆。
     现统一移入 asyncio.to_thread（与同步 handler 走线程池的隔离语义对齐）。
     """

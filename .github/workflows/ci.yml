@@ -146,6 +146,8 @@ jobs:
       # 否则不受 CI 守护 —— v0.6.7 的传输修复测试曾因此漏出门禁。
       # FIX(v0.7.1-b1): 补登记 v0.6.9 漏掉的 sdk-destroy.test.js + 本批新增
       # sdk-minor-reuse.test.js，CI 与 npm test 文件清单保持一致。
+      # W15 / P3-SDK-2: 补登记 sdk-endpoint-validation.test.js（endpoint 合法性
+      # 校验），与 browser-sdk/package.json 的 test script 同清单。
       - name: Run SDK core contract tests
         run: >-
           node --test
@@ -157,6 +159,7 @@ jobs:
           browser-sdk/test/sdk-destroy.test.js
           browser-sdk/test/sdk-minor-reuse.test.js
           browser-sdk/test/sdk-rejection.test.js
+          browser-sdk/test/sdk-endpoint-validation.test.js
 
       # npm 启动器（bin/cli.js）契约测试：参数拼装、平台二进制两种落盘布局解析、
       # 以及终止信号转发（本 job 为 Linux runner，SIGTERM 用例会真实执行；

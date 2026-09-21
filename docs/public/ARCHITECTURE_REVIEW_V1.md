@@ -111,9 +111,14 @@ rag ──▶ 外部向量库（qdrant）
 - 位置：[analyzer.py](../../app/llm/analyzer.py#L17-L29) `app.rag.knowledge_base` / `app.rag.debug_case` / `app.rag.vector_store`
 - **裁决**：批准为显式依赖 `llm → rag`（知识检索增强）。禁止反向 `rag → llm`。
 
-### F4（⏸ 暂不处理）— app/services 为空
-- 位置：[services/__init__.py](../../app/services/__init__.py)
-- **裁决**：暂不处理。不因 F4 引入 service 层；空占位保持现状，除非后续明确要求清理。
+### F4（✅ 已清理 2026-09-21）— app/services 为空
+- 位置：原 `app/services/__init__.py`（0 字节空文件，已删除）
+- **原裁决**：暂不处理。不因 F4 引入 service 层；空占位保持现状，除非后续明确要求清理。
+- **收口**：CODE_REVIEW §0.6.5 的 P4 架构项把「空壳包 `app/services/`」排入 W15 清理批，即上文
+  「后续明确要求清理」的条件已满足。删除前实测：全仓 `from app.services` / `import app.services`
+  命中 0（`benchmark/cases.py`、`examples/trace_demo.json` 与若干单测里出现的 `app/services/*.py`
+  都是**被调试项目**的堆栈路径字符串，与本包无关）；`packaging/lujo-mcp-server.spec` 与打包配置
+  均不引用；仓库内无 `pkgutil.walk_packages` 一类动态发现。仍然不引入 service 层。
 
 ### F5（✅ 已完成）— schema 模型职责拆分
 - 位置：[schemas/__init__.py](../../app/schemas/__init__.py#L8)（`TraceStep`，流程步骤模型）与 [schemas/trace.py](../../app/schemas/trace.py#L15)（`TraceEntry`，完整链路条目模型）

@@ -1,8 +1,12 @@
 /**
- * lujo-mcp Browser SDK v0.8.0
+ * lujo-mcp Browser SDK
  *
- * 版本以 browser-sdk/package.json 的 version 为准（本注释仅为可读性，
- * 升级时随版本 bump 一并更新，避免再次漂移）。
+ * 版本号**刻意不写在这里**：唯一权威来源是 browser-sdk/package.json 的 version。
+ * 此前本行硬编码 "v0.8.0" 且自称「升级时随版本 bump 一并更新，避免再次漂移」，
+ * 结果在 0.9.1 上又漂了一次（W15 / P3-SDK-1）——注释里的版本号没有任何机制
+ * 保证它被同步，所以删掉比改正更可靠。
+ * 分发副本 npm/packages/lujo-mcp/browser-sdk/ai-debug.js 必须与本文件逐字节一致
+ * （由 tests/unit/test_distribution_smoke.py 与发布前 check-clean-bin.js 双向守卫）。
  *
  * V2：批量上报 + sendBeacon 降级 + 指数退避重试。
  * 前端自动采集：全局异常捕获、网络请求记录、UI 事件上报、静默失败标记。
@@ -110,6 +114,18 @@
   // 恢复暂存批次时合并 >100 条必然 413，且 413 曾被当作可重试错误整批重试、
   // 整批回写 localStorage，形成"毒批"自增强循环（事件永远无法送达）。
   var _MAX_BATCH_EVENTS = 100;
+  // W15 / P3-SDK-3：network 记录字段的客户端体积上限。服务端
+  // app/runtime/collectors/network.py 对 request_body/response_body 截到 10240、
+  // url 截到 2048，但那发生在**入库前**：兆级字符串照样穿过网络、被整体读进内存、
+  // 被脱敏正则各扫一遍，还会挤爆 localStorage 降级队列（~5MB 配额）。此前只有
+  // fetch/XHR 钩子里的 response_body 被截到 2000，url 与 request_body 完全不设限
+  // （_serializeRequestBody 对字符串原样返回）。
+  // 客户端上限必须**严格小于**服务端上限以留出标记位置：等长会让服务端二次截断把
+  // 标记切掉，入库内容退化成"静默截断"。Node SDK 用同一组数值。
+  var _MAX_BODY_CHARS = 10176;
+  var _MAX_URL_CHARS = 2000;
+  var _BODY_TRUNCATED_SUFFIX = "\n...（客户端已截断）";
+  var _URL_TRUNCATED_SUFFIX = "...（客户端已截断）";
   var _onSilentFailureReport = null;
 
   // ── V5 传输优化状态 ──
@@ -822,6 +838,26 @@
     }
   }
 
+  // W15 / P3-SDK-2：endpoint 必须是 http(s) 绝对地址。
+  // 漏 scheme 的 "localhost:8000" 能通过"只判空"的旧校验，随后被拼成相对地址
+  // （"localhost:8000/ingest/batch"）交给 fetch/XHR/sendBeacon —— 浏览器按页面
+  // origin 解析，现场数据被静默 POST 到用户自己的业务服务器（404 或被业务日志
+  // 吃掉），SDK 侧零告警。注意 "localhost:8000" 会被 URL 解析成
+  // protocol="localhost:"（scheme 可为任意字母），所以必须校验协议而不只是"能否解析"。
+  // Node SDK 对同一输入抛 TypeError；浏览器 SDK 注入宿主页面，抛异常会打断宿主
+  // 脚本，因此这里只做判定，由 init 走"告警 + 拒绝初始化"的失败安全路径。
+  function _isEndpointUsable(value) {
+    if (typeof value !== "string" || !value) return false;
+    var parsed;
+    try {
+      parsed = new URL(value);
+    } catch (e) {
+      return false;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    return !!parsed.host;
+  }
+
   function _isSelfRequest(url) {
     if (!cfg.endpoint) return false;
     var raw = String(url || "");
@@ -1022,6 +1058,14 @@
     return String(body);
   }
 
+  // W15 / P3-SDK-3：只收敛字符串字段。对象形态的 body（手动
+  // reportNetworkError({request_body: {...}})）不在此处理——把它 JSON 化会改变
+  // 上报与入库的形状，属契约变更；服务端 _truncate_body 同样只按字符串截断。
+  function _truncateField(value, limit, suffix) {
+    if (typeof value !== "string" || value.length <= limit) return value;
+    return value.slice(0, limit) + suffix;
+  }
+
   function _reportNetworkRecord(record, force) {
     try {
       if (record && record.url) {
@@ -1035,6 +1079,21 @@
       }
       if (record && record.error) {
         record.error = _redact(String(record.error));
+      }
+      // 截断必须在脱敏**之后**：反过来会把敏感值从中间切开，留下正则匹配不到的
+      // 半截秘密（与服务端"脱敏在存储边界统一执行"的层次一致）。
+      // 只对**已存在**的字段赋值：凭空补 url: undefined 会改变记录形状，
+      // 下游 onNetworkCapture 消费者与 e2e 断言按字段存在性判断。
+      if (record) {
+        if ("url" in record) {
+          record.url = _truncateField(record.url, _MAX_URL_CHARS, _URL_TRUNCATED_SUFFIX);
+        }
+        if ("request_body" in record) {
+          record.request_body = _truncateField(record.request_body, _MAX_BODY_CHARS, _BODY_TRUNCATED_SUFFIX);
+        }
+        if ("response_body" in record) {
+          record.response_body = _truncateField(record.response_body, _MAX_BODY_CHARS, _BODY_TRUNCATED_SUFFIX);
+        }
       }
       if (_pendingUISilentFailure) {
         _pendingUISilentFailure.sawNetwork = true;
@@ -1588,6 +1647,14 @@
       console.warn("[ai-debug] endpoint 未配置，SDK 不上报");
       return;
     }
+    // W15 / P3-SDK-2：格式判定必须在装钩子之前——一旦钩子装上，非法 endpoint
+    // 造成的相对地址上报只会表现为"静默丢数据"，没有任何可诊断信号。
+    // 告警刻意不回显 endpoint 原文：漏 scheme 的值仍可能带 ?api_key=… 查询参数，
+    // 而宿主页面的 console 会被各种采集器接管。
+    if (!_isEndpointUsable(cfg.endpoint)) {
+      console.warn("[ai-debug] endpoint 非法（必须是 http:// 或 https:// 开头的绝对地址），SDK 不上报");
+      return;
+    }
     _inited = true;
     _destroyed = false;
     _installErrorHook();
@@ -1913,6 +1980,8 @@
     _flushBatch: _flushBatch,
     // 测试辅助（v0.7.0 Minor 单测，只读）：自请求判定与定时 flush 句柄状态
     _isSelfRequest: _isSelfRequest,
+    // W15 / P3-SDK-2：endpoint 合法性判定（纯函数，供单测与宿主自检）
+    _isEndpointUsable: _isEndpointUsable,
     get _batchTimerScheduled() { return !!_batchTimer; },
   };
 

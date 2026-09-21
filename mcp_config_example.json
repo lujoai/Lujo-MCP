@@ -1,8 +1,12 @@
 {
   "mcpServers": {
-    "lujo-mcp": {
+    "lujo": {
+      "command": "npx",
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.1"]
+    },
+    "lujo-from-source": {
       "command": "python",
-      "args": ["-m", "app.mcp_server"],
+      "args": ["-m", "app.mcp_server", "--http"],
       "cwd": "/替换为你的项目绝对路径/lujo-mcp",
       "env": {
         "PYTHONPATH": "."

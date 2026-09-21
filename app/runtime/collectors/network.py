@@ -9,14 +9,27 @@ import logging
 
 logger = logging.getLogger("lujo-mcp.collectors.network")
 
-_MAX_BODY_CHARS = 10 * 1024  # 10KB，与浏览器 SDK 截断阈值一致
+# W15 / P3-SDK-3 更正：此前这两条注释自称"与浏览器 SDK 截断阈值一致"，实测为假 ——
+# 浏览器 SDK 只在 fetch/XHR 钩子里把 response_body 截到 2000，request_body 与 url
+# 当时完全不设限（_serializeRequestBody 对字符串原样返回）。这里的值是服务端**兜底**
+# 上限，不是任何 SDK 阈值的镜像。现口径：两个 SDK 都在客户端把 body 截到 10176、
+# url 截到 2000，并追加"（客户端已截断）"标记；SDK 上限**严格小于**这里的值，好让
+# 本模块的截断只在遇到其他上报方（curl / 自建集成 / 旧版 SDK）时才生效，且不会把
+# SDK 留下的标记二次截掉。
+_MAX_BODY_CHARS = 10 * 1024  # 10KB 兜底
 # FIX(v0.7.1-b3-7): url 截断上限（2048 字符）——超长 url 此前原样入库/
-# 进 context/发 LLM，纯浪费；与浏览器 SDK 的 fetch hook 截断语义对齐。
+# 进 context/发 LLM，纯浪费。同为兜底值，SDK 侧上限是 2000。
 _MAX_URL_CHARS = 2048
 
 
 def _truncate_body(text):
-    """超长 body 截断，None/空原样返回。"""
+    """超长 body 截断，None/空原样返回。
+
+    已知边界（W15 / P3-SDK-3）：只按**字符串**长度收敛。对象形态的 body（手动
+    `reportNetworkError({request_body: {...}})` 不会先 JSON 化）在这里走
+    `len(dict)` = 键数，因此不受上限保护；真要按字节收敛得先统一成字符串，那会
+    改变入库与 MCP 工具返回的形状（契约变更），不在本次 SDK 清理批范围内。
+    """
     if not text:
         return text
     if len(text) > _MAX_BODY_CHARS:

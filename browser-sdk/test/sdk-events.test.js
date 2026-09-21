@@ -123,3 +123,77 @@ test("G2: sampleRate=0 时遥测类事件仍被采样过滤", () => {
   const sends = MockXHR.instances.filter((x) => x.body);
   assert.equal(sends.length, 0, `遥测不应绕过采样，实际发送 ${sends.length} 个请求`);
 });
+
+// ── W15 / P3-SDK-3：上报体积必须在客户端收敛 ──────────────────────────────
+// 服务端 parse_network_record 对 request_body/response_body 截到 10240、url 截到
+// 2048，但那发生在**入库前**：兆级字符串照样穿过网络、被整体读进内存、被脱敏正则
+// 各扫一遍，还会挤爆 localStorage 降级队列（浏览器 ~5MB 配额）。浏览器 SDK 此前
+// 只在 fetch/XHR 钩子里把 response_body 截到 2000，url 与 request_body 完全不设限
+// （_serializeRequestBody 对字符串原样返回），Node SDK 侧同一缺陷已一并修。
+//
+// 这两个用例放在文件末尾并显式清空 endpoint：_send 在 endpoint 为空时直接返回，
+// 因此不会产生批次定时器（node --test 会等空事件循环），也不依赖 MockXHR。
+test("P3-SDK-3: 超长 url / body 在客户端截断并留下可诊断标记", () => {
+  SDK._setConfig("endpoint", "");
+  const captured = [];
+  SDK.onNetworkCapture((record) => captured.push(record));
+  try {
+    SDK.reportNetworkError({
+      method: "POST",
+      url: "http://example.com/search?q=" + "y".repeat(64 * 1024),
+      status_code: 500,
+      request_body: "x".repeat(1024 * 1024),
+      response_body: "z".repeat(1024 * 1024),
+    });
+  } finally {
+    SDK.onNetworkCapture(null);
+  }
+
+  assert.equal(captured.length, 1, "onNetworkCapture 应收到 1 条记录");
+  const record = captured[0];
+  // 客户端上限必须**严格小于**服务端上限（10240 / 2048），否则服务端二次截断会
+  // 把客户端标记切掉，入库内容退化成"静默截断"。
+  assert.ok(record.request_body.length <= 10240, `request_body 未收敛: ${record.request_body.length}`);
+  assert.ok(record.response_body.length <= 10240, `response_body 未收敛: ${record.response_body.length}`);
+  assert.ok(record.url.length <= 2048, `url 未收敛: ${record.url.length}`);
+  assert.ok(/（客户端已截断）$/.test(record.request_body), "request_body 缺截断标记");
+  assert.ok(/（客户端已截断）$/.test(record.response_body), "response_body 缺截断标记");
+  assert.ok(/（客户端已截断）$/.test(record.url), "url 缺截断标记");
+  assert.equal(record.method, "POST", "非字符串字段不得被改写");
+  assert.equal(record.status_code, 500);
+});
+
+test("P3-SDK-3: 未超限字段逐字节不变，且脱敏先于截断", () => {
+  SDK._setConfig("endpoint", "");
+  const captured = [];
+  SDK.onNetworkCapture((record) => captured.push(record));
+  try {
+    SDK.reportNetworkError({
+      method: "GET",
+      url: "http://example.com/orders/1",
+      request_body: "small body",
+      response_body: '{"ok":true}',
+    });
+    // 秘密放在截断点之前：先截断后脱敏会把它完整保留；放在截断点之后则会被切
+    // 成半截、正则匹配不到 —— 两种顺序都不允许漏原文，故必须是"脱敏 → 截断"。
+    SDK.reportNetworkError({
+      method: "POST",
+      url: "http://example.com/login",
+      request_body: 'password="hunter2-secret" ' + "b".repeat(20000),
+    });
+  } finally {
+    SDK.onNetworkCapture(null);
+  }
+
+  assert.equal(captured.length, 2);
+  assert.equal(captured[0].request_body, "small body");
+  assert.equal(captured[0].response_body, '{"ok":true}');
+  assert.equal(captured[0].url, "http://example.com/orders/1");
+  assert.equal(captured[0].request_body.includes("（客户端已截断）"), false, "未超限不得加标记");
+
+  const big = captured[1].request_body;
+  assert.equal(big.includes("hunter2-secret"), false, "脱敏必须在截断之前完成");
+  assert.ok(big.includes("***REDACTED***"), "脱敏结果应留下 REDACTED 占位");
+  assert.ok(/（客户端已截断）$/.test(big), "截断标记必须保留在末尾");
+  assert.ok(big.length <= 10240, `request_body 未收敛: ${big.length}`);
+});

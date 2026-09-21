@@ -50,7 +50,7 @@ class TestVerifyPersistence:
 
     @pytest.fixture(autouse=True)
     def _clean_trace_persist(self):
-        """清理 PostgreSQL 中可能遗留的 trace-persist-1 数据"""
+        """清理 trace store 中可能遗留的 trace-persist-1 数据（跨用例隔离）"""
         from app.runtime.core.logs import delete_logs
         delete_logs("trace-persist-1")
         yield

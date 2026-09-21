@@ -102,6 +102,33 @@ AI 不再需要你手动翻日志、拼提示词，就能给出基于**真实运
 
 > 详细操作见 [Demo 演示流程](../../README.md) 与 下方「演示指南」。
 
+### 不想启服务？`examples/` 下有三份零依赖样例
+
+不需要 Docker、不需要 LLM Key，克隆仓库即可看：
+
+- **[`examples/error_demo.py`](../../examples/error_demo.py)** —— 用 runtime API 造一次真实的
+  `ZeroDivisionError`，打印逐帧调用栈（含局部变量）与组装好的 Debug Context：
+
+  ```bash
+  # macOS / Linux
+  STORAGE_BACKEND=memory python examples/error_demo.py
+  ```
+
+  ```powershell
+  # Windows（PowerShell）
+  $env:STORAGE_BACKEND = "memory"; .venv\Scripts\python.exe examples\error_demo.py
+  ```
+
+  `STORAGE_BACKEND` 必须是 `memory`（当前唯一受支持的运行时后端）：`.env` 里若还留着
+  已移除的 `postgresql`，脚本会按设计**直接拒绝启动**而不是静默回退。
+
+- **[`examples/trace_demo.json`](../../examples/trace_demo.json)** —— 一次失败请求的**静态快照**：
+  `trace`（原始时间线）、`context`（`build_context` 的组装结果）、`exception`（结构化堆栈）三段，
+  可直接对照上面第 4 步的字段形状，或当 MCP 工具返回值的样例数据用。
+
+- **[`examples/network_capture_demo.html`](../../examples/network_capture_demo.html)** —— 独立的
+  Browser SDK 采集页（不依赖内置 `/demo`），把页面里的 `endpoint` 指向你的 Lujo 实例后直接打开。
+
 ---
 
 ## 演示指南 / Demo Guide

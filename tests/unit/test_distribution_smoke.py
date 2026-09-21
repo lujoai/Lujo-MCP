@@ -7,6 +7,7 @@
 版本一致性动态读取 app/__init__.py 的 __version__，避免硬编码造成版本漂移。
 """
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,64 @@ def test_sdk_package_and_tests_exist():
     assert (BROWSER_SDK / "ai-debug.js").is_file()
     # TST-3：SDK 契约单测必须存在（Node，CI 守护）
     assert (BROWSER_SDK / "test" / "sdk-core.test.js").is_file()
+    # W15 / P4-SDK：包名与已发布的 @lujoai/lujo-mcp-node-sdk 同口径（此前仍叫
+    # v0.5.2 品牌统一前的 ai-debug-sdk）。browser-sdk/ 只是开发与测试载体：真正
+    # 对外分发的是元包内的 browser-sdk/ai-debug.js 副本，因此必须 private —— 否则
+    # 在该目录里误跑一次 npm publish 就会去公网抢注这个 scoped 名。
+    assert pkg["name"] == "@lujoai/lujo-mcp-browser-sdk"
+    assert pkg.get("private") is True, "browser-sdk 是开发载体，必须声明 private 防误发布"
+
+
+def test_browser_sdk_test_files_are_all_registered_in_ci():
+    """W15：browser-sdk 的测试文件必须同时登记在 CI 清单里。
+
+    ci.yml 显式列文件（不用目录形式：`node --test <dir>` 在部分 Node 版本下按模块
+    解析导致 MODULE_NOT_FOUND），所以**新增测试文件不会自动进 CI** —— 该 workflow
+    自己的注释就记录了 v0.6.7 传输修复测试因此漏出门禁、v0.6.9 漏登记
+    sdk-destroy.test.js。这里把「package.json 的 test script」当作单一来源，
+    与 ci.yml 清单做集合比较，两处任一漏登记即判红。
+    """
+    ci_text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    manifest = json.loads((BROWSER_SDK / "package.json").read_text(encoding="utf-8"))
+    script_files = set(re.findall(r"test/([\w.-]+\.test\.js)", manifest["scripts"]["test"]))
+    ci_files = set(re.findall(r"browser-sdk/test/([\w.-]+\.test\.js)", ci_text))
+
+    assert script_files, "browser-sdk/package.json 的 test script 未列出任何测试文件"
+    assert ci_files == script_files, (
+        f"CI 清单与 npm test 清单不一致：仅 CI 有 {sorted(ci_files - script_files)}，"
+        f"仅 npm test 有 {sorted(script_files - ci_files)}"
+    )
+    for name in sorted(script_files):
+        assert (BROWSER_SDK / "test" / name).is_file(), f"清单登记的 {name} 在磁盘上不存在"
+
+
+def test_every_published_npm_package_ships_readme_and_license():
+    """W15 / P3-SDK-6：发布产物必须自带 README 与 LICENSE 正文。
+
+    npm 只把**包目录内**的 README/LICENSE 打进 tarball（这两个文件名不受 files
+    字段管辖，因此不能靠 files 白名单带出去）。此前元包与三个平台包都没有这两个
+    文件 → registry 页面空白、无许可证正文，只剩 manifest 里一句 "license": "MIT"。
+    LICENSE 必须与仓库根逐字节一致：改一次许可证正文却漏改分发副本，等于对外
+    声明了两套条款。
+    """
+    root_license = (ROOT / "LICENSE").read_bytes()
+    published_dirs = [
+        NPM_PACKAGES / "lujo-mcp",
+        NPM_PACKAGES / "lujo-mcp-win32-x64",
+        NPM_PACKAGES / "lujo-mcp-linux-x64",
+        NPM_PACKAGES / "lujo-mcp-osx-arm64",
+        ROOT / "node-sdk",
+    ]
+    for pkg_dir in published_dirs:
+        name = pkg_dir.name
+        readme = pkg_dir / "README.md"
+        license_file = pkg_dir / "LICENSE"
+        assert readme.is_file(), f"{name} 缺 README.md（npm 包页面会空白）"
+        assert readme.read_text(encoding="utf-8").strip(), f"{name} 的 README.md 是空文件"
+        assert license_file.is_file(), f"{name} 缺 LICENSE（tarball 里没有许可证正文）"
+        assert license_file.read_bytes() == root_license, f"{name}/LICENSE 与仓库根 LICENSE 不一致"
+        manifest = json.loads((pkg_dir / "package.json").read_text(encoding="utf-8"))
+        assert manifest.get("license") == "MIT", f"{name}/package.json 未声明 MIT，与 LICENSE 正文矛盾"
 
 
 def test_builtin_browser_demos_are_zero_config_and_same_origin():

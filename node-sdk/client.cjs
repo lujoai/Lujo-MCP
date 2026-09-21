@@ -3,6 +3,18 @@
 const crypto = require("node:crypto");
 
 const MAX_BATCH_SIZE = 100;
+// W15 / P3-SDK-3：网络记录字段的客户端体积上限。服务端
+// app/runtime/collectors/network.py 对 request_body/response_body 截到 10240、
+// url 截到 2048，但那发生在**入库前**：/ingest/batch 的非 gzip 分支没有任何体积
+// 上限（只有 gzip 分支受 _MAX_DECOMPRESSED_SIZE=10MiB 保护），兆级响应体会原样
+// 穿过网络、被整体读进内存、被 6 条脱敏正则各扫一遍，最后才丢掉 99%。
+// 客户端上限必须**严格小于**服务端上限，留出截断标记的位置：等长会让服务端二次
+// 截断把标记切掉，入库内容退化成"静默截断"，看不出数据不完整。
+// 浏览器 SDK 的同位阈值是 512（request_body_preview）/ 2000（response_body）。
+const MAX_BODY_CHARS = 10176;
+const MAX_URL_CHARS = 2000;
+const BODY_TRUNCATED_SUFFIX = "\n...（客户端已截断）";
+const URL_TRUNCATED_SUFFIX = "...（客户端已截断）";
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8000";
 const DEFAULT_BATCH_SIZE = 100;
 const DEFAULT_BATCH_INTERVAL_MS = 1000;
@@ -116,6 +128,32 @@ function redactValue(value, active = new WeakSet(), depth = 0) {
 
 function sanitizePayload(payload) {
   return redactValue(payload);
+}
+
+function truncateText(value, limit, suffix) {
+  if (typeof value !== "string" || value.length <= limit) return value;
+  return value.slice(0, limit) + suffix;
+}
+
+// 只对**已存在**的字段动手：补一个 `url: undefined` 会被 redactValue 归一成
+// null，凭空给上报载荷加键。
+function boundNetworkRecord(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return record;
+  const bounded = { ...record };
+  if ("url" in bounded) {
+    bounded.url = truncateText(bounded.url, MAX_URL_CHARS, URL_TRUNCATED_SUFFIX);
+  }
+  if ("request_body" in bounded) {
+    bounded.request_body = truncateText(bounded.request_body, MAX_BODY_CHARS, BODY_TRUNCATED_SUFFIX);
+  }
+  if ("response_body" in bounded) {
+    bounded.response_body = truncateText(
+      bounded.response_body,
+      MAX_BODY_CHARS,
+      BODY_TRUNCATED_SUFFIX,
+    );
+  }
+  return bounded;
 }
 
 function parseStack(stack) {
@@ -319,8 +357,11 @@ class NodeSdkClient {
     if (this._closed || this._closing) throw new Error("Node SDK client is closed");
   }
 
-  _enqueue(path, payload) {
-    this._queue.push({ path, payload: sanitizePayload(payload) });
+  // bound: 可选的**脱敏后**收敛钩子。顺序不能反 —— 先截断会把敏感值从中间切开，
+  // 留下正则匹配不到的半截秘密。
+  _enqueue(path, payload, bound) {
+    const sanitized = sanitizePayload(payload);
+    this._queue.push({ path, payload: bound ? bound(sanitized) : sanitized });
     if (this._queue.length >= this._batchSize) {
       this._startAutomaticFlush();
     } else {
@@ -395,11 +436,15 @@ class NodeSdkClient {
     }
     const networkRecord = { ...record };
     if (typeof networkRecord.source === "undefined") networkRecord.source = this._source;
-    this._enqueue("/ingest/network", {
-      record: networkRecord,
-      trace_id: this._traceId,
-      session_id: this._sessionId,
-    });
+    this._enqueue(
+      "/ingest/network",
+      {
+        record: networkRecord,
+        trace_id: this._traceId,
+        session_id: this._sessionId,
+      },
+      (payload) => ({ ...payload, record: boundNetworkRecord(payload.record) }),
+    );
     return { trace_id: this._traceId, session_id: this._sessionId };
   }
 
@@ -435,6 +480,16 @@ class NodeSdkClient {
       result.attempts += outcome.attempts;
       result.sent += outcome.sent;
       result.failed += outcome.failed;
+      // W15 / P3-SDK-4：_sendBatch 一直返回 status，但这里把它丢掉了 —— 调用方
+      // 只能看到 failed>0，无法区分「服务端明确拒了（401 密钥错 / 413 体积超限 /
+      // 5xx）」与「根本没连上」（status 缺席）。仅在**非 2xx** 时补这个键：
+      // 2xx 但部分 item.ok=false 属业务级失败，把它记成 lastErrorStatus 会误导。
+      if (
+        typeof outcome.status === "number" &&
+        (outcome.status < 200 || outcome.status >= 300)
+      ) {
+        result.lastErrorStatus = outcome.status;
+      }
     }
     return result;
   }

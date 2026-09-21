@@ -23,6 +23,12 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 logger = logging.getLogger("lujo-mcp.ingest")
 
 _MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
+# 已知边界（W15 / P3-SDK-3）：上面这个 10MiB 闸门只作用于 gzip 分支。非压缩 JSON
+# 走 request.json()，整个请求体会被读进内存，没有等价的体积上限 —— 两个 SDK 现在
+# 都在客户端把 network 的 body/url 截到 10176/2000（并留"（客户端已截断）"标记），
+# 所以正常上报路径的体积是有界的；用 curl / 自建集成灌兆级明文 body 仍无硬上限。
+# 补这道闸门要同时定阈值与 413 语义（100 条 × 10KiB body 的合法批次本身就 ~1MiB），
+# 属 ingest 加固的独立事项，不在 SDK 清理批里顺手改。
 # FIX: P3-6 /ingest/batch events 数组单次最多 100 条，防止滥用撑爆内存/CPU
 _MAX_BATCH_EVENTS = 100
 

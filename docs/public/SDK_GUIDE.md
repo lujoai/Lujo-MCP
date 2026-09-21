@@ -96,8 +96,8 @@ await lujo.close();
 |-----|------|
 | `createClient({ endpoint?, apiKey?, release?, ... })` | 创建一个进程内客户端；`endpoint` 是 Lujo-MCP 服务根地址，省略时使用 `http://127.0.0.1:8000`。`apiKey` 通过请求头发送，`release` 随错误现场透传。 |
 | `reportError(error, extra?)` | 将 `Error` 或可序列化错误加入错误队列；`extra` 用于补充业务上下文。调用本身不保证已经完成网络发送。 |
-| `reportNetworkError(record)` | 将一次网络失败记录加入网络事件队列；建议传 `method`、`url`、`status_code` 和 `duration_ms`。 |
-| `flush()` | 等待当前队列发送和有限重试完成，并返回 `sent`、`failed`、`batches`、`attempts` 计数；单批不超过服务端允许的 100 条事件，调用方应检查 `failed`。 |
+| `reportNetworkError(record)` | 将一次网络失败记录加入网络事件队列；建议传 `method`、`url`、`status_code` 和 `duration_ms`。`url` / `request_body` / `response_body` 会在**脱敏之后**分别按 2000 / 10176 / 10176 字符截断，被截时追加 `...（客户端已截断）`。 |
+| `flush()` | 等待当前队列发送和有限重试完成，并返回 `sent`、`failed`、`batches`、`attempts` 计数；单批不超过服务端允许的 100 条事件，调用方应检查 `failed`。若某批被服务端以非 2xx 拒绝，结果里还会出现 `lastErrorStatus`（该批的 HTTP 状态码，如 401 密钥错、413 体积/条数超限、5xx），用来区分「服务端明确拒了」与「根本没连上」——后者不带这个键。 |
 | `close()` | 应用退出或 worker 重启前调用；完成最后一次 flush、停止内部定时器并释放客户端资源。重复调用安全，关闭后不要继续提交事件。 |
 | `getSessionId()` / `getTraceId()` | 读取当前会话/追踪标识；`setTraceId(id)` 可把多个上报关联到同一业务操作。 |
 
@@ -146,7 +146,7 @@ AiDebug.init({ endpoint: "http://localhost:8000" });
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `endpoint` | `""` | **必填**。服务端地址，如 `http://localhost:8000`（不含 `/ingest` 前缀） |
+| `endpoint` | `""` | **必填**。服务端地址，如 `http://localhost:8000`（不含 `/ingest` 前缀）。必须是 `http://` / `https://` 开头的**绝对地址**：缺省或格式非法（如漏 scheme 的 `localhost:8000`）时 `init()` 拒绝初始化、只留一条 `console.warn`（不抛异常，避免打断宿主页面脚本），全部现场都不上报 |
 | `apiKey` | `""` | API Key（优先走请求头；`sendBeacon` 场景自动换 beacon 短时令牌） |
 | `captureErrors` | `true` | 全局异常捕获 |
 | `captureNetwork` | `true` | 网络请求捕获 |
@@ -172,6 +172,12 @@ AiDebug.init({ endpoint: "http://localhost:8000" });
 | `localStorageKey` | `"ai-debug-pending-batches"` | V5：localStorage 暂存键 |
 | `maxPendingBatches` | `10` | V5：最多暂存批次数 |
 | `release` | `""` | v0.5.1：发布标识，随错误 extra 透传（空=不发送） |
+
+> **上报体积上限**：network 记录的 `request_body` / `response_body` 在客户端截到 10176 字符、
+> `url` 截到 2000 字符，被截时以 `...（客户端已截断）` 结尾；fetch/XHR 钩子捕获的
+> `response_body` 另有 2000 字符的预览上限。截断发生在**脱敏之后**（反过来会把敏感值切成
+> 正则认不出的半截）。服务端 `parse_network_record` 还保留 10240 / 2048 的兜底上限，
+> 用于 curl、自建集成等非 SDK 上报方。Node SDK 用同一组客户端阈值。
 
 ---
 

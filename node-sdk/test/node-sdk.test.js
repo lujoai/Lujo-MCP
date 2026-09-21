@@ -81,6 +81,34 @@ test("the package exposes real conditional CJS and ESM root entry points", async
   assert.equal(cjsApi.createClient, require("@lujoai/lujo-mcp-node-sdk").createClient);
 });
 
+test("type declarations cover every runtime export", () => {
+  // W15 / P3-SDK-5：包里没有 types/.d.ts 时 TS 使用者拿到的全是 any。
+  // 本用例不校验类型正确性（仓库不装 TypeScript），只守住**声明与运行时导出
+  // 不漂移**：新增运行时导出而忘了补声明，这里就红。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dtsPath = path.join(__dirname, "..", "index.d.ts");
+  assert.ok(fs.existsSync(dtsPath), "缺少 index.d.ts");
+  const dts = fs.readFileSync(dtsPath, "utf8");
+
+  for (const name of API_NAMES) {
+    assert.ok(
+      new RegExp(`export declare function ${name}\\b`).test(dts),
+      `index.d.ts 缺少运行时导出 ${name} 的声明`,
+    );
+  }
+  assert.ok(/export interface FlushResult\b/.test(dts), "缺少 FlushResult 声明");
+  assert.ok(/lastErrorStatus\?: number/.test(dts), "FlushResult 缺少 lastErrorStatus");
+
+  const pkg = require("../package.json");
+  assert.equal(pkg.types, "./index.d.ts", "package.json 缺少 types 字段");
+  assert.equal(pkg.exports["."].types, "./index.d.ts", "exports 缺少 types 条件");
+  assert.ok(
+    pkg.files.includes("index.d.ts"),
+    "发布产物 files 必须包含 index.d.ts，否则装完仍然没有类型",
+  );
+});
+
 test("reports error frames and network records through a real local HTTP server", async () => {
   const requests = [];
   const { server, endpoint } = await startServer(async ({ request, response, body, path }) => {
@@ -301,13 +329,61 @@ test("drops an exhausted transient batch after the configured bound", async () =
 
   try {
     client.reportError(new Error("eventually unavailable"));
-    assert.deepEqual(await client.flush(), { sent: 0, failed: 1, batches: 1, attempts: 3 });
+    assert.deepEqual(await client.flush(), {
+      sent: 0,
+      failed: 1,
+      batches: 1,
+      attempts: 3,
+      lastErrorStatus: 503,
+    });
     assert.equal(requestCount, 3);
     assert.deepEqual(await client.flush(), { sent: 0, failed: 0, batches: 0, attempts: 0 });
     assert.equal(requestCount, 3, "an exhausted batch must not be retried by a later flush");
   } finally {
     await client.close();
     await closeServer(server);
+  }
+});
+
+test("flush surfaces the HTTP status that made a batch fail", async () => {
+  // W15 / P3-SDK-4：401（密钥错）与 413（体积超限）对使用者的处置完全不同，
+  // 而 failed 计数区分不了它们 —— status 此前在 _flushQueue 里被直接丢掉。
+  for (const status of [401, 413]) {
+    const { server, endpoint } = await startServer(async ({ response }) => {
+      respond(response, status);
+    });
+    const client = cjsApi.createClient({ endpoint, maxRetries: 0, retryDelayMs: 1 });
+    try {
+      client.reportError(new Error(`rejected-${status}`));
+      const result = await client.flush();
+      assert.equal(result.lastErrorStatus, status);
+      assert.equal(result.failed, 1);
+    } finally {
+      await client.close();
+      await closeServer(server);
+    }
+  }
+});
+
+test("flush omits lastErrorStatus when no HTTP response rejected the batch", async () => {
+  // 键缺席 = 「没有服务端拒绝」：连不上（无 HTTP 响应）与全部成功都不该带它，
+  // 否则调用方会把网络不可达误读成某个状态码。
+  const client = cjsApi.createClient({
+    endpoint: "http://127.0.0.1:1",
+    maxRetries: 0,
+    retryDelayMs: 1,
+    requestTimeoutMs: 2000,
+  });
+  try {
+    client.reportError(new Error("unreachable"));
+    const result = await client.flush();
+    assert.equal(result.failed, 1);
+    assert.ok(
+      !("lastErrorStatus" in result),
+      `network failure must not carry a status, got ${result.lastErrorStatus}`,
+    );
+  } finally {
+    await client.close();
   }
 });
 
@@ -322,7 +398,13 @@ test("does not retry permanent 4xx responses", async () => {
     const client = cjsApi.createClient({ endpoint, maxRetries: 5, retryDelayMs: 1 });
     try {
       client.reportError(new Error(`permanent-${status}`));
-      assert.deepEqual(await client.flush(), { sent: 0, failed: 1, batches: 1, attempts: 1 });
+      assert.deepEqual(await client.flush(), {
+        sent: 0,
+        failed: 1,
+        batches: 1,
+        attempts: 1,
+        lastErrorStatus: status,
+      });
       assert.equal(requestCount, 1, `HTTP ${status} must not be retried`);
     } finally {
       await client.close();
@@ -400,4 +482,124 @@ test("close waits for in-flight flush, is idempotent, and rejects later reports"
     await client.close();
     await closeServer(server);
   }
+});
+
+test("bounds oversized network fields before they hit the wire (W15 / P3-SDK-3)", async () => {
+  // 缺陷复现口径：Node SDK 全文无截断。服务端 parse_network_record 对
+  // request_body/response_body 截到 10240、url 截到 2048，但那发生在**入库前**；
+  // /ingest/batch 的非 gzip 分支没有任何体积上限（只有 gzip 分支受
+  // _MAX_DECOMPRESSED_SIZE=10MiB 保护），所以一个 1MiB 的响应体会原样穿过网络、
+  // 被 request.json() 整体读进内存，再被 6 条脱敏正则各扫一遍，最后才丢掉 99%。
+  // 浏览器 SDK 早就在客户端截（request_body_preview 512 / response_body 2000）。
+  const rawSizes = [];
+  let record = null;
+  const { server, endpoint } = await startServer(async ({ response, body, raw }) => {
+    rawSizes.push(raw.length);
+    record = body.events[0].payload.record;
+    respond(response, 200, { count: body.events.length });
+  });
+  const client = cjsApi.createClient({ endpoint, batchIntervalMs: 60000 });
+
+  const hugeBody = "x".repeat(1024 * 1024);
+  const hugeUrl = "http://service.test/search?q=" + "y".repeat(64 * 1024);
+
+  try {
+    client.reportNetworkError({
+      method: "POST",
+      url: hugeUrl,
+      status_code: 500,
+      request_body: hugeBody,
+      response_body: hugeBody,
+      duration_ms: 12,
+    });
+    await client.flush();
+  } finally {
+    await client.close();
+    await closeServer(server);
+  }
+
+  // 客户端上限必须**严格小于**服务端上限，否则服务端会二次截断并把客户端留下的
+  // 截断标记切掉 → 入库内容变成"静默截断"，看不出数据不完整。
+  assert.ok(
+    record.request_body.length <= 10240,
+    `request_body 未在客户端收敛：${record.request_body.length} > 10240`,
+  );
+  assert.ok(
+    record.response_body.length <= 10240,
+    `response_body 未在客户端收敛：${record.response_body.length} > 10240`,
+  );
+  assert.ok(record.url.length <= 2048, `url 未在客户端收敛：${record.url.length} > 2048`);
+  // 用 ok+test 而不是 assert.match：失败时 match 会把整段兆级字符串打进 TAP 输出
+  assert.ok(/（客户端已截断）$/.test(record.request_body), "request_body 截断必须留下可诊断标记");
+  assert.ok(/（客户端已截断）$/.test(record.response_body), "response_body 截断必须留下可诊断标记");
+  assert.ok(/（客户端已截断）$/.test(record.url), "url 截断必须留下可诊断标记");
+  // 整包体积有界：一条记录不许把批次撑到兆级
+  assert.ok(rawSizes[0] < 64 * 1024, `上报体积未收敛：${rawSizes[0]} bytes`);
+  // 非字符串/未超限字段不得被改写
+  assert.equal(record.method, "POST");
+  assert.equal(record.status_code, 500);
+  assert.equal(record.duration_ms, 12);
+});
+
+test("leaves in-limit network fields byte-identical and truncates after redaction", async () => {
+  let record = null;
+  const { server, endpoint } = await startServer(async ({ response, body }) => {
+    record = body.events[0].payload.record;
+    respond(response, 200, { count: body.events.length });
+  });
+  const client = cjsApi.createClient({ endpoint, batchIntervalMs: 60000 });
+
+  try {
+    client.reportNetworkError({
+      method: "GET",
+      url: "http://service.test/orders/1",
+      status_code: 200,
+      request_body: "small body",
+      response_body: '{"ok":true}',
+      headers: { Cookie: "session=secret-cookie" },
+    });
+    // 敏感值必须**先脱敏再截断**：反过来会把 token 从中间切开，
+    // 留下正则匹配不到的半截秘密。
+    client.reportNetworkError({
+      method: "GET",
+      url: "http://service.test/orders/2",
+      request_body: "a".repeat(20000) + ' password="hunter2-secret"',
+    });
+    await client.flush();
+  } finally {
+    await client.close();
+    await closeServer(server);
+  }
+
+  assert.equal(record.request_body, "small body");
+  assert.equal(record.response_body, '{"ok":true}');
+  assert.equal(record.url, "http://service.test/orders/1");
+  assert.equal(record.request_body.includes("（客户端已截断）"), false, "未超限不得加标记");
+});
+
+test("redaction still runs on oversized bodies before truncation", async () => {
+  let record = null;
+  const { server, endpoint } = await startServer(async ({ response, body }) => {
+    record = body.events[0].payload.record;
+    respond(response, 200, { count: body.events.length });
+  });
+  const client = cjsApi.createClient({ endpoint, batchIntervalMs: 60000 });
+
+  try {
+    client.reportNetworkError({
+      method: "POST",
+      url: "http://service.test/login",
+      // 秘密放在**截断点之前**：若先截断后脱敏，它会被完整保留；
+      // 放在截断点之后则会被切掉一半 —— 两种顺序都不允许漏原文。
+      request_body: 'password="hunter2-secret" ' + "b".repeat(20000),
+    });
+    await client.flush();
+  } finally {
+    await client.close();
+    await closeServer(server);
+  }
+
+  assert.equal(record.request_body.includes("hunter2-secret"), false, "脱敏必须在截断前完成");
+  assert.ok(/\*\*\*REDACTED\*\*\*/.test(record.request_body), "脱敏结果必须留下 REDACTED 占位");
+  assert.ok(/（客户端已截断）$/.test(record.request_body), "截断标记必须在末尾保留");
 });

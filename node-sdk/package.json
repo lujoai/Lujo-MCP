@@ -24,8 +24,10 @@
   },
   "type": "commonjs",
   "main": "./index.cjs",
+  "types": "./index.d.ts",
   "exports": {
     ".": {
+      "types": "./index.d.ts",
       "require": "./index.cjs",
       "import": "./index.mjs",
       "default": "./index.mjs"
@@ -35,6 +37,7 @@
     "LICENSE",
     "client.cjs",
     "index.cjs",
+    "index.d.ts",
     "index.mjs",
     "README.md"
   ],

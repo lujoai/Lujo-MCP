@@ -246,7 +246,9 @@ def test_ingest_silent_failure_endpoint_persists_observed_fields():
     """服务端 /ingest/silent-failure 端点保留 observed + observed_events 并落库。
 
     注意：本用例只验证服务端字段透传与持久化，不验证 JS SDK 行为。
-    SDK 端拼装逻辑需要手动跑 examples/silent_failure_demo.html 验证。
+    SDK 端拼装逻辑需要手动跑内置演示页验证：源文件 app/web/silent_failure_demo.html，
+    服务启动后由 GET /demo/silent-failure 提供（W15：原文写的
+    examples/silent_failure_demo.html 并不存在）。
     """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
