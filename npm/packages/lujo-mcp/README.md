@@ -21,7 +21,7 @@ console 日志、网络失败、UI 交互轨迹与会话上下文。Lujo 只负�
   "mcpServers": {
     "lujo": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.1"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.2"]
     }
   }
 }

@@ -6,8 +6,10 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
 元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。**当前版本
-v0.9.1（2026-09-14）**：服务端移除 PostgreSQL 运行时后端（`STORAGE_BACKEND=memory` 为
-唯一合法值），并修复 Windows release smoke 的 HTTP readiness 超时；KB 本地「笔记本」
+v0.9.2（2026-09-21）**：安全加固（KB 存储边界拒绝未脱敏写入、Qdrant 与自定义规则的
+脱敏路径收紧、认证 fail-closed 补强、Agent 外发脱敏），默认监听收紧为 `127.0.0.1`、
+`/metrics` 免鉴权豁免仅回环生效，关闭期与鉴权错误码规范化（`TOOL_BUSY` /
+`AUTH_ERROR -32003`），并新增 KB 诊断经验关联与 `/demo` 接入状态面板；KB 本地「笔记本」
 保持默认开启。npm 已发布版本的 `latest` 与 `engines.node >=18` 以 registry 实查为准。
 
 ## 发布结构

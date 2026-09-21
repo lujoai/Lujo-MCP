@@ -5,9 +5,14 @@
 
 ---
 
-## [Unreleased]
+## [0.9.2] - 2026-09-21
 
-> 以下为 v0.9.1 之后的维护批次（审查修复 W 系列），尚未随任何发布版本出厂。
+> 主题「安全加固与经验闭环」：本版汇集 v0.9.1 之后累计 70 个提交的内容——安全修复（KB 存储边界拒绝未脱敏写入、Qdrant 与自定义规则的脱敏路径收紧、认证 fail-closed 补强、Agent 外发脱敏）、协议与部署行为调整（默认仅监听 `127.0.0.1`、`/metrics` 豁免仅回环生效、关闭期与鉴权错误码规范化）、运行稳定性改进（重型工具槽位与终端语义、stdio 错误语义、Redis L2 陈旧回流、OTel 资源回收、信号退出收口），以及 KB 诊断经验关联与 `/demo` 接入状态可视化。**默认网络暴露面更小、脱敏边界更完整**；容器部署者与按错误码分支的调用方请先阅读「升级须知」。
+
+### Added
+
+- **诊断经验关联与验证回写**：`diagnose_issue` 命中时返回最多 3 条 `related_experiences`（`fingerprint` / `fix_suggestion` / `source` / `verify_count` / `case_confidence`）；验证成功且存在 `trace_id` 时写回 KB。写回失败静默降级，不改变原有诊断结论；SQLite schema 无变更。
+- **SDK 接入状态面板**：`/demo` 展示 SDK 是否已初始化、是否已发出上报、服务端是否已收到并可查询，以及失败原因。成功状态由 SDK 回调与页面自身的 MCP 查询共同确认，不按前端计数推断。
 
 ### Changed
 
@@ -18,6 +23,7 @@
 - **消除 runtime 反向依赖 api 架构环**：建立 `app.runtime.core.invalidation` 观察者注册中心，由上层主动订阅下层写入通知，彻底移除 runtime 对 `app.api.dashboard` 的逆向导入，并通过 AST 静态边界测试防止依赖倒置回潮。
 - **知识库清空单点线性化**：`KnowledgeBase.clear()` 持锁覆盖代际推进、持久层删除与内存字典清空全生命周期，消除重启回灌导致的已清除经验复活问题。
 - **双端 SDK 客户端上报体积收敛**：Browser SDK 与 Node SDK 在脱敏之后统一对 `url`（2000 字符）与 `request_body`/`response_body`（10176 字符）实施硬上限收敛并追加客户端截断标记，保护服务端内存免受超长非压缩请求冲击。
+- **对齐 Docker 与配置示例默认值**：修正开发 Compose 的空数值默认值，生产配置的 LLM `temperature` 对齐至 `0.3`，示例默认值同步对齐。
 
 ### Fixed
 
@@ -36,12 +42,30 @@
 - **Browser SDK 非法 endpoint 格式防静默丢现场**：`init()` 严格校验 http(s) 绝对地址前缀，非法或漏 scheme 时拒绝初始化并保留一条 console.warn，避免错误解析为相对路径将现场发往宿主业务服务器。
 - **Node SDK 错误状态捕获与 TS 类型支持**：`flush()` 在批次被非 2xx 状态拒绝时保留 `lastErrorStatus`；补充完整的 `index.d.ts` 类型声明文件。
 - **分发完整性与架构清理**：npm 元包及三平台包补齐 `README.md` 与根目录一致的 `LICENSE` 授权文件；清理历史空壳 `app/services/` 包；纠正全仓多处关于 PostgreSQL 的陈旧注释与配置。
+- **保护 KB 经验优先级与统计值**：低优先级来源不再覆盖高优先级条目的 `analysis` / `fix_suggestion` / `source`；`verify_count` 与 `case_confidence` 保持单调不减，seed 重放不再降低统计值，受保护更新保留检索索引。
+- **隔离静默失败指纹**：无 `frames` 的静默失败按期望类型与目标字段稳定分组；缺少结构化期望时，按脱敏、数字折叠与截断后的消息确定性降级。普通异常的 fingerprint 逐字兼容。
+- **SIGTERM 清理完成后再退出**：信号退出等待清理收口，并以 stdio 就绪握手确认进程可用性。
+- **补齐 stdio MCP 错误响应**：对 `METHOD_NOT_FOUND`、`TOOL_TIMEOUT` 与 `TOOL_INTERNAL` 返回对应错误语义。
+- **阻断删除失败后的陈旧缓存回流**：Redis L2 删除失败后，代际门禁阻止陈旧值在最长 30 秒 TTL 窗口内重新回流。
+- **OTel 初始化失败时回收已启动的 reader**：初始化失败路径关闭已启动的 reader，消除资源泄漏。
+- **避免 stderr 重复日志与规则告警死锁**：修正统一模式日志向 root handler 传播造成的 stderr 双行噪音；脱敏规则告警移出锁作用域，消除日志格式化重入死锁。
 
 ### Security
 
 - **GO 提交闸门接线**：`allow_commit` 此前恒为 `True`，四条件闸门是空壳、`CommitRefused` 是死代码、换胎作废标记 `aborted` 无生产消费者。现在闸门真实反映 closing / kill_due / aborted，关闭窗口内业务不再可能被提交执行。
 - **指标埋点全函数防御**：`record_mcp_tool_*` 此前无兜底，而调用点位于「已取得执行许可、尚未登记 token」的窗口——OTel 抛异常会让许可永久丢失、该池此后恒 `TOOL_BUSY`。现埋点异常一律吞掉记 debug，且 token 登记先于任何埋点。
 - **路径白名单注释与实际语义相反已更正**：`GIT_PATH_WHITELIST` / `WHITELIST_PATH_PREFIX` 为空时**不是**「不限制」，而是收敛到进程工作目录并拒绝其外路径。
+- **阻止未脱敏内容写入知识库**：知识库存储边界拒绝未脱敏写入（ADR-20260920）；显式关闭脱敏时，在启动阶段发出醒目告警。
+- **收紧 Qdrant 与自定义规则的脱敏路径**：Qdrant embedding 路径改用共享 `pattern_guard`；增强额外规则保护，并跳过可能导致灾难性回溯的自定义正则。
+- **在暴露证据下 fail-closed**：通配绑定、空 host，以及外部 ASGI host 禁用 lifespan 等场景均按暴露证据 fail-closed；不再向未鉴权调用者回显绑定地址。
+
+### 升级须知
+
+- **容器部署者**：服务默认监听地址改为 `127.0.0.1`。需要从容器外访问时，在自定义 Compose 或启动配置中显式设置 `HOST=0.0.0.0` 并确认端口映射；项目自带的三份 Docker 部署配置（`docker-compose.yaml`、`deploy/docker-compose.prod.yml`、`deploy/env.production.example`）已设置该值。
+- **Prometheus 部署者**：`/metrics` 仅在回环绑定时免鉴权。服务绑定到非回环地址时，请为抓取配置提供 Bearer 凭据；项目的 `deploy/prometheus.yml` 已更新。
+- **固定版本的 MCP 客户端配置者**：把配置中的 `@lujoai/lujo-mcp@0.9.1` 更新为 `@lujoai/lujo-mcp@0.9.2`，然后重启对应宿主。使用浮动 `latest` 的配置请在本次 npm 发布完成后确认已升级到该版本。
+- **按错误码分支的调用方**：关闭期重型工具错误码由 `TOOL_TIMEOUT` 改为 `TOOL_BUSY`；HTTP 端 RBAC 鉴权拒绝由 `-32600` 改为 `AUTH_ERROR (-32003)`。请更新对旧错误码的匹配逻辑。
+- **本地数据与旧配置**：无需清理本地 KB 数据，也无需迁移 SQLite schema；只需更新固定版本号、容器自定义 `HOST`，以及非回环 `/metrics` 的 Bearer 配置。
 
 ---
 
