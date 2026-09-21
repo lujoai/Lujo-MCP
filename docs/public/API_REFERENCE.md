@@ -291,13 +291,51 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
   - **JSON-RPC 顶层协议错误**：当请求无法解析（如 `-32700` Parse Error）、方法未找到（`-32601` Method Not Found）或入参结构校验失败（`-32602` Invalid Params）时，服务端返回顶层 JSON-RPC `error` 对象。
   - **错误码常量定义**：代码中预定义了 `TOOL_BUSY_ERROR = -32004` 等扩展错误码常量供协议层备用；客户端在处理工具调用结果时，应以 `result.error_code`（如 `"TOOL_BUSY"`）作为判定标准。
 
+#### 3.4.1 两条传输的错误形态（**有意差异，宿主按 `error_code` 分支，不要按文案**）
+
+同一个工具失败在 HTTP（`POST /mcp`）与 stdio（官方 SDK 适配层）上的**外层载体不同**，
+这是既有设计而非缺陷，两侧形态各自被 wire / parity 测试锁定：
+
+| 场景 | HTTP（JSON-RPC） | stdio（官方 SDK） |
+| --- | --- | --- |
+| 协议级错误（解析失败、方法不存在、入参结构非法、会话/权限） | 顶层 `error` 对象 + 数字 `code` | 同为顶层 JSON-RPC 错误（由 SDK 承载） |
+| 工具级失败（`TOOL_BUSY` / `TOOL_TIMEOUT` / `TOOL_INTERNAL` / 业务失败） | `result.isError = true`，`result.error_code` 与 `_busy` / `_timed_out` 标记位于 **`result` 顶层** | `CallToolResult.isError = true`，`error_code` 与标记位于 **`content[0].text` 里的 JSON 载荷内**（工具失败以 `ToolExecutionError` 上抛，由 SDK 包成 isError） |
+| 错误文案 | 中文（如「工具执行队列已满，请稍后重试。」） | 部分为英文（如 `Tool execution failed`） |
+
+因此：**判定失败一律用 `isError` + `error_code`，绝不要匹配文案**（文案两传输不一致，
+且属可变的诊断信息）。`error_code` 取值集合由 `app/mcp/protocol/tool_errors.py`
+的 `MCP_TOOL_ERROR_CODES` 单一声明，两传输同源。
+
+两处刻意的口径决定（勿当缺陷重开）：
+
+- **未知工具用 `-32601` 而不是 MCP 规范建议的 `-32602`**：工具名确实是
+  `tools/call` 的 params 之一，按规范可归 Invalid Params；但 `-32601` 是本服务
+  自 v0.5 起的既有 wire 契约，宿主可能已按码分支，改码属破坏性变更，收益不抵风险。
+- **`params` 缺 `name` 键归入「未知工具 `-32601`」而不是 `-32602`**：缺键与
+  「工具名为空串」在注册表查找上不可区分；只有 `name` 存在但**非字符串**才按
+  malformed params 返回 `-32602`（B25 的三层防线之一）。
+
+还有一处**不由本项目控制**的形态差异（已用真实调用取证并被单测锁定，升级 MCP SDK
+后若变化会红灯）：stdio 上「参数类型错误」的载体取决于该工具是否出现在 `tools/list`——
+
+| 路径 | 校验方 | 形态 |
+| --- | --- | --- |
+| stdio + listed 工具 | 官方 SDK 的 jsonschema | `isError=true`，`content[0].text` 是裸文本 `Input validation error: ...`，**不含** `error_code` |
+| stdio + unlisted 工具（`agent_visible=false` 的 SDK 上报类） | 本项目 `_validate_tool_arguments`（SDK 对未列出工具明确不校验） | `isError=true`，文本是 JSON 载荷，含 `error_code="INVALID_PARAMS"` |
+| HTTP（两类工具一致） | 本项目 `_validate_tool_arguments` | 顶层 `error.code = -32602` |
+
+因此宿主在 stdio 上**不能**假定参数错误一定带 `error_code`：对 listed 工具它是 SDK
+的裸文本。要统一只能放弃 SDK 校验（代价更大——SDK 会校验嵌套结构，项目自己的校验
+只做顶层两层），故按现状文档化。
+
 | 错误标识 | 出现层级 | 触发条件 | 处理建议 |
 |---------|---------|---------|----------|
-| `TOOL_BUSY` | `result.error_code`（常量 `-32004`） | 同步工具执行槽位满且等待超时（或 timeout=0 立即拒绝） | 客户端稍后重试 / 指数退避，或调大 `TOOL_EXECUTOR_WORKERS` |
+| `TOOL_BUSY` | `result.error_code`（常量 `-32004`） | 同步工具执行槽位满且等待超时（或 timeout=0 立即拒绝）；**服务正在关闭时对重型工具的 fast-fail 也用本码**（关闭路径从未消耗超时预算，不记 `TOOL_TIMEOUT`） | 客户端稍后重试 / 指数退避，或调大 `TOOL_EXECUTOR_WORKERS` |
 | `TOOL_TIMEOUT` | `result.error_code`（当前工具响应不使用顶层数字错误码） | 工具执行耗时超过 `tool_timeout_seconds`（默认 60s） | 检查操作耗时或调大超时阈值 |
 | `TOOL_INTERNAL` | `result.error_code` | 工具执行中抛出未捕获异常 | 检查服务端日志排查工具内部异常 |
 | `INVALID_PARAMS` | 顶层 `error.code = -32602` | 工具入参 Schema 校验失败（Pydantic 校验不通过） | 检查参数类型与必填字段 |
 | `METHOD_NOT_FOUND` | 顶层 `error.code = -32601` | 请求了不存在的 MCP 方法或工具 | 检查方法名与工具注册列表 |
+| `AUTH_ERROR` | 顶层 `error.code = -32003`（HTTP 403） | RBAC 角色不足，无法调用该工具 | 换用具备所需角色的 API Key（角色映射见 `RBAC_ROLE_MAPPING`） |
 | `INTERNAL_ERROR` | 顶层 `error.code = -32603` | MCP 协议层未捕获内部错误 | 检查服务端日志与运行环境 |
 
 ---

@@ -615,7 +615,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # 先记 ok 再被谓词纠正（报告 #22），指标与 isError 由同一判定派生。
     if tool_failure_predicate(tool)(result):
         record_mcp_tool_call(name, "error", time.monotonic() - _tool_start)
-        raise ToolExecutionError(json.dumps(result, ensure_ascii=False, indent=2))
+        # W11 / P3-PRO-3：default=str 与 HTTP 侧（server.py 的两处 dumps）对齐。
+        # 缺它时 handler 返回非 JSON 原生值（datetime / Path / Decimal 等）会在
+        # 这里抛 TypeError，被 SDK 兜底成协议错误，而同一个 handler 在 HTTP 侧
+        # 正常返回 —— 双传输契约分叉。
+        raise ToolExecutionError(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     record_mcp_tool_call(name, "ok", time.monotonic() - _tool_start)
 
     # Phase 3 D5：记录 Tool 响应耗时（仅日志，不修改协议响应、不打印敏感负载）
@@ -629,7 +633,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         name, _elapsed * 1000, _size,
     )
 
-    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2, default=str))]
 
 
 async def main(argv: list[str] | None = None):

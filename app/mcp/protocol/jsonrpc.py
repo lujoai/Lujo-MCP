@@ -29,6 +29,20 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 # 扩展/语义化应用级错误码 (-32000 到 -32099 为 JSON-RPC 预留服务器错误范围)
+#
+# ⚠️ 使用现状（W11 / P3-PRO-4 核对，勿再当成"全都在用"或"全是死代码"）：
+# - **AUTH_ERROR 已接线**：HTTP 侧 RBAC 角色不足时返回它（`app/api/mcp_routes.py`，
+#   HTTP 403）。此前该分支误用 INVALID_REQUEST(-32600)，语义是"请求结构非法"。
+# - 其余四个（TOOL_EXECUTION / TOOL_TIMEOUT / RATE_LIMIT / TOOL_BUSY）**是有意
+#   保留、当前无生产消费者**：工具级失败不走 JSON-RPC 顶层 error，而是按 MCP
+#   规范返回 `result.isError = true` + 载荷内的**字符串** `error_code`
+#   （`TOOL_BUSY` / `TOOL_TIMEOUT` / `TOOL_INTERNAL`，单一声明在
+#   `app/mcp/protocol/tool_errors.py` 的 `MCP_TOOL_ERROR_CODES`，两传输同源）。
+#   限流同样在 HTTP 层用 429 表达。宿主判定工具失败一律以 `isError` +
+#   `result.error_code` 为准，不要等这些数字码（对外文档见
+#   `docs/public/API_REFERENCE.md` §3.4/§3.4.1）。
+#   删除它们需要同步删 `tests/unit/test_jsonrpc.py` 的常量与区间断言，而保留
+#   的代价只是四个常量 —— 按"不为风格删有测试锁定的声明"处置，保留并在此说明。
 SERVER_ERROR_RESERVED_START = -32000
 SERVER_ERROR_RESERVED_END = -32099
 TOOL_EXECUTION_ERROR = -32000

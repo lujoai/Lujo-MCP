@@ -3,6 +3,23 @@
 协议：stdin 逐行读取 JSON-RPC 请求，stdout 逐行写回 JSON-RPC 响应。
 通知（无 id）不写回响应体。
 注意：stdin/stdout 是协议通道，日志必须走 stderr，否则会污染协议流。
+
+⚠️ **本模块的定位（W11 / P3-PRO-5 核对结论：不删）**：这是**第三套**独立的
+stdio 循环实现，**不在任何生产入口链路上**——npm 包、冻结产物与统一模式走的
+都是 ``app/mcp_server.py``（官方 MCP SDK 适配层），仓库内 ``app/**`` 对本模块
+的 import 数为 0（实测 grep）。它仍可被显式运行（``python -m
+app.mcp.transports.stdio``，见文件末 ``__main__``），并被
+``tests/unit/test_stdio_transport.py`` 覆盖、被 ``docs/public/DESIGN.md`` §3.1.2
+与 RELEASE_NOTES 引用为 stdio 传输的一部分。因此"零引用后删除"的前提不成立：
+删它必须同时删测试与公开文档引用，而纪律禁止删既有测试。
+
+**已知语义差异（有意保留，勿当缺陷重开）**：本模块直接复用
+``app.mcp.protocol.server.dispatch``，所以工具级失败以 **HTTP 形态**返回
+（``result.isError`` + ``result`` 顶层的 ``error_code``/``_busy``/``_timed_out``）；
+而生产 stdio 入口 ``app/mcp_server.py`` 走 ``ToolExecutionError`` → SDK 包成
+``CallToolResult(isError=True)``，标记位于 ``content[0].text`` 的 JSON 载荷内。
+两形态都被 wire / parity 测试锁定，对外文档见 ``docs/public/API_REFERENCE.md``
+§3.4.1。要接入本模块的客户端必须按该表的 HTTP 形态解析。
 """
 import sys
 import json

@@ -15,7 +15,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.config import settings
-from app.mcp.protocol.jsonrpc import make_error, PARSE_ERROR, INVALID_REQUEST, INVALID_PARAMS, INTERNAL_ERROR
+from app.mcp.protocol.jsonrpc import (
+    make_error,
+    PARSE_ERROR,
+    INVALID_REQUEST,
+    INVALID_PARAMS,
+    INTERNAL_ERROR,
+    AUTH_ERROR,
+)
 from app.mcp.protocol.server import dispatch_raw, PROTOCOL_VERSION, CAPABILITIES, _validate_tool_name
 from app.mcp.transports.session import registry, SessionLimitExceeded
 from app.mcp.transports.sse import hub
@@ -163,8 +170,13 @@ async def mcp_post(request: Request):
             # FIX(v0.7.1-b4-7): 403 不泄露内部 RBAC 角色配置——此前回显
             # "需要 {required_roles} 角色，当前为 {role}" 把角色名枚举暴露给
             # 未授权调用者（辅助角色枚举）。改为泛化文案，仅区分「未鉴权」。
+            # W11 / P3-PRO-4：错误码由 INVALID_REQUEST(-32600) 改为本项目自己
+            # 声明的 AUTH_ERROR(-32003)。-32600 的语义是「请求结构非法」，与
+            # 「角色不足」无关；宿主按码分支时会把权限问题当成参数问题去改参数
+            # 重试。-32003 落在 JSON-RPC 保留的 server error 区间（-32000..-32099），
+            # 是该常量的既定用途（此前它自出生起没有任何生产消费者）。
             return JSONResponse(
-                make_error(req_id, INVALID_REQUEST, "权限不足，无法调用该工具"),
+                make_error(req_id, AUTH_ERROR, "权限不足，无法调用该工具"),
                 status_code=403,
             )
 

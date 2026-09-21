@@ -277,3 +277,143 @@ class TestConclusionToolContract:
         register_all_tools()
         for name in ("verify", "verify_ui"):
             assert _tool_registry[name]["is_failure"] is conclusion_tool_is_failure
+
+
+# ── W11 / P3-PRO-3：非 JSON 原生返回值的跨传输一致性 ────────────────────
+
+
+def _register_non_native_tool(name: str, *, failing: bool = False):
+    """注册一个返回非 JSON 原生值（datetime / PurePath）的轻量同步工具。"""
+    from datetime import datetime, timezone
+    from pathlib import PurePosixPath
+
+    def _handler(arguments):
+        payload = {
+            "when": datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc),
+            "where": PurePosixPath("app/mcp_server.py"),
+        }
+        if failing:
+            payload["error"] = "non-native failure"
+        return payload
+
+    register_tool(
+        name,
+        description="returns non-JSON-native values",
+        handler=_handler,
+        inputSchema={"type": "object"},
+    )
+    return name
+
+
+class TestNonNativeResultParity:
+    """handler 返回非 JSON 原生值时，stdio 不得比 HTTP 更脆。
+
+    此前 stdio 的成功与失败两条序列化都缺 ``default=str``（HTTP 侧一直有，
+    连 stdio 自己算 response_size 的那次 dumps 也有），于是同一个 handler 在
+    HTTP 正常返回、在 stdio 抛 TypeError 被兜底成工具失败。缺陷是潜在的：
+    仓库内现有 handler 恰好都只返回 JSON 原生值，所以从未被发现。
+    """
+
+    @pytest.mark.asyncio
+    async def test_http_serializes_non_native_values(self):
+        name = _register_non_native_tool("w11_non_native_http")
+        try:
+            resp = await _http_call(name, {})
+            assert resp.get("error") is None
+            assert resp["result"]["isError"] is False
+            text = resp["result"]["content"][0]["text"]
+            assert "2026-09-21" in text
+            assert "app/mcp_server.py" in text
+        finally:
+            _tool_registry.pop(name, None)
+
+    @pytest.mark.asyncio
+    async def test_stdio_serializes_non_native_values(self):
+        import app.mcp_server as stdio
+
+        name = _register_non_native_tool("w11_non_native_stdio")
+        try:
+            result = await stdio.server.request_handlers[CallToolRequest](
+                _call_tool_request(name, {})
+            )
+            dumped = result.model_dump(mode="json")
+            assert dumped["isError"] is False, (
+                "stdio 把非 JSON 原生返回值兜底成了工具失败（P3-PRO-3）：%r"
+                % dumped["content"][0]["text"]
+            )
+            text = dumped["content"][0]["text"]
+            assert "2026-09-21" in text
+            assert "app/mcp_server.py" in text
+        finally:
+            _tool_registry.pop(name, None)
+
+    @pytest.mark.asyncio
+    async def test_stdio_failure_path_serializes_non_native_values(self):
+        """失败路径（ToolExecutionError 的载荷）同样不得因非原生值炸掉。"""
+        import app.mcp_server as stdio
+
+        name = _register_non_native_tool("w11_non_native_fail", failing=True)
+        try:
+            result = await stdio.server.request_handlers[CallToolRequest](
+                _call_tool_request(name, {})
+            )
+            dumped = result.model_dump(mode="json")
+            assert dumped["isError"] is True
+            payload = json.loads(dumped["content"][0]["text"])
+            assert payload["error"] == "non-native failure"
+            assert "2026-09-21" in dumped["content"][0]["text"]
+        finally:
+            _tool_registry.pop(name, None)
+
+
+# ── W11 / P3-PRO-6：listed 工具的参数校验形态由官方 SDK 拥有 ────────────
+
+
+class TestParamValidationShapeByPath:
+    """同一个「参数类型错误」在三条路径上有三种形态（真实调用取证，非推断）。
+
+    - stdio + **listed** 工具：官方 SDK 的 jsonschema 拦截，``isError=True``，
+      文本形如 ``Input validation error: ...``，**不含** ``error_code``；
+    - stdio + **unlisted** 工具：SDK 明确不校验（其日志会打
+      ``Tool 'X' not listed, no validation will be performed``），走项目自己的
+      ``_validate_tool_arguments`` → 载荷含 ``error_code="INVALID_PARAMS"``；
+    - HTTP（两类工具一致）：顶层 JSON-RPC ``error.code = -32602``。
+
+    本类是**形态锁定（characterization）**而不是理想契约：SDK 那一路的形状不受
+    本项目控制，要统一只能放弃 SDK 校验（更糟——它会校验嵌套结构，而项目自己的
+    校验只做顶层两层）。锁住的价值是：升级 mcp SDK 后形态若变化，这里会红，
+    届时再裁定是否需要适配层。对外文档见 API_REFERENCE §3.4.1。
+    """
+
+    @pytest.mark.asyncio
+    async def test_listed_tool_type_error_is_sdk_shaped(self):
+        import app.mcp_server as stdio
+
+        result = await stdio.server.request_handlers[CallToolRequest](
+            _call_tool_request("list_recent_traces", {"limit": "definitely-not-a-number"})
+        )
+        dumped = result.model_dump(mode="json")
+        assert dumped["isError"] is True
+        text = dumped["content"][0]["text"]
+        assert text.startswith("Input validation error:"), (
+            "SDK 的参数校验形态变了（升级 mcp 后需重新裁定是否需要适配层）：%r" % text
+        )
+        assert "error_code" not in text, "SDK 形态不该带项目自己的 error_code"
+
+    @pytest.mark.asyncio
+    async def test_unlisted_tool_type_error_is_project_shaped(self):
+        import app.mcp_server as stdio
+
+        result = await stdio.server.request_handlers[CallToolRequest](
+            _call_tool_request("ingest_network", {"trace_id": 123})
+        )
+        dumped = result.model_dump(mode="json")
+        assert dumped["isError"] is True
+        payload = json.loads(dumped["content"][0]["text"])
+        assert payload["error_code"] == "INVALID_PARAMS"
+
+    @pytest.mark.asyncio
+    async def test_http_type_error_is_jsonrpc_invalid_params(self):
+        resp = await _http_call("list_recent_traces", {"limit": "definitely-not-a-number"})
+        assert resp.get("result") is None
+        assert resp["error"]["code"] == -32602

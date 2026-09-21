@@ -792,3 +792,34 @@ class TestB25HttpToolNameValidation:
                   "params": {"name": "b25-no-such", "arguments": {}}},
         )
         assert resp.status_code == 403
+
+    def test_rbac_denial_uses_auth_error_code(self, monkeypatch):
+        """W11 / P3-PRO-4：RBAC 拒绝必须用项目自己声明的 AUTH_ERROR(-32003)。
+
+        此前用 -32600 Invalid Request —— 那是「请求结构非法」的语义，与「角色
+        不足」无关；``jsonrpc.py`` 为此声明的 AUTH_ERROR 自出生起没有任何生产
+        消费者（只有单测断言它的值与落点区间）。宿主按码分支时，-32600 会让
+        权限问题被当成请求格式问题去改参数重试。
+        """
+        from app.config import settings
+        from app.mcp.protocol.jsonrpc import AUTH_ERROR, INVALID_REQUEST
+
+        monkeypatch.setattr(settings, "rbac_enabled", True)
+
+        client = _client()
+        session_id = _initialized_session(client)
+        resp = client.post(
+            "/mcp",
+            headers={"Mcp-Session-Id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": "b25-no-such", "arguments": {}}},
+        )
+        assert resp.status_code == 403
+        body = resp.json()
+        assert body["error"]["code"] == AUTH_ERROR, (
+            "RBAC 拒绝仍用 %s（Invalid Request）而不是 AUTH_ERROR" % body["error"]["code"]
+        )
+        assert body["error"]["code"] != INVALID_REQUEST
+        # v0.7.1-b4-7 的既有约束不得回退：403 文案不回显角色配置
+        assert "admin" not in body["error"]["message"]
+        assert "viewer" not in body["error"]["message"]
