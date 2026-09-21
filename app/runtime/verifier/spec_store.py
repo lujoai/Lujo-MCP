@@ -21,6 +21,18 @@ logger = logging.getLogger("lujo-mcp.spec_store")
 _STEP_SPEC = "spec"
 
 # 主存：spec_id → spec dict
+#
+# ⚠️ 已知边界（W13 / P3-STORE-2，裁定：**登记不修，需产品决策**）：
+# ① 本 dict 没有容量上限。② 更实际的风险在备份侧——spec 经 ``add_log(step="spec")``
+# 写进 **trace_store**，与运行现场**共用同一份 FIFO 预算**（max_entries 个
+# request_id），所以现场流量一大，早先的 spec 备份会被静默挤掉；此时进程内
+# ``_specs`` 仍然好用，但**重启后** ``_restore_from_storage()`` 扫不到备份，
+# 用户手写的断言规范就没了（无任何告警）。
+# 不就地加 LRU 的理由：从 ``_specs`` 驱逐会让 ``list_specs()`` 少返回用户自己
+# 创建的规范，而 ``_restore_if_needed()`` 只在进程内跑一次、不会把它找回来 ——
+# 等于把「重启后可能丢」换成「运行中确定丢」，更糟。正确修法是给 spec 独立的
+# 存储预算（自己的 store / 自己的 SQLite 表），属新增持久化面，必须先出方案并
+# 由作者点头，不在维护包里顺手做。
 _specs: dict[str, dict] = {}
 # Spec CRUD is infrequent, but each operation must be linearizable across the
 # in-memory cache and the optional persistence mirrors.  A re-entrant lock lets

@@ -190,3 +190,73 @@ def test_debug_echo_is_redacted():
     assert secret not in json.dumps(echoed, ensure_ascii=False)
     assert echoed["note"] == "keep-me", "非敏感字段不得被一并抹掉"
     assert resp["request_id"]
+
+
+# ---------------------------------------------------------------------------
+# W13 / P3-STORE-4: KB 持久化降级必须在 health 上可见
+# ---------------------------------------------------------------------------
+
+def _force_kb_persist_degraded(monkeypatch):
+    """让 KB 持久化「被要求但初始化失败」→ factory 降级 NoOp。"""
+    import app.runtime.core.storage.factory as factory
+
+    monkeypatch.setattr(settings, "kb_persist_enabled", True)
+    monkeypatch.setattr(factory, "_knowledge_store", None)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("sqlite notebook unavailable")
+
+    monkeypatch.setattr(
+        "app.runtime.core.storage.sqlite_kb_store.SQLiteKnowledgeBaseStore", _boom
+    )
+    return factory
+
+
+def test_health_degraded_when_kb_persistence_unavailable(monkeypatch):
+    """持久化被请求却降级 no-op 时，/health 不得再报 ok。
+
+    旧实现 ``storage_ok = True`` 是硬编码：本地笔记本坏了（经验不再跨重启保留）
+    而健康检查一切正常，使用者无从得知。
+    """
+    from app.main import health
+
+    # llm_ok 置真，才能把 status 落在 degraded 而不是 unhealthy（两者都不 ok 时
+    # 既有语义是 unhealthy）——本用例要考的是 storage 这一维。
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    _force_kb_persist_degraded(monkeypatch)
+
+    assert health()["status"] == "degraded", "KB 持久化降级但 /health 仍报 ok（P3-STORE-4）"
+
+
+def test_internal_health_exposes_kb_persist_state(monkeypatch):
+    """/internal/health 必须区分 disabled / sqlite / degraded 三态。
+
+    ``storage`` 字段保持后端名不变（e2e 的服务器身份校验按 service/version/storage
+    三项比对，改它会破坏复用判定），新状态走独立的 ``kb_persist`` 字段。
+    """
+    from types import SimpleNamespace
+
+    from app.auth import key_rotation
+    from app.main import internal_health
+
+    monkeypatch.setattr(key_rotation, "get_valid_keys", list)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+
+    class _FakeRequest:
+        client = SimpleNamespace(host="127.0.0.1")
+        headers = {}
+
+    factory = _force_kb_persist_degraded(monkeypatch)
+    payload = internal_health(_FakeRequest)
+    assert payload["kb_persist"] == "degraded"
+    assert payload["storage"] == settings.storage_backend, "storage 字段不得改变语义"
+    assert payload["status"] == "degraded"
+    assert factory.kb_persist_degraded() is True
+
+    # 显式关闭持久化 → disabled，且不判为不健康
+    monkeypatch.setattr(settings, "kb_persist_enabled", False)
+    monkeypatch.setattr(factory, "_knowledge_store", None)
+    payload_off = internal_health(_FakeRequest)
+    assert payload_off["kb_persist"] == "disabled"
+    assert payload_off["status"] == "ok"
+    assert factory.kb_persist_degraded() is False

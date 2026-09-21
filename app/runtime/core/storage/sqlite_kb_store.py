@@ -4,13 +4,22 @@
 无需安装任何外部服务（Python 标准库 sqlite3，零新依赖）。
 
 设计要点：
-- 表结构对齐 PG 的 kb_entries（fingerprint 主键 + analysis JSON 文本 + 两个索引键），
-  使 PG 与 SQLite 两种实现的回灌产物完全一致；
+- 表结构沿用历史 PG 版 kb_entries 的形状（fingerprint 主键 + analysis JSON 文本
+  + 两个索引键）。W13 文案更正：PostgreSQL 运行时后端已随 Step 3 移除，
+  本实现是**唯一**的 KB 持久化后端，不再有「两种实现回灌产物一致」的对照面；
 - 每次操作使用短连接 + WAL 模式：单用户低写入频率下开销可忽略，
   且天然线程安全（连接不跨线程共享，写穿可能来自 asyncio.to_thread 的工作线程）；
-- 与 PG 实现相同的失败语义：异常向上抛，由调用方降级——
-  工厂初始化失败时降级 NoOp，运行期写穿失败由 KnowledgeBaseStore 的
-  _persist_* 各自 try/except 兜底（不阻断 KB 主流程）。
+- 失败语义：异常向上抛，由调用方降级——工厂初始化失败时降级 NoOp（该降级由
+  ``factory.kb_persist_degraded()`` 暴露给 health，W13 / P3-STORE-4），运行期
+  写穿失败由 KnowledgeBaseStore 的 _persist_* 各自 try/except 兜底（不阻断 KB
+  主流程）。
+
+⚠️ 已知边界（W13 / P4-存储，登记不修）：表结构**没有 schema 版本号，也没有迁移
+入口**。加列/改列只能靠「新建表 + 拷贝」或让用户删掉笔记本文件重来；而删除
+PostgreSQL 时连带的迁移入口也已移除（Step 3 WP6），所以此处不存在可复用的迁移
+框架。引入版本化迁移属新增持久化面，须单独立项（并同步 Step 3 的既有决策），
+不在维护包里顺手做。当前风险可接受：字段自 v0.8.0 起未变，且回灌对缺字段
+用 ``row.get(...)`` 兜底。
 """
 
 from __future__ import annotations

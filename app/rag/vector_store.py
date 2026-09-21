@@ -134,24 +134,31 @@ class InProcessVectorStore(VectorStore):
         """FIX: R7-T4 —— 按指纹删除向量条目（KB 驱逐/清空同步调用）。
 
         删除后重建指纹索引，保证后续 add 的覆盖/追加语义不受影响。
+
+        W13 / P3-STORE-5：token 集与 doc 列表**并行过滤**，不再对存活的每条 doc
+        重新分词。旧实现是 ``[_tokenize(text) for text, _doc in kept]``，于是删除
+        的代价变成「全库文本重新分词一遍」（O(总字符数) 的正则/切词），而 token
+        本来就已经算好存在 ``_doc_tokens`` 里。KB 清空时会一次性传入全部指纹，
+        旧实现等于把整个库分词两次。
         """
         if not fingerprints:
             return
         targets = {str(fp) for fp in fingerprints}
         with self._lock:
-            kept = [
-                (text, doc)
-                for text, doc in self._docs
-                if not (
+            keep = [
+                not (
                     isinstance(doc, dict)
                     and doc.get("fingerprint")
                     and str(doc["fingerprint"]) in targets
                 )
+                for _text, doc in self._docs
             ]
-            if len(kept) == len(self._docs):
+            if all(keep):
                 return
-            self._docs = kept
-            self._doc_tokens = [_tokenize(text) for text, _doc in kept]
+            self._docs = [item for item, k in zip(self._docs, keep) if k]
+            self._doc_tokens = [
+                tokens for tokens, k in zip(self._doc_tokens, keep) if k
+            ]
             self._fingerprint_index = {
                 str(doc["fingerprint"]): i
                 for i, (_text, doc) in enumerate(self._docs)

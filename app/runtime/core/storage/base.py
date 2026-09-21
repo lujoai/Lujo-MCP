@@ -35,10 +35,10 @@ class TraceStorage(ABC):
     def cleanup_expired(self, ttl_seconds: int) -> int:
         """清理过期条目，返回清理数量。
 
-        FIX(v0.7.1-b8-3): 返回值的精确语义由后端决定——memory 后端返回清理的
-        request_id 数，PG 后端返回删除的行数（一行一条 trace，同一 request_id
-        多条时两者不等）。当前无消费方依赖该数值，仅作日志/诊断用途；若后续
-        需要统一口径，应在此处约定「返回清理的 request_id 数」并改 PG 实现。
+        FIX(v0.7.1-b8-3): 返回值的精确语义由后端决定。当前唯一运行时后端是
+        memory（``MemoryTraceStore``），返回清理的 **request_id 数**；无消费方
+        依赖该数值，仅作日志/诊断用途。（W13 文案更正：原文让人「去改 PG 实现」
+        以统一口径，而 PostgreSQL 运行时后端已随 Step 3 移除。）
         """
         ...
 

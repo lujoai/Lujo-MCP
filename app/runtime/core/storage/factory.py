@@ -119,7 +119,17 @@ def get_error_store() -> ErrorStorage:
 
 
 def get_spec_store() -> SpecStorage:
-    """返回规范存储实例（memory 后端 no-op：运行现场重启即清）。"""
+    """返回规范存储实例（memory 后端 no-op：运行现场重启即清）。
+
+    ⚠️ 现状（W13 / P4-存储 核对）：``get_error_store()`` 与 ``get_spec_store()``
+    在 ``app/**`` 里**没有任何生产调用点**（实测 grep 只命中这两个定义本身）——
+    errors 走 ``runtime/core/errors.py`` 的进程内队列、specs 走
+    ``runtime/verifier/spec_store.py`` 的进程内主存 + trace_store 备份，两者都不
+    经工厂。它们仍是 storage 抽象的既定公开面（``app/runtime/__init__.py`` 列在
+    稳定入口里）且有 ``tests/unit/test_factory.py`` 覆盖，故**保留并登记**，不当
+    死代码删除：删掉等于删测试，而保留的代价只是两个惰性单例。真要收敛，应先
+    决定 errors/specs 是否要走工厂（那是存储层设计变更，须单独立项）。
+    """
     global _spec_store
     if _spec_store is None:
         with _store_lock:
@@ -129,6 +139,23 @@ def get_spec_store() -> SpecStorage:
                 _spec_store = NoOpSpecStore()
                 logger.info("spec_store initialized: backend=%s (no-op)", settings.storage_backend)
     return _spec_store
+
+
+def kb_persist_degraded() -> bool:
+    """KB 持久化被显式请求（``kb_persist_enabled``）却落到 no-op 实现时为 True。
+
+    W13 / P3-STORE-4：``get_knowledge_store()`` 在 SQLite 初始化失败时只打一条
+    warning 并降级 NoOp —— 于是「经验不再跨重启保留」对使用者完全不可见，而
+    ``/health`` 的 ``storage_ok`` 还恒为 True（本地笔记本坏了却报健康）。
+
+    本函数**不新增任何全局状态**：结论直接由「配置要求持久化」与「实际拿到的
+    store 类型」推出，因此不需要额外的重置纪律（factory 单例被重置即随之复位）。
+    """
+    if not settings.kb_persist_enabled:
+        return False
+    from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
+
+    return isinstance(get_knowledge_store(), NoOpKnowledgeBaseStore)
 
 
 def get_knowledge_store() -> KnowledgeBaseStorage:

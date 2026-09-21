@@ -1,9 +1,16 @@
-"""存储降级实现 —— memory 后端 ErrorStorage / SpecStorage 的 no-op 版本。
+"""存储降级实现 —— ErrorStorage / SpecStorage / KnowledgeBaseStorage 的 no-op 版本。
 
-方案 C 拆分：ErrorStorage / SpecStorage 由 PG 后端实现真实持久化；
-memory 后端不持久化 errors/specs（errors 走 errors.py 内存、specs 走
-spec_store.py 内存 + trace_store 双写回退），因此工厂对非 PG 后端返回
-本模块的 no-op 实现，保持调用方契约一致同时零行为变更。
+方案 C 拆分把这三类存储收敛为 ABC 契约；本模块提供「什么都不做」的实现，
+让调用方无需在调用点判断后端。
+
+W13 文案更正（PostgreSQL 运行时后端已随 Step 3 移除，原文案已失真）：
+- ``NoOpErrorStore`` / ``NoOpSpecStore``：memory 后端下 errors 走 ``errors.py``
+  的进程内队列、specs 走 ``spec_store.py`` 的进程内主存 + trace_store 双写备份，
+  持久层无事可做，故 factory 返回 no-op；
+- ``NoOpKnowledgeBaseStore``：仅在 ``KB_PERSIST_ENABLED=false``（显式关闭）或
+  SQLite 笔记本初始化失败降级时使用。**开启时用的是
+  ``sqlite_kb_store.SQLiteKnowledgeBaseStore``（真实写穿 + 启动回灌）**，
+  降级事实由 ``factory.kb_persist_degraded()`` 暴露给 health（P3-STORE-4）。
 """
 
 import logging

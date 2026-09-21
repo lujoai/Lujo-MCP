@@ -189,6 +189,38 @@ class TestInProcessVectorStore:
         assert len(store._docs) == 1
         assert store._docs[0][1]["analysis"]["root_cause"] == "v3"
 
+    def test_delete_does_not_retokenize_survivors(self, monkeypatch):
+        """W13 / P3-STORE-5：删除只过滤，不得把存活 doc 重新分词一遍。
+
+        旧实现是 ``[_tokenize(text) for text, _doc in kept]`` —— 删除的代价变成
+        「全库文本重新分词」，而 token 早就存在 ``_doc_tokens`` 里。KB 清空会一次
+        传入全部指纹，等于把整库分词两次。
+        """
+        import app.rag.vector_store as vs
+
+        store = InProcessVectorStore()
+        store.add([
+            {"fingerprint": "fp-a", "analysis": {"root_cause": "alpha beta gamma"}},
+            {"fingerprint": "fp-b", "analysis": {"root_cause": "delta epsilon"}},
+        ])
+        tokens_before = list(store._doc_tokens)
+
+        calls: list[str] = []
+        original = vs._tokenize
+        monkeypatch.setattr(
+            vs, "_tokenize", lambda text: (calls.append(text), original(text))[1]
+        )
+
+        store.delete(["fp-a"])
+
+        assert calls == [], "delete 对存活 doc 重新分词（P3-STORE-5）：%r" % calls
+        # 存活条目的 token 集必须是**同一个对象**（原样搬运，不是重算的等值副本）
+        assert len(store._doc_tokens) == 1
+        assert store._doc_tokens[0] is tokens_before[1]
+        # 语义不变：剩下的条目与索引仍正确
+        assert [doc.get("fingerprint") for _t, doc in store._docs] == ["fp-b"]
+        assert store._fingerprint_index == {"fp-b": 0}
+
 
 class TestNullVectorStore:
     def test_add_is_noop(self):

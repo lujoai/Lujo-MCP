@@ -165,3 +165,90 @@ def test_clear_concurrent_with_in_flight_upsert():
     # clear 完成后持久层不应有幽灵数据复活
     assert "fp-ghost" not in fake.rows
     assert len(fake.rows) == 0
+
+
+def test_clear_and_concurrent_upsert_never_diverge():
+    """W13 / P2-STORE-1：clear 与并发 upsert 交错时，内存与持久层不得分叉。
+
+    旧时序是「锁内 gen-bump → **锁外** delete-all → 锁内清内存」，于是存在这个
+    交错：upsert 在 gen-bump 之后拿到锁写入内存（它的 clear 快照 == 新的
+    ``_clear_generation``，代际守卫因此不认为自己被超越），而它的落库又发生在
+    delete-all **之后** → 持久层留下条目、内存已被清空 → 重启回灌把用户刚清掉的
+    条目复活。反方向（落库在 delete-all 之前、内存写入在清内存之后）产生对称分叉。
+
+    本用例用事件把该交错钉成确定性顺序，断言的是**一致性不变量**
+    （内存有 ⟺ 持久层有），而不是某一方必胜——修复后两种结局都合法。
+    """
+    store, fake = _make_store_with_fake()
+
+    # 先落一条已持久化的条目，让 delete-all 真的有事可做（用原始替身，不编排）
+    store.upsert(
+        fingerprint="fp-old",
+        analysis={"exception_type": "ValueError", "message": "old"},
+        fix_suggestion="old-fix",
+        source="llm",
+    )
+    assert "fp-old" in fake.rows
+
+    delete_all_entered = threading.Event()
+    delete_all_release = threading.Event()
+    clear_returned = threading.Event()
+    persist_reached = threading.Event()
+
+    orig_delete_all = fake.delete_all_kb_entries
+    orig_upsert_kb = fake.upsert_kb_entry
+
+    def blocked_delete_all():
+        delete_all_entered.set()
+        assert delete_all_release.wait(timeout=5.0), "编排超时：delete-all 未被放行"
+        return orig_delete_all()
+
+    def deferred_upsert(entry):
+        # 落库刻意推迟到 clear() 返回之后 —— 这正是旧时序产生「持久层有、内存无」的窗口
+        persist_reached.set()
+        assert clear_returned.wait(timeout=5.0), "编排超时：clear 未返回"
+        orig_upsert_kb(entry)
+
+    fake.delete_all_kb_entries = blocked_delete_all
+    fake.upsert_kb_entry = deferred_upsert
+
+    clear_result: list = []
+
+    def worker_clear():
+        clear_result.append(store.clear())
+        clear_returned.set()
+
+    def worker_upsert():
+        store.upsert(
+            fingerprint="fp-new",
+            analysis={"exception_type": "ValueError", "message": "new"},
+            fix_suggestion="new-fix",
+            source="llm",
+        )
+
+    th_clear = threading.Thread(target=worker_clear)
+    th_clear.start()
+    assert delete_all_entered.wait(timeout=5.0), "clear 未进入 delete-all"
+
+    th_upsert = threading.Thread(target=worker_upsert)
+    th_upsert.start()
+
+    # 有界等待，仅用于决定编排顺序（不是对时序的断言）：
+    # 旧时序下 upsert 能在 clear 的锁外窗口里写完内存并抵达落库点；
+    # 修复后它会阻塞在 clear 持有的锁上，永远到不了落库点。
+    reached_persist_before_clear_done = persist_reached.wait(timeout=1.0)
+
+    delete_all_release.set()
+    th_clear.join(timeout=5.0)
+    th_upsert.join(timeout=5.0)
+    assert not th_clear.is_alive() and not th_upsert.is_alive(), "线程未收尾"
+    assert clear_result == [True], "持久层删除成功时 clear 必须返回 True"
+
+    in_memory = store.get("fp-new") is not None
+    in_persist = "fp-new" in fake.rows
+    assert in_memory == in_persist, (
+        "内存与持久层分叉（P2-STORE-1）：in_memory=%s in_persist=%s "
+        "（upsert 是否在 clear 完成前抵达落库点=%s）"
+        % (in_memory, in_persist, reached_persist_before_clear_done)
+    )
+    assert "fp-old" not in fake.rows, "clear 之前落库的条目必须被删掉"

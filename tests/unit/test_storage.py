@@ -39,6 +39,24 @@ class TestMemoryTraceStore:
         assert self.store.get_entries("rid-old") == []
         assert len(self.store.get_entries("rid-new")) == 1
 
+    def test_cleanup_expired_tolerates_entry_without_timestamp(self):
+        """W13 / P4：缺 timestamp 的条目不得让整轮 TTL 清理抛 KeyError。
+
+        清理是周期性后台任务（app/main.py 的 periodic_cleanup），它一抛异常就
+        等于内存只增不减 —— 唯一剩下的约束只有 max_entries 的 FIFO。
+        无法定龄的条目按「不清理」处理：宁可多留，不可误删用户现场。
+        """
+        self.store.save_entry("rid-no-ts", {"step": "legacy", "data": None})
+        self.store.save_entry("rid-old", {"timestamp": time.time() - 7200, "step": "old", "data": None})
+        self.store.save_entry("rid-new", {"timestamp": time.time(), "step": "new", "data": None})
+
+        count = self.store.cleanup_expired(ttl_seconds=3600)
+
+        assert count == 1, "只应清掉能定龄且已过期的那条"
+        assert self.store.get_entries("rid-old") == []
+        assert len(self.store.get_entries("rid-new")) == 1
+        assert len(self.store.get_entries("rid-no-ts")) == 1, "无法定龄的条目不得被误删"
+
     def test_list_request_ids_sorted_by_last_entry_timestamp(self):
         self.store.save_entry("rid-old", {"timestamp": 10.0, "step": "start", "data": None})
         self.store.save_entry("rid-new", {"timestamp": 20.0, "step": "start", "data": None})

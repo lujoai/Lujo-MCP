@@ -14,6 +14,16 @@ class MemoryTraceStore(TraceStorage):
     # request_id 可无界涨内存）；现按「保留最新 N 条、丢最旧」截断。
     _MAX_ENTRIES_PER_REQUEST = 5000
 
+    # ⚠️ 已知边界（W13 / P3-STORE-3，裁定：**不改计量口径，只登记**）：容量按
+    # **条数**计（max_entries 个 request_id × 每个 _MAX_ENTRIES_PER_REQUEST 条），
+    # 不按字节计，所以理论上限很松（默认 10000 × 5000）。改成按字节预算会直接
+    # 改变「用户能查到多久以前的现场」这一可感知行为 —— 那是产品决策，不在维护
+    # 包里顺手改。实际约束来自两处：单条 payload 受 MAX_BODY_SIZE（默认 1 MiB）
+    # 与采集侧截断限制，以及 periodic_cleanup 的 TTL 清理（注意：该任务只在
+    # HTTP/统一模式的 lifespan 里起，纯 stdio 下不跑，此时唯一约束就是条数上限）。
+    # 真要收紧，正确做法是新增一个可配置的字节预算并与条数上限取严，且必须同时
+    # 给出「清理任务在 stdio 下也跑」的方案。
+
     def __init__(self, max_entries: int = 10000):
         # OrderedDict 保留插入顺序，用于容量超限时按最旧条目 FIFO 淘汰
         self._store: "OrderedDict[str, list[dict]]" = OrderedDict()
@@ -56,10 +66,19 @@ class MemoryTraceStore(TraceStorage):
     def cleanup_expired(self, ttl_seconds: int) -> int:
         now = time.time()
         with self._lock:
-            stale = [
-                rid for rid, entries in self._store.items()
-                if entries and now - entries[-1]["timestamp"] > ttl_seconds
-            ]
+            stale = []
+            for rid, entries in self._store.items():
+                if not entries:
+                    continue
+                # W13 / P4：此前直接索引 entries[-1]["timestamp"]，任一条目缺该键
+                # 即抛 KeyError，把整个 TTL 清理任务打掉——清理是周期性后台任务，
+                # 它一死内存就只增不减（唯一剩下的约束是 max_entries 的 FIFO）。
+                # 无法定龄的条目按「不清理」处理：宁可多留，不可误删用户现场。
+                ts = entries[-1].get("timestamp")
+                if ts is None:
+                    continue
+                if now - ts > ttl_seconds:
+                    stale.append(rid)
             for rid in stale:
                 del self._store[rid]
         return len(stale)

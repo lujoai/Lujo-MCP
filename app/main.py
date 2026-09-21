@@ -429,13 +429,30 @@ app.include_router(auth_router)
 
 
 @app.get("/")
+def _kb_persist_state() -> str:
+    """KB 本地「笔记本」持久化的对外可见状态（W13 / P3-STORE-4）。
+
+    - ``disabled``：``KB_PERSIST_ENABLED=false``，显式关闭（历史 no-op 行为）；
+    - ``sqlite``：正在写穿本地 SQLite 单文件；
+    - ``degraded``：**要求持久化但已降级 no-op**（SQLite 初始化失败）——此时经验
+      不再跨重启保留，而此前 ``/health`` 的 ``storage_ok`` 恒为 True，使用者无从得知。
+    """
+    from app.runtime.core.storage.factory import kb_persist_degraded
+
+    if not settings.kb_persist_enabled:
+        return "disabled"
+    return "degraded" if kb_persist_degraded() else "sqlite"
+
+
 @app.get("/health")
 def health():
     """健康检查 —— 仅返回状态，不暴露内部配置"""
     llm_ok = bool(settings.openai_api_key)
 
-    # 经存储抽象层探活（A1），不直接操作后端连接池
-    storage_ok = True
+    # 经存储抽象层探活（A1），不直接操作后端连接池。
+    # W13 / P3-STORE-4：不再恒为 True —— KB 持久化被请求却降级时判为不健康，
+    # 于是 status 落到 degraded（HTTP 仍 200，容器 healthcheck 不受影响）。
+    storage_ok = _kb_persist_state() != "degraded"
 
     if llm_ok and storage_ok:
         status = "ok"
@@ -502,7 +519,11 @@ def internal_health(request: Request):
 
     llm_ok = bool(settings.openai_api_key)
 
-    storage_ok = True
+    # W13 / P3-STORE-4：storage_ok 不再恒为 True；KB 持久化的具体状态另用
+    # ``kb_persist`` 字段暴露（``storage`` 字段保持后端名不变——e2e 的服务器
+    # 身份校验按 service/version/storage 三项比对，改它会破坏复用判定）。
+    kb_persist = _kb_persist_state()
+    storage_ok = kb_persist != "degraded"
     storage_detail = settings.storage_backend
     # WP4：PostgreSQL 运行时后端已移除，health check 不再探测 PG 连接
 
@@ -518,6 +539,7 @@ def internal_health(request: Request):
         "service": settings.service_name,
         "version": __version__,
         "storage": storage_detail,
+        "kb_persist": kb_persist,
         "llm_configured": llm_ok,
     }
 

@@ -8,11 +8,17 @@ v0.4.0 M2 增强：在原有精确指纹（L1）基础上，引入三级 fallbac
 并新增向量索引双写同步（_sync_entry_to_vector_store / _sync_all_to_vector_store），
 保证 KB 写入后向量检索能覆盖全部条目，避免"写了但向量召不回"。
 
-v0.5.3 新增 PG 持久化（写穿模式）：
-- upsert / record_verification / LRU 驱逐 / clear 同步落库到 kb_entries 表
-  （经 storage factory 分发，memory 后端 no-op，PG 故障 warning 降级不阻断）；
+v0.5.3 引入持久化写穿，v0.8.0 起落地形态是本地「笔记本」（PostgreSQL 运行时
+后端已随 Step 3 移除，W13 更正本文案）：
+- upsert / record_verification / LRU 驱逐 / clear 同步写穿到注入的
+  ``KnowledgeBaseStorage``（由 Composition Root 从 storage factory 取得；
+  ``KB_PERSIST_ENABLED=true`` 默认下是单文件 SQLite，显式关闭时 no-op，
+  故障 warning 降级不阻断主流程）；
 - load_from_persistent() 启动回灌：按 updated_at 倒序取最近 max_entries 条
-  重建内存条目（含验证统计），跨重启保留 learned 知识。
+  重建内存条目（含验证统计），跨重启保留 learned 知识；
+- 持久化被请求却降级 no-op 时，``factory.kb_persist_degraded()`` 为真，
+  ``/health`` 判为 degraded 且 ``/internal/health`` 的 ``kb_persist`` 字段
+  报 ``degraded``（W13 / P3-STORE-4：此前该降级对使用者完全不可见）。
 """
 
 from __future__ import annotations
@@ -155,6 +161,16 @@ class KnowledgeBaseStore:
         # B04 并发一致性控制：单调递增代数、指纹级串行化锁
         self._generation: int = 0
         self._clear_generation: int = 0
+        # ⚠️ 已知边界（W13 / P3-STORE-1，裁定：**不裁剪，只登记**）：
+        # 这两张簿记表按**出现过的不同指纹**增长，唯一回收点是 clear()，LRU 驱逐
+        # 不回收。它们**不**随调用次数增长（同指纹反复 upsert 只更新既有键），
+        # 量级是「每个不同错误指纹 ~100 字节」，单用户本地定位下可接受。
+        # 之所以不做裁剪：`_persisted_generations[fp]` 是 B04 关闭「旧写晚于新写
+        # 落库」的唯一依据，而 upsert 在「写完内存」到「取得 fp_lock」之间存在
+        # 不持锁窗口 —— 在该窗口里删掉 fp 的代际记录，会让一个迟到的旧写通过
+        # `gen <= _persisted_generations.get(fp, 0)` 守卫并把旧快照落库，等于
+        # 重新打开 B04 已经关掉的倒序窗口。要安全裁剪必须再加一层在途写登记，
+        # 属独立设计变更，不在维护包里顺手做。
         self._persisted_generations: dict[str, int] = {}
         self._fp_locks: dict[str, threading.Lock] = {}
         self._fp_locks_guard = threading.Lock()
@@ -391,19 +407,36 @@ class KnowledgeBaseStore:
         - 成功必须表示持久删除已完成，失败显式返回 False；
         - NoOp 边界：_persistent_store() 返回 None（memory / KB_PERSIST_ENABLED=false）时，
           直接返回 True —— 无持久层承诺，内存清空即视为全部成功；
-        - 持久层开启时，新时序固定为：持久层 delete_all_kb_entries()（锁外） → 持锁清内存与索引 → 删向量（尽力而为）；
         - 持久层删除失败时记录 warning 并返回 False，内存不予清空，防止重启后旧条目死灰复燃；
         - 向量库删除不纳入成功判定（保持 R7-T4 失败静默降级语义）。
+
+        W13 / P2-STORE-1 —— **线性化点**：代际推进、持久层 delete-all、内存与索引
+        清空必须在**同一个临界区**内完成。此前 delete-all 在锁外（U12 定的时序），
+        于是存在这个交错：并发 upsert 在代际推进之后拿到锁写入内存（它的 clear
+        快照 == 新的 ``_clear_generation``，``_persist_upsert`` 的代际守卫因此
+        不认为自己被超越），而它的落库又发生在 delete-all **之后** → 持久层有条目、
+        内存没有 → 重启回灌把用户刚清掉的条目复活；反方向（落库先于 delete-all、
+        内存写入晚于清内存）产生对称分叉。已由
+        ``tests/unit/test_kb_concurrency.py::test_clear_and_concurrent_upsert_never_diverge``
+        确定性复现（改前实测 in_memory=False / in_persist=True）。
+
+        持锁跨越 delete-all 后两种交错都不再可能：upsert 要么完整发生在 clear 之前
+        （快照落后 → 代际守卫丢弃其写入，或由 ``_persist_upsert`` 既有的补偿删除
+        撤销），要么完整发生在 clear 之后（内存与持久层同时有）。
+
+        代价：delete-all 成为锁内 I/O，clear 期间 KB 读写被阻塞。clear 是低频管理
+        操作，删的是 ≤ max_entries 行的单文件 SQLite；换来的是「clear 的语义可
+        证明」。锁内只有 store 调用与日志，store 不会回调本类，且本方法唯一调用点
+        ``clear_knowledge_base()`` 不持锁 —— ``self._lock`` 是普通 Lock，无重入死锁。
         """
         with self._lock:
             self._generation += 1
             self._clear_generation = self._generation
             self._persisted_generations.clear()
 
-        if not self._persist_clear():
-            return False
+            if not self._persist_clear():
+                return False
 
-        with self._lock:
             # FIX: R7-T4 —— 清空前收集指纹，同步删除向量条目（否则向量点
             # 永久残留，_try_vector_rag 继续召回已清空的历史结论）
             fingerprints = list(self._entries.keys())
@@ -446,7 +479,7 @@ class KnowledgeBaseStore:
         if settings.kb_vector_index_autosync:
             self._sync_entry_to_vector_store(result)
 
-        # PG 写穿：同步回写验证统计（锁外执行）
+        # 持久层写穿：同步回写验证统计（锁外执行）
         self._persist_verification(
             result,
             gen=current_gen,
@@ -657,7 +690,7 @@ class KnowledgeBaseStore:
                 if not hit:
                     # 记录在持久层缺失（如未持久化或冷启动），回退执行全量 upsert 保证经验不丢失
                     logger.info(
-                        "KB→PG verification update miss; falling back to upsert (fingerprint=%s)",
+                        "KB persist verification update miss; falling back to upsert (fingerprint=%s)",
                         fp,
                     )
                     store.upsert_kb_entry(entry)
@@ -673,13 +706,19 @@ class KnowledgeBaseStore:
                     )
             except Exception:
                 logger.warning(
-                    "KB→PG verification update failed (fingerprint=%s)",
+                    "KB persist verification update failed (fingerprint=%s)",
                     fp,
                     exc_info=True,
                 )
 
     def _persist_clear(self) -> bool:
-        """清空持久层（锁外执行）。成功返回 True，失败 warning 降级并返回 False。"""
+        """清空持久层。成功返回 True，失败 warning 降级并返回 False。
+
+        W13 / P2-STORE-1：由 :meth:`clear` 在其临界区内调用（不再是「锁外执行」）——
+        delete-all 与代际推进、内存清空必须同处一个线性化点，否则与并发 upsert
+        交错会让内存与持久层分叉。本方法只调用注入的 store 与日志，不取
+        ``self._lock``，store 也不回调本类，故在锁内调用无重入死锁。
+        """
         store = self._persistent_store()
         if store is None:
             return True
@@ -734,7 +773,7 @@ class KnowledgeBaseStore:
                     verify_count=int(row.get("verify_count") or 0),
                     case_confidence=float(row.get("case_confidence") or 0.0),
                 )
-                # PG 为权威来源：直接覆盖内存中的同指纹条目（若有）
+                # 持久层为权威来源：直接覆盖内存中的同指纹条目（若有）
                 existing = self._entries.get(fingerprint)
                 if existing is not None:
                     self._remove_from_index(existing)
