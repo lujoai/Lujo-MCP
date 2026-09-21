@@ -495,7 +495,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 - 启动：HTTP 使用 `python -m app.main`；stdio 使用 `python -m app.mcp_server`。
 - 依赖：`requirements.txt`（fastapi、uvicorn、openai、psutil、redis、mcp、pydantic-settings；PG 驱动 psycopg2/asyncpg 已移除）。
-- 关键配置：见 `PRD.md` §11.3；**务必生产设 `API_KEY` 与 `CORS_ORIGINS`**；`code_context_lines` 待补（§6）。
+- 关键配置：见 `PRD.md` §11.3；**务必生产设 `API_KEY` 与 `CORS_ORIGINS`**；`code_context_lines` 已支持（默认 5 行，见 §3.4.5）。
 - 容器化：`Dockerfile` + `docker-compose.yaml` 已提供。
 
 ---
