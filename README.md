@@ -459,16 +459,22 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 
 ---
 
-## 📚 文档导航
+## 📚 文档导航（公开文档）
 
-| 文档 | 描述 |
-|---|---|
-| 📖 [DEMO.md](./docs/public/DEMO.md) | 端到端实战演示（以 React 登录 Bug 为例的完整调试链路） |
-| 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | MCP 工具详细入参、返回值与 REST 端点参考 |
-| 💻 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | Browser SDK 与 Node SDK 使用手册（运行时边界、上报、脱敏、重试、批量与关闭语义） |
-| 🧠 [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md) | 调试经验知识库：指纹匹配、跨会话沉淀与置信度进化机制 |
-| 🏗️ [DESIGN.md](./docs/public/DESIGN.md) | 核心六层系统架构与数据流转设计 |
-| 📝 [RELEASE_NOTES.md](./docs/public/RELEASE_NOTES.md) | 版本演进历史与详细更新日志 |
+| 分类 | 文档 | 描述 |
+|---|---|---|
+| **接入与实战** | 📖 [DEMO.md](./docs/public/DEMO.md) | 端到端实战演示（以 React 登录 Bug 为例的完整调试链路与零依赖样例） |
+| | 💻 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | Browser SDK 与 Node SDK 使用手册（运行时边界、上报、脱敏、重试与体积截断限制） |
+| | 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | 18 个 MCP 工具详细入参、返回值、双传输错误码规范与 REST 端点参考 |
+| **系统架构** | 🏗️ [DESIGN.md](./docs/public/DESIGN.md) | 核心六层系统架构、数据流转设计与架构分层规则 |
+| | 🧠 [KNOWLEDGE_BASE.md](./docs/public/KNOWLEDGE_BASE.md) | 调试经验知识库：指纹匹配、跨会话沉淀与本地 SQLite 笔记本持久化机制 |
+| | 📋 [PRD.md](./docs/public/PRD.md) | 产品功能需求规格与设计边界承诺 |
+| | 🌐 [PROJECT_SUMMARY.md](./docs/public/PROJECT_SUMMARY.md) | 项目技术全景与能力模块速查 |
+| **运维与排障** | 🚦 [PREFLIGHT_CHECKLIST.md](./docs/public/PREFLIGHT_CHECKLIST.md) | 环境依赖、回环绑定验证、Docker 部署前预检清单 |
+| | 🛠️ [TROUBLESHOOTING.md](./docs/public/TROUBLESHOOTING.md) | 启动异常、配置错误、网络与 MCP 协议异常排查指南 |
+| **发版与记录** | 📜 [CHANGELOG.md](./docs/public/CHANGELOG.md) | 完整版本变更历史与未发布维护批次修复记录 |
+| | 📝 [RELEASE_NOTES.md](./docs/public/RELEASE_NOTES.md) | 历史版本发布说明与里程碑功能总结 |
+| | 🏛️ [ARCHITECTURE_REVIEW_V1.md](./docs/public/ARCHITECTURE_REVIEW_V1.md) | 架构审查历史决议与边界归档记录 |
 
 ---
 
