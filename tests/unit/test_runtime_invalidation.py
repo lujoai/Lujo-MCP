@@ -14,6 +14,11 @@ import re
 
 import pytest
 
+# 必须在 fixture 取快照**之前**导入：dashboard 在导入期注册失效监听器，若它是在
+# 某个用例执行期间才第一次被导入，注册就发生在快照之后，teardown 还原快照时会把
+# 它一并抹掉 —— 字母序排在本文件之后、又依赖该监听器的用例（如
+# test_batch_writes 的「批量写入只失效一次」）会静默失去被测行为。
+import app.api.dashboard  # noqa: F401
 from app.runtime.core import invalidation
 
 
@@ -25,6 +30,10 @@ def _clean_listeners():
     yield
     invalidation._listeners.clear()
     invalidation._listeners.update(saved)
+    # 还原后必须仍包含生产监听器，否则本文件之后的用例会失去 dashboard 失效行为
+    assert "dashboard" in invalidation._listeners, (
+        "dashboard 的失效监听器在还原后丢失（导入期注册被 fixture 抹掉）"
+    )
 
 
 def test_notify_reaches_every_listener_once():
