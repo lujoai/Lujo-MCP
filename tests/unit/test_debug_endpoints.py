@@ -275,3 +275,41 @@ class TestAnalyzeStreamAndAsyncSeeIngestedTrace:
 
         assert resp.status_code == 200, resp.text
         assert captured["context"]["errors"], "/analyze/async 的 context['errors'] 不应为空"
+
+    def test_repair_async_context_has_errors(self, monkeypatch):
+        import asyncio
+        from app.config import settings
+        from app.mcp.tools.repair_api import repair_async_handler
+
+        trace_id = _ingest_trace()
+        captured = {}
+
+        class _FakeRepairQueue:
+            async def enqueue(self, context, model=None):
+                captured["context"] = context
+                return "job-repair-1"
+
+        monkeypatch.setattr(settings, "agent_enabled", True)
+        with patch("app.api.debug.get_repair_queue", return_value=_FakeRepairQueue()):
+            resp = _analyze_client().post(
+                "/api/debug/repair/async", json={"request_id": trace_id}
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert captured["context"]["errors"], "/repair/async 的 context['errors'] 不应为空"
+        assert captured["context"].get("exception"), "/repair/async 的 context['exception'] 必须被提升"
+
+        # 同时也验证 MCP 工具 repair_async_handler 具有相同的补位行为
+        mcp_captured = {}
+
+        class _FakeMcpRepairQueue:
+            async def enqueue(self, context, model=None):
+                mcp_captured["context"] = context
+                return "job-mcp-1"
+
+        with patch("app.mcp.tools.repair_api.get_repair_queue", return_value=_FakeMcpRepairQueue()):
+            res = asyncio.run(repair_async_handler({"request_id": trace_id}))
+
+        assert res.get("job_id") == "job-mcp-1"
+        assert mcp_captured["context"]["errors"], "mcp repair_async 的 context['errors'] 不应为空"
+        assert mcp_captured["context"].get("exception"), "mcp repair_async 的 context['exception'] 必须被提升"

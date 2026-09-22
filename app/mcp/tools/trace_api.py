@@ -138,10 +138,15 @@ def _extract_trace_summary(request_id: str) -> dict | None:
             summary["type"] = f"RESPONSE {status}"
             if status >= 400:
                 summary["type"] = "ERROR"
-        elif step == "error":
-            summary["type"] = data.get("error_type", "ERROR")
+        elif step in ("error", "trace_data"):
+            summary["type"] = data.get("error_type") or data.get("type", "ERROR")
             summary["message"] = (data.get("message", "") or "")[:200]
             summary["top_frame"] = _top_frame(data.get("frames", []))
+            if step == "trace_data" and data.get("fingerprint"):
+                summary["fingerprint"] = data.get("fingerprint")
+        elif step == "trace_meta":
+            if data.get("trace_kind"):
+                summary["source"] = data.get("trace_kind")
         elif step == "exception":
             summary["type"] = data.get("type", "Exception")
             summary["message"] = (data.get("message", "") or "")[:200]

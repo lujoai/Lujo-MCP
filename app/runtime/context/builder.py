@@ -46,6 +46,41 @@ def build_context(request_id: str, logs: list) -> dict:
     }
 
 
+def augment_context_from_trace(context: dict, trace: list) -> None:
+    """把 ingest 落库的 trace_data 载荷补进 context["errors"]。
+
+    背景：``build_context`` 的 step 词汇表只认 ``request_start`` /
+    ``response_ready`` / ``error``，而 ``trace_repo.save_trace``（``/ingest/error``
+    与 silent_failure 的落库路径）写的是 ``trace_meta`` / ``trace_link`` /
+    ``trace_data``——于是 ingest 来源的 ``context["errors"]`` 恒空，下游
+    ``_get_error_signal`` 取不到 type/message/fingerprint，KB 精确指纹命中与
+    分析结果回写必然落空。``trace_data`` 载荷的键（type/message/frames/fingerprint）
+    与 errors 条目形状天然一致，无需任何适配层。
+
+    语义：
+    - 仅当 ``context["errors"]`` 为空时补位——既有 ``step="error"`` 路径零影响；
+    - 取最后一条 trace_data；
+    - 单条畸形日志只告警不阻断。
+    """
+    if context.get("errors"):
+        return
+    if not trace:
+        return
+    for item in reversed(trace):
+        try:
+            if not isinstance(item, dict) or item.get("step") != "trace_data":
+                continue
+            data = item.get("data")
+            if not isinstance(data, dict):
+                logger.warning("trace_data 载荷非 dict，已跳过该条补位")
+                continue
+            context["errors"] = [data]
+            return
+        except Exception:
+            logger.warning("trace_data 补位解析失败，已跳过该条", exc_info=True)
+            continue
+
+
 def build_debug_context(
     trace_id: str | None = None,
     include_runtime: bool = True,

@@ -15,7 +15,7 @@ from typing import Any
 
 from app.agent.repair_queue import get_repair_queue, QueueFullError
 from app.config import settings
-from app.runtime.context.builder import build_context
+from app.runtime.context.builder import build_context, augment_context_from_trace
 from app.runtime.collectors.runtime import collect_runtime_snapshot
 from app.runtime.core.logs import get_logs
 
@@ -101,6 +101,9 @@ async def repair_async_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     except Exception as e:
         logger.error(str(e), exc_info=True)
         return {"error": "build context failed"}
+
+    # P2-API-1：与 /analyze 同口径补位（必须位于下方提升循环之前）
+    augment_context_from_trace(context, trace)
 
     # 与 /analyze 一致：errors 中含堆栈帧则提升到 exception
     for err in context.get("errors", []):

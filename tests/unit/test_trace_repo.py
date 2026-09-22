@@ -413,3 +413,28 @@ class TestStoreFallbackSessionEnforcement:
         errors._recent.clear()
         assert trace_repo.get_trace(error_id, session_id="sess-a") is None
         assert trace_repo.get_trace(error_id) is not None
+
+
+def test_extract_trace_summary_with_trace_data_step():
+    """验证 trace_api 与 dashboard 的 _extract_trace_summary 均能正确提取 trace_data。"""
+    from app.mcp.tools.trace_api import _extract_trace_summary as mcp_summary
+    from app.api.dashboard import _extract_trace_summary as dash_summary
+
+    frames = [{"file": "service.py", "line": 99, "function": "handle"}]
+    error_id = trace_repo.save_trace(
+        "CustomServiceError", "something failed in worker", frames,
+        trace_kind="custom_exception",
+    )
+    # 验证 MCP 侧提取
+    s_mcp = mcp_summary(error_id)
+    assert s_mcp is not None
+    assert s_mcp["type"] == "CustomServiceError"
+    assert s_mcp["message"] == "something failed in worker"
+    assert "service.py:99 in handle" in s_mcp["top_frame"]
+
+    # 验证 Dashboard 侧提取
+    s_dash = dash_summary(error_id)
+    assert s_dash is not None
+    assert s_dash["type"] == "CustomServiceError"
+    assert s_dash["message"] == "something failed in worker"
+    assert s_dash["trace_kind"] == "custom_exception"

@@ -65,6 +65,46 @@ class TestStacktraceHandler:
         assert result["code_snippets"] == []
         assert "ai_summary" in result
 
+    def test_request_id_with_trace_repo_trace(self, monkeypatch):
+        mock_trace = {
+            "trace_id": "err-test-123",
+            "exc_type": "ZeroDivisionError",
+            "message": "division by zero",
+            "frames": [{"file": "calc.py", "line": 42, "function": "divide"}],
+            "frame_count": 1,
+            "traceback": "Traceback...",
+        }
+        monkeypatch.setattr("app.runtime.core.trace_repo.get_trace", lambda rid: mock_trace)
+        mock_snippet = MagicMock()
+        mock_snippet.model_dump.return_value = {"file": "calc.py", "line": 42, "snippet": "x / y"}
+        monkeypatch.setattr(stacktrace_api, "get_snippets_for_frames", lambda frames: [mock_snippet])
+
+        result = stacktrace_api.handler({"request_id": "err-test-123"})
+        assert result["request_id"] == "err-test-123"
+        assert result["exception"]["type"] == "ZeroDivisionError"
+        assert result["exception"]["message"] == "division by zero"
+        assert len(result["code_snippets"]) == 1
+        assert result["code_snippets"][0]["file"] == "calc.py"
+
+    def test_request_id_with_trace_data_step(self, monkeypatch):
+        mock_logs = [{
+            "step": "trace_data",
+            "data": {
+                "type": "KeyError",
+                "message": "'user_id'",
+                "frames": [{"file": "auth.py", "line": 10, "function": "get_user"}],
+            }
+        }]
+        monkeypatch.setattr("app.runtime.core.errors.get_by_id", lambda rid: None)
+        monkeypatch.setattr("app.runtime.core.trace_repo.get_trace", lambda rid: None)
+        monkeypatch.setattr(stacktrace_api, "get_logs", lambda rid: mock_logs)
+
+        result = stacktrace_api.handler({"request_id": "err-key-456"})
+        assert result["request_id"] == "err-key-456"
+        assert result["exception"]["type"] == "KeyError"
+        assert result["exception"]["message"] == "'user_id'"
+        assert result["exception"]["frame_count"] == 1
+
     def test_request_id_missing_arg(self):
         """arguments 不含 request_id 时不应抛 KeyError"""
         result = stacktrace_api.handler({})

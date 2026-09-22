@@ -125,6 +125,38 @@ class TestDashboardEventBus:
         msg = await asyncio.wait_for(q.get(), timeout=1)
         assert bus.is_close_event(msg)
 
+    @pytest.mark.asyncio
+    async def test_concurrent_threads_publish_and_subscribe(self):
+        """验证多线程并发 publish 与 subscribe/unsubscribe 不发生死锁与列表破坏。"""
+        import concurrent.futures
+
+        bus = DashboardEventBus()
+        stop_event = threading.Event()
+        errors_collected = []
+
+        def _publisher():
+            while not stop_event.is_set():
+                try:
+                    bus.publish({"type": "ping", "ts": 123})
+                except Exception as exc:
+                    errors_collected.append(exc)
+
+        # 启动 5 个后台发布线程
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        futures = [executor.submit(_publisher) for _ in range(5)]
+
+        # 主事件循环反复订阅和取消
+        for _ in range(30):
+            q = bus.subscribe()
+            await asyncio.sleep(0.001)
+            bus.unsubscribe(q)
+
+        stop_event.set()
+        executor.shutdown(wait=True)
+
+        assert not errors_collected, f"并发发布出现异常: {errors_collected}"
+        assert bus.subscriber_count() == 0
+
     def test_format_event_format(self):
         ev = DashboardEventBus.format_event({"type": "x"})
         assert ev.startswith("event: message\ndata: ")

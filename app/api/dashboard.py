@@ -229,11 +229,17 @@ def _extract_trace_summary(request_id: str) -> dict | None:
             summary["type"] = f"RESPONSE {status}"
             if status >= 400:
                 summary["trace_kind"] = "exception"
-        elif step == "error":
-            summary["type"] = data.get("error_type", "ERROR")
+        elif step in ("error", "trace_data"):
+            summary["type"] = data.get("error_type") or data.get("type", "ERROR")
             summary["message"] = (data.get("message", "") or "")[:200]
-            summary["trace_kind"] = "exception"
+            if summary.get("trace_kind") in ("debug", "exception"):
+                summary["trace_kind"] = data.get("trace_kind") or summary.get("trace_kind") or "exception"
+                if summary["trace_kind"] == "debug":
+                    summary["trace_kind"] = "exception"
             summary["has_silent_failure"] = data.get("silent", False)
+        elif step == "trace_meta":
+            if data.get("trace_kind"):
+                summary["trace_kind"] = data["trace_kind"]
         elif step == "verify":
             spec_diffs.append(data)
             if data.get("silent_failure"):

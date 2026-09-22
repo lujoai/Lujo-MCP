@@ -33,21 +33,49 @@ def handler(arguments: dict) -> dict:
     if exc_info[1] is not None:
         exc_data = capture_exception(exc_info[1])
     elif request_id:
-        trace = get_logs(request_id)
-        errors = [item for item in trace if item.get("step") == "error"]
-        if errors:
+        from app.runtime.core.errors import get_by_id
+        from app.runtime.core import trace_repo
+
+        err = get_by_id(request_id)
+        if err is None:
+            err = trace_repo.get_trace(request_id)
+
+        if err is not None:
+            frames = err.get("frames") or []
             exc_data = {
-                "type": "LoggedError",
-                "message": str(errors[-1].get("data", "")),
-                "traceback": str(errors),
-                "frames": [],
-                "frame_count": 0,
+                "type": err.get("type") or err.get("exc_type") or "Exception",
+                "message": err.get("message", ""),
+                "traceback": err.get("traceback", ""),
+                "frames": frames,
+                "frame_count": err.get("frame_count", len(frames)),
             }
         else:
-            return {
-                "request_id": request_id,
-                "message": "当前请求没有捕获到异常",
-            }
+            trace = get_logs(request_id)
+            error_entries = [item for item in trace if item.get("step") in ("error", "trace_data")]
+            if error_entries:
+                last_data = error_entries[-1].get("data")
+                if isinstance(last_data, dict):
+                    frames = last_data.get("frames") or []
+                    exc_data = {
+                        "type": last_data.get("type") or last_data.get("error_type", "LoggedError"),
+                        "message": str(last_data.get("message", "")),
+                        "traceback": str(last_data.get("traceback", "")),
+                        "frames": frames,
+                        "frame_count": len(frames),
+                    }
+                else:
+                    exc_data = {
+                        "type": "LoggedError",
+                        "message": str(last_data or ""),
+                        "traceback": str(error_entries),
+                        "frames": [],
+                        "frame_count": 0,
+                    }
+            else:
+                return {
+                    "request_id": request_id,
+                    "message": "当前请求没有捕获到异常",
+                }
     else:
         # FIX(v0.7.3): 无 request_id 且当前无活跃异常时，回退读取 errors 存储
         # 最近一条——浏览器 SDK / ingest_error 上报的错误都落在这里。旧行为只看
@@ -90,6 +118,9 @@ def get_stacktrace(trace_id: str | None = None) -> dict:
 
     _start = time.perf_counter()
     err = get_by_id(trace_id) if trace_id else get_latest()
+    if err is None and trace_id:
+        from app.runtime.core import trace_repo
+        err = trace_repo.get_trace(trace_id)
     if err is None:
         exc_info = sys.exc_info()
         if exc_info[1] is not None:
@@ -104,14 +135,14 @@ def get_stacktrace(trace_id: str | None = None) -> dict:
         else []
     )
     exception = {
-        "type": err.get("type"),
-        "message": err.get("message"),
-        "traceback": err.get("traceback"),
+        "type": err.get("type") or err.get("exc_type") or "Exception",
+        "message": err.get("message", ""),
+        "traceback": err.get("traceback", ""),
         "frames": frames,
         "frame_count": err.get("frame_count", len(frames)),
     }
     output = {
-        "error_id": err.get("error_id"),
+        "error_id": err.get("error_id") or trace_id,
         "exception": exception,
         "code_snippets": code_snippets,
         "ai_summary": format_trace_for_ai(exception),
