@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前版本：v0.9.2（2026-09-21，已发布）。本版为安全加固与经验闭环：默认监听收紧为 `127.0.0.1`、`/metrics` 免鉴权豁免仅回环生效、错误码规范化（关闭期 `TOOL_BUSY`；RBAC 鉴权拒绝 `AUTH_ERROR -32003`）、KB 存储边界拒绝未脱敏写入、Agent 外发脱敏，并新增 KB 诊断经验关联（`related_experiences`）与 `/demo` 接入状态面板；公开工具面、REST 契约与数据库 schema 不变。上一版 v0.9.1 为 PostgreSQL 运行时后端移除收口与 Windows release smoke 修复。
+> 当前版本：v0.9.3（2026-09-23，已发布）。本版为 Qdrant 语义召回修复：`qdrant-client` 1.16 移除 `QdrantClient.search()` 导致适配层调用异常被吞、召回恒为空，现切换 `query_points()` 并把依赖下限抬到 `>=1.10.0`；CI 与发布产物共用锁定依赖集。公开工具面、REST 契约与数据库 schema 不变。上一版 v0.9.2 为安全加固与经验闭环（默认监听收紧、错误码规范化、KB 边界加固、`related_experiences`）。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -20,7 +20,7 @@
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
-- [4. Node SDK（v0.9.2 已发布）](#4-node-sdkv092-已发布)
+- [4. Node SDK（v0.9.3 已发布）](#4-node-sdkv093-已发布)
 - [5. 常用字段速查](#5-常用字段速查)
 
 ---
@@ -340,9 +340,9 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ---
 
-## 4. Node SDK（v0.9.2 已发布）
+## 4. Node SDK（v0.9.3 已发布）
 
-包名固定为 `@lujoai/lujo-mcp-node-sdk`，当前发布版本为 v0.9.2，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。该包已随本版发布，`engines.node` 为 `>=18`。
+包名固定为 `@lujoai/lujo-mcp-node-sdk`，当前发布版本为 v0.9.3，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。该包已随本版发布，`engines.node` 为 `>=18`。
 
 ```bash
 npm install @lujoai/lujo-mcp-node-sdk

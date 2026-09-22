@@ -2,12 +2,13 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.9.2｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.9.3｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
 > **PostgreSQL 移除（Step 3，2026-09-14）**：PostgreSQL 运行时后端（pg_executor / pg_*_store / async_pg_store 等模块）、驱动依赖、Docker/compose 服务与 PG 配置族已全部移除；`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。本文以下历史版本注记中与 PG 相关的内容为**当时事实记录**，不再描述当前架构；现行语义以 §3.5 与 TROUBLESHOOTING.md L 节为准。
 
+> **v0.9.3（2026-09-23，已发布）**：Qdrant 语义召回修复——适配 qdrant-client 1.16 移除 `QdrantClient.search()` 的变更，切换 `query_points()`（依赖下限 `>=1.10.0`）；CI 与发布产物共用锁定依赖集；无破坏性行为变更。
 > **v0.9.2（2026-09-21，已发布）**：安全加固与经验闭环——默认监听收紧为 `127.0.0.1`、`/metrics` 免鉴权豁免仅回环生效、错误码规范化（关闭期 `TOOL_BUSY`；RBAC 鉴权拒绝 `AUTH_ERROR -32003`）、KB 存储边界拒绝未脱敏写入、认证 fail-closed 补强、Agent 外发脱敏；新增 KB 诊断经验关联（`related_experiences`）与 `/demo` 接入状态面板；静默失败指纹隔离、stdio 错误语义补齐、Redis L2 陈旧回流阻断。
 >
 > **v0.9.1（2026-09-14，已发布）**：PostgreSQL 运行时后端（Step 3）正式移除后收口，并修复 Windows release smoke 的 HTTP readiness 超时（新增独立 `--http-timeout`，默认 15 秒）。`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。
