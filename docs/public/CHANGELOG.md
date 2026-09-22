@@ -5,6 +5,19 @@
 
 ---
 
+## [0.9.3] - 2026-09-23
+
+> 主题「Qdrant 语义召回修复」：v0.9.2 之后 main 上 5 个维护提交的发布收口。核心修复一项真实缺陷——`qdrant-client` 1.16 移除了 `QdrantClient.search()`，适配层沿用旧 API 抛出的 `AttributeError` 被静默吞掉，配置了 Qdrant 的用户语义召回一直返回空结果且无任何报错；现切换到 `query_points()` 并抬高依赖下限。另含 CI 锁定依赖集验证与 RAG 离线回归测试。**无破坏性行为变更**：公开工具面、REST 契约、schema 与默认配置均不变，升级无破坏面。
+
+### Fixed
+
+- **Qdrant 语义召回静默失效**：qdrant-client 1.16 移除远端 `QdrantClient.search()` 后，适配层调用抛出的 `AttributeError` 被外层 `except` 吞掉，`search` 恒返回空列表——语义召回从未真正生效且不可见。现改用 `query_points()`（1.10 起可用），`requirements` 的 qdrant-client 下限同步抬到 `>=1.10.0`；新增离线客户端契约守卫（校验适配层调用的每个 `client.*` 方法在真实 `QdrantClient` 上存在）与内存 Qdrant 离线 roundtrip 回归（不依赖 Qdrant server、embedding API 或任何 Key）。附带修正智谱 embedding-3 维度注释（2048，非 1024）。
+
+### Changed
+
+- **CI 与发布产物共用同一依赖集**：CI 的 dev 依赖改为安装 `requirements-locked.txt`（与 PyInstaller 冻结产物一致），消除「CI 绿但发布物炸」的依赖漂移窗口（此前 CI 装松散 `requirements.txt` 会解析到最新版，如本地 fastapi 0.138 vs 冻结产物 0.115 的分叉，qdrant-client 1.16 移除 `search()` 这类破坏性变更 CI 完全抓不到）。
+- 公开参考文档与配置示例对齐 v0.9.2 发布事实；修正 CHANGELOG 过期表述。
+
 ## [0.9.2] - 2026-09-21
 
 > 主题「安全加固与经验闭环」：本版汇集 v0.9.1 之后累计 70 个提交的内容——安全修复（KB 存储边界拒绝未脱敏写入、Qdrant 与自定义规则的脱敏路径收紧、认证 fail-closed 补强、Agent 外发脱敏）、协议与部署行为调整（默认仅监听 `127.0.0.1`、`/metrics` 豁免仅回环生效、关闭期与鉴权错误码规范化）、运行稳定性改进（重型工具槽位与终端语义、stdio 错误语义、Redis L2 陈旧回流、OTel 资源回收、信号退出收口），以及 KB 诊断经验关联与 `/demo` 接入状态可视化。**默认网络暴露面更小、脱敏边界更完整**；容器部署者与按错误码分支的调用方请先阅读「升级须知」。

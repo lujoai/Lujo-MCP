@@ -6,7 +6,7 @@
 
 > 💡 **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 
-> **当前版本：v0.9.2（2026-09-21）**：安全加固（KB 存储边界拒绝未脱敏写入、Qdrant 与自定义规则的脱敏路径收紧、认证 fail-closed 补强、Agent 外发脱敏），默认监听收紧为 `127.0.0.1`、`/metrics` 免鉴权豁免仅回环生效，关闭期与鉴权错误码规范化（`TOOL_BUSY` / `AUTH_ERROR -32003`），并新增 KB 诊断经验关联（`related_experiences`）与 `/demo` 接入状态面板。**升级前请先读 [CHANGELOG.md](./docs/public/CHANGELOG.md) 的「升级须知」**。npm 最新已发布版本见 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp)；v0.9.2 的发布证据见 [GitHub Release v0.9.2](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.2)。
+> **当前版本：v0.9.3（2026-09-23）**：修复 Qdrant 语义召回静默失效（`qdrant-client` 1.16 移除 `QdrantClient.search()`，旧调用异常被吞导致召回恒为空；现切换 `query_points()` 并抬高依赖下限），CI 改为与发布产物共用锁定依赖集。无破坏性行为变更，公开工具面、REST 契约与 schema 不变。npm 最新已发布版本见 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp)；v0.9.3 的发布证据见 [GitHub Release v0.9.3](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.3)。
 
 ---
 
@@ -16,20 +16,20 @@
 
 ### 推荐方式：npx 免安装直跑
 
-在 MCP 客户端配置文件中填入（示例固定使用当前已发布版本 `0.9.2`，保证可复现）：
+在 MCP 客户端配置文件中填入（示例固定使用当前已发布版本 `0.9.3`，保证可复现）：
 
 ```json
 {
   "mcpServers": {
     "lujo": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.2"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.3"]
     }
   }
 }
 ```
 
-> **版本口径**：省略 `@0.9.2` 时 npx 会取 npm `latest`（当前 latest 即 0.9.2）。npm 已发布包与仓库 `main` 开发分支不完全等同——`main` 上可能包含尚未发布的维护提交（发布策略见 [CHANGELOG.md](./docs/public/CHANGELOG.md)）；以 npm registry 实际版本为准。
+> **版本口径**：省略 `@0.9.3` 时 npx 会取 npm `latest`（当前 latest 即 0.9.3）。npm 已发布包与仓库 `main` 开发分支不完全等同——`main` 上可能包含尚未发布的维护提交（发布策略见 [CHANGELOG.md](./docs/public/CHANGELOG.md)）；以 npm registry 实际版本为准。
 >
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
@@ -40,7 +40,7 @@
 ### 替代方式：全局安装
 
 ```bash
-npm install -g @lujoai/lujo-mcp@0.9.2
+npm install -g @lujoai/lujo-mcp@0.9.3
 ```
 
 客户端配置：
@@ -224,7 +224,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
-### Node 服务接入：使用 Node SDK（v0.9.2 已发布）
+### Node 服务接入：使用 Node SDK（v0.9.3 已发布）
 
 服务端 Node.js 使用独立包 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18/20/22 和 CJS/ESM。它只做显式错误与网络上报，不安装浏览器的 DOM、XHR/fetch、console 或 `localStorage` 钩子；浏览器页面继续使用上面的 Browser SDK。
 
@@ -427,11 +427,11 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
   "mcpServers": {
     "lujo-project-a": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.2", "--http-port", "8101"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.3", "--http-port", "8101"]
     },
     "lujo-project-b": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.2", "--http-port", "8102"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.3", "--http-port", "8102"]
     }
   }
 }
@@ -450,7 +450,7 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 </script>
 ```
 
-**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp@0.9.2", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
+**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp@0.9.3", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
 
 **已知限制（如实说明）**：
 
