@@ -430,12 +430,15 @@ class QdrantVectorStore(VectorStore):
             return []
 
         try:
-            hits = client.search(
+            # FIX(R8): qdrant-client 1.16 起移除了远程 QdrantClient.search()，旧调用会抛
+            # AttributeError 并被下方 except 吞掉、静默返回空 —— 语义召回整体失效且无告警。
+            # 统一改用 query_points()（自 1.10 提供），响应体经 .points 取 ScoredPoint 列表。
+            hits = client.query_points(
                 collection_name=settings.qdrant_collection,
-                query_vector=vectors[0],
+                query=vectors[0],
                 limit=top_k,
                 score_threshold=settings.vector_store_min_score,
-            )
+            ).points
             return [(hit.payload, float(hit.score)) for hit in hits]
         except Exception:
             logger.warning("Qdrant search 失败，返回空结果", exc_info=True)

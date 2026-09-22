@@ -11,4 +11,5 @@ pybreaker>=1.0.0
 opentelemetry-api>=1.20.0
 opentelemetry-sdk>=1.20.0
 opentelemetry-exporter-otlp-proto-grpc>=1.20.0
-qdrant-client>=1.9.0
+# qdrant-client：query_points() 自 1.10 提供；1.16 起远程 QdrantClient 已移除 search()
+qdrant-client>=1.10.0

@@ -211,7 +211,7 @@ class TestSearch:
             _FakeHit({"fingerprint": "fp1", "analysis": {"root_cause": "db"}}, 0.92),
             _FakeHit({"fingerprint": "fp2", "analysis": {"root_cause": "net"}}, 0.81),
         ]
-        mock_qdrant.search.return_value = hits
+        mock_qdrant.query_points.return_value.points = hits
         monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: mock_qdrant)
         monkeypatch.setattr(qdrant_module, "_get_embedding_client", lambda: MagicMock())
         vec = _make_vector()
@@ -226,7 +226,7 @@ class TestSearch:
 
     def test_search_passes_score_threshold_and_limit(self, monkeypatch):
         mock_qdrant = _make_qdrant_client()
-        mock_qdrant.search.return_value = []
+        mock_qdrant.query_points.return_value.points = []
         monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: mock_qdrant)
         monkeypatch.setattr(qdrant_module, "_get_embedding_client", lambda: MagicMock())
         vec = _make_vector()
@@ -234,21 +234,61 @@ class TestSearch:
         store = QdrantVectorStore()
         store.search("query", 7)
 
-        mock_qdrant.search.assert_called_once()
-        call_kwargs = mock_qdrant.search.call_args.kwargs
+        mock_qdrant.query_points.assert_called_once()
+        call_kwargs = mock_qdrant.query_points.call_args.kwargs
         assert call_kwargs["collection_name"] == settings.qdrant_collection
+        assert call_kwargs["query"] == vec
         assert call_kwargs["limit"] == 7
         assert call_kwargs["score_threshold"] == settings.vector_store_min_score
 
     def test_search_failure_returns_empty(self, monkeypatch):
         mock_qdrant = _make_qdrant_client()
-        mock_qdrant.search.side_effect = RuntimeError("qdrant read error")
+        mock_qdrant.query_points.side_effect = RuntimeError("qdrant read error")
         monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: mock_qdrant)
         monkeypatch.setattr(qdrant_module, "_get_embedding_client", lambda: MagicMock())
         vec = _make_vector()
         monkeypatch.setattr(qdrant_module, "_embed_texts", lambda texts: [vec])
         store = QdrantVectorStore()
         assert store.search("query", 3) == []
+
+
+# ── 契约守卫：适配器调用的客户端方法必须真实存在（离线，不联网 / 不需要 Key）──
+
+
+class TestQdrantClientContract:
+    """守住「适配器调用的 Qdrant 客户端方法在真实 QdrantClient 上确实存在」。
+
+    背景（Qdrant 真环境取证发现）：qdrant-client 1.16 起移除了远程
+    ``QdrantClient.search()``，而 ``app/rag/qdrant_vector_store.py`` 仍在调用它——
+    异常被 ``except`` 吞掉后静默返回空，语义召回整体失效且无告警。
+    单测因 mock 掉客户端（mock 上什么方法都有）全绿，集成用例又因缺 Key / 缺服务长期
+    skip，缺陷因此长期漏网。本用例只读源码 + 已安装客户端的类属性，离线可跑，
+    用于在 CI 拦住同类「依赖升级悄悄删方法」。
+    """
+
+    def test_methods_called_by_adapter_exist_on_client(self):
+        import inspect
+        import re
+
+        from qdrant_client import QdrantClient
+
+        source = inspect.getsource(qdrant_module)
+        called = sorted(set(re.findall(r"\bclient\.([a-z_][a-z0-9_]*)\(", source)))
+        # 本模块内名为 client 的局部变量有两类：Qdrant 客户端与 embedding 用的 OpenAI 客户端
+        # （后者只调 .embeddings.create）；此处只校验 Qdrant 侧。
+        called = [name for name in called if name != "embeddings"]
+        assert called, "未能从适配器源码解析出任何 client.* 调用，守卫本身失效"
+        missing = [name for name in called if not hasattr(QdrantClient, name)]
+        assert not missing, (
+            f"qdrant-client 已移除或重命名这些方法：{missing}；"
+            "app/rag/qdrant_vector_store.py 需要同步适配"
+        )
+
+    def test_removed_search_api_is_not_called(self):
+        """反向断言：适配器不得再调用已被移除的 client.search()，防止修复被回退。"""
+        import inspect
+
+        assert "client.search(" not in inspect.getsource(qdrant_module)
 
 
 # ── C. _get_qdrant_client 初始化逻辑 ──────────────────────────────

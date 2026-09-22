@@ -260,7 +260,8 @@ class Settings(BaseSettings):
     qdrant_url: str = ""
     qdrant_collection: str = "ai-debug-kb"
     qdrant_api_key: str = ""
-    # Embedding 模型：OpenAI 用 text-embedding-3-small（1536维）；智谱用 embedding-3（1024维）
+    # Embedding 模型：OpenAI 用 text-embedding-3-small（1536维）；智谱 embedding-3 默认 2048 维
+    # （实测默认即 2048；配智谱时必须同步设 QDRANT_EMBEDDING_DIM=2048，否则维度不匹配静默降级）
     # 与 llm_provider 解耦而非自动推导——用户可能 LLM 与 embedding 用不同 provider
     qdrant_embedding_model: str = "text-embedding-3-small"
     # 向量维度：必须与 qdrant_embedding_model 对齐，且与已建 collection 维度一致
