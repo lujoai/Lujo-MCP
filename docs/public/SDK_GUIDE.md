@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v0.9.1（2026-09-14）。本文包含 Node SDK 接线与 Browser SDK 使用边界；v0.9.x 的能力变化在服务端（PostgreSQL 后端移除、KB 本地「笔记本」默认开启），SDK 接口无变化。
+> 当前版本：v0.9.2（2026-09-21）。本文包含 Node SDK 接线与 Browser SDK 使用边界；本版能力变化在服务端（默认监听收紧为 `127.0.0.1`、`/metrics` 豁免仅回环、关闭期与鉴权错误码规范化、KB 存储边界拒写未脱敏内容），SDK 接口无变化。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 

@@ -2,12 +2,14 @@
 
 > 本文档描述 Lujo-MCP 的**实现设计**：系统架构、模块职责、关键流程、数据模型、接口契约、设计决策与待设计项。
 > 配套文档：产品需求文档 `PRD.md`（回答"做什么/为什么"），本文档回答"怎么做"。
-> 版本：v0.9.1｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
+> 版本：v0.9.2｜设计状态：✅ 已落地 / ⚠️ 已写待补完 / 🔲 设计草案（待实现）
 > 审阅视角：高级工程师 / 高级架构师
 > 功能完成度与默认可交付状态以内部文档为准；本设计文档允许记录已设计但仍需环境启用或后续补完的能力。
 >
 > **PostgreSQL 移除（Step 3，2026-09-14）**：PostgreSQL 运行时后端（pg_executor / pg_*_store / async_pg_store 等模块）、驱动依赖、Docker/compose 服务与 PG 配置族已全部移除；`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。本文以下历史版本注记中与 PG 相关的内容为**当时事实记录**，不再描述当前架构；现行语义以 §3.5 与 TROUBLESHOOTING.md L 节为准。
 
+> **v0.9.2（2026-09-21，已发布）**：安全加固与经验闭环——默认监听收紧为 `127.0.0.1`、`/metrics` 免鉴权豁免仅回环生效、错误码规范化（关闭期 `TOOL_BUSY`；RBAC 鉴权拒绝 `AUTH_ERROR -32003`）、KB 存储边界拒绝未脱敏写入、认证 fail-closed 补强、Agent 外发脱敏；新增 KB 诊断经验关联（`related_experiences`）与 `/demo` 接入状态面板；静默失败指纹隔离、stdio 错误语义补齐、Redis L2 陈旧回流阻断。
+>
 > **v0.9.1（2026-09-14，已发布）**：PostgreSQL 运行时后端（Step 3）正式移除后收口，并修复 Windows release smoke 的 HTTP readiness 超时（新增独立 `--http-timeout`，默认 15 秒）。`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。
 >
 > **v0.8.0（2026-09-11）**：KB 调试经验本地「笔记本」（SQLite 单文件写穿 + 启动回灌，`KB_PERSIST_ENABLED` 默认 true）；平台包同名 bin 安装修复。默认 `STORAGE_BACKEND=memory`，产品定位为单用户本地自用。（该版曾提到的 `STORAGE_BACKEND != postgresql` 条件与 `PG_ASYNC_ENABLED` 工作项均已随 Step 3 PG 移除失效。）
@@ -637,7 +639,7 @@ python -m pytest -m "not integration and not slow" --tb=short -q
 
 ### 11.3 集成测试覆盖
 
-> 范围注记：下列「KB 经验闭环」「进程边界与生命周期」「传输契约」三条目来自 v0.9.1 发布后的 main 维护提交，不属于 v0.9.1 已发布产物，将在后续版本发布时纳入。
+> 范围注记：下列「KB 经验闭环」「进程边界与生命周期」「传输契约」三条目来自 v0.9.1 发布后的 main 维护提交，**已随 v0.9.2（2026-09-21）发布**。
 
 - **DashboardIntegration**：stats 结构、traces 列表、trace 详情（当前数据源为 memory + errors 缓冲；原 PG 读取路径已移除）
 - **MCPToolIntegration**：list_recent_traces、search_logs、get_logs 返回运行现场数据（memory）
