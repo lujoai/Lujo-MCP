@@ -252,6 +252,52 @@ class TestSearch:
         assert store.search("query", 3) == []
 
 
+class TestOfflineQdrantQueryPoints:
+    def test_search_roundtrip_uses_real_query_points_api_without_external_services(self, monkeypatch):
+        """真实 1.18 客户端的内存模式必须经适配器召回 payload。
+
+        这个回归不依赖 Qdrant server、embedding API 或 StepFun：向量直接写入
+        QdrantClient(location=":memory:")，embedding 只替换为固定向量。它同时约束
+        ``query_points`` 的实际调用参数、返回对象的 ``.points`` 读取及 payload/score 映射，
+        防止旧 ``search()`` 调用被异常吞掉后静默返回空。
+        """
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import Distance, PointStruct, VectorParams
+
+        collection_name = f"offline-qdrant-contract-{uuid.uuid4().hex}"
+        client = QdrantClient(location=":memory:")
+        try:
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(size=3, distance=Distance.COSINE),
+            )
+            client.upsert(
+                collection_name=collection_name,
+                points=[
+                    PointStruct(
+                        id=1,
+                        vector=[1.0, 0.0, 0.0],
+                        payload={"fingerprint": "fp-offline-query-points"},
+                    )
+                ],
+                wait=True,
+            )
+            monkeypatch.setattr(settings, "qdrant_collection", collection_name)
+            monkeypatch.setattr(settings, "qdrant_embedding_dim", 3)
+            monkeypatch.setattr(settings, "vector_store_min_score", 0.0)
+            monkeypatch.setattr(qdrant_module, "_get_qdrant_client", lambda: client)
+            monkeypatch.setattr(qdrant_module, "_get_embedding_client", lambda: MagicMock())
+            monkeypatch.setattr(qdrant_module, "_embed_texts", lambda texts: [[1.0, 0.0, 0.0]])
+
+            results = QdrantVectorStore().search("offline query", top_k=1)
+
+            assert len(results) == 1
+            assert results[0][0]["fingerprint"] == "fp-offline-query-points"
+            assert results[0][1] == pytest.approx(1.0)
+        finally:
+            client.close()
+
+
 # ── 契约守卫：适配器调用的客户端方法必须真实存在（离线，不联网 / 不需要 Key）──
 
 
