@@ -27,6 +27,9 @@ jobs:
             requirements-locked.txt
             requirements-dev.txt
 
+      # FIX(R8-a)：requirements-dev.txt 现在指向 requirements-locked.txt（出厂冻结产物
+      # 构建用的同一份锁定版本），因此本 job 的绿灯代表「出厂形态」，不再解析浮动的最新
+      # 版本。理由与升级顺序见 requirements-dev.txt 顶部说明。
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
@@ -73,6 +76,9 @@ jobs:
             requirements-locked.txt
             requirements-dev.txt
 
+      # FIX(R8-a)：requirements-dev.txt 现在指向 requirements-locked.txt（出厂冻结产物
+      # 构建用的同一份锁定版本），因此本 job 的绿灯代表「出厂形态」，不再解析浮动的最新
+      # 版本。理由与升级顺序见 requirements-dev.txt 顶部说明。
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
@@ -104,6 +110,9 @@ jobs:
             requirements-locked.txt
             requirements-dev.txt
 
+      # FIX(R8-a)：requirements-dev.txt 现在指向 requirements-locked.txt（出厂冻结产物
+      # 构建用的同一份锁定版本），因此本 job 的绿灯代表「出厂形态」，不再解析浮动的最新
+      # 版本。理由与升级顺序见 requirements-dev.txt 顶部说明。
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 

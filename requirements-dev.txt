@@ -1,6 +1,22 @@
 # Dev dependencies: runtime deps + test/lint tools
 # Usage: pip install -r requirements-dev.txt
--r requirements.txt
+#
+# FIX(R8-a)：运行时依赖这里指向「发布锁定」requirements-locked.txt，而不是
+# requirements.txt（声明面）。
+#
+# 为什么：出厂的三平台冻结产物是用 requirements-locked.txt 构建的，而 CI 的三个
+# Python job（lint-and-test / integration-tests / e2e-tests）装的就是本文件。
+# 此前本文件指向松边界的 requirements.txt，pip 每次解析「当时最新」的版本，于是
+# 出现「CI 绿的组合 ≠ 出厂的组合」：
+#   · 本机 fastapi 0.138.x vs 出厂锁定 0.115.0（相隔 20+ minor）
+#   · qdrant-client 1.16 移除远程 search() 这类破坏性升级，CI 结构上不可能拦住
+#     （该缺陷最终在真环境集成取证时才暴露）
+# 改为锁定组合后：CI 绿灯 == 出厂形态绿灯，本机与 CI 也用同一套版本。
+#
+# 升级运行时依赖的正确顺序：先改 requirements.txt（声明面）→ 重新生成
+# requirements-locked.txt（见该文件顶部说明）→ 本机跑全量 unit/integration/e2e
+# → 再 push（CI 会用新的锁定组合复验）。
+-r requirements-locked.txt
 
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
