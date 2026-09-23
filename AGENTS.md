@@ -286,3 +286,25 @@ npm test --prefix node-sdk
 ```bash
 .venv/Scripts/python.exe scripts/check_doc_links.py
 ```
+
+---
+
+## 10. 临时文件落盘位置
+
+排查 CI / GitHub Actions API / Release 等外部状态时，
+需要把 API 响应落到本地再解析。
+
+禁止写入工作树内（仓库根目录或任何子目录）：
+
+- 探针文件会出现在 `git status`，易被误提交污染工作树
+- 违反本项目「测试与分析产物写入工作树之外」的既有纪律
+
+统一写入系统临时目录：
+
+```bash
+curl -s ... -o "$TEMP/lujo-probe.json"
+```
+
+`.gitignore` 只守护已知测试产物
+（`.pytest_tmp/`、`.pytest-tmp/`、`test-results.xml` 等）；
+一次性会话探针靠本约定自律，不靠 ignore 兜底。
