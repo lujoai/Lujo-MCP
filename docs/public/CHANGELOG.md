@@ -5,13 +5,28 @@
 
 ---
 
-## [未发布]
+## [0.9.4] - 2026-09-23
 
-> **破坏性变更**：废弃便捷调试入口 `POST /debug`，统一收敛到 `POST /api/debug/run`。
+> 主题「上下文断层修复与端点收敛」：本版全面修复代码审查发现的运行时上下文断层、MCP 工具堆栈查询、追踪摘要提取与事件总线线程安全问题，收敛遗留未文档化调试端点。
 
 ### Removed
 
-- **便捷调试入口 `POST /debug`（破坏性变更）**：该入口从未进入公开 API 参考（`docs/public/API_REFERENCE.md` 只列出 `/api/debug/*` 15 个端点），其逻辑与 `POST /api/debug/run` 完全重复，且曾是唯一未声明端点级 RBAC 依赖的 REST 调试入口。现统一收敛：`POST /debug` 返回 `410 Gone` + `{"error": "endpoint_removed", "replacement": "/api/debug/run"}`。**迁移方式**：改用 `POST /api/debug/run`，请求体 `{"payload": <原 /debug 的整个请求体>, "metadata": {...}}`，返回结构一致（`request_id` / `result` / `trace` / `context`）。选 `410 Gone` 而非直接 `404`，是为让旧客户端得到「有意移除 + 替代端点」的明确信号，不与路由写错的 404 混淆；该路由计划在后续版本整条摘除。
+- **便捷调试入口 `POST /debug`（破坏性变更）**：该入口从未进入公开 API 参考（`docs/public/API_REFERENCE.md` 只列出 `/api/debug/*` 15 个端点），其逻辑与 `POST /api/debug/run` 完全重复，且曾是唯一未声明端点级 RBAC 依赖的 REST 调试入口。现统一收敛：`POST /debug` 返回 `410 Gone` + `{"error": "endpoint_removed", "replacement": "/api/debug/run"}`。**迁移方式**：改用 `POST /api/debug/run`，请求体 `{"payload": <原 /debug 的整个请求体>, "metadata": {...}}`，返回结构一致（`request_id` / `result` / `trace` / `context`）。
+
+### Fixed
+
+- **异步修复任务上下文补位**：`debug_repair_async` 与 MCP 工具 `repair_async` 补位 Ingest 上报的 `trace_data` 步骤，修复 SDK 错误在异步修复链路丢失堆栈帧与异常类型的问题。
+- **MCP `stacktrace` 工具指定 `request_id` 真实栈帧还原**：传入 `request_id` 时优先从 `errors.get_by_id` 与 `trace_repo.get_trace` 回读结构化异常与真实调用栈帧，并生成代码片段，不再返回空栈帧或误判「当前请求没有捕获到异常」。
+- **追踪摘要支持 `trace_data` 步骤**：`trace_api` 与 `dashboard` 的 `_extract_trace_summary` 正确识别 `step="trace_data"`，修复持久化错误在内存队列轮替或重启后被降级抹平为纯空 `debug` 记录的问题。
+- **Dashboard 事件总线跨线程线程安全**：`DashboardEventBus` 增加 `threading.Lock` 保护订阅列表与容量检查，根除后台数据广播与前台连接握手的竞态死锁隐患。
+- **URL 反查两趟精确优先匹配**：`url_resolver.resolve()` 采用两趟匹配，杜绝参数化模板路由（如 `/items/{id}`）截胡同前缀精确路由（如 `/items/search`）。
+- **修复队列启动幂等性**：`RepairQueue.start()` 增加已存在 Worker 检查，防止生命周期重载时 Worker 成倍增加。
+- **网络记录数值安全转换**：`parse_network_record` 安全转换 `status_code` 与 `duration_ms`，非规范输入安全降级为 None，避免单条上报抛出未捕获 422 异常。
+- **根路径 `GET /` 契约规范化**：移除直接绑定的 `_kb_persist_state` 私有状态函数，改为返回标准服务元信息 JSON 字典。
+
+### Changed
+
+- **CI 逐测试打印 skip 原因**：CI 三个测试任务（unit / integration / e2e）增加 `-rs` 参数，每次流水线直接透明列出跳过的测试项与原因，提升假绿排查可观测性。
 
 ## [0.9.3] - 2026-09-23
 

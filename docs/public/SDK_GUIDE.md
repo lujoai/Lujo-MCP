@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v0.9.3（2026-09-23）。本文包含 Node SDK 接线与 Browser SDK 使用边界；本版为服务端 Qdrant 语义召回修复（切换 `query_points()`），SDK 接口无变化。
+> 当前版本：v0.9.4（2026-09-23）。本文包含 Node SDK 接线与 Browser SDK 使用边界；本版为服务端运行时上下文断层修复与端点收敛，SDK 接口无变化。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 

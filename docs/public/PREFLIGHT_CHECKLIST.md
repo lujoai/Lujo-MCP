@@ -1,10 +1,10 @@
 # 启动前检查与功能启用综合手册 / Pre-flight Checklist & Enablement Guide
 
-**适用版本 / Applicable Version**: v0.9.3
-**最后更新 / Last Updated**: 2026-09-22
+**适用版本 / Applicable Version**: v0.9.4
+**最后更新 / Last Updated**: 2026-09-23
 
 > **说明**：本文档已整合原独立文件 `ENABLEMENT_GUIDE.md`（功能启用指南）全部内容，为 Lujo-MCP 的环境部署、配置检查与可选功能启用（Redis、Playwright、熔断器、OTel）提供一站式操作与验证手册。
-> **发布状态**：v0.9.3 已发布（npm registry `latest=0.9.3`）。v0.9.3 本身无新增行为变更（Qdrant 语义召回修复 + CI 依赖集对齐）。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。**升级须知（自 v0.9.2 起的行为变更）**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`。发布页：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.3。
+> **发布状态**：v0.9.4 已发布（npm registry `latest=0.9.4`）。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。发布页：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.4。
 
 ---
 
@@ -568,7 +568,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | lujo-mcp v0.9.3 | ..."
+#   - 日志输出 "服务启动 | lujo-mcp v0.9.4 | ..."
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -602,7 +602,7 @@ curl http://localhost:8000/internal/health
 #   {
 #     "status": "ok",
 #     "service": "lujo-mcp",
-#     "version": "0.9.3",
+#     "version": "0.9.4",
 #     "storage": "memory",         ← 唯一合法值（PostgreSQL 后端已移除）
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

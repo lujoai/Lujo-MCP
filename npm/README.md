@@ -6,10 +6,8 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
 元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。**当前版本
-v0.9.3（2026-09-23）**：修复 Qdrant 语义召回静默失效（`qdrant-client` 1.16 移除
-`QdrantClient.search()`，旧调用异常被吞导致召回恒为空；现切换 `query_points()` 并把
-依赖下限抬到 `>=1.10.0`），CI 改为与发布产物共用锁定依赖集；无破坏性行为变更，
-KB 本地「笔记本」保持默认开启。npm 已发布版本的 `latest` 与 `engines.node >=18`
+v0.9.4（2026-09-23）**：修复运行时上下文断层、MCP 工具堆栈查询、追踪摘要提取与事件总线线程安全问题，
+收敛未文档化调试端点。npm 已发布版本的 `latest` 与 `engines.node >=18`
 以 registry 实查为准。
 
 ## 发布结构

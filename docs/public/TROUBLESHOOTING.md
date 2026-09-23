@@ -1,7 +1,7 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.9.3
-**最后更新 / Last Updated**: 2026-09-22
+**适用版本 / Applicable Version**: v0.9.4
+**最后更新 / Last Updated**: 2026-09-23
 
 > **发布状态**：默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
 
@@ -62,7 +62,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HOST=127.0.0.1`
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.3`
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.4`
 
 ---
 
@@ -524,7 +524,7 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-`tools/list` 公开 18 个 Agent-facing 工具（v0.9.3；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
+`tools/list` 公开 18 个 Agent-facing 工具（v0.9.4；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
 `debug`, `context`, `trace`, `stacktrace`, `diagnose_issue`, `list_recent_traces`, `search_logs`, `ingest_specs`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
