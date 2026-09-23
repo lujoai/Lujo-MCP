@@ -55,15 +55,23 @@ def resolve(method: str, path: str) -> Optional[dict[str, Any]]:
         logger.warning("URL Resolver: 无法加载 app.main", exc_info=True)
         return None
 
+    # 第一趟：严格精确匹配（route.path == path）——优先于任何模板匹配。
+    # FIX: 单次循环先遇到参数化模板（如 /items/{id}）时，/items/search 会被
+    # /items/{id} 的正则截胡、返回错误的 handler；必须做两趟遍历。
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
         if method not in (route.methods or []):
             continue
-        # 精确匹配优先
         if route.path == path:
             return _describe_endpoint(route.endpoint)
-        # 路径模板兜底（含路径参数）
+
+    # 第二趟：路径模板兜底（含路径参数）。
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if method not in (route.methods or []):
+            continue
         try:
             if _path_to_regex(route.path).match(path):
                 return _describe_endpoint(route.endpoint)

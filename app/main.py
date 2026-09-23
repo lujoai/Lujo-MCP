@@ -5,13 +5,14 @@ import ipaddress
 import logging
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from app import __version__
 from app.config import settings
 from app.auth.key_rotation import auth_enabled
+from app.auth.rbac import require_role
 from app.auth.startup_guard import is_unspecified_bind
 from app.utils.logging import setup_logging
 from app.middleware import setup_middleware
@@ -428,7 +429,6 @@ app.include_router(spec_router)
 app.include_router(auth_router)
 
 
-@app.get("/")
 def _kb_persist_state() -> str:
     """KB 本地「笔记本」持久化的对外可见状态（W13 / P3-STORE-4）。
 
@@ -442,6 +442,22 @@ def _kb_persist_state() -> str:
     if not settings.kb_persist_enabled:
         return "disabled"
     return "degraded" if kb_persist_degraded() else "sqlite"
+
+
+@app.get("/")
+def index():
+    """服务根入口——基本信息 + 文档入口，避免暴露内部状态裸字符串。"""
+    return {
+        "service": settings.service_name,
+        "version": __version__,
+        "description": "MCP Runtime Debugging Context Server for AI coding agents",
+        "endpoints": {
+            "health": "/health",
+            "dashboard": "/dashboard",
+            "mcp": "/mcp",
+            "docs": "https://github.com/lujoai/Lujo-MCP#readme",
+        },
+    }
 
 
 @app.get("/health")
@@ -586,7 +602,7 @@ def ai_debug_js():
     return _html_response("<h1>SDK not found</h1>", status_code=404)
 
 
-@app.post("/debug")
+@app.post("/debug", dependencies=[Depends(require_role("admin", "developer"))])
 def debug(req: dict):
     """便捷调试入口"""
     request_id = create_request_id()

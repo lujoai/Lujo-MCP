@@ -193,6 +193,54 @@ def test_debug_echo_is_redacted():
 
 
 # ---------------------------------------------------------------------------
+# 审查 P3-MED-06: POST /debug 必须显式声明 RBAC 角色依赖
+# ---------------------------------------------------------------------------
+
+def test_debug_endpoint_requires_write_role():
+    """POST /debug 会写入 trace 存储，必须与 /api/debug/run 同口径限 admin/developer。
+
+    此前该端点只经过全局 AuthMiddleware、未声明端点级 require_role 依赖——
+    开启 RBAC 时 viewer 角色可绕过 /api/debug/run 的 403，从 /debug 越权写入。
+    """
+    from app.main import app
+
+    for route in app.router.routes:
+        if getattr(route, "path", None) == "/debug" and "POST" in (getattr(route, "methods", None) or []):
+            deps = getattr(route, "dependant", None)
+            assert deps is not None, "/debug 缺少 dependant，无法判定角色依赖"
+            # 检查该路由的依赖树中是否存在 require_role 生成的角色校验依赖
+            dep_names = {
+                getattr(d.call, "__name__", "") for d in (deps.dependencies or [])
+            }
+            dep_names.add(getattr(deps.call, "__name__", ""))
+            assert any(name == "dependency" for name in dep_names) or any(
+                "role" in name for name in dep_names
+            ), "/debug 未声明 RBAC 角色依赖（viewer 可越权写入）"
+            return
+    raise AssertionError("未找到 POST /debug 路由")
+
+
+def test_index_returns_service_metadata_not_internal_state():
+    """GET / 必须返回服务元信息字典，不得暴露 _kb_persist_state 内部裸状态。
+
+    审查 P3-MED-05：此前根路径意外绑定了内部私有函数，直接对外吐出
+    "sqlite"/"disabled"/"degraded" 之一——既泄露部署内部状态，也破坏
+    REST 契约（其他端点均返回 JSON 对象）。
+    """
+    from app.main import app
+
+    for route in app.router.routes:
+        if getattr(route, "path", None) == "/" and "GET" in (getattr(route, "methods", None) or []):
+            result = route.endpoint()
+            assert isinstance(result, dict), "GET / 应返回 JSON 对象而非裸字符串"
+            assert result.get("service") == settings.service_name
+            assert "endpoints" in result and "health" in result["endpoints"]
+            assert result.get("kb_persist") is None, "根路径不得暴露 KB 持久化内部状态"
+            return
+    raise AssertionError("未找到 GET / 路由")
+
+
+# ---------------------------------------------------------------------------
 # W13 / P3-STORE-4: KB 持久化降级必须在 health 上可见
 # ---------------------------------------------------------------------------
 

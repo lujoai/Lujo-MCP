@@ -126,7 +126,15 @@ class RepairQueue:
             return
 
     async def start(self, n_workers: int) -> None:
-        """启动 n_workers 个常驻消费协程。重复调用幂等（追加不重叠）。"""
+        """启动 n_workers 个常驻消费协程。重复调用幂等（已有 worker 时不再追加）。
+
+        FIX: 文档此前宣称「重复调用幂等」，实现却无条件追加 worker——lifespan
+        重载或测试重试时 worker 数成倍增长（start(2) 两次 → 4 个消费协程），
+        与并发配额和 Semaphore 的设计意图相悖。现按文档语义落闸：已有 worker
+        时直接返回。
+        """
+        if self._workers:
+            return
         for _ in range(n_workers):
             self._workers.append(asyncio.create_task(self._worker()))
 

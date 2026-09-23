@@ -103,3 +103,50 @@ class TestAnalyzeHandler:
             assert analyze_handler("GET", "/nope") is None
         finally:
             ur.resolve = original
+
+
+class TestResolveExactBeatsTemplate:
+    """FIX: 参数化模板路由不得「截胡」同前缀的精确路由。
+
+    旧实现在单次循环中先遇到 /items/{id} 即正则命中 /items/search，
+    返回参数化 handler 而非专门处理 /items/search 的 handler。
+    """
+
+    def _fake_route(self, path: str, methods, endpoint_name: str):
+        from fastapi.routing import APIRoute
+
+        async def _ep():  # pragma: no cover - 仅作路由对象占位
+            return None
+
+        _ep.__name__ = endpoint_name
+        return APIRoute(path=path, endpoint=_ep, methods=list(methods))
+
+    def test_exact_route_wins_over_template_prefix(self, monkeypatch):
+        from app.runtime.collectors import url_resolver
+
+        template_first = self._fake_route("/items/{item_id}", {"GET"}, "get_item")
+        exact_second = self._fake_route("/items/search", {"GET"}, "search_items")
+
+        original_describe = url_resolver._describe_endpoint
+        try:
+            def _describe(endpoint):
+                return {"function": endpoint.__name__}
+
+            # FastAPI.routes 是只读 property，改其内部 router.routes 列表
+            from app.main import app
+
+            monkeypatch.setattr(app.router, "routes", [template_first, exact_second])
+            monkeypatch.setattr(url_resolver, "_describe_endpoint", _describe)
+
+            result = url_resolver.resolve("GET", "/items/search")
+            assert result is not None
+            assert result["function"] == "search_items", (
+                "精确路由 /items/search 被参数化模板 /items/{item_id} 截胡"
+            )
+
+            # 参数化路径仍然能匹配到模板 handler
+            result_param = url_resolver.resolve("GET", "/items/abc-123")
+            assert result_param is not None
+            assert result_param["function"] == "get_item"
+        finally:
+            url_resolver._describe_endpoint = original_describe

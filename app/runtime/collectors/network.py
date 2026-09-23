@@ -46,6 +46,33 @@ def _truncate_url(url):
     return url
 
 
+def _coerce_int(value) -> int | None:
+    """安全转 int：无法转换（字符串/字典/非法字面量）时返回 None，不抛异常。
+
+    W9 / P4-边界：此前 ``int(status_code)`` 对 "500 Internal Error" /
+    "timeout" 这类自建集成会直传的字符串直接抛 ValueError——批量路径
+    ``parse_network_records`` 会跳过该条，但单条端点（``/ingest/network``）
+    会冒泡成 422 调用方错误，而责任在采集方数据形态。可转换的数值字符串
+    （如 "500"）按 int() 语义正常处理，不可转换则安全降级为 None。
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value) -> float | None:
+    """安全转 float：无法转换时返回 None，不抛异常（同 _coerce_int 语义）。"""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_network_record(raw: dict) -> dict:
     """把原始 dict 规范化为 network 记录。非法输入抛 ValueError。"""
     if not isinstance(raw, dict):
@@ -66,10 +93,10 @@ def parse_network_record(raw: dict) -> dict:
         "direction": raw.get("direction") or "outbound",
         "method": (raw.get("method") or "GET").upper(),
         "url": _truncate_url(raw.get("url")),
-        "status_code": int(status_code) if status_code is not None else None,
+        "status_code": _coerce_int(status_code),
         "request_body": _truncate_body(raw.get("request_body")),
         "response_body": _truncate_body(raw.get("response_body")),
-        "duration_ms": float(duration_ms) if duration_ms is not None else None,
+        "duration_ms": _coerce_float(duration_ms),
     }
 
 
