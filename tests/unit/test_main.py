@@ -169,53 +169,54 @@ def test_internal_health_forwarded_with_valid_key_allowed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# W9 / P3-SEC-4: POST /debug 的回显必须是脱敏副本
+# W9 / P3-SEC-4: REST 调试入口的回显必须是脱敏副本
 # ---------------------------------------------------------------------------
 
 def test_debug_echo_is_redacted():
-    """/debug 不得把调用方 POST 进来的密钥原样回显到 HTTP 响应里。
+    """/api/debug/run 不得把调用方 POST 进来的密钥原样回显到 HTTP 响应里。
 
-    落库那份一直是干净的（add_log 内部过 redact_nested），漏的只有响应体；
-    对照 app/api/debug.py 的同名端点，那里一直是 redact_nested(req.payload)。
+    落库那份一直是干净的（add_log 内部过 redact_nested），漏的只有响应体。
+    旧便捷入口 POST /debug 已废弃收敛到本端点，该回归随迁移一并保留。
     """
     import json
 
-    from app.main import debug
+    from app.api.debug import debug_run
+    from app.schemas import DebugRequest
 
     secret = "hunter2-super-secret"
-    resp = debug({"password": secret, "note": "keep-me"})
+    resp = debug_run(DebugRequest(payload={"password": secret, "note": "keep-me"}))
 
-    echoed = resp["result"]["echo"]
+    echoed = resp.result["echo"]
     assert echoed["password"] != secret, "响应体原样回显了密钥（P3-SEC-4）"
     assert secret not in json.dumps(echoed, ensure_ascii=False)
     assert echoed["note"] == "keep-me", "非敏感字段不得被一并抹掉"
-    assert resp["request_id"]
+    assert resp.request_id
 
 
 # ---------------------------------------------------------------------------
-# 审查 P3-MED-06: POST /debug 必须显式声明 RBAC 角色依赖
+# 便捷入口 POST /debug 废弃：410 Gone + 替代端点提示
 # ---------------------------------------------------------------------------
 
-def test_debug_endpoint_requires_write_role():
-    """POST /debug 会写入 trace 存储，必须与 /api/debug/run 同口径限 admin/developer。
+def test_debug_endpoint_returns_410_gone():
+    """POST /debug 已废弃：必须回 410 + replacement 提示，而非 404 误判。
 
-    此前该端点只经过全局 AuthMiddleware、未声明端点级 require_role 依赖——
-    开启 RBAC 时 viewer 角色可绕过 /api/debug/run 的 403，从 /debug 越权写入。
+    410 让旧客户端立即知道「这是有意移除、请换端点」，不至于把路由写错
+    的 404 与有意废弃混为一谈；路由后续版本可整体摘除。
     """
+    import json
+
     from app.main import app
 
     for route in app.router.routes:
-        if getattr(route, "path", None) == "/debug" and "POST" in (getattr(route, "methods", None) or []):
-            deps = getattr(route, "dependant", None)
-            assert deps is not None, "/debug 缺少 dependant，无法判定角色依赖"
-            # 检查该路由的依赖树中是否存在 require_role 生成的角色校验依赖
-            dep_names = {
-                getattr(d.call, "__name__", "") for d in (deps.dependencies or [])
-            }
-            dep_names.add(getattr(deps.call, "__name__", ""))
-            assert any(name == "dependency" for name in dep_names) or any(
-                "role" in name for name in dep_names
-            ), "/debug 未声明 RBAC 角色依赖（viewer 可越权写入）"
+        if getattr(route, "path", None) == "/debug" and "POST" in (
+            getattr(route, "methods", None) or []
+        ):
+            resp = route.endpoint()
+            assert resp.status_code == 410, "废弃端点应返回 410 Gone"
+            payload = json.loads(resp.body)
+            assert payload["error"] == "endpoint_removed"
+            assert payload["replacement"] == "/api/debug/run"
+            assert "已废弃" in payload["detail"]
             return
     raise AssertionError("未找到 POST /debug 路由")
 

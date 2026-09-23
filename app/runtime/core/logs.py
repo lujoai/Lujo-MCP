@@ -36,9 +36,10 @@ def add_log(request_id: str, step: str, data=None) -> None:
     store.save_entry(request_id, {
         "timestamp": time.time(),
         "step": step,
-        # FIX: A2 —— data 可能是调用方透传的原始用户 payload（如 POST /debug
-        # 的 request body），入库前必须脱敏；此前仅 trace_repo 的 save_* 系列
-        # 脱敏，本直写路径绕过了"存储边界统一脱敏"承诺（重复脱敏幂等无害）
+        # FIX: A2 —— data 可能是调用方透传的原始用户 payload（如
+        # POST /api/debug/run 的 request body），入库前必须脱敏；此前仅
+        # trace_repo 的 save_* 系列脱敏，本直写路径绕过了"存储边界统一脱敏"
+        # 承诺（重复脱敏幂等无害）
         # FIX(R8) —— 字符串 payload 先按 A2 契约归一成结构化值，两种后端一致
         "data": redact_nested(_coerce_structured_payload(data)),
     })

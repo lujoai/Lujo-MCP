@@ -5,22 +5,18 @@ import ipaddress
 import logging
 
 import uvicorn
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from app import __version__
 from app.config import settings
 from app.auth.key_rotation import auth_enabled
-from app.auth.rbac import require_role
 from app.auth.startup_guard import is_unspecified_bind
 from app.utils.logging import setup_logging
 from app.middleware import setup_middleware
 from app.error_handlers import setup_error_handlers
 from app.observability import setup_observability
-from app.runtime.core.logs import create_request_id, add_log, get_logs
-from app.runtime.core.redaction import redact_nested
-from app.runtime.context.builder import build_context
 from app.api.debug import router as debug_router
 from app.api.mcp_routes import router as mcp_router
 from app.api.ingest import router as ingest_router
@@ -602,47 +598,22 @@ def ai_debug_js():
     return _html_response("<h1>SDK not found</h1>", status_code=404)
 
 
-@app.post("/debug", dependencies=[Depends(require_role("admin", "developer"))])
-def debug(req: dict):
-    """便捷调试入口"""
-    request_id = create_request_id()
+@app.post("/debug")
+def debug_endpoint_removed() -> JSONResponse:
+    """已废弃：统一收敛到 POST /api/debug/run。
 
-    try:
-        add_log(request_id, "request_start", req)
-        add_log(request_id, "processing")
-        # W9 / P3-SEC-4：回显必须用脱敏副本。add_log 内部已过 redact_nested，
-        # 所以落库那份是干净的；但响应体此前原样回显入参，等于把调用方 POST
-        # 进来的密钥/凭据再从 HTTP 响应送回一遍（对照 app/api/debug.py 的
-        # POST /api/debug/debug，那里一直是 redact_nested(req.payload)）。
-        result = {"echo": redact_nested(req)}
-        add_log(request_id, "response_ready", result)
-    except Exception as e:
-        logger.error(str(e), exc_info=True)
-        return {
-            "request_id": request_id,
-            "result": {"status": "error", "message": "Internal server error"},
-            "trace": [],
-            "context": {"request_id": request_id, "flow": [], "input": None, "output": None, "errors": ["Internal server error"]},
-        }
-
-    try:
-        trace = get_logs(request_id)
-        context = build_context(request_id, trace)
-    except Exception as e:
-        logger.error(str(e), exc_info=True)
-        return {
-            "request_id": request_id,
-            "result": result,
-            "trace": [],
-            "context": {"request_id": request_id, "flow": [], "input": None, "output": None, "errors": ["Internal server error"]},
-        }
-
-    return {
-        "request_id": request_id,
-        "result": result,
-        "trace": trace,
-        "context": context,
-    }
+    保留本路由只为给出明确信号：旧客户端 POST /debug 会得到 410 Gone +
+    替代端点提示，而不是被误判成路径写错的 404。整条路由计划后续版本移除。
+    """
+    return JSONResponse(
+        status_code=410,
+        content={
+            "error": "endpoint_removed",
+            "detail": "POST /debug 已废弃，请改用 POST /api/debug/run"
+            "（语义等价：记录请求 → 处理 → 构建调试上下文）。",
+            "replacement": "/api/debug/run",
+        },
+    )
 
 
 if __name__ == "__main__":

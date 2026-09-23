@@ -119,8 +119,8 @@ class TestHealthEndpoint:
 
 class TestDebugEndpoint:
 
-    def test_debug_returns_schema(self, client):
-        resp = client.post("/debug", json={"foo": "bar", "n": 1})
+    def test_debug_run_returns_schema(self, client):
+        resp = client.post("/api/debug/run", json={"payload": {"foo": "bar", "n": 1}})
         assert resp.status_code == 200
         data = resp.json()
         # 验证字段完整
@@ -134,13 +134,21 @@ class TestDebugEndpoint:
         assert "flow" in ctx
         assert "errors" in ctx
 
+    def test_legacy_debug_endpoint_returns_410(self, client):
+        """便捷入口 POST /debug 已废弃收敛到 /api/debug/run：410 + 替代提示。"""
+        resp = client.post("/debug", json={"foo": "bar"})
+        assert resp.status_code == 410
+        data = resp.json()
+        assert data["error"] == "endpoint_removed"
+        assert data["replacement"] == "/api/debug/run"
+
 
 class TestMetricsEndpoint:
 
     def test_metrics_format(self, client):
         # 先打几个请求，产生指标
         client.get("/health")
-        client.post("/debug", json={"x": 1})
+        client.post("/api/debug/run", json={"payload": {"x": 1}})
 
         resp = client.get("/metrics")
         assert resp.status_code == 200

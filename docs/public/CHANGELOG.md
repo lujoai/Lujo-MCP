@@ -5,6 +5,14 @@
 
 ---
 
+## [未发布]
+
+> **破坏性变更**：废弃便捷调试入口 `POST /debug`，统一收敛到 `POST /api/debug/run`。
+
+### Removed
+
+- **便捷调试入口 `POST /debug`（破坏性变更）**：该入口从未进入公开 API 参考（`docs/public/API_REFERENCE.md` 只列出 `/api/debug/*` 15 个端点），其逻辑与 `POST /api/debug/run` 完全重复，且曾是唯一未声明端点级 RBAC 依赖的 REST 调试入口。现统一收敛：`POST /debug` 返回 `410 Gone` + `{"error": "endpoint_removed", "replacement": "/api/debug/run"}`。**迁移方式**：改用 `POST /api/debug/run`，请求体 `{"payload": <原 /debug 的整个请求体>, "metadata": {...}}`，返回结构一致（`request_id` / `result` / `trace` / `context`）。选 `410 Gone` 而非直接 `404`，是为让旧客户端得到「有意移除 + 替代端点」的明确信号，不与路由写错的 404 混淆；该路由计划在后续版本整条摘除。
+
 ## [0.9.3] - 2026-09-23
 
 > 主题「Qdrant 语义召回修复」：v0.9.2 之后 main 上 5 个维护提交的发布收口。核心修复一项真实缺陷——`qdrant-client` 1.16 移除了 `QdrantClient.search()`，适配层沿用旧 API 抛出的 `AttributeError` 被静默吞掉，配置了 Qdrant 的用户语义召回一直返回空结果且无任何报错；现切换到 `query_points()` 并抬高依赖下限。另含 CI 锁定依赖集验证与 RAG 离线回归测试。**无破坏性行为变更**：公开工具面、REST 契约、schema 与默认配置均不变，升级无破坏面。

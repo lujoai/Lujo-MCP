@@ -710,17 +710,19 @@ flowchart TB
     LLM --> |"analyze()"| Engine
 ```
 
-### 12.2 数据流（POST /debug 端到端）
+### 12.2 数据流（POST /api/debug/run 端到端）
+
+> 旧的便捷入口 `POST /debug` 已废弃（返回 410 Gone + 替代端点提示），统一收敛到本节路由。
 
 ```mermaid
 sequenceDiagram
     participant C as 客户端
-    participant API as /debug API
+    participant API as /api/debug/run API
     participant Logs as logs core
     participant Factory as Storage Factory
     participant MEM as MemoryStore
 
-    C->>API: POST /debug {payload}
+    C->>API: POST /api/debug/run {payload}
     API->>Logs: create_request_id()
     API->>Logs: add_log(rid, "request_start", data)
     Logs->>Factory: get_trace_store()

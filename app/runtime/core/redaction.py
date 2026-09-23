@@ -114,7 +114,7 @@ def _warn_redaction_disabled_once() -> None:
 
 # ── 结构化数据脱敏（dict/list 递归 + 键名白名单）────────────────────────────
 # FIX: A2 —— 此前该逻辑内联在 trace_repo，logs.add_log 等直接写存储的路径
-# 无法复用（trace_repo ↔ logs 存在循环 import），导致 POST /debug 的原始
+# 无法复用（trace_repo ↔ logs 存在循环 import），导致写入路径的原始
 # payload（可含 password/token 字段）明文入库。现统一下沉到本模块，
 # 所有存储边界（trace_repo / logs / stacktrace / context_prep）共用一份实现。
 
