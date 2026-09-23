@@ -47,8 +47,12 @@ jobs:
       - name: Check doc links
         run: python scripts/check_doc_links.py
 
+      # -rs：逐条打印 skip 原因（short test summary info）。原有汇总只在
+      # check_junit_skip_guard 里给一个 skipped=N 数字，无法追溯「跳的是什么、
+      # 为什么跳」——跨提交对比才能反推基线，成本高。加上 -rs 后每次 CI 直接
+      # 可见 skip 清单，环境常态与「我的改动遮蔽了测试」一眼可分。
       - name: Run unit tests
-        run: pytest tests/unit -q --tb=short --junitxml=test-results.xml
+        run: pytest tests/unit -q -rs --tb=short --junitxml=test-results.xml
 
       # 全 skip 假绿守卫：内联 heredoc 已抽出为 scripts/check_junit_skip_guard.py，
       # 与下方 integration / e2e 两个测试 job 复用同一实现（v0.7.6 起）。
@@ -82,8 +86,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # -rs 同单测 job：逐条 skip 原因，便于区分环境门禁与真实遮蔽。
       - name: Run integration tests
-        run: pytest tests/integration -q -p no:cacheprovider --junitxml=integration-results.xml
+        run: pytest tests/integration -q -rs -p no:cacheprovider --junitxml=integration-results.xml
 
       - name: Print skip summary (guard against all-skip false-green)
         if: always()
@@ -126,8 +131,10 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           playwright install --with-deps chromium
 
+      # -rs 同单测 job：e2e 的 1 条 skip（LLM 未配置的知识库用例）从此在日志里
+      # 留名，不再只靠注释说明。
       - name: Run e2e tests
-        run: pytest tests/e2e -q -p no:cacheprovider --junitxml=e2e-results.xml
+        run: pytest tests/e2e -q -rs -p no:cacheprovider --junitxml=e2e-results.xml
 
       - name: Print skip summary (guard against all-skip false-green)
         if: always()
