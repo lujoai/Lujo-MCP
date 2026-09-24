@@ -273,11 +273,24 @@ def test_explicit_project_root_bypasses_guard(monkeypatch, tmp_path):
     assert any("CONVENTION" in s["file"] for s in specs)
 
 
-def test_existing_local_frame_still_discovers_specs(tmp_path):
-    """有效本地源码帧：不传 project_root 时仍走根查找 → 规范发现行为保持。"""
-    (tmp_path / ".git").mkdir()  # 项目根标记
-    _write(tmp_path / "CONVENTION.md", "# 约定\n\n## api\n返回必须含 status 字段\n")
-    py_file = tmp_path / "src" / "svc.py"
+def test_existing_local_frame_still_discovers_specs(tmp_path, monkeypatch):
+    """有效本地源码帧：不传 project_root 时仍走根查找 → 规范发现行为保持。
+
+    FIX: 平台无关夹具——用 monkeypatch 把逻辑 home 钉在 tmp_path 之下
+    （范式同 test_find_project_root_within_home），避免依赖真实
+    ``Path.home()`` 与宿主临时目录的相对位置：Linux runner 的
+    ``/tmp/pytest-of-*`` 不在 home 之下，会使根查找在第一个祖先处停住、
+    扫描根退化为文件父目录。
+    """
+    from pathlib import Path
+
+    fake_home = tmp_path / "home" / "us"
+    project = fake_home / "proj"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    (project / ".git").mkdir(parents=True)  # 项目根标记（位于逻辑 home 之下）
+    _write(project / "CONVENTION.md", "# 约定\n\n## api\n返回必须含 status 字段\n")
+    py_file = project / "src" / "svc.py"
     _write(py_file, "x = 1")
 
     specs = spec_collector.get_related_specs(str(py_file))
