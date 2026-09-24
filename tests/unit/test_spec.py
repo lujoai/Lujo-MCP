@@ -172,3 +172,113 @@ def test_get_project_specs_concurrent_calls_no_crash(tmp_path):
 
     assert errors == []
     assert results == [1] * 8  # 同一项目在同一次刷新窗口内返回一致结果
+
+
+# ---------------------------------------------------------------------------
+# 虚拟/不存在帧守卫——不得进入项目根查找与规范目录遍历
+# 根因：浏览器堆栈的伪帧路径（"eval at evaluate (" 等）被 _find_project_root
+# 沿祖先链解析到用户主目录级 package.json，随后对整个主目录 os.walk。
+# ---------------------------------------------------------------------------
+
+
+def _forbid_root_discovery(monkeypatch):
+    """守卫断言辅助：项目根查找/规范遍历一旦被触发即让用例失败。"""
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("virtual/nonexistent frame must not reach root discovery or spec walk")
+
+    monkeypatch.setattr(spec_collector, "_find_project_root", _boom)
+    monkeypatch.setattr(spec_collector, "get_project_specs", _boom)
+    # 冗余哨兵：discover_spec_files 目前只经 get_project_specs 间接调用，
+    # 单独 patch 可防未来重构绕过被拦截的入口（如 _load_specs 直呼）。
+    monkeypatch.setattr(spec_collector, "discover_spec_files", _boom)
+
+
+def test_virtual_browser_frames_skip_spec_discovery(monkeypatch):
+    """Chrome eval 踪迹帧 / <anonymous> / URL / 空串：返回空且不触发根查找与遍历。"""
+    _forbid_root_discovery(monkeypatch)
+    for virtual in ("eval at evaluate (", "<anonymous>", "http://site.test/app.js", ""):
+        assert spec_collector.get_related_specs(virtual) == []
+
+
+def test_nonexistent_local_frame_skips_spec_discovery(monkeypatch, tmp_path):
+    """本地不存在的文件帧：同样安全跳过，不沿祖先链找根、不遍历目录。"""
+    _forbid_root_discovery(monkeypatch)
+    assert spec_collector.get_related_specs(str(tmp_path / "no_such_file.py")) == []
+
+
+def test_unc_and_device_paths_skip_spec_discovery(monkeypatch):
+    """UNC 共享 / 设备命名空间帧：存在性检查之前排除，不发起 SMB 网络访问。
+
+    eval 帧名是任意字符串，可携带 ``\\\\server\\share`` 形态；``os.path.isfile``
+    对其发起 SMB 访问（挂起 + 信息泄露面），下游 resolve/exists/os.walk 同样
+    触网，必须整个挡在门外——isfile 一旦被触达即让用例失败。
+    """
+    _forbid_root_discovery(monkeypatch)
+
+    def _isfile_boom(*args, **kwargs):
+        raise AssertionError("UNC/device path must not reach os.path.isfile (SMB touch)")
+
+    monkeypatch.setattr(spec_collector.os.path, "isfile", _isfile_boom)
+    for non_local in (
+        "\\\\evil.example.com\\share\\app.js",  # UNC（反斜杠形态）
+        "//evil.example.com/share/app.js",  # UNC（正斜杠形态）
+        "\\/evil.example.com\\share\\app.js",  # UNC（混合：反斜杠 + 正斜杠）
+        "/\\evil.example.com/share/app.js",  # UNC（混合：正斜杠 + 反斜杠）
+        "\\\\.\\PhysicalDrive0",  # 设备命名空间
+        "\\\\?\\C:\\app.js",  # 扩展长度前缀
+    ):
+        assert spec_collector.get_related_specs(non_local) == []
+
+
+def test_frame_shape_rejection_makes_no_filesystem_access(monkeypatch):
+    """形态拒绝不依赖存在性检查：伪帧/URL/UNC/空路径一旦触达 isfile 即失败。
+
+    与 get_related_specs 级用例互补——后者中 ``<anonymous>``、URL 之所以被拒
+    也可能来自 isfile 返回 False；本用例把 isfile 钉死为失败，锁定字符串形态
+    分支（``<`` 前缀 / ``://`` / 四种分隔符前缀）本身生效，防"靠 isfile=False
+    兜底"的假绿。
+    """
+
+    def _isfile_boom(*args, **kwargs):
+        raise AssertionError("shape-rejected frame must not reach os.path.isfile")
+
+    monkeypatch.setattr(spec_collector.os.path, "isfile", _isfile_boom)
+    for shape in (
+        "",  # 空路径
+        "<anonymous>",  # 伪帧
+        "http://site.test/app.js",  # 页面 URL
+        "\\\\srv\\share\\app.js",  # UNC（反斜杠）
+        "//srv/share/app.js",  # UNC（正斜杠）
+        "\\/srv\\share\\app.js",  # UNC（混合：反斜杠 + 正斜杠）
+        "/\\srv/share/app.js",  # UNC（混合：正斜杠 + 反斜杠）
+        "\\\\.\\PhysicalDrive0",  # 设备命名空间
+    ):
+        assert spec_collector._is_scannable_source_path(shape) is False
+
+
+def test_explicit_project_root_bypasses_guard(monkeypatch, tmp_path):
+    """显式传 project_root 时守卫不介入：虚拟帧只参与规范匹配，不触发根查找。
+
+    锁定"显式 root 行为不变"契约——若守卫改为无条件拦截（丢掉
+    ``project_root is None`` 前置条件），本用例即失败。
+    """
+    _write(tmp_path / "CONVENTION.md", "# 约定\n\n## api\n返回必须含 status 字段\n")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("explicit project_root must not trigger root discovery")
+
+    monkeypatch.setattr(spec_collector, "_find_project_root", _boom)
+    specs = spec_collector.get_related_specs("<anonymous>", project_root=tmp_path)
+    assert any("CONVENTION" in s["file"] for s in specs)
+
+
+def test_existing_local_frame_still_discovers_specs(tmp_path):
+    """有效本地源码帧：不传 project_root 时仍走根查找 → 规范发现行为保持。"""
+    (tmp_path / ".git").mkdir()  # 项目根标记
+    _write(tmp_path / "CONVENTION.md", "# 约定\n\n## api\n返回必须含 status 字段\n")
+    py_file = tmp_path / "src" / "svc.py"
+    _write(py_file, "x = 1")
+
+    specs = spec_collector.get_related_specs(str(py_file))
+    assert any("CONVENTION" in s["file"] for s in specs)

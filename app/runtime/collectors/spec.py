@@ -70,6 +70,34 @@ _spec_cache: dict = {"project_root": None, "specs": [], "mtime": 0, "checked_at"
 _spec_lock = threading.Lock()
 
 
+def _is_scannable_source_path(file_path: str | Path) -> bool:
+    """帧文件是否为可安全进入项目根查找/规范遍历的本地文件。
+
+    浏览器 SDK 上报的堆栈含虚拟帧路径（Chrome eval 帧被栈解析正则截断出的
+    ``eval at evaluate (`` 片段、``<anonymous>`` 伪帧、页面 URL 等）——它们不是
+    本地文件系统路径。旧实现把它们交给 ``_find_project_root`` 沿祖先链找项目
+    标记，一旦命中用户主目录级的 ``package.json`` 之类标记，就会把整个主目录
+    当"项目根"发起全量 os.walk，足以把 diagnose_issue 顶满工具守护超时。此处
+    把虚拟路径连同本地不存在的文件一并挡下；真实存在的本地源码帧行为不变。
+    UNC / 设备命名空间路径在存在性检查之前排除：``os.path.isfile`` 会对其发起
+    SMB 网络访问（挂起 + 信息泄露面），下游 resolve/exists/os.walk 同样触网；
+    前缀覆盖反斜杠 / 正斜杠及混合分隔符四种组合（Windows 路径语义下均按 UNC
+    处理）。本守卫是"路径形态拒绝 + 存在性"过滤器，不是访问控制或白名单：
+    放行仅表示可进入后续本地根查找，不代表该路径可信。
+    """
+    raw = str(file_path or "").strip()
+    if not raw:
+        return False
+    if raw.startswith("<"):  # <anonymous> / <built-in> 等伪帧
+        return False
+    if "://" in raw:  # http(s) 页面 URL / blob: 等浏览器内嵌资源
+        return False
+    # UNC 共享 / \\.\ 与 \\?\ 设备命名空间；混合分隔符 \/ 与 /\ 同按 UNC 处理
+    if raw.startswith(("\\\\", "//", "\\/", "/\\")):
+        return False
+    return os.path.isfile(raw)
+
+
 def _find_project_root(file_path: str | Path) -> Path:
     """从文件路径向上查找项目根（含 .git/pyproject.toml/package.json），不超过用户主目录。
 
@@ -259,7 +287,15 @@ def match_specs(error_file: str, specs: list[dict], max_chars: int = _TOTAL_MAX_
 
 
 def get_related_specs(file_path: str, project_root: Optional[str | Path] = None) -> list[dict]:
-    """获取与指定文件相关的项目规范片段。"""
+    """获取与指定文件相关的项目规范片段。
+
+    需从帧路径推导项目根（未显式传 project_root）时，虚拟帧路径与本地
+    不存在的文件先安全跳过（见 ``_is_scannable_source_path``），不进入
+    项目根查找与规范目录遍历；显式传入 project_root 的调用方不受
+    影响（扫描根已由调用方钉死）。
+    """
+    if project_root is None and not _is_scannable_source_path(file_path):
+        return []
     if project_root is None:
         project_root = _find_project_root(file_path)
     specs = get_project_specs(project_root)
