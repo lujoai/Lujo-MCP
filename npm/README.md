@@ -5,10 +5,9 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 浏览器 SDK 的 `/ingest` 数据会与 MCP 工具共享同一份内存状态。
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
-元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。**当前版本
-v0.9.4（2026-09-23）**：修复运行时上下文断层、MCP 工具堆栈查询、追踪摘要提取与事件总线线程安全问题，
-收敛未文档化调试端点。npm 已发布版本的 `latest` 与 `engines.node >=18`
-以 registry 实查为准。
+元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。**当前 npm 线上最新已发布版本为
+v0.9.4**（勿假设 npm 上已存在 0.9.5 版本）；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），当前文档与发布冒烟隔离加固等改动仍为本地工作树未提交改动，代码库处于 **v0.9.5 候选阶段（未发布）**。npm 已发布版本的 `latest` 与 `engines.node >=18`
+以 registry 实际查询为准。
 
 ## 发布结构
 
@@ -34,11 +33,13 @@ npm/
 
 ## 用户使用
 
+安装当前 npm 稳定版本（推荐固定版本保证可复现）：
+
 ```bash
-npm install -g @lujoai/lujo-mcp
+npm install -g @lujoai/lujo-mcp@0.9.4
 ```
 
-MCP 客户端配置（Claude Desktop / Cursor / Trae）：
+MCP 客户端配置（Claude Desktop / Cursor / Trae 等）：
 
 ```json
 {
@@ -51,10 +52,12 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae）：
 }
 ```
 
+> **交互说明**：配置完成后，用户在 Trae / Cursor / Claude 对话框中使用正常自然语言描述问题即可，无需手动调用 MCP 工具或记忆特定指令。宿主模型自主决定是否选用工具，不保证每次都调用；若模型未选用，可明确提示它：“**请调用 diagnose_issue 检查运行时现场**”。Trae 等客户端的具体菜单和配置路径可能随版本变化，请以当前 UI 为准。
+
 启动器默认启用统一本地模式（HTTP 绑定 `127.0.0.1:8000`）。需要纯 stdio 时使用
 `"args": ["--no-http"]`；也可传 `--http-port` 或 `--http-host` 覆盖 HTTP 监听参数。
-浏览器页面若在其他端口运行，请通过 MCP 配置的 `env` 设置 `CORS_ORIGINS`，例如
-`"CORS_ORIGINS": "http://localhost:3000"`。
+浏览器页面若在其他端口运行（例如 `http://localhost:3000`），请通过 MCP 配置的 `env` 设置 `CORS_ORIGINS`，例如
+`"CORS_ORIGINS": "http://localhost:3000"`。前端引入 Browser SDK 若传入 `apiKey`，该密钥会直接暴露在客户端代码中，严禁将高权限或共享服务端密钥写进公开前端；所有 `/ingest/*` 上报端点要求 `admin`/`developer` 角色（`viewer` 会被 403 拒绝），系统不存在只读上报 Key。本地开发优先使用本机回环（`HOST=127.0.0.1`）免 Key 运行；若必须在远程/容器网络开启鉴权，应当由服务端应用代理（如 BFF/反向代理）保管密钥并限制转发上报路由。
 
 ## Node.js 服务端接入
 
@@ -102,7 +105,7 @@ flush、停止定时器并释放资源。完整 API 和脱敏规则见
    ```
 2. **生成平台包骨架**：
    ```bash
-   node npm/scripts/gen-platform-packages.js <version>  # 例如 0.7.6
+   node npm/scripts/gen-platform-packages.js <version>  # 例如 0.9.5
    ```
 3. **把各平台二进制放入对应平台包**：
    `npm/packages/lujo-mcp-<suffix>/bin/lujo-mcp-server(.exe)`
@@ -150,10 +153,10 @@ flush、停止定时器并释放资源。完整 API 和脱敏规则见
 
 ```bash
 # 方式一：手动触发（填版本号）
-gh workflow run release-npm.yml -f version=<version>  # 例如 0.7.6
+gh workflow run release-npm.yml -f version=<version>  # 例如 0.9.5
 
 # 方式二：打 tag 自动触发（v 前缀）
-git tag v<version>  # 例如 v0.7.6
+git tag v<version>  # 例如 v0.9.5
 git push origin v<version>
 ```
 

@@ -4,19 +4,32 @@
 
 让 Claude、Cursor、Trae 等 AI coding agents 获得**真实运行的 Debug Context** —— 不是只读你的静态代码，而是看到真实 Bug 运行现场。
 
-> 💡 **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
+> 💡 **定位与核心原则**：
+> - **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
+> - **核心原则**：**服务端可零配置免环境启动（Trae 一次配好），业务运行现场仍需项目接入 SDK（页面引入脚本并初始化）**。Lujo 无法凭空透视未接入 SDK 的任意项目。
 
-> **当前版本：v0.9.4（2026-09-23）**：修复运行时上下文断层、MCP 工具堆栈查询、追踪摘要提取与事件总线线程安全问题，收敛未文档化调试端点。npm 最新已发布版本见 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp)；v0.9.4 的发布证据见 [GitHub Release v0.9.4](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.4)。
+> **当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布）**：最新已发布稳定版本为 `v0.9.4`（npm registry 见 [@lujoai/lujo-mcp](https://www.npmjs.com/package/@lujoai/lujo-mcp)，发布证据见 [GitHub Release v0.9.4](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.4)）；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），当前本轮文档与发布冒烟隔离等改动仍为本地工作树未提交改动，v0.9.5 处于代码库候选阶段、尚未正式发布。
 
 ---
 
-## ⚡ 30 秒极速接入（Quick Start）
+## ⚡ 核心认知：两步搞定，分工清晰
 
-无需安装 Python 或 Docker 环境，通过 npm / npx 即可开箱即用：
+初次使用 Lujo-MCP 时，请牢记核心原则（避免误解）：**服务端可零配置免环境启动（Trae 一次配好），业务运行现场仍需项目接入 SDK（页面引入脚本并初始化）**。
+
+1. **Lujo 服务端（真正零配置）**：通过 Trae / Cursor 配置 `npx` 即可直跑，**无需安装 Python、无需 Docker、无需配置数据库或大模型 Key**，本地自带 SQLite 笔记本与开箱即用的轻量 HTTP 采集服务。
+2. **业务项目（一次性轻量接入）**：Lujo 不是系统底层驱动或注入插件，它**无法凭空透视任意本地页面的内部异常**。被调试的项目页面需要**引入 Browser SDK 脚本并在代码中调用 `AiDebug.init({ endpoint })`**（见下方第 1 步）。如果页面与服务不同源（如页面在 `localhost:3000`、Lujo 在 `8000`），需在服务端配置 `CORS_ORIGINS`；若服务端启用了 `API_KEY`，SDK 初始化时也需同步传入 `apiKey`。
+3. **日常调试交互（自然语言对话，无需记忆特殊指令）**：配置好后，你在 Trae 里**正常与 AI 对话即可**（例如说：“刚才页面报错了，帮我看下控制台和网络现场”）。Trae 的智能体会根据你的问题**自主决策发起 Tool Calling** 调用 Lujo 工具，你**不需要**手动输入 `@lujo`。
+   > 📌 **注**：是否调用工具由宿主大模型自主判断，不保证 100% 每次都选用。若 AI 未调用工具而仅凭静态代码猜测，你只需在对话中简单补充一句：“*请调用 Lujo 工具（diagnose_issue）检查真实的控制台和网络报错记录*”即可。
+
+---
+
+## ⚡ 服务端快速配置（Quick Start）
+
+无需安装 Python 或 Docker 环境，通过 npm / npx 即可开箱即用在 Trae / Cursor 中配置好 Lujo 服务端（注意：此步完成服务端就绪；业务页面仍需接入 SDK 才能采集现场，详见后文「第 1 步」）：
 
 ### 推荐方式：npx 免安装直跑
 
-在 MCP 客户端配置文件中填入（示例固定使用当前已发布版本 `0.9.4`，保证可复现）：
+在 MCP 客户端配置文件中填入当前已发布的稳定版本（推荐固定版本保证可复现）：
 
 ```json
 {
@@ -29,7 +42,7 @@
 }
 ```
 
-> **版本口径**：省略 `@0.9.4` 时 npx 会取 npm `latest`（当前 latest 即 0.9.4）。npm 已发布包与仓库 `main` 开发分支不完全等同——`main` 上可能包含尚未发布的维护提交（发布策略见 [CHANGELOG.md](./docs/public/CHANGELOG.md)）；以 npm registry 实际版本为准。
+> **版本说明**：省略版本后缀时 npx 会默认拉取 npm 上的稳定最新版 `latest`（当前发布版为 0.9.4）。代码库正在演进 0.9.5 候选，以 npm registry 实际发布状态为准。
 >
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
@@ -64,11 +77,11 @@ npm install -g @lujoai/lujo-mcp@0.9.4
 
 ## 🧭 主流客户端配置路径
 
-| 客户端 | 配置文件位置 |
+| 客户端 | 界面操作与配置文件位置 |
 |---|---|
-| **Claude Desktop** | `Settings` → `Developer` → `Edit Config`（或编辑 `claude_desktop_config.json`） |
+| **Trae** | **界面操作**（菜单入口与配置路径可能随 Trae 版本更新而变化，请以当前 UI 为准）：<br>点击聊天框上方的 `MCP Servers` 图标（或 `Settings` → `Features` → `MCP`）→ 点击 `Add (添加)`，填入：<br>• **Name**: `lujo`<br>• **Command**: `npx`<br>• **Args**: `-y @lujoai/lujo-mcp@0.9.4`<br>**配置文件编辑**：若支持直接编辑配置文件，常见位置为 `.trae/mcp.json`（工作区）或 `~/.trae/mcp.json`（全局），该路径随版本演进可能不同，未验证的配置路径不保证永久有效，建议以 Trae 当前设置界面或官方最新文档为准 |
 | **Cursor** | 项目根目录 `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json` |
-| **Trae** | 设置面板 → `MCP Server` → `添加`（填入上述 JSON） |
+| **Claude Desktop** | `Settings` → `Developer` → `Edit Config`（编辑 `claude_desktop_config.json`） |
 | **其他 MCP 客户端** | 任何支持 MCP 标准 stdio 协议的工具均可直接接入 |
 
 ---
@@ -77,7 +90,7 @@ npm install -g @lujoai/lujo-mcp@0.9.4
 
 用大白话说清分工，可以避开 90% 的上手误区：
 
-- **宿主智能体（Claude / Codex / Cursor / Trae…）负责大模型推理**。你平时在宿主 IDE 里对话、让它改代码，用的是宿主自带的模型能力。
+- **宿主智能体（Trae / Cursor / Claude…）负责大模型推理与工具调用**。你平时在 Trae 里提问“刚才报错了帮我修”，Trae 自身携带的大模型会**自主判断是否调用 Lujo 工具**，你完全不需要在对话时手动敲指令或手动传参数。
 - **Lujo 只负责一件事：采集、关联、查询真实运行现场**。它把控制台异常、网络失败、UI 事件链、静默失败和调用堆栈组装成结构化现场，喂给宿主 AI 判断。Lujo 不是另一个聊天 Agent，也不替代宿主。
 - **正常通过 MCP 使用 Lujo，不需要给 Lujo 配置任何大模型 API Key。** 推理由宿主完成；Lujo 的内置 LLM 分析是可选项（见下方「如何开启 LLM 分析」），与能不能用 MCP 工具无关。
 - 仓库中的 `BENCHMARK_LLM_BASE_URL` / `BENCHMARK_LLM_API_KEY` / `BENCHMARK_LLM_MODEL` 环境变量**只服务于独立的真实 LLM Benchmark runner（基准评测实验工具）**，与日常 MCP 调试无关，正常使用完全不需要配置。
@@ -85,30 +98,29 @@ npm install -g @lujoai/lujo-mcp@0.9.4
 ### 两条链路：MCP 调用链 ≠ 浏览器采集链
 
 ```
-① MCP 调用链（宿主 AI 查现场）
-   宿主智能体 ──MCP──▶ Lujo 进程（工具调用）
+① MCP 调用链（宿主 AI 按需查现场）
+   宿主智能体（Trae 对话）──自主调用 MCP 工具──▶ Lujo 进程
 
-② 浏览器采集链（页面产生现场）
-   被调试网页 ──Browser SDK──▶ Lujo HTTP endpoint（/ingest）──▶ Lujo memory runtime
+② 浏览器采集链（业务项目产生现场）
+   被调试网页 ──Browser SDK 上报──▶ Lujo HTTP endpoint（/ingest）──▶ Lujo memory runtime
 ```
 
-两条链路都必须通，宿主 AI 才能拿到浏览器现场：
+两条链路都通，宿主 AI 才能拿到浏览器现场：
 
-- **只有 MCP 连接、没有第②条链路时，Lujo 不会自动知道页面里发生了什么。** MCP 面板显示 Lujo「已连接」，只证明工具可调用，不证明浏览器现场已被采集。
+- **只有 MCP 连接、没有第②条链路时，Lujo 不会自动知道页面里发生了什么。** MCP 面板显示 Lujo「已连接」，只证明工具可被宿主调用，不证明浏览器现场已被采集。如果在未接入 SDK 的项目里直接向 Trae 提问，AI 调用 `diagnose_issue` 会得到“未捕获到近期异常”，这是正常现象。
 - Browser SDK 的 `endpoint` 必须指向**当前项目对应的 Lujo HTTP 实例和端口**；同一台机器多项目并行时，每个项目应使用不同 `--http-port`（详见下文「端口即隔离」）。
 - 当前 runtime 默认是 **memory**：运行现场保存在 Lujo 进程内存中，**进程重启后旧现场可能消失**（KB 调试经验的本地 SQLite 笔记本是另一回事，不受影响）。持久化存储不是默认前提，也不需要 `.env` 才能跑。
-- 正确的操作顺序：**保持同一个 Lujo 进程运行 → 在页面复现问题 → 等待采集完成（秒级）→ 立即在宿主会话里查询**。
+- 正确的操作顺序：**保持 Lujo 进程运行 → 业务页面引入 Browser SDK 并执行 init → 在页面复现问题 → 直接在 Trae 对话框提问让 AI 分析**。
 
-### 最短可执行流程
+### 最短可执行流程（以 Trae 为例）
 
-1. 在宿主 IDE 里配置并启用 Lujo MCP（上面的 npx 配置即可）。
-2. 只调试后端 / MCP 数据，没有浏览器现场需求？直接让 Agent 调用 Lujo 工具（如 `diagnose_issue`），到此结束。
-3. 需要浏览器现场：确认 Lujo HTTP 已启动（npm 统一模式默认就绪），并让页面里的 Browser SDK `endpoint` 指向它。
-4. 在页面里复现问题。
-5. 在**同一个宿主会话**里先调用 `diagnose_issue({})`（读最近错误）。
-6. 若无结果，再调用 `list_recent_traces`，按返回的 trace_id / request_id 用 `context`、`trace`、`stacktrace`、`get_network_trace` 深挖。
+1. **配好 MCP**：在 Trae 里添加 Lujo MCP（填入上述 npx 配置）。
+2. **接入业务项目**：在前端项目（HTML / React / Vue / Vite）里引入 Browser SDK 脚本并调用 `AiDebug.init({ endpoint: "http://127.0.0.1:8000" })`（页面跨端口需配 CORS，见下文）。
+3. **复现问题**：在浏览器里点击或触发该 Bug。
+4. **自然对话**：直接在 Trae 聊天框输入：“*刚才页面出现报错了，帮我看下控制台和网络现场并修复*”。
+5. **宿主自主排查**：宿主模型可按需调用 `diagnose_issue` 获取结构化现场；是否选用工具由模型自主决定，不保证每次都调用。在有真实报错现场时，可辅助分析排障；若模型未选用工具，可明确提示“请调用 diagnose_issue 检查运行时现场”。
 
-> 全程不需要给 Lujo 额外配置任何 LLM API Key。
+> 全程不需要记忆任何特殊指令，不需要给 Lujo 额外配置任何 LLM API Key。
 
 ---
 
@@ -184,7 +196,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 
 三项配置必须相互匹配，缺一会导致「服务在跑但 SDK 上不去 / MCP 连不上」：
 
-1. **SDK**：初始化时带 `apiKey`（SDK 会换取短时令牌后上报）：
+1. **SDK**：初始化时若传入 `apiKey`（SDK 会换取短时令牌后上报）：
 
    ```html
    <script src="/ai-debug.js"></script>
@@ -192,6 +204,8 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
      window.AiDebug.init({ endpoint: "http://127.0.0.1:8000", apiKey: "change-me-api-key" });
    </script>
    ```
+
+   > ⚠️ **前端安全警告**：若在浏览器客户端代码中填入 `apiKey`，该密钥会**完全暴露给页面访问者和所有前端代码**！**严禁将高权限或共享的服务端密钥直接写进公开前端页面**。注意：所有 `/ingest/*` 数据接入端点在开启 RBAC 时硬性要求 `admin` 或 `developer` 角色（`viewer` 角色会被 403 拒绝），系统**不存在**可用于浏览器上报的“只读 Key”或“仅上报 Key”。本地回环开发（`HOST=127.0.0.1`）优先使用免 Key 模式运行；若必须在远程或容器网络开启鉴权，应当由服务端应用代理（如 BFF 或反向代理）保管密钥并限制转发上报路由，避免直接把高权限/共享服务端密钥写进公开前端。
 
 2. **MCP 客户端**：HTTP 接入时在请求头携带同一个 Key（客户端配置支持 `headers` 的写法）：
 
@@ -206,21 +220,23 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
    }
    ```
 
-3. **CORS**：`CORS_ORIGINS` 必须包含页面的完整源；服务端口（8000）与页面端口（如 3000）不同源，未配置白名单时预检直接失败。
+3. **CORS**：`CORS_ORIGINS` 必须包含被调试前端页面的完整源（协议+域名+端口，如 `http://localhost:3000`）；服务端口（默认 8000）与页面端口不同源时，浏览器会先发起 OPTIONS 预检请求；服务端未配置对应的 `CORS_ORIGINS` 白名单时，预检失败会导致 SDK 上报全部被阻断。
 
 ### 第 1 步：页面接入采集 SDK（两行代码）
 
-下载或复制仓库中的 [`browser-sdk/ai-debug.js`](./browser-sdk/ai-debug.js) 到你的前端项目，然后在页面中加入：
+下载或复制仓库中的 [`browser-sdk/ai-debug.js`](./browser-sdk/ai-debug.js) 到你的前端项目（如 `public/` 目录），然后在页面 `<head>` 或 `<body>` 中通过 `<script>` 标签引入并调用：
 
 ```html
 <script src="/ai-debug.js"></script>
 <script>
   window.AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
-  // Docker/API Key 模式再加：, apiKey: "change-me-api-key"
 </script>
 ```
 
-> SDK 无需构建工具，`<script>` 直接引入即可；`init` 时的 `endpoint` 指向上一步启动的 Lujo-MCP 服务地址。
+> **参数说明**：
+> - `endpoint`：必填，指向上一步启动的 Lujo-MCP HTTP 服务地址（如 `http://127.0.0.1:8000`）。
+> - **跨域 CORS**：若页面运行在 `http://localhost:3000`，请确保 Lujo-MCP 服务端配置了 `CORS_ORIGINS=http://localhost:3000`。
+> - **API Key 安全**：本地回环开发（`HOST=127.0.0.1`）建议免 key 运行，无需传入 `apiKey`。切勿将服务端高权限密钥明文写在前端代码中。
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
@@ -272,14 +288,16 @@ fetch('/api/user/profile').then(res => {
 
 ### 第 3 步：在 AI 对话框中直接提问
 
-在 Cursor、Claude 或 Trae 中直接对 AI 提问：
+用户可正常用自然语言向 Trae、Cursor 或 Claude 等宿主智能体描述问题，无需手动调用 MCP 工具或记忆指令：
 
 > 💬 *“刚才前端页面报错了，帮我查查是什么原因并给出修复方案。”*
 
-宿主 AI 会自动调用统一诊断入口 `diagnose_issue`（**无需任何 request_id**，自动定位最近一次真实错误），一次性读取完整的控制台报错、网络请求 Payload/Status、源码行号与调用栈，直接给出修复代码！
+宿主大模型会自主判断并尝试选用统一诊断入口 `diagnose_issue`（无需任何 request_id，直查最近一次真实错误现场，获取控制台报错、网络请求 Payload/Status、源码行号与调用栈辅助定位）。
+
+> 📌 **重要说明**：Trae / 宿主模型自主决定是否选用工具，不保证每次都自动调用。若大模型未调用工具而仅凭静态代码猜测，你可明确提示它：“**请调用 diagnose_issue 检查运行时现场**”。
 
 ```text
-AI Agent 自动调用上下文：
+AI Agent 调用工具现场结构示例（diagnose_issue）：
 ┌────────────────────────────────────────────────────────┐
 │ diagnose_issue          ← 统一诊断入口，免 ID 直查      │
 │ ├─ exception_type: "Error"                             │

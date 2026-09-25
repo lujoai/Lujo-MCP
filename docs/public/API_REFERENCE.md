@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前版本：v0.9.4（2026-09-23，已发布）。本版修复运行时上下文断层、MCP 工具堆栈查询、追踪摘要提取与事件总线线程安全问题，收敛未文档化调试端点。公开工具面、REST 契约与数据库 schema 不变。上一版 v0.9.3 为 Qdrant 语义召回修复（切换 `query_points()`）。
+> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-24）。npm 线上最新已发布稳定版本为 v0.9.4；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），本轮文档与冒烟隔离改动仍为本地工作树未提交改动，v0.9.5 处于候选阶段尚未正式发布（强化 Trae / Cursor 智能体协同体验与防超时）。公开工具面、REST 契约与数据库 schema 不变。上一版 v0.9.4 为运行时上下文断层修复与端点收敛。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -20,7 +20,7 @@
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
-- [4. Node SDK（v0.9.4 已发布）](#4-node-sdkv094-已发布)
+- [4. Node SDK（npm 稳定版 v0.9.4 / 代码库候选 v0.9.5）](#4-node-sdk)
 - [5. 常用字段速查](#5-常用字段速查)
 
 ---
@@ -32,6 +32,10 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 - 请求头：`Authorization: Bearer <key>` 或 `X-API-Key: <key>`（二者等价，`Authorization: Bearer` 优先）。
 - 仅当 `sendBeacon` / `EventSource` 等无法自定义 header 的场景，允许 `?token=<beacon短时令牌>` 或 `?api_key=` 查询参数降级（不推荐长期使用）。
 - 未配置任何 `API_KEY` 时 = 不鉴权（仅限内网/回环使用；绑定非回环地址会启动校验拒绝或告警）。
+
+> ⚠️ **前端安全性与 CORS 规范**：
+> - **安全警告**：若在前端页面引入 Browser SDK 时填入 `apiKey`，该密钥会直接暴露给所有页面访问者与客户端代码，**严禁将高权限/共享服务端密钥直接写入公开前端代码**。需要注意：所有 `/ingest/*` 数据接入端点硬性要求 `admin` 或 `developer` 角色（`viewer` 角色会被 403 拒绝），系统**不存在**可用于浏览器上报的“只读 Key”或“仅上报 Key”。本地回环（`127.0.0.1`）开发推荐免 key 运行；若必须在远程/容器网络开启鉴权，应当由服务端应用代理（如 BFF 或反向代理）保管密钥并限制转发上报路由，避免直接把高权限/共享服务端密钥写进公开前端。
+> - **跨域 CORS**：当被调试页面与 Lujo-MCP 服务端不在同一端口（例如页面在 `http://localhost:3000`、服务在 `http://127.0.0.1:8000`）时，浏览器在发送上报前会发起 OPTIONS 预检。服务端必须配置 `CORS_ORIGINS` 包含前端源，否则预检失败导致上报被拦截。
 
 三角色分级（`RBAC_ENABLED=true` 时生效）：
 
@@ -340,9 +344,9 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ---
 
-## 4. Node SDK（v0.9.4 已发布）
+## 4. Node SDK（npm 稳定版 v0.9.4 / 代码库候选 v0.9.5）
 
-包名固定为 `@lujoai/lujo-mcp-node-sdk`，当前发布版本为 v0.9.4，支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口。该包已随本版发布，`engines.node` 为 `>=18`。
+包名固定为 `@lujoai/lujo-mcp-node-sdk`。**当前 npm 线上最新已发布版本为 v0.9.4**（请勿假设 npm 上已存在 0.9.5）；当前代码库处于 v0.9.5 候选阶段。SDK 支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口，`engines.node` 为 `>=18`。
 
 ```bash
 npm install @lujoai/lujo-mcp-node-sdk

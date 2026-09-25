@@ -1,10 +1,10 @@
 # 启动前检查与功能启用综合手册 / Pre-flight Checklist & Enablement Guide
 
-**适用版本 / Applicable Version**: v0.9.4
-**最后更新 / Last Updated**: 2026-09-23
+**适用版本 / Applicable Version**: v0.9.4（已发布稳定版）/ v0.9.5（代码库候选）
+**最后更新 / Last Updated**: 2026-09-24
 
 > **说明**：本文档已整合原独立文件 `ENABLEMENT_GUIDE.md`（功能启用指南）全部内容，为 Lujo-MCP 的环境部署、配置检查与可选功能启用（Redis、Playwright、熔断器、OTel）提供一站式操作与验证手册。
-> **发布状态**：v0.9.4 已发布（npm registry `latest=0.9.4`）。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。发布页：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.4。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），本轮文档与冒烟改动仍为本地工作树未提交改动，代码库处于 `v0.9.5` 候选阶段（未发布）。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。
 
 ---
 
@@ -568,7 +568,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | lujo-mcp v0.9.4 | ..."
+#   - 日志输出 "服务启动 | lujo-mcp v0.9.5 | ..."（本地源码候选显示 0.9.5；若运行 npm 发布版则为 0.9.4）
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -602,7 +602,7 @@ curl http://localhost:8000/internal/health
 #   {
 #     "status": "ok",
 #     "service": "lujo-mcp",
-#     "version": "0.9.4",
+#     "version": "0.9.5",          ← 本地源码候选显示 0.9.5；npm 发布版显示 0.9.4
 #     "storage": "memory",         ← 唯一合法值（PostgreSQL 后端已移除）
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

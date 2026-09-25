@@ -118,6 +118,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
@@ -336,13 +341,19 @@ jobs:
           mkdir -p "$platform_dir"
           tar -xzf "./lujoai-lujo-mcp-$SUFFIX-$RELEASE_VERSION.tgz" \
             -C "$platform_dir" --strip-components=1
-          # The npm launcher defaults to unified stdio + localhost HTTP. The
-          # protocol smoke only needs stdio and opts out explicitly so the
-          # temporary process exits immediately after stdin closes.
-          # --ignore-scripts intentionally avoids the package postinstall check
-          # during install (registry flakiness on big optional packages); the
-          # check itself is executed explicitly below, since it is part of what
-          # a real user's `npm install` runs.
+          # 1. 验证 npm 启动器的默认统一模式（不传 --no-http，启动器自动注入 --http）：
+          # 使用独立高位端口 8130，避免冲突；全内存环境，不污染工作区与状态。
+          # 验证 MCP 握手成功且本机 HTTP health 与 /demo 演示页均可访问。
+          export KB_PERSIST_ENABLED=false
+          export STORAGE_BACKEND=memory
+          SMOKE_PORT=8130
+          python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" \
+            --cmd "node ./node_modules/@lujoai/lujo-mcp/bin/cli.js --http-port $SMOKE_PORT" \
+            --http-url "http://127.0.0.1:$SMOKE_PORT/health" \
+            --http-url "http://127.0.0.1:$SMOKE_PORT/demo" \
+            --http-timeout 30
+
+          # 2. 验证纯 stdio 模式逃生门（显式传入 --no-http 剥离 HTTP 监听）
           python "$GITHUB_WORKSPACE/scripts/mcp_smoke_test.py" \
             --cmd "node ./node_modules/@lujoai/lujo-mcp/bin/cli.js --no-http"
 

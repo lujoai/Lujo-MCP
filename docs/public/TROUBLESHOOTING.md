@@ -1,9 +1,9 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.9.4
-**最后更新 / Last Updated**: 2026-09-23
+**适用版本 / Applicable Version**: v0.9.4（已发布稳定版）/ v0.9.5（代码库候选）
+**最后更新 / Last Updated**: 2026-09-24
 
-> **发布状态**：默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），本轮文档与冒烟改动仍为本地工作树未提交改动，代码库处于 `v0.9.5` 候选阶段（未发布）。默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
 
 ---
 
@@ -62,7 +62,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HOST=127.0.0.1`
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.4`
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.5`（本地源码候选显示 0.9.5；npm 稳定版显示 0.9.4）
 
 ---
 
@@ -524,7 +524,7 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-`tools/list` 公开 18 个 Agent-facing 工具（v0.9.4；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
+`tools/list` 公开 18 个 Agent-facing 工具（v0.9.4 / v0.9.5 工具面保持一致；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
 `debug`, `context`, `trace`, `stacktrace`, `diagnose_issue`, `list_recent_traces`, `search_logs`, `ingest_specs`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
@@ -1015,6 +1015,12 @@ pytest tests/ --timeout=120
   2. `list_recent_traces` —— 列出近期全部错误摘要；
   3. 按返回的 `trace_id` / `request_id` 调 `context` / `trace` / `stacktrace` / `get_network_trace` 深挖。
 - **验证方法**：按上述顺序第 1 步即能取回现场；若需要关键词检索，改用与错误 type/message 实际文案一致的关键词（如异常类型名、接口路径片段）。
+
+### M-3. 宿主 AI 没有自动调用工具，而是直接猜测代码
+
+- **现象**：在 Trae / Cursor / Claude 对话框中向 AI 描述页面报错，但 AI 没有调用 MCP 工具，仅凭静态代码猜测原因。
+- **原因**：宿主智能体的大模型自主决策是否选用工具，不保证 100% 每次都自动触发 Tool Calling。
+- **解决方案**：无需记忆指令或手动执行 MCP 方法，只需在日常自然语言对话中明确提示 AI 一句：“**请调用 diagnose_issue 检查运行时现场**”即可引导大模型调用工具获取完整控制台与网络记录。
 
 ---
 

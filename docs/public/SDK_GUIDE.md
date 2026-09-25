@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v0.9.4（2026-09-23）。本文包含 Node SDK 接线与 Browser SDK 使用边界；本版为服务端运行时上下文断层修复与端点收敛，SDK 接口无变化。
+> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-24）。当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描过滤核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），本轮文档与冒烟改动仍为本地工作树未提交改动，代码库处于 `v0.9.5` 候选阶段尚未正式发布，SDK 公开接口保持稳定兼容。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 
@@ -32,12 +32,12 @@ Browser SDK 依赖 DOM、浏览器网络对象、`localStorage` 和 `sendBeacon`
 
 ## Node SDK（服务端 Node.js）
 
-Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支持 Node 18、20、22，并提供 CommonJS 和 ESM 两种包根入口。
+Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支持 Node 18、20、22，并提供 CommonJS 和 ESM 两种包根入口。**当前 npm 线上最新已发布版本为 v0.9.4**（请勿假设 npm 上已发布 0.9.5 版本）。
 
-安装独立包：
+安装独立包（推荐指定已发布版本）：
 
 ```bash
-npm install @lujoai/lujo-mcp-node-sdk
+npm install @lujoai/lujo-mcp-node-sdk@0.9.4
 ```
 
 CommonJS：
@@ -114,24 +114,29 @@ Node SDK 不会自动拦截 `fetch`、`http`、`undici` 或 `axios`。需要透�
 ### 方式一：`<script>` 标签（无构建工具）
 
 ```html
+<!-- 同源引入或指定绝对地址 -->
 <script src="/ai-debug.js"></script>
 <script>
-  AiDebug.init({ endpoint: "http://localhost:8000" });
+  AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
 </script>
 ```
 
-> 服务端内置挂载路径为 `/ai-debug.js`（见 `app/main.py`），直接相对引入即可。
+> 服务端内置挂载路径为 `/ai-debug.js`（见 `app/main.py`），直接相对引入或跨端口从 `http://127.0.0.1:8000/ai-debug.js` 引入即可。
+>
+> ⚠️ **跨域 CORS 与 API Key 安全须知**：
+> - **CORS 配置**：若前端页面运行在不同源端口（如 `http://localhost:3000`），浏览器发送上报前会先发 OPTIONS 预检请求。必须在 Lujo-MCP 服务端环境配置 `CORS_ORIGINS=http://localhost:3000`（多域名逗号分隔），否则预检 405/403 导致上报全阻断。
+> - **安全警告**：若在浏览器代码中传入 `apiKey`，该密钥会**完全暴露给页面访问者和所有客户端脚本**！**严禁将高权限或共享的服务端密钥写进公开前端**。注意：所有 `/ingest/*` 上报端点硬性要求 `admin` 或 `developer` 角色（`viewer` 角色会被 403 拒绝），系统**不存在**供浏览器上报的“只读 Key”或“仅上报 Key”。本地回环开发（`HOST=127.0.0.1`）默认免 key 运行（无需传 `apiKey`）；若必须在远程/容器网络开启鉴权，应当由服务端应用代理（如 BFF 或反向代理）保管密钥并限制转发上报路由，避免直接把高权限/共享服务端密钥写进公开前端。
 
 ### 方式二：在浏览器构建工具中加载
 
 ```js
 // ai-debug.js 运行在浏览器上下文，并把 AiDebug 暴露到 globalThis
 import "./ai-debug.js";
-globalThis.AiDebug.init({ endpoint: "http://localhost:8000" });
+globalThis.AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
 
 // CommonJS 仅适合浏览器打包/测试环境；不要在纯 Node 进程中调用 init()
 const AiDebug = require("./ai-debug.js");
-AiDebug.init({ endpoint: "http://localhost:8000" });
+AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
 ```
 
 初始化后 Browser SDK 自动安装浏览器采集钩子（错误 / 网络 / XHR / UI / 静默失败 / 控制台 / 页面卸载），无需手动调用。Node 服务端请使用上面的 Node SDK 显式上报。
@@ -146,8 +151,8 @@ AiDebug.init({ endpoint: "http://localhost:8000" });
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `endpoint` | `""` | **必填**。服务端地址，如 `http://localhost:8000`（不含 `/ingest` 前缀）。必须是 `http://` / `https://` 开头的**绝对地址**：缺省或格式非法（如漏 scheme 的 `localhost:8000`）时 `init()` 拒绝初始化、只留一条 `console.warn`（不抛异常，避免打断宿主页面脚本），全部现场都不上报 |
-| `apiKey` | `""` | API Key（优先走请求头；`sendBeacon` 场景自动换 beacon 短时令牌） |
+| `endpoint` | `""` | **必填**。服务端地址，如 `http://127.0.0.1:8000`（不含 `/ingest` 前缀）。必须是 `http://` / `https://` 开头的**绝对地址**：缺省或格式非法（如漏 scheme 的 `localhost:8000`）时 `init()` 拒绝初始化、只留一条 `console.warn`（不抛异常，避免打断宿主页面脚本），全部现场都不上报 |
+| `apiKey` | `""` | API Key（优先走请求头；`sendBeacon` 场景自动换 beacon 短时令牌）。⚠️ **警告**：写在浏览器代码中会泄露给页面访问者，严禁填入高权限服务端密钥，本地开发推荐留空免 key |
 | `captureErrors` | `true` | 全局异常捕获 |
 | `captureNetwork` | `true` | 网络请求捕获 |
 | `captureUI` | `true` | UI 交互事件捕获 |
@@ -266,6 +271,7 @@ SDK 通过 monkey-patch 拦截浏览器网络请求，**两者同源捕获**（V
 
 - 正常场景：`apiKey` 通过 `X-API-Key` / `Authorization: Bearer` 请求头发送。
 - `sendBeacon` / `EventSource` 无法自定义 header 时，SDK 启动即调用 `POST /auth/beacon-token` 换取短时令牌，并每 25s 续期；上报改用 `?token=` 查询参数，避免永久 Key 进 URL 被明文记录（见 `beacon.py`）。
+- ⚠️ **安全警告**：前端页面是公开运行环境，若配置了 `apiKey`，该密钥会暴露给所有页面访问者和审查元素的用户。严禁将高权限/管理服务端密钥写入前端配置。所有 `/ingest/*` 上报端点要求 `admin` 或 `developer` 角色（`viewer` 会被 403 拒绝），系统**不存在**可用于浏览器上报的“只读 Key”或“仅上报 Key”。本地开发请优先使用回环免 key 模式；若必须在远程/容器网络开启鉴权，应通过服务端应用代理（如 BFF 或反向代理）保管密钥并限制转发上报路由。
 
 ---
 
