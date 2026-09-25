@@ -4,7 +4,7 @@
 **最后更新 / Last Updated**: 2026-09-24
 
 > **说明**：本文档已整合原独立文件 `ENABLEMENT_GUIDE.md`（功能启用指南）全部内容，为 Lujo-MCP 的环境部署、配置检查与可选功能启用（Redis、Playwright、熔断器、OTel）提供一站式操作与验证手册。
-> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），本轮文档与冒烟改动仍为本地工作树未提交改动，代码库处于 `v0.9.5` 候选阶段（未发布）。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选已进入 main（commit `e39aeb7`），`v0.9.5` 仍待发布。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 指定位置）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。
 
 ---
 

@@ -6,7 +6,7 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
 元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。**当前 npm 线上最新已发布版本为
-v0.9.4**（勿假设 npm 上已存在 0.9.5 版本）；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），当前文档与发布冒烟隔离加固等改动仍为本地工作树未提交改动，代码库处于 **v0.9.5 候选阶段（未发布）**。npm 已发布版本的 `latest` 与 `engines.node >=18`
+v0.9.4**（勿假设 npm 上已存在 0.9.5 版本）；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），当前 main 已包含 v0.9.5 候选内容（commit `e39aeb7`）；v0.9.5 尚未发布，npm 最新稳定版仍为 `v0.9.4`。npm 已发布版本的 `latest` 与 `engines.node >=18`
 以 registry 实际查询为准。
 
 ## 发布结构

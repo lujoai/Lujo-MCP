@@ -265,28 +265,6 @@ jobs:
           await client.close();
           NODE
 
-      - name: Publish Node SDK
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          name="@lujoai/lujo-mcp-node-sdk"
-          ver="$RELEASE_VERSION"
-          probe="$RUNNER_TEMP/lujo-node-sdk-npm-probe.txt"
-          if npm view "$name@$ver" version --json >"$probe" 2>&1; then
-            echo "$name@$ver already exists; skipping"
-          else
-            if ! grep -q "E404" "$probe"; then
-              cat "$probe"
-              echo "::error::Unable to determine whether $name@$ver is already published"
-              exit 1
-            fi
-            echo "Publishing $name@$ver"
-            npm publish ./node-sdk --access public --tag latest
-          fi
-
       - name: Generate platform package skeletons
         env:
           RELEASE_VERSION: ${{ steps.ver.outputs.value }}
@@ -366,6 +344,31 @@ jobs:
           # prepublishOnly 守卫（browser-sdk 包内副本与仓库源一致性等）也显式跑
           # 一次：npm pack 是否触发 prepublishOnly 随 npm 版本而异，不能依赖。
           node "$GITHUB_WORKSPACE/npm/packages/lujo-mcp/scripts/check-clean-bin.js"
+
+      # Run every publish-blocking validation before the first npm publish.
+      # The Node SDK tests and clean install ran above; validate the launcher and
+      # package layout first so a later smoke failure cannot leave only this SDK published.
+      - name: Publish Node SDK
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.value }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="@lujoai/lujo-mcp-node-sdk"
+          ver="$RELEASE_VERSION"
+          probe="$RUNNER_TEMP/lujo-node-sdk-npm-probe.txt"
+          if npm view "$name@$ver" version --json >"$probe" 2>&1; then
+            echo "$name@$ver already exists; skipping"
+          else
+            if ! grep -q "E404" "$probe"; then
+              cat "$probe"
+              echo "::error::Unable to determine whether $name@$ver is already published"
+              exit 1
+            fi
+            echo "Publishing $name@$ver"
+            npm publish ./node-sdk --access public --tag latest
+          fi
 
       - name: Publish platform packages
         env:

@@ -358,9 +358,13 @@ def _run_smoke(
             return 1
 
         # 4. 调用一个无害工具验证往返
-        target = tool if tool in names else "debug"
-        if target not in names:
-            target = names[0]
+        if tool is not None:
+            if tool not in names:
+                print(f"[FAIL] 指定的工具 {tool} 不在 tools/list 返回的工具中", file=sys.stderr)
+                return 1
+            target = tool
+        else:
+            target = "debug" if "debug" in names else names[0]
         call = _send(proc, out_q, "tools/call", {
             "name": target,
             "arguments": tool_arguments or {},

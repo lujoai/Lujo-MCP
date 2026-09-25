@@ -135,6 +135,43 @@ def test_parse_tool_arguments_requires_json_object():
         sm._parse_tool_arguments("not-json")
 
 
+def _run_smoke_with_tools(monkeypatch, tool, names):
+    calls = []
+    monkeypatch.setattr(sm, "_resolve_cmd", lambda _cmd: ["dummy"])
+    monkeypatch.setattr(sm.subprocess, "Popen", lambda *_args, **_kwargs: _FakeProc())
+    monkeypatch.setattr(sm, "_start_readers", lambda _proc: queue.Queue())
+    monkeypatch.setattr(sm, "_cleanup_process", lambda _proc: None)
+
+    def _send(_proc, _out_q, method, params):
+        calls.append((method, params))
+        if method == "initialize":
+            return {"result": {"serverInfo": {}}}
+        if method == "tools/list":
+            return {"result": {"tools": [{"name": name} for name in names]}}
+        if method == "tools/call":
+            return {"result": {"content": []}}
+        raise AssertionError(f"Unexpected method: {method}")
+
+    monkeypatch.setattr(sm, "_send", _send)
+    return sm._run_smoke(tool=tool, cmd="dummy"), calls
+
+
+def test_run_smoke_fails_when_explicit_tool_is_missing(monkeypatch, capsys):
+    rc, calls = _run_smoke_with_tools(monkeypatch, tool="missing_tool", names=["debug", "verify"])
+
+    assert rc == 1
+    assert not any(method == "tools/call" for method, _params in calls)
+    assert "missing_tool" in capsys.readouterr().err
+
+
+def test_run_smoke_defaults_to_debug_when_tool_is_not_specified(monkeypatch):
+    rc, calls = _run_smoke_with_tools(monkeypatch, tool=None, names=["debug", "verify"])
+
+    assert rc == 0
+    tool_calls = [params for method, params in calls if method == "tools/call"]
+    assert tool_calls == [{"name": "debug", "arguments": {}}]
+
+
 def test_wait_http_accepts_html_response(monkeypatch):
     """统一 transport 冒烟的 /demo 检查应正常接收 HTML 响应而不因 json 解析崩溃。"""
     class _Headers:

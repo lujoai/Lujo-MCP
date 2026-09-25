@@ -8,7 +8,7 @@
 > - **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 > - **核心原则**：**服务端可零配置免环境启动（Trae 一次配好），业务运行现场仍需项目接入 SDK（页面引入脚本并初始化）**。Lujo 无法凭空透视未接入 SDK 的任意项目。
 
-> **当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布）**：最新已发布稳定版本为 `v0.9.4`（npm registry 见 [@lujoai/lujo-mcp](https://www.npmjs.com/package/@lujoai/lujo-mcp)，发布证据见 [GitHub Release v0.9.4](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.4)）；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），当前本轮文档与发布冒烟隔离等改动仍为本地工作树未提交改动，v0.9.5 处于代码库候选阶段、尚未正式发布。
+> **当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布）**：最新已发布稳定版本为 `v0.9.4`（npm registry 见 [@lujoai/lujo-mcp](https://www.npmjs.com/package/@lujoai/lujo-mcp)，发布证据见 [GitHub Release v0.9.4](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.4)）；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选内容已进入 main（commit `e39aeb7`）；v0.9.5 仍处于候选阶段、尚未正式发布。
 
 ---
 

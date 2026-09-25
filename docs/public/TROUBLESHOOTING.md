@@ -3,7 +3,7 @@
 **适用版本 / Applicable Version**: v0.9.4（已发布稳定版）/ v0.9.5（代码库候选）
 **最后更新 / Last Updated**: 2026-09-24
 
-> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），本轮文档与冒烟改动仍为本地工作树未提交改动，代码库处于 `v0.9.5` 候选阶段（未发布）。默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选已进入 main（commit `e39aeb7`），`v0.9.5` 仍待发布。默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
 
 ---
 
