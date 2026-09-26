@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-26）。v0.9.5 候选修复虚拟堆栈帧触发目录扫描的问题、调整 KB SQLite 默认数据目录，并在默认 HTTP 端口冲突时保留 stdio 启动。公开工具面、REST 契约、SDK 接口与数据库 schema 不变；详细变更见 [CHANGELOG](./CHANGELOG.md)。上一版 v0.9.4 为运行时上下文断层修复与端点收敛。
+> 当前版本：v0.9.5（已发布稳定版，2026-09-26）。本版修复虚拟堆栈帧触发目录扫描的问题、调整 KB SQLite 默认数据目录，并在默认 HTTP 端口冲突时保留 stdio 启动。公开工具面、REST 契约、SDK 接口与数据库 schema 不变；详细变更见 [CHANGELOG](./CHANGELOG.md)。上一版 v0.9.4 为运行时上下文断层修复与端点收敛。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -20,7 +20,7 @@
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
-- [4. Node SDK（npm 稳定版 v0.9.4 / 代码库候选 v0.9.5）](#4-node-sdk)
+- [4. Node SDK（npm 稳定版 v0.9.5）](#4-node-sdk)
 - [5. 常用字段速查](#5-常用字段速查)
 
 ---
@@ -344,7 +344,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ---
 
-## 4. Node SDK（npm 稳定版 v0.9.4 / 代码库候选 v0.9.5）
+## 4. Node SDK（npm 稳定版 v0.9.5）
 
 包名固定为 `@lujoai/lujo-mcp-node-sdk`。该包独立发布；当前可安装版本以 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp-node-sdk) 为准。SDK 支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口，`engines.node` 为 `>=18`。
 

@@ -1,10 +1,10 @@
 # 启动前检查与功能启用综合手册 / Pre-flight Checklist & Enablement Guide
 
-**适用版本 / Applicable Version**: v0.9.4（已发布稳定版）/ v0.9.5（代码库候选）
+**适用版本 / Applicable Version**: v0.9.5（已发布稳定版）
 **最后更新 / Last Updated**: 2026-09-26
 
 > **说明**：本文档已整合原独立文件 `ENABLEMENT_GUIDE.md`（功能启用指南）全部内容，为 Lujo-MCP 的环境部署、配置检查与可选功能启用（Redis、Playwright、熔断器、OTel）提供一站式操作与验证手册。
-> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`，`v0.9.5` 仍是候选版本。候选变更包括虚拟/非本地堆栈帧过滤、KB SQLite 默认文件迁至用户数据目录（有效旧库会安全迁移），以及默认 HTTP 端口冲突时保留 stdio 启动。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.5`。本版包含虚拟/非本地堆栈帧过滤、KB SQLite 默认文件迁至用户数据目录（有效旧库会安全迁移），以及默认 HTTP 端口冲突时保留 stdio 启动。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。
 
 ---
 
@@ -567,7 +567,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | lujo-mcp v0.9.5 | ..."（本地源码候选显示 0.9.5；若运行 npm 发布版则为 0.9.4）
+#   - 日志输出 "服务启动 | lujo-mcp v0.9.5 | ..."（本地源码与 npm 发布版均为 0.9.5）
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -601,7 +601,7 @@ curl http://localhost:8000/internal/health
 #   {
 #     "status": "ok",
 #     "service": "lujo-mcp",
-#     "version": "0.9.5",          ← 本地源码候选显示 0.9.5；npm 发布版显示 0.9.4
+#     "version": "0.9.5",          ← 当前本地源码与 npm 发布版版本
 #     "storage": "memory",         ← 唯一合法值（PostgreSQL 后端已移除）
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

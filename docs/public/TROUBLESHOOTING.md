@@ -1,9 +1,9 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.9.4（已发布稳定版）/ v0.9.5（代码库候选）
+**适用版本 / Applicable Version**: v0.9.5（已发布稳定版）
 **最后更新 / Last Updated**: 2026-09-26
 
-> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`，`v0.9.5` 仍是候选版本。候选变更包括虚拟/非本地堆栈帧过滤、KB SQLite 默认位置迁至用户数据目录，以及默认 HTTP 端口被占用时降级为 stdio-only；默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.5`。本版包括虚拟/非本地堆栈帧过滤、KB SQLite 默认位置迁至用户数据目录，以及默认 HTTP 端口被占用时降级为 stdio-only；默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）。
 
 ---
 
@@ -62,7 +62,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HOST=127.0.0.1`
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.5`（本地源码候选显示 0.9.5；npm 稳定版显示 0.9.4）
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.5`（本地源码与 npm 稳定版均为 0.9.5）
 
 ---
 
@@ -513,7 +513,7 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-`tools/list` 公开 18 个 Agent-facing 工具（v0.9.4 / v0.9.5 工具面保持一致；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
+`tools/list` 公开 18 个 Agent-facing 工具（v0.9.5 工具面；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
 `debug`, `context`, `trace`, `stacktrace`, `diagnose_issue`, `list_recent_traces`, `search_logs`, `ingest_specs`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表

@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-26）。v0.9.5 候选包含虚拟堆栈帧过滤、KB SQLite 默认位置调整和默认 HTTP 端口冲突时保留 stdio 启动；Browser SDK 与 Node SDK 的公开接口保持稳定兼容。当前详细状态见 [CHANGELOG](./CHANGELOG.md)。
+> 当前版本：v0.9.5（已发布稳定版，2026-09-26）。本版调整 KB SQLite 默认位置并在默认 HTTP 端口冲突时保留 stdio 启动；Browser SDK 与 Node SDK 的公开接口保持稳定兼容。当前详细状态见 [CHANGELOG](./CHANGELOG.md)。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 
@@ -37,7 +37,7 @@ Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支
 安装独立包（推荐指定已发布版本）：
 
 ```bash
-npm install @lujoai/lujo-mcp-node-sdk@0.9.4
+npm install @lujoai/lujo-mcp-node-sdk@0.9.5
 ```
 
 CommonJS：
