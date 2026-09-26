@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import queue
 import shlex
@@ -71,7 +72,11 @@ def _next_id() -> int:
     return _ID
 
 
-def _start_readers(proc: subprocess.Popen) -> queue.Queue[str]:
+def _start_readers(
+    proc: subprocess.Popen,
+    stderr_tail: deque[str],
+    stderr_lock: threading.Lock,
+) -> tuple[queue.Queue[str], threading.Thread]:
     """后台线程分别读取 stdout / stderr。
 
     stdout 逐行入队供主线程带超时消费；stderr 持续排空避免管道缓冲写满
@@ -85,12 +90,28 @@ def _start_readers(proc: subprocess.Popen) -> queue.Queue[str]:
         out_q.put(None)
 
     def _drain_err() -> None:
-        for _ in iter(proc.stderr.readline, ""):
-            pass
+        for raw in iter(proc.stderr.readline, ""):
+            with stderr_lock:
+                stderr_tail.append(raw.rstrip())
 
     threading.Thread(target=_drain_out, daemon=True).start()
-    threading.Thread(target=_drain_err, daemon=True).start()
-    return out_q
+    stderr_thread = threading.Thread(target=_drain_err, daemon=True)
+    stderr_thread.start()
+    return out_q, stderr_thread
+
+
+def _print_stderr_tail(stderr_tail: deque[str], stderr_lock: threading.Lock) -> None:
+    """Print a bounded server log tail for a failed tool call, never on success."""
+    with stderr_lock:
+        lines = list(stderr_tail)
+    if not lines:
+        return
+    print(
+        f"[DEBUG] 服务端 stderr（最近 {len(lines)} 行）:",
+        file=sys.stderr,
+    )
+    for line in lines:
+        print(line, file=sys.stderr)
 
 
 def _send(proc: subprocess.Popen, out_q: queue.Queue[str], method: str, params: dict) -> dict:
@@ -307,7 +328,9 @@ def _run_smoke(
         errors="replace",
         bufsize=1,
     )
-    out_q = _start_readers(proc)
+    stderr_tail: deque[str] = deque(maxlen=80)
+    stderr_lock = threading.Lock()
+    out_q, stderr_thread = _start_readers(proc, stderr_tail, stderr_lock)
     try:
         probe_urls = _normalize_http_urls(http_url, http_probe_urls)
         if probe_urls:
@@ -375,6 +398,9 @@ def _run_smoke(
         result = call.get("result", {})
         if result.get("isError"):
             print(f"[FAIL] tools/call {target} 返回 isError=true：{result}", file=sys.stderr)
+            _cleanup_process(proc)
+            stderr_thread.join(timeout=2)
+            _print_stderr_tail(stderr_tail, stderr_lock)
             return 1
         content = result.get("content", [])
         print(f"[OK] tools/call {target}: {len(content)} 个 content 块")
