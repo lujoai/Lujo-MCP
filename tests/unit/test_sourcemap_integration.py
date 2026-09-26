@@ -304,7 +304,7 @@ class TestBenchmarkSourcemapCase:
         from benchmark.cases import BENCHMARK_CASES, get_case
 
         assert get_case("frontend_minified_sourcemap") is not None
-        assert len(BENCHMARK_CASES) == 6
+        assert len(BENCHMARK_CASES) == 12  # 2026-09-26 扩样后基线
 
     def test_quality_score_improves_after_resolution(self):
         """核心价值证明：还原后 Quality 评分必须高于还原前。"""

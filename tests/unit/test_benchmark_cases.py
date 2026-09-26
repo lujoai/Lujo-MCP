@@ -78,19 +78,23 @@ class TestSchemas:
 
 
 class TestStandardCases:
-    def test_six_cases(self):
-        assert len(BENCHMARK_CASES) == 6
-        assert len(BENCHMARK_INDEX) == 6
+    def test_twelve_cases(self):
+        # 2026-09-26 扩样：6 冻结基础 + 6 新增（KB 真实高频错误家族，见 cases.py 注释）
+        assert len(BENCHMARK_CASES) == 12
+        assert len(BENCHMARK_INDEX) == 12
 
     def test_case_ids_unique(self):
         ids = [c.case_id for c in BENCHMARK_CASES]
         assert len(ids) == len(set(ids))
 
-    def test_categories_cover_six_scenarios(self):
+    def test_categories_cover_twelve_scenarios(self):
         categories = {c.category for c in BENCHMARK_CASES}
         expected = {
             "api_error", "frontend_blank", "db_error", "auth_403", "perf_slow",
             "frontend_sourcemap",  # v0.5.1 Source Map 还原对照
+            # 2026-09-26 扩展批：真实 KB 高频家族
+            "connection_drop", "downstream_error", "json_error",
+            "network_ssl", "async_task", "cors_error",
         }
         assert categories == expected
 
@@ -178,7 +182,7 @@ class TestRunner:
     def test_list_returns_zero(self, capsys):
         assert runner.cmd_list() == 0
         out = capsys.readouterr().out
-        assert "6 个 BenchmarkCase" in out
+        assert "12 个 BenchmarkCase" in out
         assert "api_500_none_attribute" in out
 
     def test_show_returns_zero(self, capsys):
