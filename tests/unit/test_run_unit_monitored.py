@@ -91,6 +91,9 @@ def test_gbk_child_under_gbk_parent_emits_single_completed_sentinel(tmp_path):
             str(test_file),
             "-q",
             "-s",
+            "-c",
+            str(REPO_ROOT / "pytest.ini"),
+            f"--confcutdir={test_file.parent}",
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -151,7 +154,17 @@ def test_default_args_keep_summary_line_visible(tmp_path):
     test_file = tmp_path / "test_minimal.py"
     test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     monitor = m.Monitor(
-        [sys.executable, "-m", "pytest", str(test_file), "-p", "no:warnings"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(test_file),
+            "-p",
+            "no:warnings",
+            "-c",
+            str(REPO_ROOT / "pytest.ini"),
+            f"--confcutdir={test_file.parent}",
+        ],
         heartbeat=3600.0,
         grace=30.0,
     )
