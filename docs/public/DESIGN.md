@@ -1543,6 +1543,8 @@ analyze(context)
 | `vector_store_top_k` | int | 3 | 召回条数上限 |
 | `vector_store_min_score` | float | 0.3 | 相似度下限（低于此分数丢弃） |
 
+> **零配置能力口径（重要）**：不配置任何 Key 时，知识库的**指纹精确匹配（L1）与归一化/类型相似召回（L1.5/L2）始终可用**，且是默认主力路径；只有**向量语义召回（Qdrant/embedding）与 LLM 智能分析**需要自配 `OPENAI_API_KEY`（embedding）与可选 Qdrant 服务。未配置 Key 时向量路径按设计**静默降级为 no-op**（启动后 stderr 有一条告警，改配置需重启生效），不影响其余调试链路——这是显式声明的边界，不是故障。
+
 #### 16.3.6 设计权衡
 
 - **为何用 Jaccard 而非余弦相似度？** InProcessVectorStore 定位为零依赖的默认实现，Jaccard 仅需集合运算，无需嵌入模型；上生产时切换到 Qdrant 等带向量的后端即可获得语义相似度。
