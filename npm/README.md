@@ -5,9 +5,10 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 浏览器 SDK 的 `/ingest` 数据会与 MCP 工具共享同一份内存状态。
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
-元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。**当前 npm 线上最新已发布版本为
-v0.9.4**（勿假设 npm 上已存在 0.9.5 版本）；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），当前 main 已包含 v0.9.5 候选内容（commit `e39aeb7`）；v0.9.5 尚未发布，npm 最新稳定版仍为 `v0.9.4`。npm 已发布版本的 `latest` 与 `engines.node >=18`
-以 registry 实际查询为准。
+元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。当前代码库候选版本为
+v0.9.5，npm 线上 latest 仍以 registry 实际查询为准。该候选包含虚拟/非本地堆栈帧过滤、KB SQLite
+默认文件迁至用户数据目录并迁移有效旧库、默认 HTTP 端口冲突时保留 MCP stdio。npm 已发布版本的
+`latest` 与 `engines.node >=18` 以 registry 实际查询为准。
 
 ## 发布结构
 
@@ -142,6 +143,10 @@ flush、停止定时器并释放资源。完整 API 和脱敏规则见
 
 - **Node SDK CI**：Node 18/20/22 各运行一次完整测试，并在同一 packed fixture 中验证
   CJS、ESM 和 `close()`；缺失 `node-sdk` 或根入口不完整会直接失败。
+
+**发行说明门禁**：打 tag 或触发发布工作流前，先将 `docs/public/CHANGELOG.md` 的 `[Unreleased]`
+内容整理为 `## [<version>] - <release-date>` 版本段，并重建空的 `[Unreleased]`。GitHub Release
+正文按目标版本提取该段；没有对应版本段时当前工作流会退回通用提示，不能把那种结果当成完整发行说明。
 
 **发布前需在仓库配置 npm token secret**：
 

@@ -6,26 +6,27 @@
 console 日志、网络失败、UI 交互轨迹与会话上下文。Lujo 只负责采集、关联与查询，
 推理与改代码由宿主智能体完成。
 
-> **版本状态**：npm 线上最新已发布稳定版本为 `v0.9.4`；代码库处于 `v0.9.5` 候选阶段（未发布）。
+> **本包 v0.9.5 更新**：虚拟/非本地堆栈帧过滤，避免不必要的项目根查找与目录遍历；KB SQLite 默认位置迁至用户数据目录，并对有效旧库执行一致性快照迁移；默认 HTTP 端口冲突时保留 MCP stdio 启动。完整发行说明见仓库 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
 
 - 单机、本地自用、服务端零配置：`npx` 一条命令即可接入，无需数据库、Docker 或配置大模型 Key
 - 宿主自然交互：在 Trae / Cursor / Claude 中正常用自然语言描述问题即可，无需手动调用 MCP 工具或记忆特定指令；宿主模型自主决定是否选用工具（不保证每次都调用；未调用时可提示：“请调用 diagnose_issue 检查运行时现场”）
 - 业务端轻量接入：前端页面通过 `<script>` 引入 Browser SDK 并执行 `AiDebug.init({ endpoint })` 建立现场采集（跨端口需配 CORS，本地回环推荐免 key 避免前端密钥泄露）
 - 运行现场默认留在本机内存；调试经验（KB）写穿到本地单文件 SQLite「笔记本」
 - 采集侧提供 Browser SDK（本包已随附，可被 CDN 直接引用）与 Node SDK
-  （[`@lujoai/lujo-mcp-node-sdk`](https://www.npmjs.com/package/@lujoai/lujo-mcp-node-sdk)，npm 当前发布版本为 v0.9.4）
+  （[`@lujoai/lujo-mcp-node-sdk`](https://www.npmjs.com/package/@lujoai/lujo-mcp-node-sdk)，独立发布；当前版本以 npm registry 为准）
 
 ## 安装与接入
 
-在 MCP 客户端配置里加入当前 npm 稳定版本（推荐 `npx`：跨平台自动拉取对应的预编译二进制，
-避免桌面 GUI 客户端因未加载 shell PATH 而找不到命令）：
+在 MCP 客户端配置里加入 npm 的 `latest` 版本（如需固定版本，可将 `latest` 替换为 registry
+中当前已发布的具体版本号）。推荐 `npx`：跨平台自动拉取对应的预编译二进制，避免桌面 GUI
+客户端因未加载 shell PATH 而找不到命令：
 
 ```json
 {
   "mcpServers": {
     "lujo": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.4"]
+      "args": ["-y", "@lujoai/lujo-mcp@latest"]
     }
   }
 }

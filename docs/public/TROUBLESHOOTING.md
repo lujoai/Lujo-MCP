@@ -1,9 +1,9 @@
 # 异常排查指南 / Troubleshooting Guide
 
 **适用版本 / Applicable Version**: v0.9.4（已发布稳定版）/ v0.9.5（代码库候选）
-**最后更新 / Last Updated**: 2026-09-24
+**最后更新 / Last Updated**: 2026-09-26
 
-> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选已进入 main（commit `e39aeb7`），`v0.9.5` 仍待发布。默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写入用户数据目录下的本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 覆盖）。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`，`v0.9.5` 仍是候选版本。候选变更包括虚拟/非本地堆栈帧过滤、KB SQLite 默认位置迁至用户数据目录，以及默认 HTTP 端口被占用时降级为 stdio-only；默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）。
 
 ---
 

@@ -8,7 +8,7 @@
 >
 > **PostgreSQL 移除（Step 3，2026-09-14）**：PostgreSQL 运行时后端（pg_executor / pg_*_store / async_pg_store 等模块）、驱动依赖、Docker/compose 服务与 PG 配置族已全部移除；`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。本文以下历史版本注记中与 PG 相关的内容为**当时事实记录**，不再描述当前架构；现行语义以 §3.5 与 TROUBLESHOOTING.md L 节为准。
 
-> **v0.9.5（2026-09-24，代码库候选/未发布）**：优化 Trae / Cursor 智能体协同交互，消除手动调用 MCP 的误解；补齐前端一次性 SDK 接入指引与安全警告；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`）；相关候选已进入 main（commit `e39aeb7`），v0.9.5 仍待发布。当前 npm 线上最新已发布稳定版本为 `v0.9.4`。
+> **v0.9.5（2026-09-26，代码库候选/未发布）**：虚拟/非本地堆栈帧在规范根查找前被过滤；KB SQLite 默认路径改为跨平台用户数据目录并安全迁移有效旧库；默认 HTTP 端口冲突时允许 MCP stdio-only 启动，显式端口冲突仍失败。公开 MCP 工具、REST 契约与 schema 不变。当前 npm 线上最新已发布稳定版本为 `v0.9.4`。
 > **v0.9.4（2026-09-23，npm 最新已发布稳定版）**：修复运行时上下文断层（异步修复任务 trace_data 补位）、MCP stacktrace 工具按 request_id 真实栈帧还原、追踪摘要提取支持 trace_data、Dashboard 事件总线线程安全加固，以及收敛废弃未文档化端点 POST /debug（返回 410）。
 > **v0.9.3（2026-09-23，已发布）**：Qdrant 语义召回修复——适配 qdrant-client 1.16 移除 `QdrantClient.search()` 的变更，切换 `query_points()`（依赖下限 `>=1.10.0`）；CI 与发布产物共用锁定依赖集；无破坏性行为变更。
 > **v0.9.2（2026-09-21，已发布）**：安全加固与经验闭环——默认监听收紧为 `127.0.0.1`、`/metrics` 免鉴权豁免仅回环生效、错误码规范化（关闭期 `TOOL_BUSY`；RBAC 鉴权拒绝 `AUTH_ERROR -32003`）、KB 存储边界拒绝未脱敏写入、认证 fail-closed 补强、Agent 外发脱敏；新增 KB 诊断经验关联（`related_experiences`）与 `/demo` 接入状态面板；静默失败指纹隔离、stdio 错误语义补齐、Redis L2 陈旧回流阻断。

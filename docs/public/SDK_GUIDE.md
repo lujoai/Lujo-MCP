@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-24）。当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描过滤核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选已进入 main（commit `e39aeb7`），`v0.9.5` 仍待发布，SDK 公开接口保持稳定兼容。
+> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-26）。v0.9.5 候选包含虚拟堆栈帧过滤、KB SQLite 默认位置调整和默认 HTTP 端口冲突时保留 stdio 启动；Browser SDK 与 Node SDK 的公开接口保持稳定兼容。当前详细状态见 [CHANGELOG](./CHANGELOG.md)。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 
@@ -32,7 +32,7 @@ Browser SDK 依赖 DOM、浏览器网络对象、`localStorage` 和 `sendBeacon`
 
 ## Node SDK（服务端 Node.js）
 
-Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支持 Node 18、20、22，并提供 CommonJS 和 ESM 两种包根入口。**当前 npm 线上最新已发布版本为 v0.9.4**（请勿假设 npm 上已发布 0.9.5 版本）。
+Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支持 Node 18、20、22，并提供 CommonJS 和 ESM 两种包根入口。它独立于 Lujo-MCP 主包发布；当前可安装版本以 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp-node-sdk) 为准。
 
 安装独立包（推荐指定已发布版本）：
 

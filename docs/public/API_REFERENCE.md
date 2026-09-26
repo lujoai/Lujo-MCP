@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-24）。npm 线上最新已发布稳定版本为 v0.9.4；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选内容已进入 main（commit `e39aeb7`）；v0.9.5 仍待发布（强化 Trae / Cursor 智能体协同体验与防超时）。公开工具面、REST 契约与数据库 schema 不变。上一版 v0.9.4 为运行时上下文断层修复与端点收敛。
+> 当前版本：v0.9.4（已发布稳定版）/ v0.9.5（代码库候选/未发布，2026-09-26）。v0.9.5 候选修复虚拟堆栈帧触发目录扫描的问题、调整 KB SQLite 默认数据目录，并在默认 HTTP 端口冲突时保留 stdio 启动。公开工具面、REST 契约、SDK 接口与数据库 schema 不变；详细变更见 [CHANGELOG](./CHANGELOG.md)。上一版 v0.9.4 为运行时上下文断层修复与端点收敛。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -346,7 +346,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ## 4. Node SDK（npm 稳定版 v0.9.4 / 代码库候选 v0.9.5）
 
-包名固定为 `@lujoai/lujo-mcp-node-sdk`。**当前 npm 线上最新已发布版本为 v0.9.4**（请勿假设 npm 上已存在 0.9.5）；当前代码库处于 v0.9.5 候选阶段。SDK 支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口，`engines.node` 为 `>=18`。
+包名固定为 `@lujoai/lujo-mcp-node-sdk`。该包独立发布；当前可安装版本以 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp-node-sdk) 为准。SDK 支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口，`engines.node` 为 `>=18`。
 
 ```bash
 npm install @lujoai/lujo-mcp-node-sdk
