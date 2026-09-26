@@ -7,6 +7,20 @@
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-09-26
+
+> 主题「零改造本地调试」：从本版起，「3 行 npx 配置 + 对宿主 AI 说哪里有问题」即可零配置调试本地前端——`auto_test` / `verify_ui` 打开本机开发服务器不再需要任何环境变量，宿主 AI 也拿到了「先采集现场再分析」的行动指引。同时评估套件扩样一倍（12 个冻结 case，覆盖真实高频错误家族）。
+
+### Changed
+
+- **纯回环 UI 目标默认放行（行为变更，SSRF 防线不变）**：`auto_test` / `verify_ui` 的目标 URL 当**全部** DNS 解析结果均为回环地址（`localhost` / `127.0.0.1` / `::1`）时默认允许访问（规则标记 `loopback_default`）——单用户本地定位下，Playwright 打开 `http://localhost:3000` 这类本机开发服务器是主使用场景，回环与 Lujo 自身的回环 HTTP 监听同处一个信任域。**非回环**的内网、链路本地（云元数据 `169.254.x`）、保留地址仍默认拒绝；混合解析（回环+公网/私网，防 DNS rebinding）保守拒绝；`UI_URL_ALLOW_PRIVATE` / `UI_URL_ALLOWLIST` 语义不变。此前依赖「回环也默认拒绝」的部署请显式配置 `UI_URL_ALLOWLIST` 排除策略。
+- **`auto_test` 工具描述新增宿主行动指引**：明确「用户报告前端问题且服务端尚无现场时，先用本工具打开目标页面采集真实运行现场再分析修复」，并标注本机 localhost 已默认放行；README 同步提供可直接粘贴到 Trae / Claude / Cursor 自定义指令的 5 行「宿主使用指引」片段。
+- **公开设计文档显式声明零配置能力边界**：不配置任何 Key 时，知识库的指纹精确匹配与归一化/类型相似召回始终可用；仅向量语义召回（Qdrant/embedding）与 LLM 智能分析需要自配 Key，未配置时按设计静默降级为 no-op——是显式边界而非故障。
+
+### Added
+
+- **Benchmark 评估套件扩样 6 → 12 个冻结 case**：新增 6 个来自本地知识库真实高频错误家族的 fixture（WebSocket 空闲断连、下游 429 限流透传、502 HTML 被 JSON 解析、部署删除 ca-certificates 致 TLS 验证失败、fire-and-forget 任务静默丢失、子应用 mount 绕过 CORS），全部通过防泄题守卫（模型可见文本与 gold 无 n-gram 重叠、evidence 只引用真实存在的字段）。属内部评估工具扩展，不影响运行时。
+
 ## [0.9.5] - 2026-09-26
 
 > 主题「诊断安全与本地开箱体验」：修复浏览器上报的虚拟堆栈帧（`eval at evaluate (`、`<anonymous>`、页面 URL 等）被当作本地路径进入项目根查找，进而对用户主目录等超大目录发起全量扫描、把 `diagnose_issue` 顶满工具守护超时的问题；同时将 KB SQLite 默认位置收敛到用户数据目录，并在默认 HTTP 端口冲突时保留 MCP stdio 可用。

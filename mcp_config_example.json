@@ -2,7 +2,7 @@
   "mcpServers": {
     "lujo": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.5"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.6"]
     },
     "lujo-from-source": {
       "command": "python",

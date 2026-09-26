@@ -6,7 +6,7 @@
 console 日志、网络失败、UI 交互轨迹与会话上下文。Lujo 只负责采集、关联与查询，
 推理与改代码由宿主智能体完成。
 
-> **本包 v0.9.5 更新**：虚拟/非本地堆栈帧过滤，避免不必要的项目根查找与目录遍历；KB SQLite 默认位置迁至用户数据目录，并对有效旧库执行一致性快照迁移；默认 HTTP 端口冲突时保留 MCP stdio 启动。完整发行说明见仓库 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
+> **本包 v0.9.6 更新**：虚拟/非本地堆栈帧过滤，避免不必要的项目根查找与目录遍历；KB SQLite 默认位置迁至用户数据目录，并对有效旧库执行一致性快照迁移；默认 HTTP 端口冲突时保留 MCP stdio 启动。完整发行说明见仓库 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
 
 - 单机、本地自用、服务端零配置：`npx` 一条命令即可接入，无需数据库、Docker 或配置大模型 Key
 - 宿主自然交互：在 Trae / Cursor / Claude 中正常用自然语言描述问题即可，无需手动调用 MCP 工具或记忆特定指令；宿主模型自主决定是否选用工具（不保证每次都调用；未调用时可提示：“请调用 diagnose_issue 检查运行时现场”）

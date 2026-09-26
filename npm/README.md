@@ -6,8 +6,9 @@ Lujo-MCP 的本地 MCP Server 通过 **npm 元包 + 平台二进制包** 模式�
 
 Node.js 服务端 SDK 是独立包 `@lujoai/lujo-mcp-node-sdk`，不包含在本地 MCP Server
 元包中；它面向 Node 18/20/22，提供 CJS/ESM 根入口和显式错误/网络上报。当前已发布版本为
-v0.9.5，npm 五包 `latest=0.9.5`。本版包含虚拟/非本地堆栈帧过滤、KB SQLite 默认文件迁至用户数据目录
-并迁移有效旧库、默认 HTTP 端口冲突时保留 MCP stdio。Node.js 兼容范围为 `>=18`。
+v0.9.6，npm 五包 `latest=0.9.6`。本版 `auto_test`/`verify_ui` 对纯回环目标（本机开发
+服务器）默认放行，配合宿主行动指引实现「零配置本地前端调试」；非回环内网地址仍默认
+拒绝。Node.js 兼容范围为 `>=18`。
 
 ## 发布结构
 
@@ -36,7 +37,7 @@ npm/
 安装当前 npm 稳定版本（推荐固定版本保证可复现）：
 
 ```bash
-npm install -g @lujoai/lujo-mcp@0.9.5
+npm install -g @lujoai/lujo-mcp@0.9.6
 ```
 
 MCP 客户端配置（Claude Desktop / Cursor / Trae 等）：
