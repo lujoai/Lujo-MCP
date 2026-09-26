@@ -72,17 +72,15 @@ def _next_id() -> int:
     return _ID
 
 
-def _start_readers(
-    proc: subprocess.Popen,
-    stderr_tail: deque[str],
-    stderr_lock: threading.Lock,
-) -> tuple[queue.Queue[str], threading.Thread]:
+def _start_readers(proc: subprocess.Popen) -> queue.Queue[str]:
     """后台线程分别读取 stdout / stderr。
 
     stdout 逐行入队供主线程带超时消费；stderr 持续排空避免管道缓冲写满
     导致子进程阻塞（死锁）。EOF 时向 stdout 队列推入 None 哨兵。
     """
     out_q: queue.Queue[str] = queue.Queue()
+    stderr_tail: deque[str] = deque(maxlen=80)
+    stderr_lock = threading.Lock()
 
     def _drain_out() -> None:
         for raw in iter(proc.stdout.readline, ""):
@@ -97,7 +95,11 @@ def _start_readers(
     threading.Thread(target=_drain_out, daemon=True).start()
     stderr_thread = threading.Thread(target=_drain_err, daemon=True)
     stderr_thread.start()
-    return out_q, stderr_thread
+    # Keep the helper's queue-only return contract for existing callers/test doubles.
+    out_q.stderr_tail = stderr_tail
+    out_q.stderr_lock = stderr_lock
+    out_q.stderr_thread = stderr_thread
+    return out_q
 
 
 def _print_stderr_tail(stderr_tail: deque[str], stderr_lock: threading.Lock) -> None:
@@ -328,9 +330,10 @@ def _run_smoke(
         errors="replace",
         bufsize=1,
     )
-    stderr_tail: deque[str] = deque(maxlen=80)
-    stderr_lock = threading.Lock()
-    out_q, stderr_thread = _start_readers(proc, stderr_tail, stderr_lock)
+    out_q = _start_readers(proc)
+    stderr_tail = getattr(out_q, "stderr_tail", deque(maxlen=80))
+    stderr_lock = getattr(out_q, "stderr_lock", threading.Lock())
+    stderr_thread = getattr(out_q, "stderr_thread", None)
     try:
         probe_urls = _normalize_http_urls(http_url, http_probe_urls)
         if probe_urls:
@@ -399,7 +402,8 @@ def _run_smoke(
         if result.get("isError"):
             print(f"[FAIL] tools/call {target} 返回 isError=true：{result}", file=sys.stderr)
             _cleanup_process(proc)
-            stderr_thread.join(timeout=2)
+            if stderr_thread is not None:
+                stderr_thread.join(timeout=2)
             _print_stderr_tail(stderr_tail, stderr_lock)
             return 1
         content = result.get("content", [])
