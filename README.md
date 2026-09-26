@@ -50,6 +50,17 @@
 >
 > 📄 可直接复制的机器可读版本在仓库根目录：[`mcp_config_example.json`](./mcp_config_example.json) —— 里面 `lujo`（npx 免安装）与 `lujo-from-source`（跑本地源码，已带 `--http`）是两条等价配置，**二选一**即可；用源码那条时把 `cwd` 换成你的仓库绝对路径，Windows 下建议把 `command` 指向项目的 `.venv/Scripts/python.exe`。
 
+### 让宿主 AI 学会自主使用 Lujo（可选，复制粘贴即用）
+
+把下面 5 行加到你的 AI 客户端（Trae / Claude / Cursor）的自定义指令或项目规则里，之后你只需要**用自然语言说哪里有问题**，宿主 AI 会自己决定何时调用 Lujo，你不需要打开任何演示页、不需要点任何东西、不需要改你自己的网站：
+
+```text
+遇到我报告的任何运行时问题（页面异常、白屏、点了没反应、接口不对、静默失败）：
+1. 优先调用 lujo 的 diagnose_issue（没有 trace_id 也直接调）获取真实运行现场；
+2. 若服务端还没有现场，调用 lujo 的 auto_test 打开目标页面自动遍历采集（本机 localhost 已默认放行，直接用 http://localhost:端口）;
+3. 基于返回的现场（异常堆栈/网络链/UI 事件/git 归因）分析并修复，不要凭空猜测。
+```
+
 ### 替代方式：全局安装
 
 ```bash

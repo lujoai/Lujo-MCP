@@ -9,11 +9,15 @@ import logging
 AUTO_TEST_DEF = {
     "name": "auto_test",
     "description": (
+        "【前端现场采集入口】当用户报告前端问题（页面异常、白屏、『点了没反应』、"
+        "接口表现不对、疑似静默失败）而服务端还没有任何上报现场时，应先用本工具"
+        "打开目标页面自动遍历并采集真实运行现场，再分析修复。"
+        "本机开发服务器（http://localhost:3000 等）默认放行，无需任何额外配置。"
         "自动遍历页面所有可交互元素（按钮/链接/输入框），"
         "依次执行点击并监听控制台错误和网络 4xx/5xx。"
         "需要 url、不需要 request_id；不需要手动指定选择器，"
         "适合快速验收 AI 生成的前端页面、批量发现「点了没反应」的静默问题；"
-        "定位单个已知问题请先用 diagnose_issue。"
+        "已有上报现场时定位单个已知问题请先用 diagnose_issue。"
         "需要 Playwright（pip install playwright && playwright install chromium）。"
     ),
     "inputSchema": {

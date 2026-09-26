@@ -96,6 +96,23 @@ def inspect_url_security(url: str) -> dict:
 
     assessment["resolved_ips"] = ips
 
+    # 作者批准的回环豁免（2026-09-26，「动动嘴巴」零改造接入）：单用户本机定位下，
+    # Playwright 打开本机开发服务器（localhost:3000 等）是主使用场景，回环与 Lujo
+    # 自身的回环 HTTP 监听同处一个信任域，不构成 SSRF 攻击面。仅当**全部**解析
+    # 结果都是回环时放行；混合解析（回环+公网/私网）按下方保守分支处理（防
+    # DNS rebinding）。非回环私网/链路本地/元数据地址的默认拒绝语义不变。
+    try:
+        all_loopback = bool(ips) and all(
+            ipaddress.ip_address(ip).is_loopback for ip in ips
+        )
+    except ValueError:
+        all_loopback = False
+    if all_loopback:
+        assessment["allowed"] = True
+        assessment["rule"] = "loopback_default"
+        assessment["reason"] = "回环地址默认放行（本机调试豁免）；非回环私网/元数据地址仍默认拒绝"
+        return assessment
+
     for ip in ips:
         try:
             addr = ipaddress.ip_address(ip)
@@ -117,8 +134,8 @@ def inspect_url_security(url: str) -> dict:
             assessment["restricted_ip"] = ip
             assessment["rule"] = "private_network"
             assessment["reason"] = (
-                f"拒绝内网/回环/元数据地址：{assessment['host']}→{ip}"
-                "（本地联调请设 UI_URL_ALLOW_PRIVATE=true 或加入 UI_URL_ALLOWLIST）"
+                f"拒绝内网/回环混合/元数据地址：{assessment['host']}→{ip}"
+                "（纯回环已默认放行；内网联调请设 UI_URL_ALLOW_PRIVATE=true 或加入 UI_URL_ALLOWLIST）"
             )
             return assessment
 
@@ -131,7 +148,8 @@ def inspect_url_security(url: str) -> dict:
 def is_safe_url(url: str) -> tuple[bool, str]:
     """SEC-02：校验 Playwright 目标 URL，防 SSRF。
 
-    仅允许 http/https；默认拒绝回环/私网/链路本地（云元数据 169.254.x）/保留地址。
+    仅允许 http/https；纯回环解析（localhost/127.0.0.1/::1）默认放行（2026-09-26
+    作者批准的本机调试豁免）；其余私网/链路本地（云元数据 169.254.x）/保留地址默认拒绝，
     可经 settings.ui_url_allow_private 放开，或 settings.ui_url_allowlist 精确放行主机。
     返回 (是否安全, 拒绝原因)。
     """

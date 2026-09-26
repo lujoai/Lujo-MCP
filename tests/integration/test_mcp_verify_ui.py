@@ -256,12 +256,16 @@ class TestVerifyUiViaDispatch:
         )
 
     def test_private_url_rejection_returns_structured_security(self, monkeypatch):
-        """私网目标经 MCP 调用时返回结构化安全拒绝结果。"""
+        """非回环私网目标经 MCP 调用时返回结构化安全拒绝结果。
+
+        2026-09-26 作者批准回环豁免后，回环地址默认放行；本测试靶点改为
+        非回环私网地址，继续守护 SSRF 默认拒绝语义。
+        """
         monkeypatch.setattr("app.config.settings.ui_url_allow_private", False)
         monkeypatch.setattr("app.config.settings.ui_url_allowlist", "")
 
         req = _make_tools_call_req("verify_ui", {
-            "spec": {"kind": "ui", "target": "http://127.0.0.1:8123/private"},
+            "spec": {"kind": "ui", "target": "http://192.168.1.10:8123/private"},
         })
         resp = asyncio.run(protocol_server.dispatch(req))
 

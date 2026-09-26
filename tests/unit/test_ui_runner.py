@@ -63,13 +63,17 @@ class TestUIRunner:
         assert result["diffs"][0]["field"] == "target"
 
     def test_private_target_returns_structured_security_rejection(self, monkeypatch):
-        """私网目标被拒绝时返回结构化 security 与留证信息。"""
+        """非回环私网目标被拒绝时返回结构化 security 与留证信息。
+
+        2026-09-26 作者批准回环豁免后，回环地址默认放行；本测试的靶点改为
+        非回环私网地址（192.168.1.10），继续守护 SSRF 默认拒绝语义。
+        """
         monkeypatch.setattr("app.config.settings.ui_url_allow_private", False)
         monkeypatch.setattr("app.config.settings.ui_url_allowlist", "")
 
         result = ui_runner.run_ui_verification({
             "kind": "ui",
-            "target": "http://127.0.0.1:8765/demo",
+            "target": "http://192.168.1.10:8765/demo",
             "expect": {},
         })
 
@@ -79,6 +83,24 @@ class TestUIRunner:
         assert result["security"]["target"]["rule"] == "private_network"
         assert result["security"]["target"]["private_network"] is True
         assert result["failure_evidence"]["stage"] == "security_check"
+
+    def test_loopback_target_allowed_by_default(self):
+        """回环地址（localhost / 127.0.0.1 / ::1）默认放行——「动动嘴巴」豁免。
+
+        作者 2026-09-26 批准：单用户本机定位下，Playwright 打开本机开发服务器
+        （如 http://localhost:3000）是主场景；回环与 Lujo 自身监听同一信任域。
+        """
+        for url in ("http://localhost:3000", "http://127.0.0.1:8765/demo", "http://[::1]:8000/"):
+            a = ui_runner.inspect_url_security(url)
+            assert a["allowed"] is True, f"{url} 应默认放行：{a}"
+            assert a["rule"] == "loopback_default"
+
+    def test_non_loopback_private_still_denied_by_default(self):
+        """豁免仅限回环：非回环私网/链路本地/元数据地址仍默认拒绝。"""
+        for url in ("http://192.168.1.10:8080/x", "http://10.0.0.5/x", "http://169.254.169.254/latest/meta-data/"):
+            a = ui_runner.inspect_url_security(url)
+            assert a["allowed"] is False, f"{url} 应默认拒绝：{a}"
+            assert a["rule"] == "private_network"
 
     def test_verify_state_adds_text_assertion_failure_evidence(self):
         """文本断言失败时输出结构化断言结果与 failure_evidence。"""
@@ -439,8 +461,17 @@ def test_ssrf_guard_allows_browser_internal_schemes():
 
 
 def test_ssrf_guard_still_blocks_private_http():
-    """http 内网地址仍被 abort（SSRF 防护不被内部 scheme 放行削弱）。"""
+    """http 非回环内网地址仍被 abort（SSRF 防护不被回环豁免削弱）。"""
     handler = _install_and_get_handler()
-    route = _FakeRoute("http://127.0.0.1:8080/secret")
+    route = _FakeRoute("http://192.168.1.10:8080/secret")
     handler(route)
     assert route.aborted is True
+
+
+def test_ssrf_guard_allows_loopback_http():
+    """回环 http 请求默认放行（2026-09-26 作者批准的本机调试豁免）。"""
+    handler = _install_and_get_handler()
+    route = _FakeRoute("http://127.0.0.1:8080/local-dev")
+    handler(route)
+    assert route.continued is True
+    assert route.aborted is False
