@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
+import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -36,6 +39,209 @@ from app.config import settings
 from app.runtime.core.storage.base import KnowledgeBaseStorage
 
 logger = logging.getLogger("lujo-mcp.storage.sqlite")
+
+_DEFAULT_KB_MIGRATION_MARKER = ".lujo-kb-cwd-migration-complete"
+_REQUIRED_KB_COLUMNS = frozenset(
+    {
+        "fingerprint",
+        "analysis",
+        "fix_suggestion",
+        "source",
+        "created_at",
+        "updated_at",
+        "normalized_fingerprint",
+        "type_fingerprint",
+        "verify_count",
+        "case_confidence",
+    }
+)
+
+
+def get_default_kb_persist_path() -> Path:
+    """确定跨平台默认用户数据目录下的 SQLite 笔记本持久化路径。
+
+    - Windows: %LOCALAPPDATA%\\lujo-mcp\\lujo-kb.sqlite3（若无 LOCALAPPDATA 环境变量则回退 ~/.local/share/lujo-mcp/lujo-kb.sqlite3）
+    - macOS: ~/Library/Application Support/lujo-mcp/lujo-kb.sqlite3
+    - Linux/其他: $XDG_DATA_HOME/lujo-mcp/lujo-kb.sqlite3（若无则回退 ~/.local/share/lujo-mcp/lujo-kb.sqlite3）
+    """
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_appdata:
+            base_dir = Path(local_appdata).expanduser()
+        else:
+            base_dir = Path.home() / ".local" / "share"
+    elif sys.platform == "darwin":
+        base_dir = Path.home() / "Library" / "Application Support"
+    else:
+        xdg_data = os.environ.get("XDG_DATA_HOME", "").strip()
+        if xdg_data:
+            base_dir = Path(xdg_data).expanduser()
+        else:
+            base_dir = Path.home() / ".local" / "share"
+    return (base_dir / "lujo-mcp" / "lujo-kb.sqlite3").resolve()
+
+
+def _mark_default_kb_initialized(target_path: Path) -> None:
+    """记住默认目录已初始化，防止删除新库后再次导入保留的旧 CWD 库。"""
+    marker = target_path.with_name(_DEFAULT_KB_MIGRATION_MARKER)
+    try:
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        if not marker.is_file():
+            raise OSError(f"SQLite KB 迁移标记不是普通文件: {marker}") from None
+        return
+
+    try:
+        with os.fdopen(fd, "wb") as marker_file:
+            marker_file.write(b"v1\n")
+            marker_file.flush()
+            os.fsync(marker_file.fileno())
+    except Exception:
+        marker.unlink(missing_ok=True)
+        raise
+
+
+def is_valid_sqlite_kb(candidate_path: Path | str) -> bool:
+    """校验候选文件为完整 SQLite KB 库，包含所需字段及单列 fingerprint 主键。"""
+    path = Path(candidate_path)
+    if not path.is_file():
+        return False
+    # SQLite 最小文件大小为 100 字节，且必须以魔数开头
+    try:
+        if path.stat().st_size < 100:
+            return False
+        with open(path, "rb") as f:
+            header = f.read(16)
+        if header != b"SQLite format 3\x00":
+            return False
+    except Exception:
+        return False
+
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=2.0)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kb_entries'"
+        )
+        if cursor.fetchone() is None:
+            return False
+
+        table_info = cursor.execute("PRAGMA table_info(kb_entries)").fetchall()
+        column_names = {str(row[1]).casefold() for row in table_info}
+        missing_columns = _REQUIRED_KB_COLUMNS - column_names
+        primary_key_columns = [
+            str(row[1]).casefold() for row in table_info if int(row[5]) > 0
+        ]
+        if missing_columns or primary_key_columns != ["fingerprint"]:
+            logger.debug(
+                "文件 %s kb_entries schema 不兼容: missing_columns=%s, primary_key=%s",
+                path,
+                sorted(missing_columns),
+                primary_key_columns,
+            )
+            return False
+
+        row = cursor.execute("PRAGMA quick_check").fetchone()
+        if not row or row[0] != "ok":
+            return False
+        return True
+    except Exception as e:
+        logger.debug("文件 %s SQLite 有效性校验未通过: %s", path, e)
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _migrate_legacy_cwd_kb_if_needed(target_path: Path) -> bool:
+    """非破坏性安全迁移：将 CWD 下的旧库做一致性快照并保留原文件。
+
+    使用 SQLite backup API 读取主库及 WAL 中的同一事务快照，先写入目标目录
+    的临时文件并校验，再以不覆盖目标的硬链接原子发布，避免复制中断留下半成品。
+    发布后记录一次性标记；若恰在两步之间崩溃，下一次启动会由已存在的
+    目标库补记标记。有效旧库的快照/发布失败则抛错，避免空目标阻断重试。
+    """
+    target_path = target_path.resolve()
+    if target_path.exists() or target_path.with_name(_DEFAULT_KB_MIGRATION_MARKER).exists():
+        return False
+
+    cwd_candidate = (Path.cwd() / "lujo-kb.sqlite3").resolve()
+    if not cwd_candidate.is_file():
+        return False
+
+    # 若 CWD 路径与目标路径恰好相同，不做自复制
+    if cwd_candidate == target_path.resolve():
+        return False
+
+    if not is_valid_sqlite_kb(cwd_candidate):
+        logger.info(
+            "CWD 下存在旧版数据库文件 %s，但有效性校验未通过（损坏或非法结构），跳过迁移",
+            cwd_candidate,
+        )
+        return False
+
+    temp_path: Path | None = None
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{target_path.name}.migrate-",
+            suffix=".tmp",
+            dir=target_path.parent,
+        )
+        temp_path = Path(temp_name)
+        os.close(fd)
+
+        source_conn: sqlite3.Connection | None = None
+        target_conn: sqlite3.Connection | None = None
+        try:
+            source_uri = f"{cwd_candidate.as_uri()}?mode=ro"
+            source_conn = sqlite3.connect(source_uri, uri=True, timeout=2.0)
+            target_conn = sqlite3.connect(str(temp_path), timeout=2.0)
+            source_conn.backup(target_conn)
+        finally:
+            if target_conn is not None:
+                target_conn.close()
+            if source_conn is not None:
+                source_conn.close()
+
+        if not is_valid_sqlite_kb(temp_path):
+            raise ValueError(f"从 CWD {cwd_candidate} 创建的 SQLite 快照校验失败")
+
+        try:
+            # Same-directory hard link publishes the completed snapshot atomically and
+            # fails if another instance has already created the destination.
+            os.link(temp_path, target_path)
+        except FileExistsError:
+            logger.info("另一 Lujo 实例已创建目标笔记本 %s，跳过旧库迁移", target_path)
+            return False
+
+        _mark_default_kb_initialized(target_path)
+        logger.info(
+            "已将当前工作目录旧版数据库从 %s 一致性迁移至用户数据目录 %s，原文件已保留",
+            cwd_candidate,
+            target_path,
+        )
+        return True
+    except Exception as e:
+        logger.warning(
+            "从 CWD %s 迁移数据库至 %s 失败: %s，原文件保留；本次禁用 KB 持久化以便下次重试",
+            cwd_candidate,
+            target_path,
+            e,
+        )
+        raise
+    finally:
+        if temp_path is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    temp_path.with_name(temp_path.name + suffix).unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    logger.debug("清理 SQLite 迁移临时文件失败: %s", cleanup_error)
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kb_entries (
@@ -68,19 +274,34 @@ class SQLiteKnowledgeBaseStore(KnowledgeBaseStorage):
     """KB 持久化的本地 SQLite 单文件实现（v0.8.0「笔记本」）。"""
 
     def __init__(self, db_path: str | None = None) -> None:
-        raw_path = str(db_path or settings.kb_persist_path or "lujo-kb.sqlite3").strip()
-        # 显式拒绝 :memory:：本实现用短连接，而 SQLite 的内存库是「每连接独立」的，
-        # 建表与后续操作会落在不同的空库上（恒 no such table），无法持久化。
-        if raw_path == ":memory:":
-            raise ValueError(
-                "kb_persist_path 不支持 ':memory:'：SQLiteKnowledgeBaseStore 使用短连接，"
-                "每连接独立的内存库无法承载持久化。请改用文件路径，"
-                "或设置 KB_PERSIST_ENABLED=false 关闭持久化。"
-            )
-        # 解析为绝对路径：相对路径按「构造时」的工作目录定格，避免运行期 cwd 变化导致落库位置漂移
-        self.db_path = str(Path(raw_path).expanduser().resolve())
+        explicit_path: str | None = None
+        if db_path is not None and str(db_path).strip():
+            explicit_path = str(db_path).strip()
+        elif settings.kb_persist_path and str(settings.kb_persist_path).strip():
+            explicit_path = str(settings.kb_persist_path).strip()
+
+        if explicit_path is not None:
+            # 显式配置：100% 优先尊重用户配置，不进行任何重定向或隐式迁移
+            # 显式拒绝 :memory:：本实现用短连接，而 SQLite 的内存库是「每连接独立」的，
+            # 建表与后续操作会落在不同的空库上（恒 no such table），无法持久化。
+            if explicit_path == ":memory:":
+                raise ValueError(
+                    "kb_persist_path 不支持 ':memory:'：SQLiteKnowledgeBaseStore 使用短连接，"
+                    "每连接独立的内存库无法承载持久化。请改用文件路径，"
+                    "或设置 KB_PERSIST_ENABLED=false 关闭持久化。"
+                )
+            # 解析为绝对路径：相对路径按「构造时」的工作目录定格，避免运行期 cwd 变化导致落库位置漂移
+            self.db_path = str(Path(explicit_path).expanduser().resolve())
+        else:
+            # 默认路径：使用跨平台用户数据目录，并执行非破坏性迁移检测
+            target_path = get_default_kb_persist_path()
+            self.db_path = str(target_path)
+            _migrate_legacy_cwd_kb_if_needed(target_path)
+
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
+        if explicit_path is None:
+            _mark_default_kb_initialized(target_path)
 
     # ── 连接与建表 ──
 

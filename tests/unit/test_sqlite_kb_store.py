@@ -16,9 +16,15 @@ import pytest
 
 from app.rag.knowledge_base import KnowledgeBaseStore
 from app.runtime.core.storage import factory as storage_factory
+from app.runtime.core.storage import sqlite_kb_store as sqlite_store_module
 from app.runtime.core.storage.base import KnowledgeBaseStorage
 from app.runtime.core.storage.noop_store import NoOpKnowledgeBaseStore
-from app.runtime.core.storage.sqlite_kb_store import SQLiteKnowledgeBaseStore
+from app.runtime.core.storage.sqlite_kb_store import (
+    SQLiteKnowledgeBaseStore,
+    _migrate_legacy_cwd_kb_if_needed,
+    get_default_kb_persist_path,
+    is_valid_sqlite_kb,
+)
 
 
 @pytest.fixture
@@ -408,3 +414,511 @@ def test_custom_path_only_creates_that_file(db_path, tmp_path):
     # WAL 模式会额外产生 -wal/-shm 伴生文件，但全部落在指定临时目录内
     assert created, "应至少创建 sqlite 主文件"
     assert all(name.startswith("kb-test.sqlite3") for name in created), created
+
+
+# ── 6. 默认用户数据目录与非破坏性安全迁移（跨项目经验沉淀）───────────
+
+
+def test_default_kb_path_windows_with_localappdata(monkeypatch, tmp_path):
+    """Windows 下若 LOCALAPPDATA 存在，定位到 %LOCALAPPDATA%/lujo-mcp/lujo-kb.sqlite3。"""
+    fake_appdata = tmp_path / "AppData" / "Local"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_appdata))
+
+    p = get_default_kb_persist_path()
+
+    assert p == (fake_appdata / "lujo-mcp" / "lujo-kb.sqlite3").resolve()
+
+
+def test_default_kb_path_windows_fallback(monkeypatch, tmp_path):
+    """Windows 下若 LOCALAPPDATA 未设，回退到 ~/.local/share/lujo-mcp/lujo-kb.sqlite3。"""
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    p = get_default_kb_persist_path()
+
+    assert p == (fake_home / ".local" / "share" / "lujo-mcp" / "lujo-kb.sqlite3").resolve()
+
+
+def test_default_kb_path_macos(monkeypatch, tmp_path):
+    """macOS 下定位到 ~/Library/Application Support/lujo-mcp/lujo-kb.sqlite3。"""
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    p = get_default_kb_persist_path()
+
+    assert p == (fake_home / "Library" / "Application Support" / "lujo-mcp" / "lujo-kb.sqlite3").resolve()
+
+
+def test_default_kb_path_linux_with_xdg(monkeypatch, tmp_path):
+    """Linux 下若 XDG_DATA_HOME 存在，定位到 $XDG_DATA_HOME/lujo-mcp/lujo-kb.sqlite3。"""
+    fake_xdg = tmp_path / "custom_xdg"
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(fake_xdg))
+
+    p = get_default_kb_persist_path()
+
+    assert p == (fake_xdg / "lujo-mcp" / "lujo-kb.sqlite3").resolve()
+
+
+def test_default_kb_path_linux_fallback(monkeypatch, tmp_path):
+    """Linux 下若 XDG_DATA_HOME 未设，回退到 ~/.local/share/lujo-mcp/lujo-kb.sqlite3。"""
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    p = get_default_kb_persist_path()
+
+    assert p == (fake_home / ".local" / "share" / "lujo-mcp" / "lujo-kb.sqlite3").resolve()
+
+
+def test_store_uses_default_data_dir_when_unconfigured(monkeypatch, tmp_path):
+    """未传 db_path 且 settings.kb_persist_path 为空时，自动定位并初始化默认用户数据目录。"""
+    fake_appdata = tmp_path / "AppData" / "Local"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_appdata))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+    isolated_cwd = tmp_path / "empty_cwd"
+    isolated_cwd.mkdir()
+    monkeypatch.chdir(isolated_cwd)
+
+    store = SQLiteKnowledgeBaseStore()
+
+    expected_path = (fake_appdata / "lujo-mcp" / "lujo-kb.sqlite3").resolve()
+    assert Path(store.db_path) == expected_path
+    assert expected_path.exists()
+    assert (expected_path.parent / ".lujo-kb-cwd-migration-complete").is_file()
+
+
+def test_explicit_constructor_arg_takes_precedence_over_all(monkeypatch, tmp_path):
+    """构造函数显式传入 db_path 必须 100% 优先，不使用默认目录且不做迁移。"""
+    fake_appdata = tmp_path / "AppData" / "Local"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_appdata))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", str(tmp_path / "from-settings.sqlite3"))
+
+    explicit_target = tmp_path / "explicit" / "custom.sqlite3"
+    store = SQLiteKnowledgeBaseStore(db_path=str(explicit_target))
+
+    assert Path(store.db_path) == explicit_target.resolve()
+    assert explicit_target.exists()
+    assert not (fake_appdata / "lujo-mcp" / "lujo-kb.sqlite3").exists()
+
+
+def test_explicit_settings_kb_persist_path_takes_precedence_over_default(monkeypatch, tmp_path):
+    """显式设置 settings.kb_persist_path 时优先使用该路径，不使用默认目录。"""
+    fake_appdata = tmp_path / "AppData" / "Local"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_appdata))
+
+    settings_target = tmp_path / "settings_explicit" / "custom.sqlite3"
+    monkeypatch.setattr("app.config.settings.kb_persist_path", str(settings_target))
+
+    store = SQLiteKnowledgeBaseStore()
+
+    assert Path(store.db_path) == settings_target.resolve()
+    assert settings_target.exists()
+    assert not (fake_appdata / "lujo-mcp" / "lujo-kb.sqlite3").exists()
+
+
+def test_explicit_path_does_not_trigger_cwd_migration(monkeypatch, tmp_path):
+    """显式配置路径时不触发 CWD 自动迁移（不进行隐式复制）。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    legacy_file = cwd_dir / "lujo-kb.sqlite3"
+    legacy_store = SQLiteKnowledgeBaseStore(db_path=str(legacy_file))
+    legacy_store.upsert_kb_entry(_entry("fp-cwd-legacy"))
+
+    explicit_file = tmp_path / "explicit" / "isolated.sqlite3"
+    store = SQLiteKnowledgeBaseStore(db_path=str(explicit_file))
+
+    assert store.list_recent_kb_entries() == []
+    assert legacy_file.exists()
+
+
+def test_migration_copies_valid_cwd_file_and_preserves_original(monkeypatch, tmp_path):
+    """非破坏性安全迁移：CWD 存在有效 lujo-kb.sqlite3 时安全复制到用户数据目录，原文件保留且数据完整。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    legacy_file = cwd_dir / "lujo-kb.sqlite3"
+    legacy_store = SQLiteKnowledgeBaseStore(db_path=str(legacy_file))
+    legacy_store.upsert_kb_entry(_entry("fp-migrated", fix_suggestion="migrated fix"))
+
+    userdata_dir = tmp_path / "userdata"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(userdata_dir))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+
+    target_file = userdata_dir / "lujo-mcp" / "lujo-kb.sqlite3"
+    assert not target_file.exists(), "迁移前目标数据库不应存在"
+
+    store = SQLiteKnowledgeBaseStore()
+
+    # 1. 目标文件被创建
+    assert target_file.exists()
+    assert Path(store.db_path) == target_file.resolve()
+    assert (target_file.parent / ".lujo-kb-cwd-migration-complete").is_file()
+
+    # 2. 原文件绝对保留（非破坏性）
+    assert legacy_file.exists()
+
+    # 3. 目标数据完整可读
+    rows = store.list_recent_kb_entries()
+    assert len(rows) == 1
+    assert rows[0]["fingerprint"] == "fp-migrated"
+    assert rows[0]["fix_suggestion"] == "migrated fix"
+
+    # 4. 原文件数据依然完整可读
+    reopened_legacy = SQLiteKnowledgeBaseStore(db_path=str(legacy_file))
+    legacy_rows = reopened_legacy.list_recent_kb_entries()
+    assert len(legacy_rows) == 1
+    assert legacy_rows[0]["fingerprint"] == "fp-migrated"
+
+
+def test_deleted_default_kb_does_not_reimport_preserved_cwd_file(monkeypatch, tmp_path):
+    """用户停服后只删新笔记本即可重置，保留的 CWD 原件不能在下次启动复活。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+    legacy_file = cwd_dir / "lujo-kb.sqlite3"
+    SQLiteKnowledgeBaseStore(db_path=str(legacy_file)).upsert_kb_entry(_entry("old"))
+
+    userdata_dir = tmp_path / "userdata"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(userdata_dir))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+    target_file = userdata_dir / "lujo-mcp" / "lujo-kb.sqlite3"
+    marker = target_file.parent / ".lujo-kb-cwd-migration-complete"
+
+    first = SQLiteKnowledgeBaseStore()
+    assert [row["fingerprint"] for row in first.list_recent_kb_entries()] == ["old"]
+    assert marker.is_file()
+
+    target_file.unlink()
+    restarted = SQLiteKnowledgeBaseStore()
+    assert restarted.list_recent_kb_entries() == []
+    assert marker.is_file()
+    assert SQLiteKnowledgeBaseStore(db_path=str(legacy_file)).list_recent_kb_entries()[0]["fingerprint"] == "old"
+
+
+def test_migration_uses_consistent_snapshot_with_live_wal(monkeypatch, tmp_path):
+    """存在活动 WAL 时通过 SQLite backup 迁移最新提交数据，不复制瞬态 sidecar。"""
+    import sqlite3
+
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    legacy_file = cwd_dir / "lujo-kb.sqlite3"
+    legacy_store = SQLiteKnowledgeBaseStore(db_path=str(legacy_file))
+    wal_file = cwd_dir / "lujo-kb.sqlite3-wal"
+    keeper = sqlite3.connect(str(legacy_file))
+    try:
+        keeper.execute("PRAGMA journal_mode=WAL")
+        legacy_store.upsert_kb_entry(_entry("fp-wal", fix_suggestion="committed in WAL"))
+        assert wal_file.is_file(), "保持连接打开时，WAL 文件应仍存在"
+
+        target_file = tmp_path / "target" / "lujo-kb.sqlite3"
+        migrated = _migrate_legacy_cwd_kb_if_needed(target_file)
+
+        assert migrated is True
+        assert is_valid_sqlite_kb(target_file)
+        target_store = SQLiteKnowledgeBaseStore(db_path=str(target_file))
+        rows = target_store.list_recent_kb_entries()
+        assert len(rows) == 1
+        assert rows[0]["fingerprint"] == "fp-wal"
+        assert rows[0]["fix_suggestion"] == "committed in WAL"
+
+        # 迁移后的目标是完整快照，不依赖复制过来的 WAL/SHM 文件。
+        assert not (tmp_path / "target" / "lujo-kb.sqlite3-wal").exists()
+        assert legacy_file.exists()
+        assert is_valid_sqlite_kb(legacy_file)
+    finally:
+        keeper.close()
+
+
+def test_sqlite_validation_never_falls_back_to_writable_connection(monkeypatch, tmp_path):
+    """只读 URI 连接失败时，校验应失败且不得改用可写连接。"""
+    candidate = tmp_path / "candidate.sqlite3"
+    SQLiteKnowledgeBaseStore(db_path=str(candidate))
+    original_bytes = candidate.read_bytes()
+    connect_calls = []
+
+    def _fail_readonly(database, *args, **kwargs):
+        connect_calls.append((database, kwargs))
+        raise OSError("simulated read-only connection failure")
+
+    monkeypatch.setattr(sqlite_store_module.sqlite3, "connect", _fail_readonly)
+
+    assert is_valid_sqlite_kb(candidate) is False
+    assert len(connect_calls) == 1
+    database, kwargs = connect_calls[0]
+    assert database.endswith("?mode=ro")
+    assert kwargs.get("uri") is True
+    assert candidate.read_bytes() == original_bytes
+
+
+def test_migration_publish_failure_leaves_no_partial_target(monkeypatch, tmp_path):
+    """快照发布失败时不留下会阻止后续迁移的半成品目标文件。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    legacy_file = cwd_dir / "lujo-kb.sqlite3"
+    legacy_store = SQLiteKnowledgeBaseStore(db_path=str(legacy_file))
+    legacy_store.upsert_kb_entry(_entry("fp-preserved"))
+
+    target_file = tmp_path / "target" / "lujo-kb.sqlite3"
+
+    def _fail_link(_source, _target):
+        raise OSError("simulated atomic publish failure")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(sqlite_store_module.os, "link", _fail_link)
+        with pytest.raises(OSError, match="simulated atomic publish failure"):
+            _migrate_legacy_cwd_kb_if_needed(target_file)
+    assert not target_file.exists()
+    assert not (target_file.parent / ".lujo-kb-cwd-migration-complete").exists()
+    assert is_valid_sqlite_kb(legacy_file)
+    assert SQLiteKnowledgeBaseStore(db_path=str(legacy_file)).list_recent_kb_entries()[0]["fingerprint"] == "fp-preserved"
+    assert list(target_file.parent.glob(".lujo-kb.sqlite3.migrate-*.tmp")) == []
+
+    assert _migrate_legacy_cwd_kb_if_needed(target_file) is True
+    assert SQLiteKnowledgeBaseStore(db_path=str(target_file)).list_recent_kb_entries()[0]["fingerprint"] == "fp-preserved"
+
+
+def test_failed_default_migration_degrades_then_retries(monkeypatch, tmp_path):
+    """有效旧库迁移失败不能用空目标占位；下次仍能经 Factory 迁移。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+    legacy_file = cwd_dir / "lujo-kb.sqlite3"
+    SQLiteKnowledgeBaseStore(db_path=str(legacy_file)).upsert_kb_entry(_entry("old"))
+
+    userdata_dir = tmp_path / "userdata"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(userdata_dir))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+    monkeypatch.setattr("app.config.settings.kb_persist_enabled", True)
+    monkeypatch.setattr("app.config.settings.storage_backend", "memory")
+    monkeypatch.setattr(storage_factory, "_knowledge_store", None)
+    target_file = userdata_dir / "lujo-mcp" / "lujo-kb.sqlite3"
+
+    def _fail_link(_source, _target):
+        raise OSError("publish failed")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(sqlite_store_module.os, "link", _fail_link)
+        assert isinstance(storage_factory.get_knowledge_store(), NoOpKnowledgeBaseStore)
+    assert not target_file.exists()
+    assert not (target_file.parent / ".lujo-kb-cwd-migration-complete").exists()
+    assert is_valid_sqlite_kb(legacy_file)
+
+    monkeypatch.setattr(storage_factory, "_knowledge_store", None)
+    retried = storage_factory.get_knowledge_store()
+    assert isinstance(retried, SQLiteKnowledgeBaseStore)
+    assert [row["fingerprint"] for row in retried.list_recent_kb_entries()] == ["old"]
+
+
+def test_default_marker_write_failure_is_explicit(monkeypatch, tmp_path):
+    """标记不能保存时不可宣称默认持久化已就绪。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+    userdata_dir = tmp_path / "userdata"
+    target_file = userdata_dir / "lujo-mcp" / "lujo-kb.sqlite3"
+    SQLiteKnowledgeBaseStore(db_path=str(target_file)).upsert_kb_entry(_entry("existing"))
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(userdata_dir))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+
+    def _fail_fsync(_fd):
+        raise OSError("marker unwritable")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(sqlite_store_module.os, "fsync", _fail_fsync)
+        with pytest.raises(OSError, match="marker unwritable"):
+            SQLiteKnowledgeBaseStore()
+    assert not (target_file.parent / ".lujo-kb-cwd-migration-complete").exists()
+    assert SQLiteKnowledgeBaseStore().list_recent_kb_entries()[0]["fingerprint"] == "existing"
+
+
+def test_migration_does_not_overwrite_existing_target(monkeypatch, tmp_path):
+    """目标位置已存在数据库时不被 CWD 旧文件覆盖（避免覆盖已有用户数据目录数据）。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    legacy_file = cwd_dir / "lujo-kb.sqlite3"
+    legacy_store = SQLiteKnowledgeBaseStore(db_path=str(legacy_file))
+    legacy_store.upsert_kb_entry(_entry("fp-cwd"))
+
+    userdata_dir = tmp_path / "userdata"
+    target_file = userdata_dir / "lujo-mcp" / "lujo-kb.sqlite3"
+    target_store = SQLiteKnowledgeBaseStore(db_path=str(target_file))
+    target_store.upsert_kb_entry(_entry("fp-target"))
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(userdata_dir))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+
+    store = SQLiteKnowledgeBaseStore()
+
+    rows = store.list_recent_kb_entries()
+    fps = [r["fingerprint"] for r in rows]
+    assert "fp-target" in fps
+    assert "fp-cwd" not in fps
+    assert legacy_file.exists()
+    marker = target_file.parent / ".lujo-kb-cwd-migration-complete"
+    assert marker.is_file(), "旧版已存在的默认目标应补记迁移状态"
+
+    target_file.unlink()
+    restarted = SQLiteKnowledgeBaseStore()
+    assert restarted.list_recent_kb_entries() == []
+    assert marker.is_file()
+
+
+def test_migration_skips_corrupted_cwd_file(monkeypatch, tmp_path):
+    """CWD 下的文件损坏（非合法 SQLite 格式）时不被迁移，目标库正常初始化为空库。"""
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    corrupt_file = cwd_dir / "lujo-kb.sqlite3"
+    corrupt_file.write_text("invalid corrupt header text that is definitely not sqlite")
+
+    userdata_dir = tmp_path / "userdata"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(userdata_dir))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+
+    store = SQLiteKnowledgeBaseStore()
+
+    target_file = userdata_dir / "lujo-mcp" / "lujo-kb.sqlite3"
+    assert target_file.exists()
+    assert store.list_recent_kb_entries() == []
+    assert corrupt_file.exists()
+
+
+def test_migration_skips_sqlite_file_without_kb_entries(monkeypatch, tmp_path):
+    """CWD 下存在有效 SQLite 库但无 kb_entries 表时不被迁移，避免误拷不相关数据库。"""
+    import sqlite3
+
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    other_db = cwd_dir / "lujo-kb.sqlite3"
+    conn = sqlite3.connect(str(other_db))
+    conn.execute("CREATE TABLE other_table (id INT)")
+    conn.commit()
+    conn.close()
+
+    userdata_dir = tmp_path / "userdata"
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(userdata_dir))
+    monkeypatch.setattr("app.config.settings.kb_persist_path", "")
+
+    store = SQLiteKnowledgeBaseStore()
+
+    target_file = userdata_dir / "lujo-mcp" / "lujo-kb.sqlite3"
+    assert target_file.exists()
+    assert store.list_recent_kb_entries() == []
+    assert other_db.exists()
+
+
+def test_migration_skips_incomplete_kb_entries_schema(monkeypatch, tmp_path):
+    """只有部分 kb_entries 字段的 SQLite 文件不得被当作旧 KB 迁移。"""
+    import sqlite3
+
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.chdir(cwd_dir)
+
+    legacy_db = cwd_dir / "lujo-kb.sqlite3"
+    conn = sqlite3.connect(str(legacy_db))
+    conn.execute(
+        "CREATE TABLE kb_entries (fingerprint TEXT PRIMARY KEY, analysis TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    target_db = tmp_path / "userdata" / "lujo-mcp" / "lujo-kb.sqlite3"
+    assert is_valid_sqlite_kb(legacy_db) is False
+    assert _migrate_legacy_cwd_kb_if_needed(target_db) is False
+    assert not target_db.exists()
+    assert legacy_db.exists()
+
+
+def test_sqlite_validation_rejects_kb_entries_without_fingerprint_primary_key(
+    tmp_path,
+):
+    """必需列齐全但缺少 fingerprint 主键时，写入冲突契约不安全，必须拒绝。"""
+    import sqlite3
+
+    candidate = tmp_path / "without-primary-key.sqlite3"
+    conn = sqlite3.connect(str(candidate))
+    conn.execute(
+        """
+        CREATE TABLE kb_entries (
+            fingerprint TEXT,
+            analysis TEXT,
+            fix_suggestion TEXT,
+            source TEXT,
+            created_at REAL,
+            updated_at REAL,
+            normalized_fingerprint TEXT,
+            type_fingerprint TEXT,
+            verify_count INTEGER DEFAULT 0,
+            case_confidence REAL DEFAULT 0.0
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    assert is_valid_sqlite_kb(candidate) is False
+
+
+def test_is_valid_sqlite_kb_helper(tmp_path):
+    """is_valid_sqlite_kb 校验辅助函数的单元测试边界。"""
+    import sqlite3
+
+    # 不存在
+    assert is_valid_sqlite_kb(tmp_path / "nonexistent.sqlite3") is False
+
+    # 空文件
+    empty_file = tmp_path / "empty.sqlite3"
+    empty_file.write_bytes(b"")
+    assert is_valid_sqlite_kb(empty_file) is False
+
+    # 小于 100 字节
+    tiny_file = tmp_path / "tiny.sqlite3"
+    tiny_file.write_bytes(b"SQLite format 3\x00short")
+    assert is_valid_sqlite_kb(tiny_file) is False
+
+    # 非 SQLite 魔数
+    fake_header = tmp_path / "fake_header.sqlite3"
+    fake_header.write_bytes(b"A" * 200)
+    assert is_valid_sqlite_kb(fake_header) is False
+
+    # 合法 SQLite 但无 kb_entries 表
+    unrelated_db = tmp_path / "unrelated.sqlite3"
+    conn = sqlite3.connect(str(unrelated_db))
+    conn.execute("CREATE TABLE dummy (x TEXT)")
+    conn.commit()
+    conn.close()
+    assert is_valid_sqlite_kb(unrelated_db) is False
+
+    # 合法 SQLite 且含 kb_entries 表
+    valid_db = tmp_path / "valid.sqlite3"
+    SQLiteKnowledgeBaseStore(db_path=str(valid_db))
+    assert is_valid_sqlite_kb(valid_db) is True

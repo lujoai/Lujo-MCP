@@ -3,7 +3,7 @@
 **适用版本 / Applicable Version**: v0.9.4（已发布稳定版）/ v0.9.5（代码库候选）
 **最后更新 / Last Updated**: 2026-09-24
 
-> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选已进入 main（commit `e39aeb7`），`v0.9.5` 仍待发布。默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写穿本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`）。
+> **发布状态**：当前 npm 线上最新已发布稳定版本为 `v0.9.4`；虚拟帧扫描守卫核心修复已合入 main 分支（commit `390849f` / `2dc9c1c`），相关候选已进入 main（commit `e39aeb7`），`v0.9.5` 仍待发布。默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）；KB 经验默认写入用户数据目录下的本地 SQLite「笔记本」（`KB_PERSIST_ENABLED=true`，可用 `KB_PERSIST_PATH` 覆盖）。
 
 ---
 
@@ -75,24 +75,13 @@ OSError: [Errno 98] Address already in use
 error: [WinError 10048] 通常每个套接字地址(协议/网络地址/端口)只允许使用一次
 ```
 
-**原因 / Cause**: 端口 8000 已被其他进程占用。
+**原因 / Cause**: Lujo HTTP 采集端口（默认 8000 或显式指定的端口）已被其他进程占用。
 
 **解决方案 / Solution**:
-```bash
-# 查找占用进程
-# Linux/macOS:
-ss -tlnp | grep 8000
-# Windows PowerShell:
-netstat -ano | findstr :8000
 
-# 方案 A: 终止占用进程
-kill -9 <PID>    # Linux/macOS
-# Stop-Process -Id <PID>  # Windows
-
-# 方案 B: 更换端口
-# .env 中修改:
-PORT=8001
-```
+- npm 统一模式使用默认端口且 8000 被占用时，MCP stdio 会继续启动，但 HTTP 服务不会启动，因此 Browser SDK 无法向该实例上报。需要浏览器采集时，在 MCP `args` 中添加 `--http-port 8001` 等空闲端口，并把 SDK `endpoint` 改为对应地址。
+- 若显式指定的端口冲突，先确认占用者；不要盲目终止其他进程。可以改用另一空闲端口，或仅在确认该进程可停止后再释放原端口。
+- 仅使用 MCP 工具、不需要浏览器采集时，可显式传入 `--no-http`。
 
 **验证 / Verify**: 服务启动成功，`curl http://localhost:<PORT>/health` 返回 200
 
@@ -974,7 +963,7 @@ pytest tests/ --timeout=120
 ### 最终 STORAGE_BACKEND 语义
 
 - 唯一合法值为 **`memory`**（默认）：运行现场（traces/errors/sessions/specs）存于进程内存，重启即清；
-- KB 调试经验由**本地 SQLite「笔记本」**持久化（`KB_PERSIST_ENABLED=true` 默认开启，路径 `KB_PERSIST_PATH`，默认工作目录 `lujo-kb.sqlite3`），进程重启自动回灌——这是**唯一**的 KB 持久化路径；
+- KB 调试经验由**本地 SQLite「笔记本」**持久化（`KB_PERSIST_ENABLED=true` 默认开启，路径 `KB_PERSIST_PATH`，默认位于当前用户数据目录），进程重启自动回灌——这是**唯一**的 KB 持久化路径；
 - 精确值 `postgresql` 会被**启动即拒绝**（`StorageBackendRemovedError`，`RuntimeError` 子类）：stdio/统一模式进程非零退出（stdout 保持纯 MCP 协议、错误只落 stderr），HTTP 模式 lifespan 启动失败；**不会静默回退 memory**；
 - 大小写变体（如 `PostgreSQL`）与拼写错误（如 `postgrsql`）仍走通用 `ValueError` 非法配置，消息含 case-sensitive 提示与移除说明；
 - 旧部署 `.env` 遗留的 `PG_*` / `POSTGRES_PASSWORD` / `DATABASE_URL` 键**不会重新启用 PostgreSQL**，也**不会让配置构造阶段崩溃**——它们会被直接忽略（启动日志仅打印忽略的键名），可安全删除。
@@ -1000,7 +989,7 @@ pytest tests/ --timeout=120
 - **现象**：宿主 IDE 的 MCP 面板里 Lujo 显示「已连接 / 工具可用」，但让 AI 查页面报错时返回 `found=false` 或空结果。
 - **原因**：Lujo 有两条独立链路——①宿主智能体 → MCP → Lujo（工具调用）；②被调试网页 → Browser SDK → Lujo HTTP `/ingest` → memory runtime（现场采集）。MCP 连接只证明第①条链路可用；**没有第②条链路时，Lujo 不会自动知道页面里发生了什么**。
 - **解决方案**：
-  1. 确认 Lujo HTTP 采集端点在监听（npm 统一模式默认 `http://127.0.0.1:8000`；纯 stdio `--no-http` 模式不接收浏览器上报）。
+  1. 确认 Lujo HTTP 采集端点在监听（npm 统一模式默认 `http://127.0.0.1:8000`；若默认端口冲突，stdio 仍可用但 HTTP 采集不会启动；纯 stdio `--no-http` 模式也不接收浏览器上报）。
   2. 确认页面已加载 Browser SDK 且 `AiDebug.init({ endpoint: ... })` 的 endpoint 指向**当前项目对应的 Lujo 实例和端口**（多项目并行时各用不同 `--http-port`，见 README「端口即隔离」）。
   3. 按 C-4/F-4 排查内存与 CORS 后，在页面里复现问题，再回宿主会话查询。
 - **验证方法**：浏览器 DevTools Network 面板能看到发往 endpoint 的 `/ingest/batch` 请求且返回 200；随后 `diagnose_issue({})` 能返回现场。
@@ -1078,7 +1067,7 @@ DEBUG=true    # 仅开发环境！
 | 错误码/现象 | 分类 | 条目 | 快速解决 |
 |---|---|---|---|
 | `Refusing to start` | A 启动 | A-1 | 设置 API_KEY |
-| `Address already in use` | A 启动 | A-2 | 换端口或杀进程 |
+| `Address already in use` | A 启动 | A-2 | 确认占用者后更换 Lujo 端口 |
 | `ModuleNotFoundError` | A 启动 | A-3 | `pip install -r requirements.txt` |
 | `Invalid STORAGE_BACKEND` | A 启动 | A-4 | 修正拼写 |
 | `.env` 警告 | B 配置 | B-2 | 可忽略 |

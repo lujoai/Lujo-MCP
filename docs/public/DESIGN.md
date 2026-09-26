@@ -2644,7 +2644,7 @@ KnowledgeBaseStore.upsert()          ← 进程内主存（毫秒级命中）
     │  └── fingerprint（错误指纹，主键去重）
     │
     ▼ 同步写穿
-kb_entries（本地 SQLite 笔记本）       ← 持久层（跨重启，工作目录 lujo-kb.sqlite3）
+kb_entries（本地 SQLite 笔记本）       ← 持久层（跨重启，用户数据目录；KB_PERSIST_PATH 可覆盖）
 ```
 
 ### 23.2 三级指纹检索机制

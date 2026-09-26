@@ -5,14 +5,19 @@
 
 ---
 
-## [0.9.5] - 2026-09-24
+## [Unreleased]
 
-> 主题「虚拟帧扫描守卫」：修复浏览器上报的虚拟堆栈帧（`eval at evaluate (`、`<anonymous>`、页面 URL 等）被当作本地路径进入项目根查找，进而对用户主目录等超大目录发起全量扫描、把 `diagnose_issue` 顶满工具守护超时的问题。**无破坏性行为变更**：公开工具面、REST 契约、schema 与默认配置均不变。
+> **目标候选版本：v0.9.5（开发中，尚未发布）**。主题「诊断安全与本地开箱体验」：修复浏览器上报的虚拟堆栈帧（`eval at evaluate (`、`<anonymous>`、页面 URL 等）被当作本地路径进入项目根查找，进而对用户主目录等超大目录发起全量扫描、把 `diagnose_issue` 顶满工具守护超时的问题；同时将 KB SQLite 默认位置收敛到用户数据目录，并在默认 HTTP 端口冲突时保留 MCP stdio 可用。
 
 ### Fixed
 
 - **虚拟/非本地帧不再进入规范根查找与目录遍历**：`get_related_specs` 未显式传入 `project_root` 时，先经 `_is_scannable_source_path` 过滤——空路径、`<...>` 伪帧、含 URL scheme（`://`）的页面地址，以及 UNC / 设备命名空间路径（`\\`、`//`、`\/`、`/\` 前缀，含 `\\.\` 与 `\\?\`）在存在性检查之前即被拒绝、不产生任何文件系统访问；普通本地路径仍会调用一次 `os.path.isfile`，不存在时返回空结果，且不继续项目根查找与目录遍历（不触达 `resolve` / `os.walk`）。显式传入 `project_root` 的调用方行为不变。
   - **已知限制（不在本 patch 范围）**：用户主目录内**真实存在**的文件帧仍可能把主目录识别为项目根（`_find_project_root` 的 home 边界语义），待后续独立变更治理。
+
+### Changed
+
+- **KB SQLite 默认位置固定到用户数据目录**：Windows 使用 `%LOCALAPPDATA%\lujo-mcp\lujo-kb.sqlite3`，macOS 使用 `~/Library/Application Support/lujo-mcp/lujo-kb.sqlite3`，Linux 使用 `$XDG_DATA_HOME/lujo-mcp/lujo-kb.sqlite3`（未设置时回退到 `~/.local/share/lujo-mcp/lujo-kb.sqlite3`）；显式 `KB_PERSIST_PATH` 仍优先。未显式指定路径且当前启动工作目录存在有效旧库时，以 SQLite backup API 迁移一致性快照到新位置并保留原文件，不搜索其他目录。
+- **默认 HTTP 端口冲突时保留 MCP stdio**：npm 统一模式在默认端口被占用时记录警告并以 stdio-only 继续启动；HTTP 与 Browser SDK 采集不可用。显式指定的 `--http-port` 冲突仍快速失败。Lujo 不随机挑端口，因为 Browser SDK 必须配置对应 endpoint。
 
 ## [0.9.4] - 2026-09-23
 

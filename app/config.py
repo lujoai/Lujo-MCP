@@ -351,8 +351,9 @@ class Settings(BaseSettings):
     # 关闭时退回纯内存行为（与 v0.7.x 完全一致）。PG 持久化已在 Step 3 移除，
     # 本地 SQLite 笔记本是唯一的 KB 持久化路径。
     kb_persist_enabled: bool = True
-    # SQLite 单文件路径：相对路径解析到当前工作目录（单用户本地自用，工作目录即数据目录）
-    kb_persist_path: str = "lujo-kb.sqlite3"
+    # SQLite 单文件路径：默认空字符串表示未显式指定，使用跨平台默认用户数据目录；
+    # 若在 .env 或环境变量中显式配置非空值，则优先使用用户指定路径。
+    kb_persist_path: str = ""
 
     # ── Agent Verify Loop（v0.4.0 M4）──
     # 迭代修复模式开关：开启后 Coordinator 按 DAG 迭代修复（修复→审查→验证→重试，最多 N 轮）

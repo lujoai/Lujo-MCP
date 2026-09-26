@@ -61,7 +61,7 @@ python --version
 
 ### 1.3 端口可用性
 
-- [ ] **[必选]** 服务端口 8000 未被占用（或已修改为其他可用端口）
+- [ ] **[需要浏览器采集时]** Lujo HTTP 端口可用；默认 8000 冲突时，为 Lujo 配置独立的 `--http-port` 并将 Browser SDK endpoint 指向该端口。只使用 MCP stdio 工具时可跳过此项。
 
 ```bash
 # Linux/macOS
@@ -69,10 +69,9 @@ ss -tlnp | grep 8000
 # Windows PowerShell
 netstat -ano | findstr :8000
 
-# 判定标准 / Pass Criteria: 无输出表示端口可用
-# 异常处理 / Contingency: 
-#   方案 A: 终止占用端口的进程
-#   方案 B: 修改 .env 中 PORT=其他端口
+# 判定标准 / Pass Criteria: 无输出表示端口可用；有输出时确认占用者并为 Lujo 指定空闲端口
+# npm 统一模式默认端口冲突时会降级到 stdio-only，MCP 工具仍可用但浏览器采集不可用
+# 不要盲目终止占用端口的进程
 ```
 
 ### 1.4 磁盘空间

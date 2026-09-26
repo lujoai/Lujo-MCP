@@ -338,15 +338,38 @@ def _http_port_conflict(host: str, port: int) -> str | None:
     return None
 
 
-async def _run_unified_transport(host: str, port: int) -> None:
+async def _run_unified_transport(
+    host: str,
+    port: int,
+    *,
+    is_default_port: bool | None = None,
+) -> None:
     """在一个进程内并行运行 stdio MCP 与 FastAPI HTTP。
 
     两个 transport 共享同一套工具注册表和内存存储，因此浏览器 SDK 通过
     ``/ingest`` 写入的数据可以立即被 stdio MCP 客户端读取。任一 transport
     结束都会有序停止另一个，避免 stdio EOF 后留下孤儿 HTTP 进程。
+
+    端口冲突处理策略（解耦）：
+    - 默认端口（未显式通过 --http-port 指定）：绝不杀死进程，降级为单 transport
+      模式，跳过 HTTP 服务并正常启动 stdio MCP，在 stderr/logger 打印引导警告；
+    - 显式指定端口（通过 --http-port 指定）：维持报错退出（SystemExit），提示冲突。
     """
     conflict = _http_port_conflict(host, port)
     if conflict:
+        is_default = (port == settings.port) if is_default_port is None else is_default_port
+        if is_default:
+            _register_signal_handlers()
+            warning_msg = (
+                f"[lujo-mcp] HTTP 端口被占用: {conflict}\n"
+                "HTTP 采集服务未启动（Browser SDK 无法上报到此端口），但 stdio MCP 服务已正常启动。\n"
+                "若需使用浏览器现场采集，可在 MCP 配置中添加 '--http-port <port>' 指定独立端口；"
+                "若不需要 HTTP 采集服务，可传入 '--no-http'。"
+            )
+            logger.warning("%s", warning_msg)
+            await _run_stdio_transport()
+            return
+
         # 显式失败而不是带着冲突继续。占用该端口的另一实例会收到浏览器 SDK 发往
         # 该地址的全部 /ingest 上报，本实例的存储则一条都收不到——宿主在当前会话
         # 里查到的永远是空现场，而这正是最难排查的一类问题。
@@ -679,13 +702,16 @@ async def main(argv: list[str] | None = None):
             # app.main 的安全校验读取同一个 settings 对象。统一模式默认只绑
             # 回环地址，即使用户的 .env 没写 HOST，也不会触发 0.0.0.0 无鉴权拒绝。
             http_host = options.http_host or "127.0.0.1"
+            is_default_port = options.http_port is None
             http_port = options.http_port if options.http_port is not None else settings.port
             old_host, old_port = settings.host, settings.port
             settings.host, settings.port = http_host, http_port
             old_stdio_log_mode = os.environ.get("LUJO_MCP_STDIO_MODE")
             os.environ["LUJO_MCP_STDIO_MODE"] = "1"
             try:
-                await _run_unified_transport(http_host, http_port)
+                await _run_unified_transport(
+                    http_host, http_port, is_default_port=is_default_port
+                )
             finally:
                 if old_stdio_log_mode is None:
                     os.environ.pop("LUJO_MCP_STDIO_MODE", None)
