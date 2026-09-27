@@ -1000,7 +1000,7 @@ pytest tests/ --timeout=120
 - **现象**：`diagnose_issue({"query": "登录按钮"})` 返回 `found=false`，而 `diagnose_issue({})` 或 `list_recent_traces` 能看到错误记录。
 - **原因**：`query` 是对近期错误 **`type` / `message` 字段的关键词过滤**，不是自然语言全字段检索，不保证匹配 selector、trace 元数据或所有上下文字段；错误超出 `since_minutes`（默认 30 分钟）时间窗时也不会命中。**query 未命中不等于 Lujo 没有现场**。
 - **解决方案**（推荐回退顺序）：
-  1. `diagnose_issue({})` —— 先读最近一次错误；
+  1. `diagnose_issue({})` —— 枚举时间窗内故障现场（多个故障时返回候选列表，用候选 `request_id` 再次调用精确选中）；
   2. `list_recent_traces` —— 列出近期全部错误摘要；
   3. 按返回的 `trace_id` / `request_id` 调 `context` / `trace` / `stacktrace` / `get_network_trace` 深挖。
 - **验证方法**：按上述顺序第 1 步即能取回现场；若需要关键词检索，改用与错误 type/message 实际文案一致的关键词（如异常类型名、接口路径片段）。

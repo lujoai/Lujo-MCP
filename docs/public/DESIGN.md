@@ -191,7 +191,7 @@ flowchart TB
 | `trace` | 按 request_id 取原始追踪日志 | `trace_api.py` |
 | `list_recent_traces` | 近期错误摘要列表（免 ID） | `trace_api.py`（v0.7.3） |
 | `search_logs` | 按关键词搜索近期错误 | `trace_api.py`（v0.7.3） |
-| `diagnose_issue` | 统一诊断入口（免 ID 自动定位最近错误+完整上下文） | `diagnose_api.py`（v0.7.3） |
+| `diagnose_issue` | 统一诊断入口（免 ID 定位时间窗内故障现场；多故障返回候选列表，v0.9.9） | `diagnose_api.py`（v0.7.3） |
 | `ingest_specs` | OpenAPI 一键生成断言规范并入库 | `spec_ingest_api.py`（v0.7.5） |
 | `stacktrace` | 最近/指定异常堆栈（文件/行/函数） | `stacktrace_api.py` |
 | `ingest_network` / `get_network_trace` | 网络请求采集 | `network_api.py` |

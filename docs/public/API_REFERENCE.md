@@ -212,7 +212,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 | 工具名 | 角色 | 说明 |
 |--------|------|------|
-| `diagnose_issue` | viewer | **统一诊断入口（优先调用）**：无需 request_id 自动定位最近错误并返回完整调试上下文；支持 query 关键词 / request_id 精确查询 |
+| `diagnose_issue` | viewer | **统一诊断入口（优先调用）**：无需 request_id 自动定位时间窗内的故障现场，多个不同故障时返回候选列表（用候选 `request_id` 精确选择）；支持 query 关键词 / request_id 精确查询（自动解析 caller trace ID 与网络记录 ID 归属） |
 | `list_recent_traces` | viewer | 列出近期错误摘要（trace_id/类型/消息/时间/top_frame） |
 | `search_logs` | viewer | 按关键词搜索近期错误（类型/消息匹配，含发生次数） |
 | `debug` | developer | 执行完整调试流程，返回结构化调试上下文 |
@@ -231,7 +231,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 | 工具 | 入参（必填标 *） | 返回要点 |
 |------|-----------------|----------|
-| `diagnose_issue` | 无必填；`request_id`(string)/`query`(string)/`since_minutes`(int=30)/`session_id`(string) 可选 | `found`, `trace_id`, `summary`, `debug_context`；无数据时 `found=false` + `setup_hint` + `next_step` |
+| `diagnose_issue` | 无必填；`request_id`(string)/`query`(string)/`since_minutes`(int=30，`0`=不限时间)/`session_id`(string) 可选 | `found`, `trace_id`, `summary`, `debug_context`；多个不同故障时 `ambiguity_detected` + `candidates[]`（含 `candidate_set_complete`/`total_candidates`/`truncated`）；桶级结果带 `granularity: "bucket"`；无数据时 `found=false` + `setup_hint` + `next_step` |
 | `list_recent_traces` | `limit`(int=10), `session_id`(string) 可选 | `count`, `traces[]`（含 trace_id/type/message/top_frame） |
 | `search_logs` | `keyword`*(string), `since_minutes`(int=30), `session_id`(string) 可选 | `count`, `results[]` |
 | `debug` | `payload`*(object), `metadata`(object) | `request_id`, `result`, `trace`, `context` |
@@ -248,13 +248,14 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 #### `diagnose_issue` 参数语义与推荐回退顺序
 
-- **`diagnose_issue({})`**：不传任何参数 = 读取**最近一次错误**（跨页面/标签的最新一条，可再用 `session_id` 过滤）。
-- **`diagnose_issue({"query": "..."})`**：按关键词过滤近期错误，匹配范围是错误的 **`type` / `message` 字段**。query 是关键词过滤，**不是**自然语言全字段检索，也不保证匹配 selector、trace 元数据（如 trace_kind、extra）或其他上下文字段。
+- **`diagnose_issue({})`**：不传任何参数 = 枚举**时间窗内**（`since_minutes` 默认 30 分钟，`0` = 不限）的故障现场：单一故障直接返回完整调试上下文（同类错误重复出现时返回最新一次）；存在**多个不同故障**时返回歧义候选列表（`ambiguity_detected`，最多展示 3 条、按最近发生倒序），用候选中的 `request_id` 再次调用即可精确选中目标现场。成功请求（2xx/3xx）与健康遥测不会制造伪歧义。
+- **`diagnose_issue({"query": "..."})`**：按关键词过滤近期错误，匹配范围是错误的 **`type` / `message` 字段**。query 是关键词过滤，**不是**自然语言全字段检索，也不保证匹配 selector、trace 元数据（如 trace_kind、extra）或其他上下文字段。多命中时同样返回歧义候选。
+- **`diagnose_issue({"request_id": "..."})`**：支持 ID 归属自动解析——`error_id` 精确直查；浏览器 SDK 的 caller trace ID 唯一关联时自动解析回对应错误现场，一对多关联时返回候选；网络记录 `record_id` 定位到归属存储桶（响应以 `granularity: "bucket"` 明示整桶粒度，不代表精确定位桶内单条事件）。候选中含不可信内容的外部上报标识以 `b64.` 前缀的可逆引用呈现，**原样回传该引用即可确定性还原原现场**。
 - **query 未命中不等于 Lujo 没有现场**——可能只是关键词没出现在 type/message 里，或错误超出 `since_minutes`（默认 30 分钟）时间窗。
 
 推荐查询回退顺序（从宽到深）：
 
-1. `diagnose_issue({})` —— 先拿最近错误；
+1. `diagnose_issue({})` —— 先拿时间窗内故障现场（多个故障时拿到候选列表，选中 `request_id` 后再次调用）；
 2. `list_recent_traces` —— 无结果时列出近期全部错误摘要；
 3. 依返回的 `trace_id` / `request_id` 调用 `context`、`trace`、`stacktrace`、`get_network_trace` 深挖完整现场。
 
