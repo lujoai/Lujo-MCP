@@ -32,4 +32,4 @@ pybreaker==1.4.1
 psutil==6.0.0
 
 # 可选：UI 验证（pip install playwright 后再运行 playwright install）
-# playwright>=1.40.0
+playwright>=1.40.0
