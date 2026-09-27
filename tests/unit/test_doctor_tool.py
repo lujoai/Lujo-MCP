@@ -2,7 +2,7 @@
 
 覆盖：
 1. doctor 返回结构：checks[]（name/ok/detail）+ summary（ok_count/fail_count）
-2. 七项自检齐全，工具本身永不抛异常
+2. 八项自检齐全，工具本身永不抛异常
 3. 无 playwright 环境下 playwright 库/chromium 二进制两项为 ok:false
    （monkeypatch sys.modules 模拟，与本机是否真实安装 playwright 无关）
 4. doctor 注册面：常驻可见（无 availability 过滤）、category=diagnostic、角色映射齐全
@@ -34,6 +34,7 @@ EXPECTED_CHECK_NAMES = {
     "heavy_worker_entry",
     "http_listen",
     "ui_url_policy",
+    "git_roots",
     "kb_persistence",
     "vector_embedding",
 }
@@ -52,7 +53,7 @@ def no_playwright(monkeypatch):
         monkeypatch.setitem(sys.modules, mod, None)
 
 
-# ── 1/2/3. doctor_handler 结构与七项自检 ──
+# ── 1/2/3. doctor_handler 结构与八项自检 ──
 
 
 class TestDoctorHandler:
@@ -60,8 +61,30 @@ class TestDoctorHandler:
         result = doctor_handler({})
         assert set(result.keys()) == {"checks", "summary"}
         names = [c["name"] for c in result["checks"]]
-        assert len(names) == 7
+        assert len(names) == 8
         assert set(names) == EXPECTED_CHECK_NAMES
+
+    def test_git_roots_check_reports_configured_roots(self, monkeypatch):
+        """git_roots 自检：回显授权根列表与生效数量（P1-D）。"""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "git_path_whitelist", r"C:\path\proj1,C:\path\proj2")
+        result = doctor_handler({})
+        by_name = {c["name"]: c for c in result["checks"]}
+        check = by_name["git_roots"]
+        assert check["ok"] is True
+        assert "2 个" in check["detail"]
+        assert "C:\\path\\proj1" in check["detail"]
+        assert "GIT_PATH_WHITELIST" in check["detail"]
+
+    def test_git_roots_check_reports_default_cwd_when_unset(self, monkeypatch):
+        """未配置 GIT_PATH_WHITELIST：回显默认收敛到进程工作目录。"""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "git_path_whitelist", "")
+        result = doctor_handler({})
+        by_name = {c["name"] for c in result["checks"]}
+        assert "git_roots" in by_name
 
     def test_each_check_has_name_ok_detail(self, no_playwright):
         result = doctor_handler({})
@@ -75,7 +98,7 @@ class TestDoctorHandler:
         ok_count = sum(1 for c in result["checks"] if c["ok"])
         assert result["summary"]["ok_count"] == ok_count
         assert result["summary"]["fail_count"] == len(result["checks"]) - ok_count
-        assert result["summary"]["ok_count"] + result["summary"]["fail_count"] == 7
+        assert result["summary"]["ok_count"] + result["summary"]["fail_count"] == 8
 
     def test_no_playwright_checks_fail_but_tool_does_not_raise(self, no_playwright):
         """无 playwright 环境：库/二进制两项 ok:false，工具整体不抛异常。"""
@@ -156,5 +179,5 @@ class TestDoctorViaMCP:
         resp = asyncio.run(_handle_tools_call(req))
         assert resp.get("error") is None
         payload = json.loads(resp["result"]["content"][0]["text"])
-        assert payload["summary"]["ok_count"] + payload["summary"]["fail_count"] == 7
+        assert payload["summary"]["ok_count"] + payload["summary"]["fail_count"] == 8
         assert {c["name"] for c in payload["checks"]} == EXPECTED_CHECK_NAMES

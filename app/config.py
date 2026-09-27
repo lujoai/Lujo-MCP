@@ -160,10 +160,13 @@ class Settings(BaseSettings):
     # ── Git 归因（M5）──
     # git 命令超时秒数，超时返回 None，不阻断主流程
     git_timeout: int = 10
-    # 允许执行 git 操作的路径白名单前缀（逗号分隔绝对路径）。
-    # ⚠️ 为空 **不等于**不限制：消费方（runtime/core/git.py 的 _is_allowed）在
-    # 空值时收敛到**进程工作目录**并拒绝其外的路径（防跨仓库探测历史）。
-    # W9 / P3-SEC-1：原注释写「为空=不限制」，与实际语义相反。
+    # 允许执行 git 归因查询的授权项目根（P1-D，逗号分隔绝对路径，
+    # 如 C:\path\proj1,C:\path\proj2）。语义为「授权项目根目录」：查询路径先
+    # 规范化（resolve 解析 ../ 与符号链接），再按 os.path.normcase 归一
+    # （Windows 大小写不敏感）判定是否位于某个授权根之下；拒绝时结构化记录
+    # 原因（见 runtime/core/git.py 的 check_path_allowed）。
+    # ⚠️ 为空 **不等于**不限制：未配置时收敛到**进程工作目录**并拒绝其外的
+    # 路径（防跨仓库探测历史）。W9 / P3-SEC-1 / P1-D。
     git_path_whitelist: str = ""
 
     # ── inbound 网络采集（M6）──

@@ -43,15 +43,17 @@ RECENT_DIFF_DEF = {
 
 
 # git 工具 found:false 的统一引导（对齐 diagnose_issue 的无数据契约）。
-# 底层 core/git 对「白名单拒绝 / 文件不存在 / 非 git 仓库或命令失败超时 /
+# 底层 core/git 对「授权根拒绝 / 文件不存在 / 非 git 仓库或命令失败超时 /
 # 行未提交」统一返回 None，工具层无法区分具体原因，因此 next_step 按可核查
-# 顺序列出全部条件（语义见 app/runtime/core/git.py 的 _is_allowed）。
+# 顺序列出全部条件（语义见 app/runtime/core/git.py 的 check_path_allowed，
+# P1-D：GIT_PATH_WHITELIST 为授权项目根语义）。
 _GIT_EMPTY_NEXT_STEP = (
     "未查到 git 归因结果。按顺序核查：① 本工具仅允许查询 GIT_PATH_WHITELIST "
-    "白名单前缀内的文件（该配置为逗号分隔绝对路径；未配置时默认收敛为本服务"
-    "进程工作目录，目录外路径一律拒绝），跨项目调试请把目标文件所在目录加入 "
-    "GIT_PATH_WHITELIST 后重试；② 确认文件在运行本服务的机器上真实存在且位于"
-    "其 git 仓库内。"
+    "授权项目根内的文件（该配置为逗号分隔的授权项目根绝对路径，如 "
+    "GIT_PATH_WHITELIST=C:\\path\\proj1,C:\\path\\proj2；未配置时默认收敛为本"
+    "服务进程工作目录，授权根之外路径一律拒绝），跨项目调试请把目标项目的根"
+    "目录加入 GIT_PATH_WHITELIST 后重试；② 确认文件在运行本服务的机器上真实"
+    "存在且位于其 git 仓库内。"
 )
 _BLAME_EMPTY_NEXT_STEP = _GIT_EMPTY_NEXT_STEP + (
     "③ 该行内容可能从未被 commit（未跟踪新行 blame 无归属）。"

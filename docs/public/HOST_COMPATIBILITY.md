@@ -29,6 +29,21 @@ Lujo 通过两个通道接收启动参数：MCP 配置的 `args`（CLI 参数，
 - 环境变量配置的端口被占用时，Lujo 沿用默认端口冲突语义：stdio MCP 继续可用、
   HTTP 采集降级关闭并在 stderr 提示（不会让整个 MCP 挂掉）。
 
+## 跨项目调试：授权目标项目根（GIT_PATH_WHITELIST）
+
+git 归因工具（get_recent_diff / get_blame_for_frame）只查询「授权项目根」内的
+文件；被调试项目通常不是 Lujo 自己的仓库，需在启动配置的 `env` 里显式授权
+（逗号分隔的绝对路径）：
+
+```json
+"env": { "GIT_PATH_WHITELIST": "C:\\path\\proj1,C:\\path\\proj2" }
+```
+
+- 未配置时默认收敛到 Lujo 进程工作目录，根外路径一律拒绝（安全默认）。
+- 路径判定前会规范化（解析 `..` 与符号链接），Windows 下大小写不敏感。
+- 只授权你信任的项目根：授权根内的 diff/blame 内容会进入宿主模型上下文。
+- 配置是否生效可用 `doctor` 工具的 `git_roots` 自检项回显核对。
+
 ## 其他宿主（不受影响）
 
 Claude Desktop、Cursor 等宿主按 MCP 标准透传 `args`，`"args": ["--http-port",

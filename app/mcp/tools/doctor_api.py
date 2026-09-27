@@ -21,7 +21,8 @@ DOCTOR_DEF = {
         "自检当前 Lujo 进程的运行能力与配置，返回逐项 ok/detail 与汇总："
         "Playwright 浏览器采集库、chromium 二进制、heavy worker 入口、"
         "HTTP 监听地址端口、UI URL 访问策略（allowlist/allow_private/回环默认放行）、"
-        "KB 持久化路径与开关、vector/embedding 能力。"
+        "git 授权项目根（GIT_PATH_WHITELIST 回显）、KB 持久化路径与开关、"
+        "vector/embedding 能力。"
         "verify_ui / auto_test 返回 CAPABILITY_MISSING 时，可先用本工具定位缺失项。"
         "本工具只读探测，不启动浏览器、不创建子进程。"
     ),
@@ -119,8 +120,31 @@ def _check_ui_url_policy() -> tuple[bool, str]:
     return True, detail
 
 
+def _check_git_roots() -> tuple[bool, str]:
+    """⑥ git 授权项目根回显（P1-D：GIT_PATH_WHITELIST 语义 = 授权项目根）。
+
+    只读回显当前生效根列表与生效数量（配置值或缺省收敛的进程工作目录），
+    供宿主跨项目调试前自查 git 归因工具（get_recent_diff / get_blame_for_frame）
+    能否覆盖目标项目根；恒 ok:true（配置回显项，不做正误裁决）。"""
+    from app.config import settings
+    from app.runtime.core.git import get_authorized_roots
+
+    raw = (settings.git_path_whitelist or "").strip()
+    configured = bool(raw) and any(p.strip() for p in raw.split(","))
+    roots = get_authorized_roots()
+    source = (
+        "GIT_PATH_WHITELIST 已配置" if configured
+        else "未配置 GIT_PATH_WHITELIST，默认收敛到进程工作目录"
+    )
+    return True, (
+        f"git 授权项目根共 {len(roots)} 个（{source}）: {', '.join(roots)}；"
+        "跨项目调试请把目标项目根加入 GIT_PATH_WHITELIST"
+        "（如 GIT_PATH_WHITELIST=C:\\path\\proj1,C:\\path\\proj2）"
+    )
+
+
 def _check_kb_persistence() -> tuple[bool, str]:
-    """⑥ KB 持久化路径与开关状态。"""
+    """⑦ KB 持久化路径与开关状态。"""
     from app.config import settings
 
     if not settings.kb_persist_enabled:
@@ -137,7 +161,7 @@ def _check_kb_persistence() -> tuple[bool, str]:
 
 
 def _check_vector_embedding() -> tuple[bool, str]:
-    """⑦ vector/embedding 能力（openai_api_key 有无）。"""
+    """⑧ vector/embedding 能力（openai_api_key 有无）。"""
     from app.config import settings
 
     if (settings.openai_api_key or "").strip():
@@ -155,6 +179,7 @@ _CHECKS = (
     ("heavy_worker_entry", _check_heavy_worker_entry),
     ("http_listen", _check_http_listen),
     ("ui_url_policy", _check_ui_url_policy),
+    ("git_roots", _check_git_roots),
     ("kb_persistence", _check_kb_persistence),
     ("vector_embedding", _check_vector_embedding),
 )
