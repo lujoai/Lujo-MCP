@@ -340,10 +340,20 @@ _OPAQUE_ID_PREFIX = "b64."
 
 
 def _display_id(request_id) -> str:
-    """原始桶 key → 响应呈现形式（安全形态原样；否则 base64url 不透明引用）。"""
+    """原始桶 key → 响应呈现形式（安全形态原样；否则 base64url 不透明引用）。
+
+    呈现命名空间与原始命名空间必须无交叠（编码可注入性）：字面上已是
+    合法引用形态（b64. + 可解码 payload）的安全 key 也要再编码一层，
+    否则它与某个不安全 key 的编码结果同串——候选 ID 冲突，且回查会
+    互相劫持（"a b" 与 "b64.YSBi" 碰撞回归）。
+    """
     if not request_id:
         return request_id
-    if isinstance(request_id, str) and _SAFE_ID_RE.fullmatch(request_id):
+    if (
+        isinstance(request_id, str)
+        and _SAFE_ID_RE.fullmatch(request_id)
+        and _decode_opaque_id(request_id) is None
+    ):
         return request_id
     encoded = base64.urlsafe_b64encode(request_id.encode("utf-8")).decode("ascii")
     return _OPAQUE_ID_PREFIX + encoded.rstrip("=")
@@ -363,15 +373,19 @@ def _decode_opaque_id(display_id) -> str | None:
 
 
 def _expand_request_id(request_id) -> list:
-    """请求 ID 展开为按序尝试的原始键（先精确命中，再解码不透明引用）。
+    """请求 ID 展开为按序尝试的原始键（不透明引用解码优先，原串兜底）。
 
-    精确优先保证即使存在字面上以 b64. 开头的真实桶 key 也不会被误解析。
+    解码优先是候选回查正确性的必要条件：本工具回传的引用必须先解码回
+    原 key——若精确优先，字面上形如引用的真实桶 key（"b64.YSBi"）会在
+    精确匹配中劫持另一个 key（"a b"）的候选路由。解码结果无桶时回退
+    原串精确匹配，字面量引用形态的真实 key 仍可达；解码失败（非法引用）
+    仅按原串处理。非 b64. 前缀的普通 ID（err-/net-/sdk-trace-/uuid 等）
+    只按原串精确匹配，既有调用行为完全不变。
     """
-    expansions = [request_id]
     decoded = _decode_opaque_id(request_id)
     if decoded is not None and decoded != request_id:
-        expansions.append(decoded)
-    return expansions
+        return [decoded, request_id]
+    return [request_id]
 
 
 def _short_summary(parts: list) -> str:

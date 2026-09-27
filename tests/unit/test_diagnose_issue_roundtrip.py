@@ -1054,3 +1054,79 @@ async def test_t3_invalid_opaque_reference_falls_to_not_found():
     assert result["found"] is False
     assert result["setup_hint"]
     assert result["next_step"]
+
+
+# ── U. 编码引用与字面量桶 key 的碰撞（facaff5 缺陷回归）─────────────────────
+# raw "a b"（不安全形态）编码为 "b64.YSBi"；而 "b64.YSBi" 本身是安全形态
+# 的真实桶 key，呈现时原样通过——两个不同原始 key 映射到同一候选 ID，
+# 且精确优先回查会把 "a b" 的候选解析到字面量桶，破坏唯一寻址。
+
+
+@pytest.mark.asyncio
+async def test_u1_opaque_reference_never_collides_with_literal_bucket_key():
+    from app.mcp.tools.diagnose_api import _display_id
+
+    raw_a = "a b"
+    raw_b = "b64.YSBi"  # 字面上等于 encode("a b") 的引用形态
+    # 前置：真实重叠场景成立（"a b" 的引用呈现就是 raw_b 字面量）
+    assert _display_id(raw_a) == "b64.YSBi"
+
+    save_network_record(
+        {"method": "POST", "url": "http://x/api/unsafe-key", "status_code": 500},
+        trace_id=raw_a,
+    )
+    save_network_record(
+        {"method": "GET", "url": "http://x/api/literal-key", "status_code": 502},
+        trace_id=raw_b,
+    )
+
+    result = await _call_tool("diagnose_issue", {})
+
+    assert result["ambiguity_detected"] is True
+    assert result["total_candidates"] == 2
+    ids = [c["request_id"] for c in result["candidates"]]
+    assert len(set(ids)) == 2, "两个不同桶 key 的候选 ID 必须互异"
+    assert "b64.YSBi" in ids, "不安全 key 的引用呈现保持稳定"
+    b_id = next(i for i in ids if i != "b64.YSBi")
+    assert b_id != raw_b, "字面量引用形态的安全 key 不得原样作为候选 ID"
+
+    # 候选回查：各自命中自己的桶，不串桶
+    r_a = await _call_tool("diagnose_issue", {"request_id": "b64.YSBi"})
+    assert r_a["found"] is True
+    assert [rec.get("url") for rec in r_a.get("network_records") or []] \
+        == ["http://x/api/unsafe-key"], "引用必须解码回 'a b' 桶，不得命中字面量桶"
+
+    r_b = await _call_tool("diagnose_issue", {"request_id": b_id})
+    assert r_b["found"] is True
+    assert [rec.get("url") for rec in r_b.get("network_records") or []] \
+        == ["http://x/api/literal-key"]
+
+
+def test_u2_display_id_injective_across_namespaces():
+    """呈现命名空间与原始命名空间无交叠：安全但形如引用的 key 再编码一层。"""
+    from app.mcp.tools.diagnose_api import _display_id
+
+    assert _display_id("a b") == "b64.YSBi"
+    assert _display_id("b64.YSBi") != "b64.YSBi"
+    # 普通 SDK / 服务端 ID 原样通过（既有调用兼容）
+    assert _display_id("sdk-trace-normal") == "sdk-trace-normal"
+    assert _display_id("err-0123456789ab") == "err-0123456789ab"
+    assert _display_id("net-0123456789ab") == "net-0123456789ab"
+
+
+@pytest.mark.asyncio
+async def test_u3_literal_reference_form_key_reachable_without_shadow():
+    """仅存在字面量 "b64.YSBi" 桶（"a b" 不存在）：按原 key 查询仍可达。
+
+    解码优先展开下，解码结果 "a b" 无桶 → 回退原串精确匹配命中字面量桶。
+    """
+    save_network_record(
+        {"method": "GET", "url": "http://x/api/only-literal", "status_code": 500},
+        trace_id="b64.YSBi",
+    )
+
+    result = await _call_tool("diagnose_issue", {"request_id": "b64.YSBi"})
+
+    assert result["found"] is True
+    assert [rec.get("url") for rec in result.get("network_records") or []] \
+        == ["http://x/api/only-literal"]
