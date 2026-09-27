@@ -99,9 +99,13 @@ def tool_ingest_error(
 
 
 def ingest_error_handler(arguments: dict) -> dict:
+    from app.mcp.tools.param_contract import require_text
+
+    exc_type = require_text(arguments, "exc_type", example="TypeError")
+    message = require_text(arguments, "message", example="'NoneType' object has no attribute 'user_id'")
     return tool_ingest_error(
-        exc_type=arguments.get("exc_type", "UnknownError"),
-        message=arguments.get("message", ""),
+        exc_type=exc_type,
+        message=message,
         frames=arguments.get("frames", []),
         source=arguments.get("source", "ingest"),
         extra=arguments.get("extra"),

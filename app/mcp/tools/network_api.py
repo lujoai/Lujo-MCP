@@ -6,6 +6,7 @@ MCP 工具：ingest_network / get_network_trace。
 
 复用 trace_repo 存取层，脱敏在存储边界统一执行。
 """
+from app.mcp.protocol.tool_errors import ToolExecutionError
 from app.runtime.collectors.network import parse_network_record
 from app.runtime.core.trace_repo import save_network_record, get_network_records
 
@@ -70,8 +71,17 @@ def tool_get_network_trace(trace_id: str, session_id: str | None = None) -> dict
 
 # ── MCP handler（接收 arguments dict，供 register_tool 使用）──
 def ingest_network_handler(arguments: dict) -> dict:
+    from app.mcp.tools.param_contract import require_text_in_record
+
+    record = arguments.get("record")
+    if not isinstance(record, dict) or not record:
+        raise ToolExecutionError(
+            "record 为必填对象（网络记录字典，含 url/status_code 等字段），收到的是 "
+            f"{record!r}——注意不是把字段平铺在参数顶层"
+        )
+    require_text_in_record(record, "url")
     return tool_ingest_network(
-        record=arguments.get("record", {}),
+        record=record,
         trace_id=arguments.get("trace_id"),
         request_id=arguments.get("request_id"),
         session_id=arguments.get("session_id"),

@@ -52,9 +52,12 @@ def tool_ingest_console(
 
 
 def ingest_console_handler(arguments: dict) -> dict:
+    from app.mcp.tools.param_contract import require_text
+
+    message = require_text(arguments, "message", example="Uncaught TypeError: x is not a function")
     return tool_ingest_console(
         level=arguments.get("level", "info"),
-        message=arguments.get("message", ""),
+        message=message,
         source=arguments.get("source", "browser_sdk"),
         extra=arguments.get("extra"),
         trace_id=arguments.get("trace_id"),

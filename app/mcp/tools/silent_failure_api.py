@@ -218,8 +218,11 @@ def tool_ingest_silent_failure(
 
 
 def silent_failure_handler(arguments: dict) -> dict:
+    from app.mcp.tools.param_contract import require_text
+
+    message = require_text(arguments, "message", example="点击登录按钮后无任何响应")
     return tool_ingest_silent_failure(
-        message=arguments.get("message", ""),
+        message=message,
         frames=arguments.get("frames"),
         ui_events=arguments.get("ui_events"),
         network_records=arguments.get("network_records"),
