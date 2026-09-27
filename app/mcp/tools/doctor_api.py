@@ -65,8 +65,16 @@ def _check_browser_channel() -> tuple[bool, str]:
             "无法启动任何浏览器通道。源码版安装: "
             "pip install playwright && playwright install chromium"
         )
-    from app.runtime.verifier.browser_launcher import resolve_launch_kwargs
+    from app.runtime.verifier.browser_launcher import (
+        reset_launch_cache,
+        resolve_launch_kwargs,
+    )
 
+    # 架构评审（2026-09-27）指出：doctor 运行在长寿命父进程，若用户在服务器
+    # 启动后才安装浏览器，模块级缓存会持续返回陈旧结果。doctor 的职责是
+    # 反映"现在"的状态，因此每次探测前重置缓存（heavy 子进程天然单次调用
+    # 不受影响，长寿命进程必须显式刷新）。
+    reset_launch_cache()
     kwargs = resolve_launch_kwargs()
     if kwargs is None:
         return False, (
