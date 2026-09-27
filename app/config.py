@@ -157,6 +157,14 @@ class Settings(BaseSettings):
     # 内置默认白名单已覆盖常见安全字段，此处可追加自定义白名单。
     redaction_key_allowlist: str = ""
 
+    # ── 证据注入边界防护（P1-F）──
+    # 开启后 diagnose_issue 返回载荷在头部标注 evidence_trust="untrusted" 与
+    # evidence_notice 提示语，并对现场文本块中的闭合序列 </debug_evidence>
+    # 做 HTML 实体转义（与 app/llm/injection_guard.wrap_evidence 同款处理），
+    # 防止不可信页面数据（异常消息/控制台日志等）伪造证据区边界逃逸注入。
+    # 关闭时完全保持旧行为（不转义、不注入头部字段）。
+    evidence_wrap_enabled: bool = True
+
     # ── Git 归因（M5）──
     # git 命令超时秒数，超时返回 None，不阻断主流程
     git_timeout: int = 10

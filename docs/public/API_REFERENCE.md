@@ -17,6 +17,7 @@
   - [2.5 MCP 传输 `/mcp`](#25-mcp-传输-mcp)
   - [2.6 令牌签发 `/auth`](#26-令牌签发-auth)
 - [3. MCP 工具](#3-mcp-工具)
+  - [3.0 变体工具清单（源码版 vs npm 冻结版）](#30-变体工具清单源码版-vs-npm-冻结版)
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
@@ -197,6 +198,15 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 > 类别含义：`agent` = 供 AI Agent 调用的查询/分析/验证类；`sdk` = 供 Browser SDK 上报的数据采集类。
 >
 > **tools/list 口径（v0.7.3）**：`tools/list` 默认只暴露 `agent` 类工具（含下表全部查询/验证工具与三个近期错误查询工具）；`sdk` 类上报工具**不进 tools/list**，但 `tools/call` 按名调用仍然有效（REST/SDK 上报链路不受影响）。工具清单以 `tools/list` 实际返回为准，勿以本文档数目为准。
+
+### 3.0 变体工具清单（源码版 vs npm 冻结版）
+
+| 变体 | 注册 | tools/list 可见 | 说明 |
+|------|------|----------------|------|
+| 源码版（本仓库运行） | 23 | 19 | 含 `verify_ui` / `auto_test` / `doctor`；依赖 Playwright 时完整可用 |
+| npm 冻结版（`@lujoai/lujo-mcp`） | 23 | 19 | P0-B 后浏览器工具（`verify_ui` / `auto_test`）常驻可见；运行环境缺 Playwright 等能力时调用返回 `CAPABILITY_MISSING` 载荷（可用 `doctor` 自检），而不是从 `tools/list` 消失 |
+
+> 两变体注册表同源（同一份 `register_all_tools`），数量一致；4 个 `ingest_*` 工具为 SDK 上报类（`agent_visible=false`），不进上表口径与 `tools/list`。
 
 ### 3.1 查询 / 分析类工具（agent）
 

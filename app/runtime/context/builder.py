@@ -1,6 +1,7 @@
 """调试上下文构建器 —— 安全地解析追踪日志"""
 
 import logging
+import time
 
 from app.config import settings
 from app.runtime.core.errors import compute_fingerprint
@@ -8,6 +9,79 @@ from app.schemas import DebugContext
 from app.runtime.context.fault_localizer import localize, to_payload
 
 logger = logging.getLogger("lujo-mcp.context")
+
+
+# P1-F：各证据维度的采集来源（source_tool）标注表。
+# ingested 类维度经存储边界统一脱敏（redact / redact_nested），其 redacted
+# 标记复用既有脱敏开关 settings.redaction_enabled；构建期直读本地的维度
+# （源码片段 / git / runtime / 规范）不经脱敏边界，一律标 redacted=False。
+_INGESTED_DIM_TOOLS = {
+    "network_trace": "network_ingest",
+    "ui_events": "ui_event_ingest",
+    "console_logs": "console_ingest",
+}
+_LOCAL_DIM_TOOLS = {
+    "code_snippets": "code_locator",
+    "static_analysis": "static_analyzer",
+    "git_blame": "git_blame",
+    "recent_diffs": "git_diff",
+    "related_specs": "spec_index",
+    "spec_diffs": "verify_log",
+    "runtime": "runtime_snapshot",
+}
+
+
+def _dim_collected_at(records: list | None, fallback: float) -> float:
+    """取记录集合中的最大 timestamp 作为采集时间；缺时间戳时回退 fallback。"""
+    if not records:
+        return fallback
+    ts_list = [
+        float(r.get("timestamp"))
+        for r in records
+        if isinstance(r, dict)
+        and isinstance(r.get("timestamp"), (int, float))
+        and not isinstance(r.get("timestamp"), bool)
+    ]
+    return max(ts_list) if ts_list else fallback
+
+
+def build_provenance(result: dict, trace: dict, assembled_at: float) -> dict | None:
+    """P1-F：汇总各证据维度的来源标记 {source_tool, collected_at, redacted}。
+
+    仅收录本次组装中真实存在（非空）的维度；异常堆栈的 collected_at 取
+    trace 的 last_seen（最近一次真实发生时间），带 timestamp 的入库记录
+    （network/UI/console）取记录时间，其余构建期采集维度取组装时刻。
+    纯确定性汇总、无 I/O；异常时返回 None（fail-open，不阻断上下文构建）。
+    """
+    try:
+        provenance: dict = {}
+        # 异常现场：经 ingest 边界落库（存储边界统一脱敏）
+        provenance["exception"] = {
+            "source_tool": "trace_ingest",
+            "collected_at": float(trace.get("last_seen") or assembled_at),
+            "redacted": bool(settings.redaction_enabled),
+        }
+        for dim, tool in _INGESTED_DIM_TOOLS.items():
+            value = result.get(dim)
+            if not value:
+                continue
+            provenance[dim] = {
+                "source_tool": tool,
+                "collected_at": _dim_collected_at(value, assembled_at),
+                "redacted": bool(settings.redaction_enabled),
+            }
+        for dim, tool in _LOCAL_DIM_TOOLS.items():
+            if not result.get(dim):
+                continue
+            provenance[dim] = {
+                "source_tool": tool,
+                "collected_at": assembled_at,
+                "redacted": False,
+            }
+        return provenance or None
+    except Exception:
+        logger.warning("provenance 汇总失败，本次上下文不带来源标记", exc_info=True)
+        return None
 
 
 def build_context(request_id: str, logs: list) -> dict:
@@ -379,6 +453,11 @@ def build_debug_context(
         "fault_localization": fault_localization,
         "resolved_frames": resolved_frames,
     }
+    # P1-F：证据来源标记（provenance）——仅随本次真实组装的维度汇总，
+    # DebugContext extra="allow" 透传，不改变既有字段契约；失败降级不带。
+    provenance = build_provenance(result, trace, time.time())
+    if provenance is not None:
+        result["provenance"] = provenance
     return DebugContext(**result)
 
 

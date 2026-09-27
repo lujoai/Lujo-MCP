@@ -350,6 +350,10 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### 你的数据去了哪里（三层披露）
+
+> **你的数据去了哪里**：① 本机——页面现场由本机 Lujo 服务接收，运行现场只存内存（重启即清）；调试经验笔记本在本机 SQLite 单文件，写入前统一脱敏，全程不出你的电脑。② 宿主 AI——你在 Trae/Cursor 对话时宿主是云端模型，Lujo 返回给宿主的现场内容（堆栈/报错文本/代码片段）会进入该云端服务上下文，这是 MCP 工作原理决定的，请知情使用。③ 可选项——内置 LLM 分析与向量召回默认关闭，只有你主动配置 API Key 时现场文本才会发送到对应服务商；不配 Key，这层完全不存在。
+
 ### 调试经验会丢吗？（本地「笔记本」，无需配置）
 
 不会。分两层：
@@ -495,7 +499,9 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 |---|---|---|
 | **接入与实战** | 📖 [DEMO.md](./docs/public/DEMO.md) | 端到端实战演示（以 React 登录 Bug 为例的完整调试链路与零依赖样例） |
 | | 💻 [SDK_GUIDE.md](./docs/public/SDK_GUIDE.md) | Browser SDK 与 Node SDK 使用手册（运行时边界、上报、脱敏、重试与体积截断限制） |
-| | 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | 18 个 MCP 工具详细入参、返回值、双传输错误码规范与 REST 端点参考 |
+| | 🔌 [API_REFERENCE.md](./docs/public/API_REFERENCE.md) | MCP 工具面（23 注册 / 19 可见）、详细入参、返回值、双传输错误码规范与 REST 端点参考 |
+| | 📌 [host-rules/trae.md](./docs/public/host-rules/trae.md) | Trae 宿主调试工具使用规则（粘贴到项目规则/自定义指令，让宿主 AI 学会自主调用 Lujo） |
+| | 🧪 [BLIND_TEST_PROTOCOL.md](./docs/public/BLIND_TEST_PROTOCOL.md) | 宿主盲测协议：验证宿主 AI 在运行时问题上正确调用 Lujo、在无关任务上零误调 |
 | **系统架构** | 🏗️ [DESIGN.md](./docs/public/DESIGN.md) | 核心系统架构、调试经验知识库（RAG 进化机制）与架构冻结规范（整合原 KNOWLEDGE_BASE 与 ARCHITECTURE_REVIEW） |
 | | 📋 [PRD.md](./docs/public/PRD.md) | 产品功能需求规格与设计边界承诺 |
 | **部署与排障** | 🚦 [PREFLIGHT_CHECKLIST.md](./docs/public/PREFLIGHT_CHECKLIST.md) | 环境依赖、功能启用（Redis/Playwright/OTel）与 Docker 部署前预检综合手册（整合原 ENABLEMENT_GUIDE） |

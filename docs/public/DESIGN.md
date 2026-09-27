@@ -508,6 +508,8 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 ## 9. 安全设计
 
+> **你的数据去了哪里（三层披露）**：① 本机——页面现场由本机 Lujo 服务接收，运行现场只存内存（重启即清）；调试经验笔记本在本机 SQLite 单文件，写入前统一脱敏，全程不出你的电脑。② 宿主 AI——你在 Trae/Cursor 对话时宿主是云端模型，Lujo 返回给宿主的现场内容（堆栈/报错文本/代码片段）会进入该云端服务上下文，这是 MCP 工作原理决定的，请知情使用。③ 可选项——内置 LLM 分析与向量召回默认关闭，只有你主动配置 API Key 时现场文本才会发送到对应服务商；不配 Key，这层完全不存在。
+
 - 传输：HTTPS 由前置代理提供；**CORS 默认收紧为空串**（不下发头），`*` 时强制 `allow_credentials=False`（SEC-12 已修复顺序）。
 - 鉴权：API Key，fail-closed，恒定时间比较，公钥路径免鉴权。**限流 fail-closed**：初始化失败返回 429（SEC-07）。
 - 防 DoS：流式请求体限制（内存恒定 ≤ `max_body_size`）、**chunked body 字节流检查**（流式累计超限 413，M8）、按 IP 限流（Redis ZSET 滑动窗口）。
