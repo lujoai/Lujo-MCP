@@ -8,7 +8,7 @@
 > - **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 > - **核心原则**：**服务端可零配置免环境启动（Trae 一次配好），业务运行现场仍需项目接入 SDK（页面引入脚本并初始化）**。Lujo 无法凭空透视未接入 SDK 的任意项目。
 
-> **当前版本：v0.9.7（可信交付与宿主兼容）**：来自真实项目 dogfooding 与外部评审的全面收口——浏览器采集工具（`auto_test`/`verify_ui`）在**全部发行变体常驻可见**（能力缺失返回 `CAPABILITY_MISSING` + 启用指引），新增 **`doctor` 八项自检工具**；`HTTP_PORT`/`HTTP_HOST` 环境变量成为宿主界一等配置通道（Trae 类宿主会丢 CLI 参数），**默认端口迁至 8710**；git 工具支持跨项目授权根；返回宿主的现场数据带 **provenance 来源标记与注入边界隔离**；工具面统一为 23 注册 / 19 可见。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
+> **当前版本：v0.9.8（可信交付与宿主兼容）**：来自真实项目 dogfooding 与外部评审的全面收口——浏览器采集工具（`auto_test`/`verify_ui`）在**全部发行变体常驻可见**（能力缺失返回 `CAPABILITY_MISSING` + 启用指引），新增 **`doctor` 八项自检工具**；`HTTP_PORT`/`HTTP_HOST` 环境变量成为宿主界一等配置通道（Trae 类宿主会丢 CLI 参数），**默认端口迁至 8710**；git 工具支持跨项目授权根；返回宿主的现场数据带 **provenance 来源标记与注入边界隔离**；工具面统一为 23 注册 / 19 可见。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
 
 ---
 
@@ -36,13 +36,13 @@
   "mcpServers": {
     "lujo": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.7"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.8"]
     }
   }
 }
 ```
 
-> **版本说明**：省略版本后缀时 npx 会默认拉取 npm 上的稳定最新版 `latest`（当前发布版为 0.9.7）。
+> **版本说明**：省略版本后缀时 npx 会默认拉取 npm 上的稳定最新版 `latest`（当前发布版为 0.9.8）。
 >
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
@@ -64,7 +64,7 @@
 ### 替代方式：全局安装
 
 ```bash
-npm install -g @lujoai/lujo-mcp@0.9.7
+npm install -g @lujoai/lujo-mcp@0.9.8
 ```
 
 客户端配置：
@@ -90,7 +90,7 @@ npm install -g @lujoai/lujo-mcp@0.9.7
 
 | 客户端 | 界面操作与配置文件位置 |
 |---|---|
-| **Trae** | **界面操作**（菜单入口与配置路径可能随 Trae 版本更新而变化，请以当前 UI 为准）：<br>点击聊天框上方的 `MCP Servers` 图标（或 `Settings` → `Features` → `MCP`）→ 点击 `Add (添加)`，填入：<br>• **Name**: `lujo`<br>• **Command**: `npx`<br>• **Args**: `-y @lujoai/lujo-mcp@0.9.7`<br>**配置文件编辑**：若支持直接编辑配置文件，常见位置为 `.trae/mcp.json`（工作区）或 `~/.trae/mcp.json`（全局），该路径随版本演进可能不同，未验证的配置路径不保证永久有效，建议以 Trae 当前设置界面或官方最新文档为准 |
+| **Trae** | **界面操作**（菜单入口与配置路径可能随 Trae 版本更新而变化，请以当前 UI 为准）：<br>点击聊天框上方的 `MCP Servers` 图标（或 `Settings` → `Features` → `MCP`）→ 点击 `Add (添加)`，填入：<br>• **Name**: `lujo`<br>• **Command**: `npx`<br>• **Args**: `-y @lujoai/lujo-mcp@0.9.8`<br>**配置文件编辑**：若支持直接编辑配置文件，常见位置为 `.trae/mcp.json`（工作区）或 `~/.trae/mcp.json`（全局），该路径随版本演进可能不同，未验证的配置路径不保证永久有效，建议以 Trae 当前设置界面或官方最新文档为准 |
 | **Cursor** | 项目根目录 `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json` |
 | **Claude Desktop** | `Settings` → `Developer` → `Edit Config`（编辑 `claude_desktop_config.json`） |
 | **其他 MCP 客户端** | 任何支持 MCP 标准 stdio 协议的工具均可直接接入 |
@@ -251,7 +251,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8710/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
-### Node 服务接入：使用 Node SDK（v0.9.7 已发布）
+### Node 服务接入：使用 Node SDK（v0.9.8 已发布）
 
 服务端 Node.js 使用独立包 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18/20/22 和 CJS/ESM。它只做显式错误与网络上报，不安装浏览器的 DOM、XHR/fetch、console 或 `localStorage` 钩子；浏览器页面继续使用上面的 Browser SDK。
 
@@ -460,12 +460,12 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
   "mcpServers": {
     "lujo-project-a": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.7"],
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.8"],
       "env": { "HTTP_PORT": "8101" }
     },
     "lujo-project-b": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.7", "--http-port", "8102"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.8", "--http-port", "8102"]
     }
   }
 }
@@ -484,7 +484,7 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 </script>
 ```
 
-**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp@0.9.7", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
+**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp@0.9.8", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
 
 **已知限制（如实说明）**：
 

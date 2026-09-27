@@ -5,6 +5,23 @@
 
 ---
 
+## [0.9.8] - 2026-09-27
+
+> 主题「真·开箱即用」：浏览器采集能力完整进入 npm 发行版——冻结二进制内置 Playwright 库与 node driver，浏览器走 chromium → 系统 Chrome → 系统 Edge 三级回退（Windows 零下载）；`auto_test` 遍历页面时自动注入采集 SDK（用户 HTML 零改动），错误现场自动回流 `diagnose_issue`。另含宿主信任与冷启动两处关键修复。
+
+### Added
+
+- **浏览器能力进冻结包**：Playwright 库 + node driver 完整打包（UPX 排除 node.exe 防压损坏）；`auto_test`/`verify_ui` 启动走三级回退链（playwright chromium → 系统 Chrome → 系统 Edge，纯路径探测带缓存），全部缺失才返回 `CAPABILITY_MISSING`（此时 doctor 会指明缺哪项）。
+- **auto_test 自动埋点**：遍历的页面自动注入 Browser SDK（`AUTO_INJECT_SDK=true` 默认开，endpoint 取自本机监听地址），控制台错误/网络失败/静默失败自动回流——用户 HTML 零改动即可建立完整现场；SDK 加载失败静默降级不干扰被测页面。
+- **MCP `instructions` 字段**：initialize 响应携带服务器出厂说明（stdio/HTTP 双传输），告知宿主何时调用与冷启动路径——信任级别高于项目内规则文件。
+- **diagnose_issue 冷启动永不空手**：无数据时从存储提取最近页面 URL，next_step 直接给出可执行的 `auto_test` 调用（含真实 URL 与参数）；完全无上报时保留 SDK 接入指引。
+
+### Fixed
+
+- **doctor 浏览器通道检查**：改为报告三级回退链中实际可用的通道；并修复长寿命进程内探测缓存的陈旧结果问题（启动后新装浏览器即刻可被 doctor 发现）。
+
+## [0.9.7] - 2026-09-27
+
 ## [Unreleased]
 
 ## [0.9.7] - 2026-09-27
