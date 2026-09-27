@@ -99,16 +99,25 @@ async def test_cold_start_with_stored_url_next_step_contains_url():
 
 @pytest.mark.asyncio
 async def test_cold_start_console_extra_url_end_to_end():
-    """console 日志经 extra.url 携带页面地址：同样进入精确采集指引。"""
+    """会话内 console error 现按故障信号返回桶级现场（会话故障识别契约）。
+
+    语义变更说明（2026-09-28 修复批次）：本用例曾断言 console error 只进
+    冷启动 URL 指引（found=false）；自「会话内 network/console 故障识别」
+    生效起，console error 是该会话内的真实故障信号，直接以桶级现场返回，
+    冷启动指引仅保留给「范围内确无故障信号」的查询（空存储 / 仅健康遥测
+    用例继续锁定该契约）。
+    """
     from app.runtime.core.trace_repo import save_console_log
 
-    page_url = "http://localhost:3000/checkout"
-    save_console_log("error", "boom", extra={"url": page_url}, session_id="sess-c")
+    save_console_log("error", "boom", extra={"url": "http://localhost:3000/checkout"},
+                     session_id="sess-c")
 
     result = await _call_diagnose({"session_id": "sess-c"})
 
-    assert result["found"] is False
-    assert page_url in result["next_step"]
+    assert result["found"] is True
+    assert result.get("granularity") == "bucket"
+    assert [c.get("message") for c in result.get("console_logs") or []] == ["boom"]
+    assert result.get("evidence_trust") == "untrusted"
 
 
 @pytest.mark.asyncio

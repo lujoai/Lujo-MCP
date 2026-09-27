@@ -53,7 +53,9 @@ def _apply_evidence_boundary(result: dict) -> dict:
     if not getattr(settings, "evidence_wrap_enabled", True):
         return result
     try:
-        for key in ("debug_context", "summary"):
+        # 桶级响应（record_id / 网络信号）的记录载荷与场景上下文一样属于
+        # 不可信页面采集数据，统一走递归转义
+        for key in ("debug_context", "summary", "network_records", "console_logs"):
             value = result.get(key)
             if value:
                 result[key] = _escape_evidence_texts(value)
@@ -320,7 +322,9 @@ _STORAGE_SCAN_LIMIT = 100_000
 # 注入语句含空格与尖括号，无法通过校验，因此不会进入摘要。
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,63}$")
 _SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._@\-]{1,80}$")
-_SAFE_PATH_RE = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%*\-]{0,200}$")
+# path 允许多段（/api/v1/login）；query/fragment 由 urlsplit 剥离，
+# 空格/尖括号/控制字符不在白名单内，整字段丢弃
+_SAFE_PATH_RE = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%*/\-]{0,200}$")
 _SAFE_METHOD_RE = re.compile(r"^[A-Za-z]{1,10}$")
 
 
@@ -400,18 +404,23 @@ def _scene_candidate(request_id: str, exc_type, frames, last_seen) -> dict:
     }
 
 
-def _bucket_fault_signal(entries: list, cutoff: float = 0.0) -> dict | None:
+def _bucket_fault_signal(
+    entries: list, cutoff: float = 0.0, session_id: str | None = None
+) -> dict | None:
     """桶级故障信号（桶内无异常实体时）：network 失败 / console error。
 
     失败分类遵循现有口径：status >= 400 或显式 error 标记为失败；
     2xx/3xx 与普通 console 日志不算故障（健康遥测不得触发伪歧义）。
     取时间窗内最新一条合格信号；method/path/status 逐一做白名单形态
-    校验，非法字段整字段丢弃。
+    校验，非法字段整字段丢弃。指定 session_id 时按记录自身归属过滤
+    （缺失/畸形归属对该查询不可见，与其他会话过滤口径一致）。
     """
     best: dict | None = None
     for entry in entries:
         step, data = entry.get("step"), entry.get("data")
         if not isinstance(data, dict):
+            continue
+        if session_id is not None and data.get("session_id") != session_id:
             continue
         ts = data.get("timestamp") or entry.get("timestamp") or 0
         if ts < cutoff:
@@ -489,6 +498,24 @@ def _enumerate_fault_candidates(
     if truncated:
         complete = False
     read_failures = 0
+    # SDK 上报形态：网络/console 记录在 caller 桶、异常在 error_id 桶。
+    # 现场候选（缓冲侧 + 存储侧）的 caller 别名收集于此，其桶级故障信号
+    # 不重复计为候选（同一故障只由错误现场代表；不同故障不合并）。
+    # 注意：缓冲候选的桶会被下方存储扫描跳过，必须在此单独收集别名。
+    scene_alias_ids: set[str] = set()
+    deferred_signals: dict[str, dict] = {}
+    for scene_id in list(candidates):
+        try:
+            entries = get_logs(scene_id)
+        except Exception:
+            read_failures += 1
+            logger.warning("候选别名读取存储桶失败 (bucket=%s)", scene_id, exc_info=True)
+            continue
+        for entry in entries:
+            if entry.get("step") == "trace_link" and isinstance(entry.get("data"), dict):
+                caller = entry["data"].get("caller_trace_id")
+                if caller:
+                    scene_alias_ids.add(caller)
     for bucket_id in bucket_ids:
         if bucket_id in candidates:
             continue
@@ -515,13 +542,18 @@ def _enumerate_fault_candidates(
             candidates[bucket_id] = _scene_candidate(
                 bucket_id, scene_data.get("type"), scene_data.get("frames"), ts,
             )
-        elif session_id is None:
-            signal = _bucket_fault_signal(entries, cutoff)
+            for entry in entries:
+                if entry.get("step") == "trace_link" and isinstance(entry.get("data"), dict):
+                    caller = entry["data"].get("caller_trace_id")
+                    if caller:
+                        scene_alias_ids.add(caller)
+        else:
+            signal = _bucket_fault_signal(entries, cutoff, session_id)
             if signal:
                 if kw and kw not in signal["summary"].lower() \
                         and kw not in signal["kind"]:
                     continue
-                candidates[bucket_id] = {
+                deferred_signals[bucket_id] = {
                     "request_id": bucket_id,
                     "kind": signal["kind"],
                     "granularity": "bucket",
@@ -529,6 +561,10 @@ def _enumerate_fault_candidates(
                     "summary": signal["summary"],
                     "last_seen": signal["last_seen"],
                 }
+    for bucket_id, signal_candidate in deferred_signals.items():
+        if bucket_id in scene_alias_ids:
+            continue
+        candidates[bucket_id] = signal_candidate
     if read_failures:
         complete = False
     ordered = sorted(
@@ -578,13 +614,15 @@ def _ambiguity_response(candidates: list[dict], complete: bool, notice: str) -> 
 def _resolve_id_scenes(request_id: str, session_id: str | None):
     """全量扫描存储，解析 request_id 的别名/记录归属（ID 往返契约）。
 
-    返回 (alias_scenes, record_bucket, scan_incomplete)：
+    返回 (alias_scenes, record_bucket, scan_incomplete, direct_signal)：
     - alias_scenes：trace_link.caller_trace_id == request_id 且桶内
       trace_data 会话可见的错误现场候选（caller ID → 唯一 error_id 别名）；
     - record_bucket：network 载荷 record_id == request_id 的桶 key
       （record_id 不作为桶 key 存储，只能确定性地定位到桶）；
     - scan_incomplete：扫描达到安全上限或存在读取失败——此时既不能断言
-      「唯一匹配」，也不能断言「确定未找到」。
+      「唯一匹配」，也不能断言「确定未找到」；
+    - direct_signal：request_id 本身就是含会话可见故障信号的桶 key 时的
+      桶级候选（会话内 network/console 故障的可回查路径）。
     """
     from app.runtime.core.logs import get_logs
 
@@ -593,6 +631,7 @@ def _resolve_id_scenes(request_id: str, session_id: str | None):
     read_failures = 0
     alias_scenes: list[dict] = []
     record_bucket: str | None = None
+    direct_signal: dict | None = None
     for bucket_id in bucket_ids:
         try:
             entries = get_logs(bucket_id)
@@ -627,10 +666,22 @@ def _resolve_id_scenes(request_id: str, session_id: str | None):
                     break
         elif record_match and record_bucket is None:
             record_bucket = bucket_id
+        if bucket_id == request_id and direct_signal is None:
+            # 桶级信号自查询：该桶 key 含会话可见的 network/console 故障
+            signal = _bucket_fault_signal(entries, 0.0, session_id)
+            if signal is not None:
+                direct_signal = {
+                    "request_id": bucket_id,
+                    "kind": signal["kind"],
+                    "granularity": "bucket",
+                    "type": signal["kind"],
+                    "summary": signal["summary"],
+                    "last_seen": signal["last_seen"],
+                }
     if read_failures:
         incomplete = True
     alias_scenes.sort(key=lambda c: (-(c.get("last_seen") or 0), str(c["request_id"])))
-    return alias_scenes, record_bucket, incomplete
+    return alias_scenes, record_bucket, incomplete, direct_signal
 
 
 def _record_bucket_response(bucket_key: str, requested_id: str, session_id: str | None) -> dict:
@@ -645,7 +696,7 @@ def _record_bucket_response(bucket_key: str, requested_id: str, session_id: str 
         }
         return result
     records = trace_repo.get_network_records(bucket_key, session_id=session_id)
-    return {
+    return _apply_evidence_boundary({
         "found": True,
         "trace_id": bucket_key,
         "granularity": "bucket",
@@ -655,7 +706,7 @@ def _record_bucket_response(bucket_key: str, requested_id: str, session_id: str 
         ),
         "network_records": records,
         "source": "request_id",
-    }
+    })
 
 
 def _bucket_signal_response(candidate: dict, session_id: str | None) -> dict:
@@ -665,23 +716,23 @@ def _bucket_signal_response(candidate: dict, session_id: str | None) -> dict:
     bucket_key = candidate["request_id"]
     if candidate["kind"] == "network_failure":
         records = trace_repo.get_network_records(bucket_key, session_id=session_id)
-        return {
+        return _apply_evidence_boundary({
             "found": True,
             "trace_id": bucket_key,
             "granularity": "bucket",
             "notice": "当前没有异常实体，最近的故障是网络失败信号；已按存储桶整桶返回（桶级粒度）。",
             "network_records": records,
             "source": "latest",
-        }
+        })
     console = trace_repo.get_console_logs(bucket_key, session_id=session_id)
-    return {
+    return _apply_evidence_boundary({
         "found": True,
         "trace_id": bucket_key,
         "granularity": "bucket",
         "notice": "当前没有异常实体，最近的故障是 console error 信号；已按存储桶整桶返回（桶级粒度）。",
         "console_logs": console,
         "source": "latest",
-    }
+    })
 
 
 def _build_context(trace_id: str, session_id: str | None = None) -> dict | None:
@@ -778,7 +829,7 @@ def handler(arguments: dict) -> dict:
                     "source": "request_id",
                 })
             )
-        alias_scenes, record_bucket, scan_incomplete = _resolve_id_scenes(
+        alias_scenes, record_bucket, scan_incomplete, direct_signal = _resolve_id_scenes(
             request_id, session_id
         )
         if len(alias_scenes) == 1 and not scan_incomplete:
@@ -814,6 +865,9 @@ def handler(arguments: dict) -> dict:
             )
         if record_bucket is not None:
             return _record_bucket_response(record_bucket, request_id, session_id)
+        if direct_signal is not None:
+            # request_id 即含故障信号的桶 key（会话内 network/console 可回查）
+            return _bucket_signal_response(direct_signal, session_id)
         # 旧行为兜底：以 request_id 直接构建上下文（存储桶 key 直查）
         ctx = _build_context(request_id, session_id=session_id)
         if ctx:
@@ -956,14 +1010,18 @@ def handler(arguments: dict) -> dict:
     recent = _list_recent(limit=1, session_id=session_id)
     if recent:
         item = recent[0]
-        item_ts = item.get("last_seen") or item.get("timestamp") or 0
-        if not item_ts or item_ts >= cutoff:
-            return _finish(
-                item.get("trace_id") or "",
-                err=None,
-                source="recent_traces",
-                session_id=session_id,
-            )
+        # 回退只接受真实故障信号（ERROR 型摘要）：健康 network /
+        # response_ready 桶不再被当作 found=true 的现场返回；
+        # 冷启动指引（无数据 → auto_test 采集）与真实现场契约保留
+        if item.get("type") == "ERROR":
+            item_ts = item.get("last_seen") or item.get("timestamp") or 0
+            if not item_ts or item_ts >= cutoff:
+                return _finish(
+                    item.get("trace_id") or "",
+                    err=None,
+                    source="recent_traces",
+                    session_id=session_id,
+                )
 
     return _not_found(
         "当前服务没有捕获到任何错误或追踪记录（可能是刚启动或尚无数据上报）",
