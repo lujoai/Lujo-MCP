@@ -60,10 +60,28 @@ def tool_ingest_network(
 
 
 def tool_get_network_trace(trace_id: str, session_id: str | None = None) -> dict:
-    """查询指定 trace_id 关联的所有网络请求记录。"""
+    """查询指定 trace_id 关联的所有网络请求记录。
+
+    无数据时补 scope + next_step（对齐 diagnose_issue 的无数据契约）：
+    宿主 AI 需要知道查询范围与如何产生数据（网络记录必须先经 ingest_network
+    上报，且传 trace_id 参数才会挂到该 trace 下），而不是拿到空结果自己猜。
+    """
     records = get_network_records(trace_id, session_id=session_id)
+    if not records:
+        return {
+            "found": False,
+            "count": 0,
+            "records": [],
+            "scope": {"trace_id": trace_id, "session_id": session_id},
+            "next_step": (
+                "该查询范围内暂无网络请求记录：数据需先经 ingest_network 上报，"
+                "且上报时必须传 trace_id 参数，记录才会关联到本 trace"
+                "（浏览器端由 Browser SDK 经 HTTP 自动上报，stdio 模式不接收）。"
+                "完成上报后用同一 trace_id 重查本工具。"
+            ),
+        }
     return {
-        "found": bool(records),
+        "found": True,
         "count": len(records),
         "records": records,
     }

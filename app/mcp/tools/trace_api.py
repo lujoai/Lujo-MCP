@@ -201,7 +201,21 @@ def list_recent_traces_handler(arguments: dict) -> dict:
     except (TypeError, ValueError):
         limit = 10
     limit = max(1, min(limit, 100))
-    items = list_recent_traces(limit=limit, session_id=arguments.get("session_id"))
+    session_id = arguments.get("session_id")
+    items = list_recent_traces(limit=limit, session_id=session_id)
+    if not items:
+        # 无数据契约（对齐 diagnose_issue）：带查询范围与数据产生方式。
+        return {
+            "count": 0,
+            "traces": [],
+            "queried_scope": {"limit": limit, "session_id": session_id},
+            "next_step": (
+                "当前范围内没有任何被捕获的错误/追踪。数据产生方式：浏览器端"
+                "接入 Browser SDK 经 HTTP 上报（stdio 模式不接收），后端异常由"
+                "全局异常钩子或 ingest_error 捕获；复现一次错误后重查本工具，"
+                "或直接调用 diagnose_issue（无需 ID 自动取最近错误）。"
+            ),
+        }
     return {"count": len(items), "traces": items}
 
 
@@ -215,9 +229,27 @@ def search_logs_handler(arguments: dict) -> dict:
         since_minutes = int(arguments.get("since_minutes") or 30)
     except (TypeError, ValueError):
         since_minutes = 30
+    session_id = arguments.get("session_id")
     items = search_logs(
-        keyword, since_minutes=since_minutes, session_id=arguments.get("session_id")
+        keyword, since_minutes=since_minutes, session_id=session_id
     )
+    if not items:
+        # 无数据契约（对齐 diagnose_issue）：带实际查询范围与可执行下一步。
+        return {
+            "count": 0,
+            "results": [],
+            "queried_scope": {
+                "keyword": keyword,
+                "since_minutes": since_minutes,
+                "session_id": session_id,
+            },
+            "next_step": (
+                "该关键词在时间窗内没有匹配的错误。可换更短/更通用的关键词、"
+                "调大 since_minutes 扩大时间窗，或调用 list_recent_traces 浏览"
+                "全部近期错误；若服务尚未捕获任何错误，先复现一次错误"
+                "（浏览器端经 Browser SDK / HTTP 上报，后端由异常钩子捕获）再查。"
+            ),
+        }
     return {"count": len(items), "results": items}
 
 
