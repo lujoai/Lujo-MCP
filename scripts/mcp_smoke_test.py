@@ -55,7 +55,7 @@ for _stream in (sys.stdout, sys.stderr):
 _ID = 0
 
 # 单条 JSON-RPC 响应的读取超时（秒）：服务端挂死时冒烟脚本不得永久阻塞
-_DEFAULT_READ_TIMEOUT = 10.0
+_DEFAULT_READ_TIMEOUT = 60.0
 _READ_TIMEOUT = _DEFAULT_READ_TIMEOUT
 # 发布构建可通过 --read-timeout 放宽冷启动较慢的冻结进程（尤其 Windows
 # heavy 子进程）验证时间；默认值保持轻量开发冒烟的快速失败语义。
