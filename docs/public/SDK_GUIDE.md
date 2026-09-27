@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v0.9.6（2026-09-26）。本版零改造本地调试：`auto_test`/`verify_ui` 对纯回环目标（本机开发服务器）默认放行（SSRF 防线不变），`auto_test` 新增宿主行动指引，README 提供宿主自定义指令片段；Browser SDK 与 Node SDK 的公开接口保持稳定兼容。当前详细状态见 [CHANGELOG](./CHANGELOG.md)。
+> 当前版本：v0.9.7（2026-09-27）。本版可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见；Browser SDK 与 Node SDK 接口保持稳定兼容（Browser SDK 默认 endpoint 随默认端口更新为 8710，旧 8000 可设 `HTTP_PORT=8000` 保持）。详见 [CHANGELOG](./CHANGELOG.md)。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 
@@ -37,7 +37,7 @@ Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支
 安装独立包（推荐指定已发布版本）：
 
 ```bash
-npm install @lujoai/lujo-mcp-node-sdk@0.9.6
+npm install @lujoai/lujo-mcp-node-sdk@0.9.7
 ```
 
 CommonJS：

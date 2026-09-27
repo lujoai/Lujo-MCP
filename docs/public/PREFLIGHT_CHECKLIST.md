@@ -1,10 +1,10 @@
 # 启动前检查与功能启用综合手册 / Pre-flight Checklist & Enablement Guide
 
-**适用版本 / Applicable Version**: v0.9.6
+**适用版本 / Applicable Version**: v0.9.7
 **最后更新 / Last Updated**: 2026-09-26
 
 > **说明**：本文档已整合原独立文件 `ENABLEMENT_GUIDE.md`（功能启用指南）全部内容，为 Lujo-MCP 的环境部署、配置检查与可选功能启用（Redis、Playwright、熔断器、OTel）提供一站式操作与验证手册。
-> **发布状态**：当前 npm 线上最新已发布版本为 `v0.9.6`。本版零改造本地调试：`auto_test`/`verify_ui` 对纯回环目标（本机开发服务器）默认放行（SSRF 防线不变），`auto_test` 新增宿主行动指引，README 提供宿主自定义指令片段。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。
+> **发布状态**：当前 npm 线上最新已发布版本为 `v0.9.7`。本版可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见。**升级须知（v0.9.7）**：默认端口 8000→**8710**（Browser SDK endpoint/书签需同步，或设 `HTTP_PORT=8000` 保持旧值）；多实例/宿主建议用 `HTTP_PORT` 显式分端口。默认 `STORAGE_BACKEND=memory`（唯一合法值，PostgreSQL 后端已正式移除）。**升级须知**：默认仅监听 `127.0.0.1`（容器须显式 `HOST=0.0.0.0`）、`/metrics` 免鉴权豁免仅回环生效、关闭期错误码 `TOOL_BUSY`、RBAC 鉴权拒绝码 `AUTH_ERROR -32003`；旧便捷端点 `POST /debug` 已废弃（返回 410），统一收敛至 `POST /api/debug/run`。
 
 ---
 
@@ -567,7 +567,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | lujo-mcp v0.9.6 | ..."（本地源码与 npm 发布版均为 0.9.6）
+#   - 日志输出 "服务启动 | lujo-mcp v0.9.7 | ..."（本地源码与 npm 发布版均为 0.9.7）
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -601,7 +601,7 @@ curl http://localhost:8710/internal/health
 #   {
 #     "status": "ok",
 #     "service": "lujo-mcp",
-#     "version": "0.9.6",          ← 当前本地源码与 npm 发布版版本
+#     "version": "0.9.7",          ← 当前本地源码与 npm 发布版版本
 #     "storage": "memory",         ← 唯一合法值（PostgreSQL 后端已移除）
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

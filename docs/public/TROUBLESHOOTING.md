@@ -1,9 +1,9 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.9.6
+**适用版本 / Applicable Version**: v0.9.7
 **最后更新 / Last Updated**: 2026-09-26
 
-> **发布状态**：当前 npm 线上最新已发布版本为 `v0.9.6`。本版零改造本地调试：`auto_test`/`verify_ui` 对纯回环目标（本机开发服务器）默认放行（SSRF 防线不变），`auto_test` 新增宿主行动指引，README 提供宿主自定义指令片段；默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）。
+> **发布状态**：当前 npm 线上最新已发布版本为 `v0.9.7`。本版可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见；默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）。
 
 ---
 
@@ -62,7 +62,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HTTP_HOST=127.0.0.1`（旧键 `HOST` 等效）
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.6`（本地源码与 npm 发布版均为 0.9.6）
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.7`（本地源码与 npm 发布版均为 0.9.7）
 
 ---
 
@@ -513,7 +513,7 @@ curl -X POST http://localhost:8710/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-`tools/list` 公开 18 个 Agent-facing 工具（v0.9.6 工具面；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 22）:
+`tools/list` 公开 19 个 Agent-facing 工具（v0.9.7 工具面，含新增 doctor；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 23）:
 `debug`, `context`, `trace`, `stacktrace`, `diagnose_issue`, `list_recent_traces`, `search_logs`, `ingest_specs`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
