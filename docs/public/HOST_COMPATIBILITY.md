@@ -6,7 +6,7 @@ Lujo 通过两个通道接收启动参数：MCP 配置的 `args`（CLI 参数，
 
 ## Trae（CN 版）实测行为
 
-以下为真实环境实测结论（v0.9.6 时期，Trae CN 桌面版；行为与 v0.9.7 一致）：
+以下为真实环境实测结论（Trae CN 桌面版；第 1–5 条为 v0.9.6 时期实测，行为与 v0.9.7 一致）：
 
 1. **`npx` 命令被自解析为缓存 exe 直启**：配置写 `npx`，Trae 实际启动的是它自己
    解析出的 npx 缓存可执行文件，不经过用户配置的原始命令行。
@@ -18,6 +18,10 @@ Lujo 通过两个通道接收启动参数：MCP 配置的 `args`（CLI 参数，
 5. **`mcp.json` 是内部存储的镜像**：Trae 把 UI 里的配置存进内部数据库后镜像出
    `mcp.json`；直接改该文件，合法改动会被导入，非法改动会被静默回退——它不是
    配置真源。
+6. **宿主把 MCP server 的 stderr 记入自身日志文件**（本轮实测）：Lujo 写往 stderr
+   的警告与日志会被 Trae 收进它自己的日志文件，实测路径为
+   `%APPDATA%\Trae CN\logs\<run>\window1\exthost\mcp-servers-host.log`，可作为
+   排查入口；但 Trae 的用户界面**不直接展示** stderr，需要主动打开上述日志文件查看。
 
 ## 推荐做法
 
@@ -49,6 +53,7 @@ git 归因工具（get_recent_diff / get_blame_for_frame）只查询「授权项
 Claude Desktop、Cursor 等宿主按 MCP 标准透传 `args`，`"args": ["--http-port",
 "8101"]` 与文档示例照常工作；这类宿主同样支持 `env`，两种通道可任选。
 
-> 排查入口：HTTP 采集未启动时先看 Lujo 的 stderr 警告，再用
+> 排查入口：HTTP 采集未启动时先看 Lujo 的 stderr 警告（Trae CN 下宿主会把它记入
+> 上文第 6 条的日志文件，用户 UI 不直接展示），再用
 > `diagnose_issue` / doctor 工具回显的监听地址端口核对是否与 SDK endpoint
 > 一致。详见 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)。

@@ -22,7 +22,7 @@ DOCTOR_DEF = {
         "v0.9.8 起任一可用即判定浏览器能力就绪）、heavy worker 入口、"
         "HTTP 监听地址端口、UI URL 访问策略（allowlist/allow_private/回环默认放行）、"
         "git 授权项目根（GIT_PATH_WHITELIST 回显）、KB 持久化路径与开关、"
-        "vector/embedding 能力。"
+        "vector/embedding 能力、运行现场状态（当前进程运行存储中是否有可查询现场）。"
         "verify_ui / auto_test 返回 CAPABILITY_MISSING 时，可先用本工具定位缺失项。"
         "本工具只读探测，不启动浏览器、不创建子进程。"
     ),
@@ -194,6 +194,37 @@ def _check_vector_embedding() -> tuple[bool, str]:
     )
 
 
+def _check_runtime_scene() -> tuple[bool, str]:
+    """⑨ 运行现场状态：当前进程运行存储中是否有可查询现场。
+
+    只读复用既有查询链路（list_recent_traces 查询侧同源）：trace store 的
+    ``list_request_ids`` 按条目计数——trace / network / ui_event / console
+    等 ingest 上报全部经 trace_repo 落入同一 trace store，每个 request_id
+    即一份可查询现场（get_logs / diagnose_issue 均按它取数）。不用
+    ``list_recent_traces`` 计数：它合并 errors 近期缓冲且逐条重建摘要，
+    口径偏窄且更重。
+
+    状态词表只用「已接收 / 已写入当前运行存储 / 可查询」，不暗示持久化；
+    detail 不含原始报错文本 / 裸 trace_id / 未脱敏内容。查询异常时
+    fail-open（ok:false + 简短 detail），不让 doctor 整体抛异常。
+    """
+    from app.config import settings
+    from app.runtime.core.logs import list_request_ids
+
+    try:
+        # limit 取存储容量上限：request_id 数不会超过 store 容量，计数为全量
+        ids = list_request_ids(limit=max(int(settings.memory_store_max_entries), 1))
+    except Exception:
+        return False, "运行现场状态查询失败（内部异常），请稍后重试"
+    count = len(ids)
+    if count == 0:
+        return False, (
+            "运行存储为空（进程重启后为空属正常行为）："
+            "页面需接入 Browser SDK 上报，或用 auto_test 采集后再查询"
+        )
+    return True, f"当前进程内存中可查询的现场条数：{count} 条（来源见 diagnose_issue）"
+
+
 # 自检项注册表：name 即载荷中的稳定标识，供宿主按名定位缺失能力
 _CHECKS = (
     ("playwright_library", _check_playwright_library),
@@ -204,6 +235,7 @@ _CHECKS = (
     ("git_roots", _check_git_roots),
     ("kb_persistence", _check_kb_persistence),
     ("vector_embedding", _check_vector_embedding),
+    ("runtime_scene", _check_runtime_scene),
 )
 
 

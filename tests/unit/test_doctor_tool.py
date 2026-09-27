@@ -2,13 +2,15 @@
 
 覆盖：
 1. doctor 返回结构：checks[]（name/ok/detail）+ summary（ok_count/fail_count）
-2. 八项自检齐全，工具本身永不抛异常
+2. 九项自检齐全，工具本身永不抛异常
 3. 无 playwright 环境下 playwright 库/浏览器通道两项为 ok:false
    （monkeypatch sys.modules 模拟，与本机是否真实安装 playwright 无关）
 4. doctor 注册面：常驻可见（无 availability 过滤）、category=diagnostic、角色映射齐全
 5. verify_ui/auto_test 无能力分支返回统一 CAPABILITY_MISSING 载荷（dict，不 raise）
 6. browser_channel（v0.9.8，原 chromium_binary）：报告 chromium/系统 Chrome/系统 Edge
    哪个通道可用，任一可用即 ok:true
+7. runtime_scene（运行现场状态）：空存储 ok=false 带指引、有数据 ok=true 带条数、
+   detail 不外泄原始报错文本/裸 trace_id、查询异常 fail-open 不炸整体
 """
 import asyncio
 import json
@@ -39,6 +41,7 @@ EXPECTED_CHECK_NAMES = {
     "git_roots",
     "kb_persistence",
     "vector_embedding",
+    "runtime_scene",
 }
 
 
@@ -55,7 +58,7 @@ def no_playwright(monkeypatch):
         monkeypatch.setitem(sys.modules, mod, None)
 
 
-# ── 1/2/3. doctor_handler 结构与八项自检 ──
+# ── 1/2/3. doctor_handler 结构与九项自检 ──
 
 
 class TestDoctorHandler:
@@ -63,7 +66,7 @@ class TestDoctorHandler:
         result = doctor_handler({})
         assert set(result.keys()) == {"checks", "summary"}
         names = [c["name"] for c in result["checks"]]
-        assert len(names) == 8
+        assert len(names) == 9
         assert set(names) == EXPECTED_CHECK_NAMES
 
     def test_git_roots_check_reports_configured_roots(self, monkeypatch):
@@ -100,7 +103,7 @@ class TestDoctorHandler:
         ok_count = sum(1 for c in result["checks"] if c["ok"])
         assert result["summary"]["ok_count"] == ok_count
         assert result["summary"]["fail_count"] == len(result["checks"]) - ok_count
-        assert result["summary"]["ok_count"] + result["summary"]["fail_count"] == 8
+        assert result["summary"]["ok_count"] + result["summary"]["fail_count"] == 9
 
     def test_no_playwright_checks_fail_but_tool_does_not_raise(self, no_playwright):
         """无 playwright 环境：库/浏览器通道两项 ok:false，工具整体不抛异常。"""
@@ -151,6 +154,76 @@ class TestBrowserChannelCheck:
         ok, detail = doctor_api._check_browser_channel()
         assert ok is False
         assert "Chrome" in detail and "Edge" in detail
+
+
+# ── 7. runtime_scene 运行现场状态自检 ──
+
+
+class TestRuntimeSceneCheck:
+    def test_empty_storage_reports_ok_false_with_empty_hint(self):
+        """空运行存储：ok=false，detail 含空存储指引（进程重启后为空属正常行为）。
+
+        tests/unit/conftest.py 的 autouse _isolate_storage 逐用例重置
+        storage factory 单例，此处运行存储确定从空开始。
+        """
+        from app.mcp.tools import doctor_api
+
+        ok, detail = doctor_api._check_runtime_scene()
+        assert ok is False
+        assert "运行存储为空" in detail
+        assert "进程重启后为空属正常行为" in detail
+
+    def test_doctor_reports_runtime_scene_empty(self):
+        """doctor 整体载荷：runtime_scene 空存储时 ok=false，不炸整体。"""
+        result = doctor_handler({})
+        by_name = {c["name"]: c for c in result["checks"]}
+        check = by_name["runtime_scene"]
+        assert check["ok"] is False
+        assert "运行存储为空" in check["detail"]
+
+    def test_nonempty_storage_reports_ok_true_with_count(self):
+        """有可查询现场：往 trace_repo 存一条再用 doctor 查 → ok=true，detail 含条数。"""
+        from app.runtime.core.trace_repo import save_trace
+
+        save_trace("TestError", "unit-test scene", [], source="doctor_unit_test")
+        result = doctor_handler({})
+        by_name = {c["name"]: c for c in result["checks"]}
+        check = by_name["runtime_scene"]
+        assert check["ok"] is True
+        assert "1 条" in check["detail"]
+        assert "diagnose_issue" in check["detail"]
+
+    def test_detail_never_leaks_raw_content(self):
+        """detail 不含原始报错文本 / 裸 trace_id / 未脱敏内容。"""
+        from app.mcp.tools import doctor_api
+        from app.runtime.core.trace_repo import save_trace
+
+        raw_marker = "TOPSECRET-raw-error-body"
+        error_id = save_trace(
+            "SecretTypeError", raw_marker, [], source="doctor_unit_test"
+        )
+        ok, detail = doctor_api._check_runtime_scene()
+        assert ok is True
+        assert raw_marker not in detail
+        assert "SecretTypeError" not in detail
+        assert error_id not in detail
+
+    def test_query_exception_fail_open(self, monkeypatch):
+        """查询异常 fail-open：ok=false + 简短 detail，不外泄异常文本，doctor 不炸。"""
+        from app.mcp.tools import doctor_api
+        from app.runtime.core import logs
+
+        def _boom(limit=50):
+            raise RuntimeError("INTERNAL-EXPLOSION")
+
+        monkeypatch.setattr(logs, "list_request_ids", _boom)
+        ok, detail = doctor_api._check_runtime_scene()
+        assert ok is False
+        assert detail
+        assert "INTERNAL-EXPLOSION" not in detail
+        result = doctor_handler({})
+        by_name = {c["name"]: c for c in result["checks"]}
+        assert by_name["runtime_scene"]["ok"] is False
 
 
 # ── 4. doctor 注册面 ──
@@ -219,5 +292,5 @@ class TestDoctorViaMCP:
         resp = asyncio.run(_handle_tools_call(req))
         assert resp.get("error") is None
         payload = json.loads(resp["result"]["content"][0]["text"])
-        assert payload["summary"]["ok_count"] + payload["summary"]["fail_count"] == 8
+        assert payload["summary"]["ok_count"] + payload["summary"]["fail_count"] == 9
         assert {c["name"] for c in payload["checks"]} == EXPECTED_CHECK_NAMES
