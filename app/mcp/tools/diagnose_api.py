@@ -12,6 +12,7 @@
 返回结构稳定：found=true 时含 trace_id/summary/debug_context/source；
 found=false 时含 message/setup_hint/next_step（绝不返回空对象让 AI 猜）。
 """
+import base64
 import logging
 import re
 import time
@@ -327,6 +328,51 @@ _SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._@\-]{1,80}$")
 _SAFE_PATH_RE = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%*/\-]{0,200}$")
 _SAFE_METHOD_RE = re.compile(r"^[A-Za-z]{1,10}$")
 
+# 外部上报的 trace_id 会成为存储桶 key（trace_repo.save_network_record），
+# 并作为歧义候选 request_id / 桶级响应 trace_id 回传宿主——这是不可信
+# 内容进入响应的旁路（evidence boundary 只覆盖 summary/debug_context/
+# network_records/console_logs）。处置：内部一律使用原始 key（查找、去重、
+# 归属判定不受影响），仅在响应呈现处把非安全形态的 ID 编码为无损可逆的
+# 不透明引用 b64.<base64url(key)>；回查时 _expand_request_id 确定性解码。
+# 不做有损清洗/截断/替换——往返能力保持完整，正常 SDK 形态 ID 原样输出。
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@\-]{0,127}$")
+_OPAQUE_ID_PREFIX = "b64."
+
+
+def _display_id(request_id) -> str:
+    """原始桶 key → 响应呈现形式（安全形态原样；否则 base64url 不透明引用）。"""
+    if not request_id:
+        return request_id
+    if isinstance(request_id, str) and _SAFE_ID_RE.fullmatch(request_id):
+        return request_id
+    encoded = base64.urlsafe_b64encode(request_id.encode("utf-8")).decode("ascii")
+    return _OPAQUE_ID_PREFIX + encoded.rstrip("=")
+
+
+def _decode_opaque_id(display_id) -> str | None:
+    """不透明引用 → 原始桶 key；非法引用返回 None（不抛异常）。"""
+    if not isinstance(display_id, str) or not display_id.startswith(_OPAQUE_ID_PREFIX):
+        return None
+    payload = display_id[len(_OPAQUE_ID_PREFIX):]
+    try:
+        padded = payload + "=" * (-len(payload) % 4)
+        raw = base64.b64decode(padded, altchars=b"-_", validate=True)
+        return raw.decode("utf-8")
+    except Exception:
+        return None
+
+
+def _expand_request_id(request_id) -> list:
+    """请求 ID 展开为按序尝试的原始键（先精确命中，再解码不透明引用）。
+
+    精确优先保证即使存在字面上以 b64. 开头的真实桶 key 也不会被误解析。
+    """
+    expansions = [request_id]
+    decoded = _decode_opaque_id(request_id)
+    if decoded is not None and decoded != request_id:
+        expansions.append(decoded)
+    return expansions
+
 
 def _short_summary(parts: list) -> str:
     """白名单字段拼接为候选摘要；超长截断且截断标记计入上限。"""
@@ -575,15 +621,16 @@ def _enumerate_fault_candidates(
 
 
 def _apply_ambiguity_boundary(response: dict) -> dict:
-    """歧义响应的证据边界（P1-F 同源）：候选 summary/type 转义闭合序列 +
-    载荷头不可信标注。候选字段已做白名单形态校验，此为第二道防线；
+    """歧义响应的证据边界（P1-F 同源）：候选 summary/type/request_id 转义
+    闭合序列 + 载荷头不可信标注。request_id 已经 _display_id 可逆编码，
+    此处转义为纵深防御（编码后形态不可能含闭合标记，转义是幂等空操作）；
     开关关闭时不转义、不注入头部字段（与主链路口径一致）。"""
     if not getattr(settings, "evidence_wrap_enabled", True):
         return response
     try:
         for cand in response.get("candidates") or []:
             if isinstance(cand, dict):
-                for key in ("summary", "type"):
+                for key in ("summary", "type", "request_id"):
                     value = cand.get(key)
                     if isinstance(value, str):
                         cand[key] = escape_evidence_close(value)
@@ -593,7 +640,15 @@ def _apply_ambiguity_boundary(response: dict) -> dict:
 
 
 def _ambiguity_response(candidates: list[dict], complete: bool, notice: str) -> dict:
-    """多现场歧义响应（正常业务结果；不含 error 键，isError 语义不受影响）。"""
+    """多现场歧义响应（正常业务结果；不含 error 键，isError 语义不受影响）。
+
+    候选 request_id 在此呈现处经 _display_id 可逆编码（外部桶 key 不得
+    原样回传）；内部调用方继续持有原始 key。"""
+    emitted = []
+    for cand in candidates[:_AMBIGUITY_MAX_CANDIDATES]:
+        shown = dict(cand)
+        shown["request_id"] = _display_id(shown.get("request_id"))
+        emitted.append(shown)
     return _apply_ambiguity_boundary({
         "found": False,
         "ambiguity_detected": True,
@@ -603,7 +658,7 @@ def _ambiguity_response(candidates: list[dict], complete: bool, notice: str) -> 
         # truncated 仅表示展示列表截断，与「无法完整枚举」是两回事
         "truncated": len(candidates) > _AMBIGUITY_MAX_CANDIDATES,
         "notice": notice,
-        "candidates": candidates[:_AMBIGUITY_MAX_CANDIDATES],
+        "candidates": emitted,
         "next_step": (
             "可用候选中的 request_id 逐个调用本工具获取完整现场"
             "（候选按最近发生排序）；或补充 query/session_id 收窄范围。"
@@ -698,7 +753,7 @@ def _record_bucket_response(bucket_key: str, requested_id: str, session_id: str 
     records = trace_repo.get_network_records(bucket_key, session_id=session_id)
     return _apply_evidence_boundary({
         "found": True,
-        "trace_id": bucket_key,
+        "trace_id": _display_id(bucket_key),
         "granularity": "bucket",
         "notice": (
             "命中的网络记录按存储桶整桶返回（桶级粒度，含桶内全部记录），"
@@ -718,7 +773,7 @@ def _bucket_signal_response(candidate: dict, session_id: str | None) -> dict:
         records = trace_repo.get_network_records(bucket_key, session_id=session_id)
         return _apply_evidence_boundary({
             "found": True,
-            "trace_id": bucket_key,
+            "trace_id": _display_id(bucket_key),
             "granularity": "bucket",
             "notice": "当前没有异常实体，最近的故障是网络失败信号；已按存储桶整桶返回（桶级粒度）。",
             "network_records": records,
@@ -727,7 +782,7 @@ def _bucket_signal_response(candidate: dict, session_id: str | None) -> dict:
     console = trace_repo.get_console_logs(bucket_key, session_id=session_id)
     return _apply_evidence_boundary({
         "found": True,
-        "trace_id": bucket_key,
+        "trace_id": _display_id(bucket_key),
         "granularity": "bucket",
         "notice": "当前没有异常实体，最近的故障是 console error 信号；已按存储桶整桶返回（桶级粒度）。",
         "console_logs": console,
@@ -787,7 +842,7 @@ def _finish(trace_id: str, err: dict | None, source: str, session_id: str | None
     return _apply_evidence_boundary(
         _attach_provenance({
             "found": True,
-            "trace_id": trace_id,
+            "trace_id": _display_id(trace_id),
             "summary": _summarize_error(err),
             "debug_context": ctx or {},
             "related_experiences": related_experiences,
@@ -812,77 +867,91 @@ def handler(arguments: dict) -> dict:
         since_minutes = 30
 
     # ① request_id：唯一 error_id 直查 → 别名/记录解析（有界扫描）→
-    #    存储兜底直查（旧行为）→ not_found
+    #    存储兜底直查（旧行为）→ not_found。
+    #    _expand_request_id 支持候选回传的不透明引用（b64.…）确定性解码：
+    #    先按原串精确匹配，未命中再尝试解码后的原始桶 key。
     if request_id:
-        err = errors.get_by_id(request_id, session_id=session_id)
-        if err is not None:
-            # FIX: R5 —— 上下文构建同样受会话过滤；不得仅凭上下文存在就
-            # 返回 found=true（那会把其他会话的现场泄漏出去）。
-            ctx = _build_context(request_id, session_id=session_id)
-            return _apply_evidence_boundary(
-                _attach_provenance({
-                    "found": True,
-                    "trace_id": request_id,
-                    "summary": _summarize_error(err),
-                    "debug_context": ctx or {},
-                    "related_experiences": _lookup_related_experience(ctx),
-                    "source": "request_id",
-                })
-            )
-        alias_scenes, record_bucket, scan_incomplete, direct_signal = _resolve_id_scenes(
-            request_id, session_id
-        )
-        if len(alias_scenes) == 1 and not scan_incomplete:
-            # caller_trace_id 经往返验证的唯一别名 → 以唯一可回查 error_id 返回
-            resolved = alias_scenes[0]["request_id"]
-            scene_err = errors.get_by_id(resolved, session_id=session_id)
-            ctx = _build_context(resolved, session_id=session_id)
-            if scene_err is not None or ctx:
-                result = _apply_evidence_boundary(
+        scan_incomplete_any = False
+        resolved: dict | None = None
+        for rid in _expand_request_id(request_id):
+            err = errors.get_by_id(rid, session_id=session_id)
+            if err is not None:
+                # FIX: R5 —— 上下文构建同样受会话过滤；不得仅凭上下文存在就
+                # 返回 found=true（那会把其他会话的现场泄漏出去）。
+                ctx = _build_context(rid, session_id=session_id)
+                resolved = _apply_evidence_boundary(
                     _attach_provenance({
                         "found": True,
-                        "trace_id": resolved,
-                        "summary": _summarize_error(scene_err),
+                        "trace_id": rid,
+                        "summary": _summarize_error(err),
                         "debug_context": ctx or {},
                         "related_experiences": _lookup_related_experience(ctx),
                         "source": "request_id",
                     })
                 )
-                result["resolved_from_alias"] = {
-                    "requested_id": request_id, "resolved_to": resolved,
-                }
-                return result
-        if len(alias_scenes) > 1 or (alias_scenes and scan_incomplete):
-            # 一对多关联不静默挑一个；扫描不完整（截断/读取失败）时同样
-            # 不得断言「唯一匹配」
-            return _ambiguity_response(
-                alias_scenes,
-                complete=not scan_incomplete,
-                notice=(
-                    f"ID {request_id} 关联了多个错误现场，未静默选择；"
-                    "请用候选中的 request_id 精确查询。"
-                ),
+                break
+            alias_scenes, record_bucket, scan_incomplete, direct_signal = _resolve_id_scenes(
+                rid, session_id
             )
-        if record_bucket is not None:
-            return _record_bucket_response(record_bucket, request_id, session_id)
-        if direct_signal is not None:
-            # request_id 即含故障信号的桶 key（会话内 network/console 可回查）
-            return _bucket_signal_response(direct_signal, session_id)
-        # 旧行为兜底：以 request_id 直接构建上下文（存储桶 key 直查）
-        ctx = _build_context(request_id, session_id=session_id)
-        if ctx:
-            return _apply_evidence_boundary(
-                _attach_provenance({
-                    "found": True,
-                    "trace_id": request_id,
-                    "summary": _summarize_error(None),
-                    "debug_context": ctx,
-                    "related_experiences": _lookup_related_experience(ctx),
-                    "source": "request_id",
-                })
-            )
+            scan_incomplete_any = scan_incomplete_any or scan_incomplete
+            if len(alias_scenes) == 1 and not scan_incomplete:
+                # caller_trace_id 经往返验证的唯一别名 → 以唯一可回查 error_id 返回
+                alias_target = alias_scenes[0]["request_id"]
+                scene_err = errors.get_by_id(alias_target, session_id=session_id)
+                ctx = _build_context(alias_target, session_id=session_id)
+                if scene_err is not None or ctx:
+                    result = _apply_evidence_boundary(
+                        _attach_provenance({
+                            "found": True,
+                            "trace_id": alias_target,
+                            "summary": _summarize_error(scene_err),
+                            "debug_context": ctx or {},
+                            "related_experiences": _lookup_related_experience(ctx),
+                            "source": "request_id",
+                        })
+                    )
+                    result["resolved_from_alias"] = {
+                        "requested_id": request_id, "resolved_to": alias_target,
+                    }
+                    resolved = result
+                    break
+            if len(alias_scenes) > 1 or (alias_scenes and scan_incomplete):
+                # 一对多关联不静默挑一个；扫描不完整（截断/读取失败）时同样
+                # 不得断言「唯一匹配」
+                resolved = _ambiguity_response(
+                    alias_scenes,
+                    complete=not scan_incomplete,
+                    notice=(
+                        f"ID {request_id} 关联了多个错误现场，未静默选择；"
+                        "请用候选中的 request_id 精确查询。"
+                    ),
+                )
+                break
+            if record_bucket is not None:
+                resolved = _record_bucket_response(record_bucket, request_id, session_id)
+                break
+            if direct_signal is not None:
+                # request_id 即含故障信号的桶 key（会话内 network/console 可回查）
+                resolved = _bucket_signal_response(direct_signal, session_id)
+                break
+            # 旧行为兜底：以 rid 直接构建上下文（存储桶 key 直查）
+            ctx = _build_context(rid, session_id=session_id)
+            if ctx:
+                resolved = _apply_evidence_boundary(
+                    _attach_provenance({
+                        "found": True,
+                        "trace_id": rid,
+                        "summary": _summarize_error(None),
+                        "debug_context": ctx,
+                        "related_experiences": _lookup_related_experience(ctx),
+                        "source": "request_id",
+                    })
+                )
+                break
+        if resolved is not None:
+            return resolved
         not_found_message = f"未找到 {request_id} 对应的错误或追踪记录"
-        if scan_incomplete:
+        if scan_incomplete_any:
             not_found_message += (
                 "（存储扫描未完成：达到扫描上限或部分读取失败，结果可能不完整）"
             )
@@ -891,7 +960,7 @@ def handler(arguments: dict) -> dict:
             next_step="可不带参数重新调用本工具，将自动返回最近一次错误；"
                       "或调用 list_recent_traces 浏览近期错误摘要。",
         )
-        if scan_incomplete:
+        if scan_incomplete_any:
             result["candidate_set_complete"] = False
         return result
 
