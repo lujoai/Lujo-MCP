@@ -7,13 +7,24 @@
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-09-27
+
+> 主题「可信交付与宿主兼容」：本版来自一次真实项目 dogfooding（22 个工具在第二个真实项目全量实测）+ 外部架构评审的全部 P0/P1 收口。核心转变：**能力缺失不再表现为工具消失，参数错误不再表现为静默成功，空结果不再让宿主瞎猜**；浏览器采集工具在全部发行变体常驻可见并新增 `doctor` 自检；环境变量成为宿主界一等配置通道；返回宿主的现场数据获得来源标记（provenance）与注入边界隔离。工具面统一为 **23 注册 / 19 可见（源码版与 npm 冻结版一致）**。
+
 ### Added
 
+- **`doctor` 自检工具（新增，第 19 个可见工具）**：轻量常驻，八项检查——Playwright 库（sync+async）、chromium 二进制路径、heavy worker 入口、HTTP 监听地址端口、UI URL 访问策略（含回环默认放行规则）、KB 持久化、vector/embedding Key、git 授权根清单。宿主 AI 可在调用采集工具前自助体检，`CAPABILITY_MISSING` 时用本工具定位缺失项。
 - **`HTTP_PORT` / `HTTP_HOST` 环境变量支持（端口与宿主兼容）**：统一模式（stdio + HTTP）与独立 HTTP 入口的监听端口/地址现可经 MCP 配置的 `env` 设置——优先级为 **CLI 显式参数（`--http-port` / `--http-host`）> 环境变量 > 内置默认值**。旧键 `PORT` / `HOST` 继续生效（同名冲突时新键优先），既有 `.env` 与容器部署不受影响。背景：Trae 类宿主实测会丢弃 `args` 里的附加 CLI 参数，环境变量是宿主界公认更可靠的传参通道；宿主实测行为与推荐做法见 [HOST_COMPATIBILITY.md](./HOST_COMPATIBILITY.md)。
+- **宿主采纳工具包**：可直接粘贴的 [Trae 项目规则](./host-rules/trae.md)（遇到页面异常/静默失败先调 `diagnose_issue`，无现场用 `auto_test`，能力缺失如实告知）；[盲测协议](./BLIND_TEST_PROTOCOL.md)（5 个相关 + 5 个无关任务，度量相关任务调用率与无关任务误调率）；变体 × 工具清单表（API_REFERENCE §3.0）。
+- **证据来源标记（provenance）与注入边界隔离（安全）**：`diagnose_issue` / `context` 返回体新增 `provenance`（各维度的 source_tool / collected_at / redacted）；返回宿主的现场文本统一做 `</debug_evidence>` 闭合序列转义并声明 `evidence_trust: "untrusted"`——不可信页面数据无法伪造证据边界向宿主模型注入指令（`evidence_wrap_enabled` 默认开启）。README 与 DESIGN 新增「你的数据去了哪里」三层披露（本机采集存储 / 宿主云端模型可见 / 可选 embedding 外发）。
+- **跨项目调试：git 工具授权项目根**：`GIT_PATH_WHITELIST` 语义升级为授权项目根目录——路径先 `resolve()`（`../` 与符号链接无法逃逸）再 `normcase` 归一判定，拒绝时返回结构化原因；未配置时仍收敛为进程工作目录（安全默认不变）。调试非 Lujo 自身的仓库（宿主场景常态）时 diff/blame 不再全盲。
 
 ### Changed
 
 - **默认 HTTP 端口 8000 → 8710（升级须知）**：8000 与开发圈最常用端口（uvicorn/npm/Django 等）高频冲突并引发过真实故障，默认监听端口迁移为 **8710**。升级后，Browser SDK 的 `endpoint` 与浏览器书签里指向 `http://127.0.0.1:8000` 的地址需同步改为 `8710`；也可设置 `HTTP_PORT=8000` 保持旧值。默认端口冲突时的行为不变：stdio MCP 继续可用，HTTP 采集降级关闭并在 stderr 提示；`--http-port` 显式指定的端口被占用仍快速失败。
+- **浏览器采集工具常驻可见 + `CAPABILITY_MISSING` 契约**：npm 冻结版因不含 Playwright 此前把 `auto_test` / `verify_ui` 从 `tools/list` 整体过滤（宿主以为产品没有这能力）；现改为全变体常驻可见，能力缺失时返回统一执行失败载荷（`error_code: "CAPABILITY_MISSING"` + 源码版/冻结版各自的启用指引 + `retryable: false` 防重试风暴），`verify_ui` 不再返回易被误读为「页面验证不通过」的 `matched:false` 结论形状。
+- **ingest 系列必填参数显式校验**：`exc_type` / `message` / `record` / `record.url` 缺失或为空时抛 `ToolExecutionError`（`isError: true` 并指明正确参数名与示例），不再静默默认存入空记录；HTTP SDK 路由对真实浏览器上报的友好默认保持不变。
+- **空结果可操作化**：`get_network_trace` / `search_logs` / `list_recent_traces` / `get_recent_diff` / `get_blame_for_frame` / `get_related_specs` 在无数据时返回查询范围（scope/queried_scope）与 `next_step`（如何产生数据或扩大查询），对齐 `diagnose_issue` 的无数据契约。
 
 ## [0.9.6] - 2026-09-26
 
