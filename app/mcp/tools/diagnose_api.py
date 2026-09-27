@@ -142,10 +142,12 @@ DIAGNOSE_DEF = {
         "「控制台有异常」「登录失败」——应首先调用本工具。"
         "没有 request_id / trace_id 也必须调用：本工具会自动查找最近一次真实错误，"
         "并一次性返回完整调试上下文（异常堆栈+源码片段+网络请求链+UI 事件+git 归因）。"
-        "三种用法：①不带参数=取本服务最近收到的一条错误（本地单机模式下所有"
-        "页面/标签的上报共用同一个服务，因此跨页面；同一类错误重复出现时返回"
-        "最新一次的现场）；②query=按关键词匹配近期错误"
-        "（如「登录失败」「500」）；③request_id=精确查询指定记录。"
+        "三种用法：①不带参数=取本服务最近收到的故障现场（存在多个不同故障"
+        "现场时返回候选列表 ambiguity_detected，用候选中的 request_id 精确选择）；"
+        "②query=按关键词匹配近期错误"
+        "（如「登录失败」「500」，多命中时同样返回候选列表）；"
+        "③request_id=精确查询指定记录（支持 error_id、SDK caller trace ID、"
+        "网络记录 ID 的自动解析归属；caller ID 关联多个现场时返回候选列表）。"
         "用户明确在说某个页面/会话时，可传 session_id 只看该会话（缺省不过滤）。"
         "拿到 trace_id 后如需更细粒度信息，再按需调用 context / get_network_trace / "
         "get_recent_diff / get_blame_for_frame。"
@@ -156,7 +158,7 @@ DIAGNOSE_DEF = {
         "properties": {
             "request_id": {
                 "type": "string",
-                "description": "错误或请求 ID（可选；提供时精确查询该记录）",
+                "description": "错误或请求 ID（可选；支持 error_id / caller trace ID / 网络记录 ID，自动解析归属）",
             },
             "query": {
                 "type": "string",
@@ -302,6 +304,325 @@ def _auto_test_collect_step(url: str) -> str:
     )
 
 
+# ── 多现场消歧与 ID 往返（ID 契约修复工单）─────────────────────────────────
+# 歧义候选展示上限：最多展示 3 条；truncated 只表示展示列表截断。
+_AMBIGUITY_MAX_CANDIDATES = 3
+# 候选摘要字符上限（含截断标记"..."）。摘要只由白名单结构化字段生成。
+_CANDIDATE_SUMMARY_MAX = 60
+# 别名解析与候选枚举的有界存储扫描上限（桶数）。达到上限视为
+# 「无法证明已完整枚举」→ candidate_set_complete=false。
+_STORAGE_SCAN_LIMIT = 200
+# trace_api.search_logs 内部存储扫描的 limit（query 模式候选完整性的
+# 可证明性探测与之对齐；该值将来若上调会误报 complete，下调只会更保守，
+# 失败方向安全）。
+_SEARCH_LOGS_SCAN_LIMIT = 50
+
+
+def _short_summary(parts: list) -> str:
+    """白名单字段拼接为候选摘要；超长截断且截断标记计入上限。"""
+    text = " ".join(str(p) for p in parts if p)
+    if len(text) > _CANDIDATE_SUMMARY_MAX:
+        text = text[: _CANDIDATE_SUMMARY_MAX - 3] + "..."
+    return text
+
+
+def _safe_path(url) -> str:
+    """URL → 仅保留 path（去 scheme/host/query/fragment；值已存储边界脱敏）。"""
+    if not isinstance(url, str) or not url:
+        return ""
+    try:
+        from urllib.parse import urlsplit
+
+        return (urlsplit(url).path or "")[:80]
+    except Exception:
+        return ""
+
+
+def _safe_frame_tag(frames) -> str:
+    """堆栈帧 → 'basename:line'（不输出本机绝对路径，不回显消息内容）。"""
+    frame = frames[0] if isinstance(frames, list) and frames else None
+    if not isinstance(frame, dict):
+        return ""
+    file_name = str(frame.get("file") or "").replace("\\", "/").split("/")[-1]
+    if not file_name:
+        return ""
+    line = frame.get("line")
+    line_text = str(line) if isinstance(line, int) and not isinstance(line, bool) else "?"
+    return f"{file_name}:{line_text}"
+
+
+def _sanitize_top_frame(top_frame) -> str:
+    """search 摘要的 "file:line in func" → "basename:line"（防绝对路径泄漏）。"""
+    if not isinstance(top_frame, str) or not top_frame:
+        return ""
+    head = top_frame.split(" in ", 1)[0]
+    file_part, sep, line_part = head.rpartition(":")
+    if not sep:
+        return ""
+    base = file_part.replace("\\", "/").split("/")[-1]
+    return f"{base}:{line_part}" if base else ""
+
+
+def _scene_candidate(request_id: str, exc_type, frames, last_seen) -> dict:
+    """错误现场候选（唯一可回查的 error_id / 现场桶 key）。"""
+    exc_type_text = str(exc_type or "Unknown")
+    return {
+        "request_id": request_id,
+        "kind": "silent_failure" if exc_type_text == "SilentFailure" else "exception",
+        "granularity": "scene",
+        "type": exc_type,
+        "summary": _short_summary([exc_type_text, _safe_frame_tag(frames)]),
+        "last_seen": last_seen or 0,
+    }
+
+
+def _bucket_fault_signal(entries: list) -> dict | None:
+    """桶级故障信号（桶内无异常实体时）：network 失败 / console error。
+
+    失败分类遵循现有口径：status >= 400 或显式 error 标记为失败；
+    2xx/3xx 与普通 console 日志不算故障（健康遥测不得触发伪歧义）。
+    """
+    for entry in entries:
+        step, data = entry.get("step"), entry.get("data")
+        if not isinstance(data, dict):
+            continue
+        ts = data.get("timestamp") or entry.get("timestamp") or 0
+        if step == "network":
+            status = data.get("status_code", data.get("status"))
+            failed = bool(data.get("error")) or (
+                isinstance(status, (int, float))
+                and not isinstance(status, bool)
+                and status >= 400
+            )
+            if failed:
+                status_text = f"status {status}" if status is not None else ""
+                return {
+                    "kind": "network_failure",
+                    "summary": _short_summary([
+                        str(data.get("method") or ""), _safe_path(data.get("url")), status_text,
+                    ]),
+                    "last_seen": ts,
+                }
+        if step == "console" and data.get("level") == "error":
+            return {
+                "kind": "console_error",
+                "summary": _short_summary(["console error"]),
+                "last_seen": ts,
+            }
+    return None
+
+
+def _enumerate_fault_candidates(session_id: str | None) -> tuple[list[dict], bool]:
+    """枚举当前安全过滤范围内的故障候选实体（无参默认模式的消歧基础）。
+
+    - errors 缓冲全量读取（指纹聚合后每条即唯一可回查实体，deque 有界）；
+    - 存储有界扫描（list_request_ids，上限 _STORAGE_SCAN_LIMIT）：
+      trace_data 桶 = 缓冲淘汰/重启后的持久化现场；纯 network/console
+      故障桶 = 只能桶级寻址的信号候选（仅无会话查询时枚举——指定会话时
+      桶 key 查询受会话守卫不可达，不得伪装成可回查候选）；
+    - 健康遥测（2xx/3xx、无错误标记、普通日志）不进入候选；
+    - 扫描达到上限 ⇒ 无法证明完整枚举，complete=False。
+
+    返回 (候选列表[按 last_seen 倒序、时间同按 ID 稳定排序], candidate_set_complete)。
+    """
+    from app.runtime.core.logs import get_logs, list_request_ids
+
+    candidates: dict[str, dict] = {}
+    for err in errors.list_recent(limit=1000, session_id=session_id):
+        error_id = err.get("error_id")
+        if error_id:
+            candidates[error_id] = _scene_candidate(
+                error_id, err.get("type"), err.get("frames"),
+                err.get("last_seen") or err.get("timestamp"),
+            )
+    complete = True
+    bucket_ids = list_request_ids(limit=_STORAGE_SCAN_LIMIT)
+    if len(bucket_ids) >= _STORAGE_SCAN_LIMIT:
+        complete = False
+    for bucket_id in bucket_ids:
+        if bucket_id in candidates:
+            continue
+        try:
+            entries = get_logs(bucket_id)
+        except Exception:
+            logger.warning("候选枚举读取存储桶失败 (bucket=%s)", bucket_id, exc_info=True)
+            continue
+        scene_data = None
+        for entry in entries:
+            if entry.get("step") == "trace_data" and isinstance(entry.get("data"), dict):
+                data = entry["data"]
+                if session_id is None or data.get("session_id") == session_id:
+                    scene_data = data
+                break
+        if scene_data is not None:
+            candidates[bucket_id] = _scene_candidate(
+                bucket_id, scene_data.get("type"), scene_data.get("frames"),
+                scene_data.get("ts"),
+            )
+        elif session_id is None:
+            signal = _bucket_fault_signal(entries)
+            if signal:
+                candidates[bucket_id] = {
+                    "request_id": bucket_id,
+                    "kind": signal["kind"],
+                    "granularity": "bucket",
+                    "type": signal["kind"],
+                    "summary": signal["summary"],
+                    "last_seen": signal["last_seen"],
+                }
+    ordered = sorted(
+        candidates.values(),
+        key=lambda c: (-(c.get("last_seen") or 0), str(c["request_id"])),
+    )
+    return ordered, complete
+
+
+def _ambiguity_response(candidates: list[dict], complete: bool, notice: str) -> dict:
+    """多现场歧义响应（正常业务结果；不含 error 键，isError 语义不受影响）。"""
+    return {
+        "found": False,
+        "ambiguity_detected": True,
+        "candidate_set_complete": complete,
+        # 仅在可证明完整枚举时给出准确总数
+        "total_candidates": len(candidates) if complete else None,
+        # truncated 仅表示展示列表截断，与「无法完整枚举」是两回事
+        "truncated": len(candidates) > _AMBIGUITY_MAX_CANDIDATES,
+        "notice": notice,
+        "candidates": candidates[:_AMBIGUITY_MAX_CANDIDATES],
+        "next_step": (
+            "可用候选中的 request_id 逐个调用本工具获取完整现场"
+            "（候选按最近发生排序）；或补充 query/session_id 收窄范围。"
+        ),
+    }
+
+
+def _resolve_id_scenes(request_id: str, session_id: str | None):
+    """有界扫描存储，解析 request_id 的别名/记录归属（ID 往返契约）。
+
+    返回 (alias_scenes, record_bucket, scan_truncated)：
+    - alias_scenes：trace_link.caller_trace_id == request_id 且桶内
+      trace_data 会话可见的错误现场候选（caller ID → 唯一 error_id 别名）；
+    - record_bucket：network 载荷 record_id == request_id 的桶 key
+      （record_id 不作为桶 key 存储，只能确定性地定位到桶）；
+    - scan_truncated：扫描达到上限，无法证明已枚举全部桶。
+    """
+    from app.runtime.core.logs import get_logs, list_request_ids
+
+    bucket_ids = list_request_ids(limit=_STORAGE_SCAN_LIMIT)
+    truncated = len(bucket_ids) >= _STORAGE_SCAN_LIMIT
+    alias_scenes: list[dict] = []
+    record_bucket: str | None = None
+    for bucket_id in bucket_ids:
+        try:
+            entries = get_logs(bucket_id)
+        except Exception:
+            logger.warning("ID 解析读取存储桶失败 (bucket=%s)", bucket_id, exc_info=True)
+            continue
+        has_scene = False
+        scene_visible = True
+        caller_match = False
+        record_match = False
+        for entry in entries:
+            step, data = entry.get("step"), entry.get("data")
+            if not isinstance(data, dict):
+                continue
+            if step == "trace_data":
+                has_scene = True
+                if session_id is not None and data.get("session_id") != session_id:
+                    scene_visible = False
+            elif step == "trace_link" and data.get("caller_trace_id") == request_id:
+                caller_match = True
+            elif step == "network" and data.get("record_id") == request_id:
+                if session_id is None or data.get("session_id") == session_id:
+                    record_match = True
+        if caller_match and has_scene and scene_visible:
+            for entry in entries:
+                if entry.get("step") == "trace_data" and isinstance(entry.get("data"), dict):
+                    data = entry["data"]
+                    alias_scenes.append(_scene_candidate(
+                        bucket_id, data.get("type"), data.get("frames"), data.get("ts")
+                    ))
+                    break
+        elif record_match and record_bucket is None:
+            record_bucket = bucket_id
+    alias_scenes.sort(key=lambda c: (-(c.get("last_seen") or 0), str(c["request_id"])))
+    return alias_scenes, record_bucket, truncated
+
+
+def _record_bucket_response(bucket_key: str, requested_id: str, session_id: str | None) -> dict:
+    """network record_id 的确定性回查：优先归属错误现场，否则明示桶级粒度。"""
+    from app.runtime.core import trace_repo
+
+    rebuilt = trace_repo.get_trace(bucket_key, session_id=session_id)
+    if rebuilt is not None:
+        result = _finish(bucket_key, err=None, source="request_id", session_id=session_id)
+        result["resolved_from_alias"] = {
+            "requested_id": requested_id, "resolved_to": bucket_key,
+        }
+        return result
+    records = trace_repo.get_network_records(bucket_key, session_id=session_id)
+    return {
+        "found": True,
+        "trace_id": bucket_key,
+        "granularity": "bucket",
+        "notice": (
+            "命中的网络记录按存储桶整桶返回（桶级粒度，含桶内全部记录），"
+            "不代表可精确定位桶内单条事件。"
+        ),
+        "network_records": records,
+        "source": "request_id",
+    }
+
+
+def _bucket_signal_response(candidate: dict, session_id: str | None) -> dict:
+    """唯一候选为桶级故障信号时的返回（明示桶级粒度）。"""
+    from app.runtime.core import trace_repo
+
+    bucket_key = candidate["request_id"]
+    if candidate["kind"] == "network_failure":
+        records = trace_repo.get_network_records(bucket_key, session_id=session_id)
+        return {
+            "found": True,
+            "trace_id": bucket_key,
+            "granularity": "bucket",
+            "notice": "当前没有异常实体，最近的故障是网络失败信号；已按存储桶整桶返回（桶级粒度）。",
+            "network_records": records,
+            "source": "latest",
+        }
+    console = trace_repo.get_console_logs(bucket_key, session_id=session_id)
+    return {
+        "found": True,
+        "trace_id": bucket_key,
+        "granularity": "bucket",
+        "notice": "当前没有异常实体，最近的故障是 console error 信号；已按存储桶整桶返回（桶级粒度）。",
+        "console_logs": console,
+        "source": "latest",
+    }
+
+
+def _search_scan_complete() -> bool:
+    """query 模式候选完整性：search_logs 的存储扫描（limit=50）可证明未截断。"""
+    from app.runtime.core.logs import list_request_ids
+
+    return len(list_request_ids(limit=_SEARCH_LOGS_SCAN_LIMIT + 1)) <= _SEARCH_LOGS_SCAN_LIMIT
+
+
+def _search_match_candidate(match: dict) -> dict:
+    """search 命中 → 消歧候选（摘要只用 type + 脱敏 top_frame，不回显消息）。"""
+    request_id = match.get("trace_id") or match.get("error_id") or ""
+    exc_type = match.get("type")
+    return {
+        "request_id": request_id,
+        "kind": "silent_failure" if exc_type == "SilentFailure" else "exception",
+        "granularity": "scene",
+        "type": exc_type,
+        "summary": _short_summary([
+            str(exc_type or ""), _sanitize_top_frame(match.get("top_frame")),
+        ]),
+        "last_seen": match.get("last_seen") or match.get("timestamp") or 0,
+    }
+
+
 def _build_context(trace_id: str, session_id: str | None = None) -> dict | None:
     """构建调试上下文，失败降级为 None（不阻断摘要返回）。
 
@@ -375,27 +696,76 @@ def handler(arguments: dict) -> dict:
     except (TypeError, ValueError):
         since_minutes = 30
 
-    # ① request_id 精确查询
+    # ① request_id：唯一 error_id 直查 → 别名/记录解析（有界扫描）→
+    #    存储兜底直查（旧行为）→ not_found
     if request_id:
         err = errors.get_by_id(request_id, session_id=session_id)
-        # FIX: R5 —— 上下文构建同样受会话过滤；err 为 None 时不得仅凭
-        # 上下文存在就返回 found=true（那会把其他会话的现场泄漏出去）。
-        ctx = _build_context(request_id, session_id=session_id)
-        if err is None and not ctx:
-            return _not_found(
-                f"未找到 {request_id} 对应的错误或追踪记录",
-                next_step="可不带参数重新调用本工具，将自动返回最近一次错误；"
-                          "或调用 list_recent_traces 浏览近期错误摘要。",
+        if err is not None:
+            # FIX: R5 —— 上下文构建同样受会话过滤；不得仅凭上下文存在就
+            # 返回 found=true（那会把其他会话的现场泄漏出去）。
+            ctx = _build_context(request_id, session_id=session_id)
+            return _apply_evidence_boundary(
+                _attach_provenance({
+                    "found": True,
+                    "trace_id": request_id,
+                    "summary": _summarize_error(err),
+                    "debug_context": ctx or {},
+                    "related_experiences": _lookup_related_experience(ctx),
+                    "source": "request_id",
+                })
             )
-        return _apply_evidence_boundary(
-            _attach_provenance({
-                "found": True,
-                "trace_id": request_id,
-                "summary": _summarize_error(err),
-                "debug_context": ctx or {},
-                "related_experiences": _lookup_related_experience(ctx),
-                "source": "request_id",
-            })
+        alias_scenes, record_bucket, scan_truncated = _resolve_id_scenes(
+            request_id, session_id
+        )
+        if len(alias_scenes) == 1 and not scan_truncated:
+            # caller_trace_id 经往返验证的唯一别名 → 以唯一可回查 error_id 返回
+            resolved = alias_scenes[0]["request_id"]
+            scene_err = errors.get_by_id(resolved, session_id=session_id)
+            ctx = _build_context(resolved, session_id=session_id)
+            if scene_err is not None or ctx:
+                result = _apply_evidence_boundary(
+                    _attach_provenance({
+                        "found": True,
+                        "trace_id": resolved,
+                        "summary": _summarize_error(scene_err),
+                        "debug_context": ctx or {},
+                        "related_experiences": _lookup_related_experience(ctx),
+                        "source": "request_id",
+                    })
+                )
+                result["resolved_from_alias"] = {
+                    "requested_id": request_id, "resolved_to": resolved,
+                }
+                return result
+        if len(alias_scenes) > 1 or (alias_scenes and scan_truncated):
+            # 一对多关联不静默挑一个；扫描截断时同样不得声称唯一
+            return _ambiguity_response(
+                alias_scenes,
+                complete=not scan_truncated,
+                notice=(
+                    f"ID {request_id} 关联了多个错误现场，未静默选择；"
+                    "请用候选中的 request_id 精确查询。"
+                ),
+            )
+        if record_bucket is not None:
+            return _record_bucket_response(record_bucket, request_id, session_id)
+        # 旧行为兜底：以 request_id 直接构建上下文（存储桶 key 直查）
+        ctx = _build_context(request_id, session_id=session_id)
+        if ctx:
+            return _apply_evidence_boundary(
+                _attach_provenance({
+                    "found": True,
+                    "trace_id": request_id,
+                    "summary": _summarize_error(None),
+                    "debug_context": ctx,
+                    "related_experiences": _lookup_related_experience(ctx),
+                    "source": "request_id",
+                })
+            )
+        return _not_found(
+            f"未找到 {request_id} 对应的错误或追踪记录",
+            next_step="可不带参数重新调用本工具，将自动返回最近一次错误；"
+                      "或调用 list_recent_traces 浏览近期错误摘要。",
         )
 
     # ② query 关键词匹配（复用 trace_api.search_logs：内存缓冲 + 存储摘要合并）
@@ -411,6 +781,27 @@ def handler(arguments: dict) -> dict:
                 next_step="可尝试其他关键词、扩大 since_minutes，"
                           "或调用 list_recent_traces 查看全部近期错误。",
             )
+        if len(matches) > 1:
+            # 多命中不静默取第一条：返回消歧候选（各自持可回查 ID）
+            return _ambiguity_response(
+                [_search_match_candidate(m) for m in matches],
+                complete=_search_scan_complete(),
+                notice=(
+                    f"关键词「{query}」命中多个错误现场，未静默选择；"
+                    "请用候选中的 request_id 精确查询。"
+                ),
+            )
+        if not _search_scan_complete():
+            # 无法证明没有更多未读记录：唯一命中也不得当作全范围唯一现场
+            return _ambiguity_response(
+                [_search_match_candidate(matches[0])],
+                complete=False,
+                notice=(
+                    f"关键词「{query}」命中错误现场，但候选枚举不完整"
+                    "（存储扫描达到上限），无法确认是否唯一；"
+                    "请用候选中的 request_id 精确查询。"
+                ),
+            )
         best = matches[0]
         return _finish(
             best.get("trace_id") or best.get("error_id") or "",
@@ -419,7 +810,41 @@ def handler(arguments: dict) -> dict:
             session_id=session_id,
         )
 
-    # ③ 默认：最近一次真实错误（errors 缓冲优先，回退存储摘要）
+    # ③ 默认：故障候选枚举 → 多现场消歧 / 唯一现场直返（健康遥测不触发歧义）
+    candidates, candidate_set_complete = _enumerate_fault_candidates(session_id)
+    if len(candidates) > 1:
+        return _ambiguity_response(
+            candidates,
+            complete=candidate_set_complete,
+            notice=(
+                "当前范围内存在多个故障现场，未静默选择；"
+                "请用候选中的 request_id 精确查询。"
+            ),
+        )
+    if candidates:
+        top = candidates[0]
+        if not candidate_set_complete:
+            # 枚举不完整：唯一可见候选也不得当作全范围唯一现场直接返回
+            return _ambiguity_response(
+                candidates,
+                complete=False,
+                notice=(
+                    "当前范围内存在故障现场，但候选枚举不完整（存储扫描达到"
+                    "上限），无法确认是否唯一；请用候选中的 request_id 精确查询。"
+                ),
+            )
+        if top["granularity"] == "bucket":
+            return _bucket_signal_response(top, session_id)
+        scene_err = errors.get_by_id(top["request_id"], session_id=session_id)
+        return _finish(
+            top["request_id"],
+            err=scene_err,
+            source="latest" if scene_err is not None else "recent_traces",
+            session_id=session_id,
+        )
+
+    # 0 候选兜底：缓冲复查（覆盖枚举与读取间隙晚到的错误，兼得旧契约）→
+    # 存储摘要（旧行为：健康桶也可能在此作为 debug 型现场返回）
     latest = errors.get_latest(session_id=session_id)
     if latest:
         return _finish(
