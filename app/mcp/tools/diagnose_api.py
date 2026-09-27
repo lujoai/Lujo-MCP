@@ -13,6 +13,8 @@
 found=false 时含 message/setup_hint/next_step（绝不返回空对象让 AI 猜）。
 """
 import logging
+import re
+import time
 
 from app.config import settings
 from app.llm.injection_guard import escape_evidence_close
@@ -166,7 +168,7 @@ DIAGNOSE_DEF = {
             },
             "since_minutes": {
                 "type": "integer",
-                "description": "查询时间范围（分钟），默认 30（仅 query 模式生效）",
+                "description": "查询时间范围（分钟），默认 30；无参与 query 模式均生效，0 表示不限时间",
                 "default": 30,
             },
             "session_id": {
@@ -309,13 +311,17 @@ def _auto_test_collect_step(url: str) -> str:
 _AMBIGUITY_MAX_CANDIDATES = 3
 # 候选摘要字符上限（含截断标记"..."）。摘要只由白名单结构化字段生成。
 _CANDIDATE_SUMMARY_MAX = 60
-# 别名解析与候选枚举的有界存储扫描上限（桶数）。达到上限视为
-# 「无法证明已完整枚举」→ candidate_set_complete=false。
-_STORAGE_SCAN_LIMIT = 200
-# trace_api.search_logs 内部存储扫描的 limit（query 模式候选完整性的
-# 可证明性探测与之对齐；该值将来若上调会误报 complete，下调只会更保守，
-# 失败方向安全）。
-_SEARCH_LOGS_SCAN_LIMIT = 50
+# 存储桶枚举的安全上限：memory 后端桶数量受存储条目上限约束，全量枚举
+# 即可证明完整性；仅当达到该上限（失控防护）时按「无法证明完整」处理。
+_STORAGE_SCAN_LIMIT = 100_000
+
+# 候选摘要白名单字段的形态校验（type/file/path/method 均来自外部上报，
+# 不符合标识符/文件名/路径形态的一律整字段丢弃，不做部分清洗）：
+# 注入语句含空格与尖括号，无法通过校验，因此不会进入摘要。
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,63}$")
+_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._@\-]{1,80}$")
+_SAFE_PATH_RE = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%*\-]{0,200}$")
+_SAFE_METHOD_RE = re.compile(r"^[A-Za-z]{1,10}$")
 
 
 def _short_summary(parts: list) -> str:
@@ -326,67 +332,91 @@ def _short_summary(parts: list) -> str:
     return text
 
 
+def _safe_exc_type(exc_type) -> str:
+    """异常类型 → 仅保留标识符形态的值（外部上报字段，注入语句整字段丢弃）。"""
+    text = str(exc_type or "").strip()
+    return text if _SAFE_IDENTIFIER_RE.fullmatch(text) else ""
+
+
 def _safe_path(url) -> str:
-    """URL → 仅保留 path（去 scheme/host/query/fragment；值已存储边界脱敏）。"""
+    """URL → 仅保留形态合法的 path（去 scheme/host/query/fragment；值已存储
+    边界脱敏）。path 含空格/尖括号等非法字符时整字段丢弃。"""
     if not isinstance(url, str) or not url:
         return ""
     try:
         from urllib.parse import urlsplit
 
-        return (urlsplit(url).path or "")[:80]
+        path = urlsplit(url).path or ""
     except Exception:
         return ""
+    return path if _SAFE_PATH_RE.fullmatch(path) else ""
 
 
 def _safe_frame_tag(frames) -> str:
-    """堆栈帧 → 'basename:line'（不输出本机绝对路径，不回显消息内容）。"""
+    """堆栈帧 → 'basename:line'（文件名不符合文件名形态时整字段丢弃，
+    不输出本机绝对路径，不回显消息内容）。"""
     frame = frames[0] if isinstance(frames, list) and frames else None
     if not isinstance(frame, dict):
         return ""
     file_name = str(frame.get("file") or "").replace("\\", "/").split("/")[-1]
-    if not file_name:
+    if not _SAFE_FILENAME_RE.fullmatch(file_name):
         return ""
     line = frame.get("line")
     line_text = str(line) if isinstance(line, int) and not isinstance(line, bool) else "?"
     return f"{file_name}:{line_text}"
 
 
-def _sanitize_top_frame(top_frame) -> str:
-    """search 摘要的 "file:line in func" → "basename:line"（防绝对路径泄漏）。"""
-    if not isinstance(top_frame, str) or not top_frame:
-        return ""
-    head = top_frame.split(" in ", 1)[0]
-    file_part, sep, line_part = head.rpartition(":")
-    if not sep:
-        return ""
-    base = file_part.replace("\\", "/").split("/")[-1]
-    return f"{base}:{line_part}" if base else ""
+def _window_cutoff(since_minutes: int) -> float:
+    """无参 / query 共用的时间窗下限；since_minutes <= 0 视为不限时间。"""
+    if since_minutes <= 0:
+        return 0.0
+    return time.time() - since_minutes * 60
+
+
+def _scan_bucket_ids() -> tuple[list[str], bool]:
+    """全量枚举存储桶 key（安全上限仅作失控防护）。
+
+    返回 (桶 key 列表, 是否达到上限截断)。达到上限时无法证明已读完，
+    调用方必须按「候选集不完整」处理。
+    """
+    from app.runtime.core.logs import list_request_ids
+
+    bucket_ids = list_request_ids(limit=_STORAGE_SCAN_LIMIT)
+    return bucket_ids, len(bucket_ids) >= _STORAGE_SCAN_LIMIT
 
 
 def _scene_candidate(request_id: str, exc_type, frames, last_seen) -> dict:
     """错误现场候选（唯一可回查的 error_id / 现场桶 key）。"""
-    exc_type_text = str(exc_type or "Unknown")
+    safe_type = _safe_exc_type(exc_type)
+    kind = "silent_failure" if safe_type == "SilentFailure" else "exception"
+    summary = _short_summary([safe_type, _safe_frame_tag(frames)]) or kind
     return {
         "request_id": request_id,
-        "kind": "silent_failure" if exc_type_text == "SilentFailure" else "exception",
+        "kind": kind,
         "granularity": "scene",
-        "type": exc_type,
-        "summary": _short_summary([exc_type_text, _safe_frame_tag(frames)]),
+        "type": safe_type or None,
+        "summary": summary,
         "last_seen": last_seen or 0,
     }
 
 
-def _bucket_fault_signal(entries: list) -> dict | None:
+def _bucket_fault_signal(entries: list, cutoff: float = 0.0) -> dict | None:
     """桶级故障信号（桶内无异常实体时）：network 失败 / console error。
 
     失败分类遵循现有口径：status >= 400 或显式 error 标记为失败；
     2xx/3xx 与普通 console 日志不算故障（健康遥测不得触发伪歧义）。
+    取时间窗内最新一条合格信号；method/path/status 逐一做白名单形态
+    校验，非法字段整字段丢弃。
     """
+    best: dict | None = None
     for entry in entries:
         step, data = entry.get("step"), entry.get("data")
         if not isinstance(data, dict):
             continue
         ts = data.get("timestamp") or entry.get("timestamp") or 0
+        if ts < cutoff:
+            continue
+        signal = None
         if step == "network":
             status = data.get("status_code", data.get("status"))
             failed = bool(data.get("error")) or (
@@ -395,56 +425,77 @@ def _bucket_fault_signal(entries: list) -> dict | None:
                 and status >= 400
             )
             if failed:
-                status_text = f"status {status}" if status is not None else ""
-                return {
+                status_text = ""
+                if isinstance(status, (int, float)) and not isinstance(status, bool):
+                    status_text = f"status {status}"
+                method = str(data.get("method") or "")
+                if not _SAFE_METHOD_RE.fullmatch(method):
+                    method = ""
+                signal = {
                     "kind": "network_failure",
                     "summary": _short_summary([
-                        str(data.get("method") or ""), _safe_path(data.get("url")), status_text,
-                    ]),
-                    "last_seen": ts,
+                        method, _safe_path(data.get("url")), status_text,
+                    ]) or "network_failure",
                 }
-        if step == "console" and data.get("level") == "error":
-            return {
+        elif step == "console" and data.get("level") == "error":
+            signal = {
                 "kind": "console_error",
                 "summary": _short_summary(["console error"]),
-                "last_seen": ts,
             }
-    return None
+        if signal is not None and (best is None or ts > best["last_seen"]):
+            signal["last_seen"] = ts
+            best = signal
+    return best
 
 
-def _enumerate_fault_candidates(session_id: str | None) -> tuple[list[dict], bool]:
-    """枚举当前安全过滤范围内的故障候选实体（无参默认模式的消歧基础）。
+def _enumerate_fault_candidates(
+    session_id: str | None,
+    since_minutes: int = 30,
+    keyword: str | None = None,
+) -> tuple[list[dict], bool]:
+    """枚举当前请求可安全访问范围内的故障候选实体（无参 / query 共用）。
 
-    - errors 缓冲全量读取（指纹聚合后每条即唯一可回查实体，deque 有界）；
-    - 存储有界扫描（list_request_ids，上限 _STORAGE_SCAN_LIMIT）：
-      trace_data 桶 = 缓冲淘汰/重启后的持久化现场；纯 network/console
-      故障桶 = 只能桶级寻址的信号候选（仅无会话查询时枚举——指定会话时
-      桶 key 查询受会话守卫不可达，不得伪装成可回查候选）；
+    范围与完整性判定：
+    - 时间窗：since_minutes 对无参与 query 模式同样生效（0 = 不限时间）；
+    - 会话：指定 session_id 时逐条归属过滤（缺失/畸形归属对该查询不可见），
+      其他会话的桶既不进候选，其数量也不影响完整性；无会话查询可见全部桶；
     - 健康遥测（2xx/3xx、无错误标记、普通日志）不进入候选；
-    - 扫描达到上限 ⇒ 无法证明完整枚举，complete=False。
+    - 完整性 = 全量桶枚举未达安全上限 且 无读取失败；keyword 只过滤
+      命中集（匹配字段与 search_logs 同口径：type / message），枚举本身
+      始终全量，因此过滤不改变完整性判断。
 
     返回 (候选列表[按 last_seen 倒序、时间同按 ID 稳定排序], candidate_set_complete)。
     """
-    from app.runtime.core.logs import get_logs, list_request_ids
+    from app.runtime.core.logs import get_logs
 
+    cutoff = _window_cutoff(since_minutes)
+    kw = (keyword or "").strip().lower()
     candidates: dict[str, dict] = {}
     for err in errors.list_recent(limit=1000, session_id=session_id):
         error_id = err.get("error_id")
-        if error_id:
-            candidates[error_id] = _scene_candidate(
-                error_id, err.get("type"), err.get("frames"),
-                err.get("last_seen") or err.get("timestamp"),
-            )
+        if not error_id:
+            continue
+        last_seen = err.get("last_seen") or err.get("timestamp") or 0
+        if last_seen < cutoff:
+            continue
+        if kw and kw not in str(err.get("type") or "").lower() \
+                and kw not in str(err.get("message") or "").lower():
+            continue
+        candidates[error_id] = _scene_candidate(
+            error_id, err.get("type"), err.get("frames"), last_seen,
+        )
     complete = True
-    bucket_ids = list_request_ids(limit=_STORAGE_SCAN_LIMIT)
-    if len(bucket_ids) >= _STORAGE_SCAN_LIMIT:
+    bucket_ids, truncated = _scan_bucket_ids()
+    if truncated:
         complete = False
+    read_failures = 0
     for bucket_id in bucket_ids:
         if bucket_id in candidates:
             continue
         try:
             entries = get_logs(bucket_id)
         except Exception:
+            read_failures += 1
             logger.warning("候选枚举读取存储桶失败 (bucket=%s)", bucket_id, exc_info=True)
             continue
         scene_data = None
@@ -455,13 +506,21 @@ def _enumerate_fault_candidates(session_id: str | None) -> tuple[list[dict], boo
                     scene_data = data
                 break
         if scene_data is not None:
+            ts = scene_data.get("ts") or 0
+            if ts < cutoff:
+                continue
+            if kw and kw not in str(scene_data.get("type") or "").lower() \
+                    and kw not in str(scene_data.get("message") or "").lower():
+                continue
             candidates[bucket_id] = _scene_candidate(
-                bucket_id, scene_data.get("type"), scene_data.get("frames"),
-                scene_data.get("ts"),
+                bucket_id, scene_data.get("type"), scene_data.get("frames"), ts,
             )
         elif session_id is None:
-            signal = _bucket_fault_signal(entries)
+            signal = _bucket_fault_signal(entries, cutoff)
             if signal:
+                if kw and kw not in signal["summary"].lower() \
+                        and kw not in signal["kind"]:
+                    continue
                 candidates[bucket_id] = {
                     "request_id": bucket_id,
                     "kind": signal["kind"],
@@ -470,6 +529,8 @@ def _enumerate_fault_candidates(session_id: str | None) -> tuple[list[dict], boo
                     "summary": signal["summary"],
                     "last_seen": signal["last_seen"],
                 }
+    if read_failures:
+        complete = False
     ordered = sorted(
         candidates.values(),
         key=lambda c: (-(c.get("last_seen") or 0), str(c["request_id"])),
@@ -477,9 +538,27 @@ def _enumerate_fault_candidates(session_id: str | None) -> tuple[list[dict], boo
     return ordered, complete
 
 
+def _apply_ambiguity_boundary(response: dict) -> dict:
+    """歧义响应的证据边界（P1-F 同源）：候选 summary/type 转义闭合序列 +
+    载荷头不可信标注。候选字段已做白名单形态校验，此为第二道防线；
+    开关关闭时不转义、不注入头部字段（与主链路口径一致）。"""
+    if not getattr(settings, "evidence_wrap_enabled", True):
+        return response
+    try:
+        for cand in response.get("candidates") or []:
+            if isinstance(cand, dict):
+                for key in ("summary", "type"):
+                    value = cand.get(key)
+                    if isinstance(value, str):
+                        cand[key] = escape_evidence_close(value)
+    except Exception:
+        logger.warning("歧义候选边界处理失败，保持原载荷", exc_info=True)
+    return _apply_evidence_boundary(response)
+
+
 def _ambiguity_response(candidates: list[dict], complete: bool, notice: str) -> dict:
     """多现场歧义响应（正常业务结果；不含 error 键，isError 语义不受影响）。"""
-    return {
+    return _apply_ambiguity_boundary({
         "found": False,
         "ambiguity_detected": True,
         "candidate_set_complete": complete,
@@ -493,29 +572,32 @@ def _ambiguity_response(candidates: list[dict], complete: bool, notice: str) -> 
             "可用候选中的 request_id 逐个调用本工具获取完整现场"
             "（候选按最近发生排序）；或补充 query/session_id 收窄范围。"
         ),
-    }
+    })
 
 
 def _resolve_id_scenes(request_id: str, session_id: str | None):
-    """有界扫描存储，解析 request_id 的别名/记录归属（ID 往返契约）。
+    """全量扫描存储，解析 request_id 的别名/记录归属（ID 往返契约）。
 
-    返回 (alias_scenes, record_bucket, scan_truncated)：
+    返回 (alias_scenes, record_bucket, scan_incomplete)：
     - alias_scenes：trace_link.caller_trace_id == request_id 且桶内
       trace_data 会话可见的错误现场候选（caller ID → 唯一 error_id 别名）；
     - record_bucket：network 载荷 record_id == request_id 的桶 key
       （record_id 不作为桶 key 存储，只能确定性地定位到桶）；
-    - scan_truncated：扫描达到上限，无法证明已枚举全部桶。
+    - scan_incomplete：扫描达到安全上限或存在读取失败——此时既不能断言
+      「唯一匹配」，也不能断言「确定未找到」。
     """
-    from app.runtime.core.logs import get_logs, list_request_ids
+    from app.runtime.core.logs import get_logs
 
-    bucket_ids = list_request_ids(limit=_STORAGE_SCAN_LIMIT)
-    truncated = len(bucket_ids) >= _STORAGE_SCAN_LIMIT
+    bucket_ids, truncated = _scan_bucket_ids()
+    incomplete = truncated
+    read_failures = 0
     alias_scenes: list[dict] = []
     record_bucket: str | None = None
     for bucket_id in bucket_ids:
         try:
             entries = get_logs(bucket_id)
         except Exception:
+            read_failures += 1
             logger.warning("ID 解析读取存储桶失败 (bucket=%s)", bucket_id, exc_info=True)
             continue
         has_scene = False
@@ -545,8 +627,10 @@ def _resolve_id_scenes(request_id: str, session_id: str | None):
                     break
         elif record_match and record_bucket is None:
             record_bucket = bucket_id
+    if read_failures:
+        incomplete = True
     alias_scenes.sort(key=lambda c: (-(c.get("last_seen") or 0), str(c["request_id"])))
-    return alias_scenes, record_bucket, truncated
+    return alias_scenes, record_bucket, incomplete
 
 
 def _record_bucket_response(bucket_key: str, requested_id: str, session_id: str | None) -> dict:
@@ -597,29 +681,6 @@ def _bucket_signal_response(candidate: dict, session_id: str | None) -> dict:
         "notice": "当前没有异常实体，最近的故障是 console error 信号；已按存储桶整桶返回（桶级粒度）。",
         "console_logs": console,
         "source": "latest",
-    }
-
-
-def _search_scan_complete() -> bool:
-    """query 模式候选完整性：search_logs 的存储扫描（limit=50）可证明未截断。"""
-    from app.runtime.core.logs import list_request_ids
-
-    return len(list_request_ids(limit=_SEARCH_LOGS_SCAN_LIMIT + 1)) <= _SEARCH_LOGS_SCAN_LIMIT
-
-
-def _search_match_candidate(match: dict) -> dict:
-    """search 命中 → 消歧候选（摘要只用 type + 脱敏 top_frame，不回显消息）。"""
-    request_id = match.get("trace_id") or match.get("error_id") or ""
-    exc_type = match.get("type")
-    return {
-        "request_id": request_id,
-        "kind": "silent_failure" if exc_type == "SilentFailure" else "exception",
-        "granularity": "scene",
-        "type": exc_type,
-        "summary": _short_summary([
-            str(exc_type or ""), _sanitize_top_frame(match.get("top_frame")),
-        ]),
-        "last_seen": match.get("last_seen") or match.get("timestamp") or 0,
     }
 
 
@@ -691,8 +752,11 @@ def handler(arguments: dict) -> dict:
     query = arguments.get("query")
     # FIX: R5 —— 空串会话等价于未指定（"" 会命中 errors 的空串 bucket）
     session_id = arguments.get("session_id") or None
+    # since_minutes=0 表示不限时间（与 search_logs 口径一致），不能用
+    # `or 30` 兜底——0 会被当 falsy 静默改成 30
+    raw_since_minutes = arguments.get("since_minutes")
     try:
-        since_minutes = int(arguments.get("since_minutes") or 30)
+        since_minutes = 30 if raw_since_minutes is None else int(raw_since_minutes)
     except (TypeError, ValueError):
         since_minutes = 30
 
@@ -714,10 +778,10 @@ def handler(arguments: dict) -> dict:
                     "source": "request_id",
                 })
             )
-        alias_scenes, record_bucket, scan_truncated = _resolve_id_scenes(
+        alias_scenes, record_bucket, scan_incomplete = _resolve_id_scenes(
             request_id, session_id
         )
-        if len(alias_scenes) == 1 and not scan_truncated:
+        if len(alias_scenes) == 1 and not scan_incomplete:
             # caller_trace_id 经往返验证的唯一别名 → 以唯一可回查 error_id 返回
             resolved = alias_scenes[0]["request_id"]
             scene_err = errors.get_by_id(resolved, session_id=session_id)
@@ -737,11 +801,12 @@ def handler(arguments: dict) -> dict:
                     "requested_id": request_id, "resolved_to": resolved,
                 }
                 return result
-        if len(alias_scenes) > 1 or (alias_scenes and scan_truncated):
-            # 一对多关联不静默挑一个；扫描截断时同样不得声称唯一
+        if len(alias_scenes) > 1 or (alias_scenes and scan_incomplete):
+            # 一对多关联不静默挑一个；扫描不完整（截断/读取失败）时同样
+            # 不得断言「唯一匹配」
             return _ambiguity_response(
                 alias_scenes,
-                complete=not scan_truncated,
+                complete=not scan_incomplete,
                 notice=(
                     f"ID {request_id} 关联了多个错误现场，未静默选择；"
                     "请用候选中的 request_id 精确查询。"
@@ -762,56 +827,75 @@ def handler(arguments: dict) -> dict:
                     "source": "request_id",
                 })
             )
-        return _not_found(
-            f"未找到 {request_id} 对应的错误或追踪记录",
+        not_found_message = f"未找到 {request_id} 对应的错误或追踪记录"
+        if scan_incomplete:
+            not_found_message += (
+                "（存储扫描未完成：达到扫描上限或部分读取失败，结果可能不完整）"
+            )
+        result = _not_found(
+            not_found_message,
             next_step="可不带参数重新调用本工具，将自动返回最近一次错误；"
                       "或调用 list_recent_traces 浏览近期错误摘要。",
         )
+        if scan_incomplete:
+            result["candidate_set_complete"] = False
+        return result
 
-    # ② query 关键词匹配（复用 trace_api.search_logs：内存缓冲 + 存储摘要合并）
+    # ② query 关键词匹配：与无参共用全量故障候选枚举（keyword 过滤，
+    #    匹配字段与 search_logs 同口径：type / message），多命中消歧
     if query:
-        from app.mcp.tools.trace_api import search_logs as _search_logs
-
-        matches = _search_logs(
-            query, since_minutes=since_minutes, session_id=session_id
+        candidates, candidate_set_complete = _enumerate_fault_candidates(
+            session_id, since_minutes, keyword=str(query)
         )
-        if not matches:
-            return _not_found(
-                f"最近 {since_minutes} 分钟内没有匹配「{query}」的错误",
-                next_step="可尝试其他关键词、扩大 since_minutes，"
-                          "或调用 list_recent_traces 查看全部近期错误。",
-            )
-        if len(matches) > 1:
-            # 多命中不静默取第一条：返回消歧候选（各自持可回查 ID）
+        if len(candidates) > 1:
             return _ambiguity_response(
-                [_search_match_candidate(m) for m in matches],
-                complete=_search_scan_complete(),
+                candidates,
+                complete=candidate_set_complete,
                 notice=(
                     f"关键词「{query}」命中多个错误现场，未静默选择；"
                     "请用候选中的 request_id 精确查询。"
                 ),
             )
-        if not _search_scan_complete():
-            # 无法证明没有更多未读记录：唯一命中也不得当作全范围唯一现场
-            return _ambiguity_response(
-                [_search_match_candidate(matches[0])],
-                complete=False,
-                notice=(
-                    f"关键词「{query}」命中错误现场，但候选枚举不完整"
-                    "（存储扫描达到上限），无法确认是否唯一；"
-                    "请用候选中的 request_id 精确查询。"
-                ),
+        if candidates:
+            if not candidate_set_complete:
+                # 枚举不完整：唯一命中也不得当作全范围唯一现场
+                return _ambiguity_response(
+                    candidates,
+                    complete=False,
+                    notice=(
+                        f"关键词「{query}」命中错误现场，但候选枚举不完整"
+                        "（存储扫描未完成），无法确认是否唯一；"
+                        "请用候选中的 request_id 精确查询。"
+                    ),
+                )
+            best = candidates[0]
+            return _finish(
+                best["request_id"],
+                err=None,
+                source="query",
+                session_id=session_id,
             )
-        best = matches[0]
-        return _finish(
-            best.get("trace_id") or best.get("error_id") or "",
-            err=None,
-            source="query",
-            session_id=session_id,
+        if not candidate_set_complete:
+            # 扫描不足以确认：不得把未扫描到的匹配故障当作不存在
+            result = _not_found(
+                f"存储扫描未完成（达到扫描上限或部分读取失败），无法确认"
+                f"时间窗内是否还有匹配「{query}」的错误；未扫描部分不视为不存在。",
+                next_step="可稍后重试、缩小 since_minutes，或调用 "
+                          "list_recent_traces 浏览近期错误。",
+            )
+            result["candidate_set_complete"] = False
+            return result
+        return _not_found(
+            f"最近 {since_minutes} 分钟内没有匹配「{query}」的错误",
+            next_step="可尝试其他关键词、扩大 since_minutes，"
+                      "或调用 list_recent_traces 查看全部近期错误。",
         )
 
-    # ③ 默认：故障候选枚举 → 多现场消歧 / 唯一现场直返（健康遥测不触发歧义）
-    candidates, candidate_set_complete = _enumerate_fault_candidates(session_id)
+    # ③ 默认：时间窗内的故障候选枚举 → 多现场消歧 / 唯一现场直返
+    #（since_minutes 对无参模式同样生效；健康遥测不触发歧义）
+    candidates, candidate_set_complete = _enumerate_fault_candidates(
+        session_id, since_minutes
+    )
     if len(candidates) > 1:
         return _ambiguity_response(
             candidates,
@@ -829,8 +913,8 @@ def handler(arguments: dict) -> dict:
                 candidates,
                 complete=False,
                 notice=(
-                    "当前范围内存在故障现场，但候选枚举不完整（存储扫描达到"
-                    "上限），无法确认是否唯一；请用候选中的 request_id 精确查询。"
+                    "当前范围内存在故障现场，但候选枚举不完整（存储扫描未完成），"
+                    "无法确认是否唯一；请用候选中的 request_id 精确查询。"
                 ),
             )
         if top["granularity"] == "bucket":
@@ -842,28 +926,44 @@ def handler(arguments: dict) -> dict:
             source="latest" if scene_err is not None else "recent_traces",
             session_id=session_id,
         )
+    if not candidate_set_complete:
+        # 扫描不足以确认：不得把未扫描到的故障当作不存在，
+        # 也不得把健康桶/时间窗外现场当作「最新现场」返回
+        result = _not_found(
+            "存储扫描未完成（达到扫描上限或部分读取失败），无法确认当前"
+            "范围内是否存在故障现场；未扫描部分不视为不存在。",
+            next_step="可稍后重试、缩小 since_minutes，"
+                      "或提供 request_id/query 精确查询。",
+        )
+        result["candidate_set_complete"] = False
+        return result
 
-    # 0 候选兜底：缓冲复查（覆盖枚举与读取间隙晚到的错误，兼得旧契约）→
-    # 存储摘要（旧行为：健康桶也可能在此作为 debug 型现场返回）
+    # 0 候选且枚举完整：缓冲复查（晚到错误；无时间戳的记录不受窗约束）
+    cutoff = _window_cutoff(since_minutes)
     latest = errors.get_latest(session_id=session_id)
     if latest:
-        return _finish(
-            latest.get("error_id") or latest.get("trace_id") or "",
-            err=latest,
-            source="latest",
-            session_id=session_id,
-        )
+        latest_ts = latest.get("last_seen") or latest.get("timestamp") or 0
+        if not latest_ts or latest_ts >= cutoff:
+            return _finish(
+                latest.get("error_id") or latest.get("trace_id") or "",
+                err=latest,
+                source="latest",
+                session_id=session_id,
+            )
 
     from app.mcp.tools.trace_api import list_recent_traces as _list_recent
 
     recent = _list_recent(limit=1, session_id=session_id)
     if recent:
-        return _finish(
-            recent[0].get("trace_id") or "",
-            err=None,
-            source="recent_traces",
-            session_id=session_id,
-        )
+        item = recent[0]
+        item_ts = item.get("last_seen") or item.get("timestamp") or 0
+        if not item_ts or item_ts >= cutoff:
+            return _finish(
+                item.get("trace_id") or "",
+                err=None,
+                source="recent_traces",
+                session_id=session_id,
+            )
 
     return _not_found(
         "当前服务没有捕获到任何错误或追踪记录（可能是刚启动或尚无数据上报）",
