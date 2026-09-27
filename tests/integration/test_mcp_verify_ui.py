@@ -248,9 +248,14 @@ class TestVerifyUiViaDispatch:
         })
         resp = asyncio.run(protocol_server.dispatch(req))
 
-        assert resp["result"]["isError"] is False
+        # P0-B 契约（2026-09-27）：能力缺失 = 工具执行失败（isError=true），
+        # 统一 CAPABILITY_MISSING 载荷，不再携带 matched/diffs 结论键
+        #（matched:false 会被宿主误读为「页面验证不通过」的事实性结论）。
+        assert resp["result"]["isError"] is True
         content = _parse_content(resp)
-        assert content["matched"] is False
+        assert "matched" not in content
+        assert content["error_code"] == "CAPABILITY_MISSING"
+        assert content["retryable"] is False
         assert "playwright 未安装" in content["error"], (
             f"应包含 playwright 未安装提示，实际: {content['error']}"
         )

@@ -6,7 +6,6 @@ import pytest
 from app.mcp.protocol.jsonrpc import JSONRPCRequest
 from app.mcp.protocol.server import (
     _handle_tools_call,
-    _is_tool_available,
     _tool_registry,
     register_tool,
 )
@@ -36,6 +35,8 @@ def test_all_tools_registered():
         "search_logs",
         # v0.7.5 OpenAPI 一键生成断言规范
         "ingest_specs",
+        # P0-B 运行能力自检工具（常驻可见，无 availability 过滤）
+        "doctor",
     }
     missing = expected - names
     assert not missing, f"未注册的工具: {missing}"
@@ -62,10 +63,11 @@ def test_stdio_exports_dynamic_registered_tools():
     names = {tool.name for tool in tools}
     # Agent-facing 核心工具必须在列
     assert "verify" in names
-    if _is_tool_available(_tool_registry["verify_ui"]):
-        assert "verify_ui" in names
-    else:
-        assert "verify_ui" not in names
+    # P0-B：verify_ui/auto_test 去除 availability 过滤后常驻可见——能力缺失
+    # 在调用时以 CAPABILITY_MISSING 载荷表达，不再按依赖安装与否从清单隐藏
+    assert "verify_ui" in names
+    assert "auto_test" in names
+    assert "doctor" in names
     assert "diagnose_issue" in names
     assert "list_recent_traces" in names
     assert "search_logs" in names
@@ -93,12 +95,10 @@ def test_sdk_ingest_tools_filtered_from_tools_list_but_callable():
                  "context", "trace", "stacktrace", "verify"):
         assert core in visible_names, f"核心工具 {core} 不应在 tools/list 中缺席"
 
-    # tools/call 直接调用被过滤的 SDK 工具仍可执行（ingest_error 落 memory 存储）
-    if _is_tool_available(_tool_registry["verify_ui"]):
-        assert "verify_ui" in visible_names
-    else:
-        assert "verify_ui" not in visible_names
+    # P0-B：verify_ui 常驻可见（availability 过滤已移除）
+    assert "verify_ui" in visible_names
 
+    # tools/call 直接调用被过滤的 SDK 工具仍可执行（ingest_error 落 memory 存储）
     req = JSONRPCRequest(
         id="req-vis",
         method="tools/call",

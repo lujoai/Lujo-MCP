@@ -32,7 +32,8 @@ class TestToolsListContainsCategory:
         tools = resp["result"]["tools"]
         for tool in tools:
             assert "category" in tool, f"Tool {tool['name']} missing 'category'"
-            assert tool["category"] in ("agent", "sdk"), (
+            # diagnostic：P0-B doctor 自检工具（非查询分析、非 SDK 采集）
+            assert tool["category"] in ("agent", "sdk", "diagnostic"), (
                 f"Tool {tool['name']} has invalid category: {tool['category']}"
             )
 
@@ -76,6 +77,8 @@ class TestToolNamesUnchanged:
         "search_logs",
         # v0.7.5 OpenAPI 一键生成断言规范
         "ingest_specs",
+        # P0-B 运行能力自检工具（常驻可见，无 availability 过滤）
+        "doctor",
     }
 
     def setup_method(self):
@@ -93,8 +96,8 @@ class TestToolNamesUnchanged:
         assert not extra, f"Unexpected new tools: {extra}"
 
     def test_tool_count_matches_whitelist(self):
-        """注册总数与白名单一致（22 = 21 + v0.7.5 ingest_specs）。"""
-        assert len(_tool_registry) == 22
+        """注册总数与白名单一致（23 = 22 + P0-B doctor）。"""
+        assert len(_tool_registry) == 23
 
 
 # ── 3. inputSchema 不变 ──
@@ -143,7 +146,9 @@ class TestBackwardCompatibility:
         """模拟旧客户端只提取 name/description/inputSchema。
 
         v0.7.3: tools/list 只暴露 Agent-facing 工具——4 个 SDK 上报工具
-        （agent_visible=False）不进清单；v0.7.5 新增 ingest_specs 后公开数为 18。
+        （agent_visible=False）不进清单；v0.7.5 新增 ingest_specs 后公开数为 18；
+        P0-B 新增 doctor 且 verify_ui/auto_test 去除 availability 过滤，
+        公开数恒为 19（18 + doctor，不再随 playwright 安装与否浮动）。
         """
         req = JSONRPCRequest(jsonrpc="2.0", id=1, method="tools/list")
         resp = _handle_tools_list(req)
@@ -152,11 +157,7 @@ class TestBackwardCompatibility:
             {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
             for t in tools
         ]
-        optional_ui_tools = ("verify_ui", "auto_test")
-        unavailable_optional_count = sum(
-            not _is_tool_available(_tool_registry[name]) for name in optional_ui_tools
-        )
-        assert len(old_client_view) == 18 - unavailable_optional_count
+        assert len(old_client_view) == 19
         sdk_names = {"ingest_network", "ingest_error", "ingest_console", "ingest_silent_failure"}
         assert {e["name"] for e in old_client_view} & sdk_names == set()
         # 每个条目都是有效的旧格式
@@ -192,6 +193,8 @@ class TestCategoryMapping:
         "repair_async": "agent",
         "repair_result": "agent",
         "resolve_stack": "agent",
+        # diagnostic：P0-B doctor 运行能力自检
+        "doctor": "diagnostic",
     }
 
     def setup_method(self):
@@ -269,7 +272,7 @@ class TestStdioTransportMetadata:
             # Tool 对象的 extra fields 可通过 model_extra 访问
             extra = tool.model_extra or {}
             assert "category" in extra, f"stdio tool {tool.name} missing 'category'"
-            assert extra["category"] in ("agent", "sdk")
+            assert extra["category"] in ("agent", "sdk", "diagnostic")
 
     def test_stdio_tools_have_experimental(self):
         import app.mcp_server as mcp_server

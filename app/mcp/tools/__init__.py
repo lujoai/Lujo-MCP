@@ -32,17 +32,16 @@ def register_all_tools():
     from app.mcp.protocol.tool_errors import conclusion_tool_is_failure
     from app.mcp.tools.verify_ui_api import (
         VERIFY_UI_DEF, verify_ui_handler, verify_ui_prepare_args,
-        is_available as verify_ui_available,
     )
     from app.mcp.tools.auto_test_api import (
         AUTO_TEST_DEF, auto_test_handler,
-        is_available as auto_test_available,
     )
     from app.mcp.tools.repair_api import (
         REPAIR_ASYNC_DEF, REPAIR_RESULT_DEF,
         repair_async_handler, repair_result_handler,
     )
     from app.mcp.tools.sourcemap_api import TOOL_DEF as sourcemap_tool, handler as sourcemap_handler
+    from app.mcp.tools.doctor_api import DOCTOR_DEF, doctor_handler
 
     # ── v0.5 Tool Category Metadata ──
     # agent: 查询/分析类工具（由 AI Agent 调用）
@@ -72,18 +71,23 @@ def register_all_tools():
     register_tool(
         **VERIFY_UI_DEF, handler=verify_ui_handler, category="agent",
         prepare_args=verify_ui_prepare_args,
-        availability=verify_ui_available,
         # FIX(R8): 结论型工具——载荷是验证结论，其中的 error 只是原因说明，
         # 不应按全局「含 error 键即失败」契约标成 isError=true。
         is_failure=conclusion_tool_is_failure,
+        # P0-B：availability 过滤移除，工具常驻可见；能力缺失在调用时以
+        # CAPABILITY_MISSING 载荷表达（非结论形状 → 全局契约判执行失败）。
     )
     register_tool(
         **AUTO_TEST_DEF, handler=auto_test_handler, category="agent", experimental=True,
-        availability=auto_test_available,
+        # P0-B：同 verify_ui——常驻可见，能力缺失经 CAPABILITY_MISSING 载荷表达。
     )
-    register_tool(**REPAIR_ASYNC_DEF, handler=repair_async_handler, category="agent", experimental=True)
+    register_tool(
+        **REPAIR_ASYNC_DEF, handler=repair_async_handler, category="agent", experimental=True,
+    )
     register_tool(**REPAIR_RESULT_DEF, handler=repair_result_handler, category="agent", experimental=True)
     register_tool(**sourcemap_tool, handler=sourcemap_handler, category="agent", experimental=True)
+    # P0-B：运行能力自检工具——轻量（不进 heavy 子进程）、常驻可见（无 availability）
+    register_tool(**DOCTOR_DEF, handler=doctor_handler, category="diagnostic", agent_visible=True)
 
 
 # ── MCP 工具角色需求映射（供 mcp_routes.py 在 tools/call 分发前消费）──
@@ -114,4 +118,6 @@ TOOL_ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "get_related_specs":      ("admin", "developer", "viewer"),
     "repair_result":        ("admin", "developer", "viewer"),
     "resolve_stack":        ("admin", "developer", "viewer"),
+    # P0-B：诊断自检工具（只读探测，不产生副作用）
+    "doctor":               ("admin", "developer", "viewer"),
 }

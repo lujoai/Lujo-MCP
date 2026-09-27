@@ -208,6 +208,26 @@ def is_available() -> bool:
     return _PLAYWRIGHT_AVAILABLE
 
 
+def capability_missing_payload() -> dict:
+    """浏览器采集能力缺失的统一失败载荷（P0-B 方案 A）。
+
+    - 能力缺失 = 工具执行失败：载荷不含 ``matched`` / ``diffs`` 结论键，
+      ``conclusion_tool_is_failure`` 谓词对非结论形状自动回落
+      「含 error 即失败」全局契约，传输层据此置 isError=true。
+    - 返回 dict 而非 raise：verify_ui / auto_test 在 heavy 子进程执行，
+      返回值经 IPC 传输，dict 载荷才能完整跨进程。
+    """
+    return {
+        "error": "playwright 未安装，浏览器采集能力不可用",
+        "error_code": "CAPABILITY_MISSING",
+        "install": {
+            "source": "pip install playwright && playwright install chromium",
+            "npm_frozen": "冻结二进制内无法安装 Python 依赖，请改用源码方式运行（见 README）",
+        },
+        "retryable": False,
+    }
+
+
 def run_ui_verification(spec: dict, timeout_ms: int = 30000) -> dict:
     """
     按 UI 规范自动遍历页面并验证交互结果。
@@ -253,13 +273,9 @@ def run_ui_verification(spec: dict, timeout_ms: int = 30000) -> dict:
         }
 
     if not _PLAYWRIGHT_AVAILABLE:
-        return {
-            "matched": False,
-            "diffs": [],
-            "silent_failure": False,
-            "error": "playwright 未安装。安装方法: pip install playwright && playwright install chromium",
-            "security": security_summary,
-        }
+        # P0-B：能力缺失=执行失败——统一 CAPABILITY_MISSING 载荷（无结论键，
+        # 传输层按全局契约判 isError=true；dict 经 IPC 回传，不 raise）
+        return capability_missing_payload()
 
     interactions = (spec.get("expect") or {}).get("interactions") or []
     global_expect = spec.get("expect") or {}

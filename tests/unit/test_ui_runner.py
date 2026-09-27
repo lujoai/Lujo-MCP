@@ -11,7 +11,7 @@ class TestUIRunner:
         assert ui_runner.is_available() in (True, False)
 
     def test_no_playwright_returns_error(self):
-        """未装 Playwright 时返回明确错误"""
+        """未装 Playwright 时返回 CAPABILITY_MISSING 结构化失败载荷（P0-B）"""
         if ui_runner.is_available():
             pytest.skip("Playwright 已安装，跳过")
 
@@ -20,8 +20,12 @@ class TestUIRunner:
             "target": "http://example.com",
             "expect": {},
         })
-        assert result["matched"] is False
         assert "playwright 未安装" in result.get("error", "")
+        assert result["error_code"] == "CAPABILITY_MISSING"
+        assert result["retryable"] is False
+        # 能力缺失=执行失败：载荷不含 matched/diffs 结论键
+        assert "matched" not in result
+        assert "diffs" not in result
 
     def test_playwright_missing_branch_is_deterministic(self, monkeypatch):
         """降级分支的确定性覆盖：不依赖环境是否装了 playwright（R8）。
@@ -44,10 +48,28 @@ class TestUIRunner:
             "target": "http://127.0.0.1:9/nope",
             "expect": {},
         })
-        assert result["matched"] is False
+        # P0-B：能力缺失=执行失败——统一 CAPABILITY_MISSING 载荷，
+        # 不含 matched/diffs 结论键（结论型谓词据此回落全局契约判 isError）
         assert "playwright 未安装" in result["error"]
-        # 放开私网限制后安全校验放行，才轮得到 playwright 检查
-        assert result["security"]["target"]["allowed"] is True
+        assert result["error_code"] == "CAPABILITY_MISSING"
+        assert result["retryable"] is False
+        assert "matched" not in result
+        assert "diffs" not in result
+        assert result["install"]["source"] == (
+            "pip install playwright && playwright install chromium"
+        )
+        assert "冻结二进制" in result["install"]["npm_frozen"]
+
+        # 分支顺序守卫：同一"未安装"状态下，私网目标仍先被 URL 安全校验拒绝
+        #（返回结论形状 + security），证明安全校验先于 playwright 检查执行
+        monkeypatch.setattr("app.config.settings.ui_url_allow_private", False)
+        rejected = ui_runner.run_ui_verification({
+            "kind": "ui",
+            "target": "http://192.168.1.10:8765/demo",
+            "expect": {},
+        })
+        assert rejected["matched"] is False
+        assert rejected["security"]["target"]["allowed"] is False
 
     def test_no_target_returns_error(self):
         """无 target 时返回错误"""

@@ -9,6 +9,8 @@ import logging
 AUTO_TEST_DEF = {
     "name": "auto_test",
     "description": (
+        "本工具需要浏览器采集能力（Playwright）；未启用时调用会返回 "
+        "CAPABILITY_MISSING 与启用指引。"
         "【前端现场采集入口】当用户报告前端问题（页面异常、白屏、『点了没反应』、"
         "接口表现不对、疑似静默失败）而服务端还没有任何上报现场时，应先用本工具"
         "打开目标页面自动遍历并采集真实运行现场，再分析修复。"
@@ -144,7 +146,11 @@ async def auto_test_handler(arguments: dict) -> dict:
     try:
         from playwright.async_api import async_playwright as _  # noqa: F401
     except ImportError:
-        return {"error": "playwright 未安装。安装: pip install playwright && playwright install chromium"}
+        # P0-B：能力缺失=执行失败——与 verify_ui 共用统一 CAPABILITY_MISSING
+        # 载荷；本工具在 heavy 子进程执行，dict 经 IPC 回传，不 raise。
+        from app.runtime.verifier.ui_runner import capability_missing_payload
+
+        return capability_missing_payload()
 
     url = arguments["url"]
     from app.runtime.verifier.ui_runner import is_safe_url

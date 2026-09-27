@@ -19,6 +19,8 @@ def is_available() -> bool:
 VERIFY_UI_DEF = {
     "name": "verify_ui",
     "description": (
+        "本工具需要浏览器采集能力（Playwright）；未启用时调用会返回 "
+        "CAPABILITY_MISSING 与启用指引。"
         "按 UI 规范启动浏览器自动遍历页面交互并验证结果（「点击无反应」类静默"
         "失败的自动化验证）。需要 spec（kind='ui'，含 target 页面 URL 和 "
         "expect.interactions 列表）或 spec_id；不需要 request_id。"
