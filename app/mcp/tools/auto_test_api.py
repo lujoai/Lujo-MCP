@@ -4,6 +4,7 @@ MCP 工具：auto_test —— 自动遍历页面所有可交互元素并捕获�
 仅暴露同步入口，内部新开事件循环跑 Playwright 异步 API，
 避免与调用方的事件循环冲突。
 """
+import json
 import logging
 
 AUTO_TEST_DEF = {
@@ -17,6 +18,8 @@ AUTO_TEST_DEF = {
         "本机开发服务器（http://localhost:3000 等）默认放行，无需任何额外配置。"
         "自动遍历页面所有可交互元素（按钮/链接/输入框），"
         "依次执行点击并监听控制台错误和网络 4xx/5xx。"
+        "遍历期间自动为页面注入采集脚本（Browser SDK），"
+        "发现的错误将进入 Lujo 现场存储（可用 diagnose_issue 查询）。"
         "需要 url、不需要 request_id；不需要手动指定选择器，"
         "适合快速验收 AI 生成的前端页面、批量发现「点了没反应」的静默问题；"
         "已有上报现场时定位单个已知问题请先用 diagnose_issue。"
@@ -46,6 +49,62 @@ def is_available() -> bool:
     return True
 
 
+def _build_sdk_init_script() -> str | None:
+    """构造 auto_test 页面自动埋点的 Playwright init script（v0.9.8）。
+
+    产出自包含 JS：动态创建 ``<script src="http://{host}:{port}/ai-debug.js">``
+    插入 document（init script 运行时 document.head 可能为 null，挂
+    document.documentElement），script.onload 里执行
+    ``AiDebug.init({ endpoint })``，另以短轮询兜底确保 init 执行
+    （SDK init 自身幂等，重复调用无害）。
+
+    - endpoint 使用 settings.http_host / http_port 实时值（默认 127.0.0.1:8710），
+      SDK 采集的 console.error / 网络失败 / 静默失败经 POST /ingest/* 回流
+      Lujo 存储，随后可经 diagnose_issue 查询；
+    - 返回 None 表示注入被关闭（settings.auto_inject_sdk=False），调用方
+      必须完全跳过注入；
+    - SDK 加载失败（如被测页面 CSP 拦截、Lujo 未启动）静默降级，不干扰
+      被测页面本身。
+    """
+    from app.config import settings
+
+    if not settings.auto_inject_sdk:
+        return None
+    endpoint = f"http://{settings.http_host}:{settings.http_port}"
+    # json.dumps 把 endpoint 安全编码为 JS 字符串字面量（引号/特殊字符转义）
+    endpoint_js = json.dumps(endpoint)
+    return (
+        "(function () {\n"
+        "  try {\n"
+        "    if (window.__LUJO_SDK_INJECTED__) { return; }\n"
+        "    window.__LUJO_SDK_INJECTED__ = true;\n"
+        f"    var ENDPOINT = {endpoint_js};\n"
+        "    var SDK_URL = ENDPOINT + '/ai-debug.js';\n"
+        "    var initSdk = function () {\n"
+        "      try {\n"
+        "        if (window.AiDebug && typeof window.AiDebug.init === 'function') {\n"
+        "          window.AiDebug.init({ endpoint: ENDPOINT });\n"
+        "        }\n"
+        "      } catch (e) {}\n"
+        "    };\n"
+        "    var s = document.createElement('script');\n"
+        "    s.src = SDK_URL;\n"
+        "    s.onload = initSdk;\n"
+        "    s.onerror = function () {};\n"
+        "    (document.head || document.documentElement).appendChild(s);\n"
+        "    var tries = 0;\n"
+        "    var timer = setInterval(function () {\n"
+        "      tries += 1;\n"
+        "      if (window.AiDebug) { initSdk(); }\n"
+        "      if ((window.AiDebug && window.AiDebug._inited) || tries >= 20) {\n"
+        "        clearInterval(timer);\n"
+        "      }\n"
+        "    }, 250);\n"
+        "  } catch (e) {}\n"
+        "})();"
+    )
+
+
 async def _run(url: str, max_actions: int, capture_console: bool, capture_network: bool) -> dict:
     """内部 async 函数：用 Playwright 异步 API 执行遍历"""
     from playwright.async_api import async_playwright
@@ -71,6 +130,17 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
         browser = await pw.chromium.launch(headless=True, **launch_kwargs)
         try:
             page = await browser.new_page()
+
+            # v0.9.8 auto_test 自动埋点：把 Browser SDK init script 装到本页
+            # （add_init_script 在每次导航的页面脚本之前执行，对 goto 及后续
+            # 导航都生效）。页面 console.error / 网络失败 / 静默失败经 SDK
+            # POST /ingest/* 自动回流 Lujo 存储（diagnose_issue 可查），
+            # 用户 HTML 零改动。开关关闭时构造函数返回 None，完全跳过。
+            # 本文件唯一的 page 创建点即此处；Lujo 自身监听回环，SDK 回传
+            # 请求经 _install_ssrf_guard 的 loopback 豁免放行。
+            sdk_init_script = _build_sdk_init_script()
+            if sdk_init_script is not None:
+                await page.add_init_script(script=sdk_init_script)
 
             # SSRF 逐跳守卫：初始 URL 经 is_safe_url 校验，但 goto 重定向 / 点击触发的
             # 导航默认不校验，攻击者可借 302/JS 跳转内网绕过。复用 ui_runner 守卫逐跳拦截。

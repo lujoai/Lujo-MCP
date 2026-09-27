@@ -207,6 +207,13 @@ class Settings(BaseSettings):
     # 额外允许的主机白名单（逗号分隔，如 "localhost,127.0.0.1,test.internal"）；命中即放行。
     ui_url_allowlist: str = ""
 
+    # v0.9.8 auto_test 自动埋点：auto_test 打开页面时经 Playwright add_init_script
+    # 自动注入 Browser SDK（<script src="http://{http_host}:{http_port}/ai-debug.js">
+    # + AiDebug.init），页面 console.error / 网络失败 / 静默失败自动回流 Lujo 存储，
+    # 用户 HTML 零改动。注入 endpoint 使用 http_host/http_port 实时值；
+    # 设 AUTO_INJECT_SDK=false 完全跳过注入（不产生任何额外页面脚本）。
+    auto_inject_sdk: bool = True
+
     # ── 日志 ──
     log_level: str = "INFO"
     log_format: str = "json"  # "json" | "text"
