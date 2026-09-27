@@ -214,6 +214,94 @@ def _not_found(message: str, next_step: str | None = None) -> dict:
     }
 
 
+# v0.9.8 冷启动闭环：扫描的最近 request_id 数上限（存储按最后条目时间倒序
+# 返回，前若干个 key 已覆盖「最近上报过的页面」；控制冷启动扫描成本）。
+_LATEST_URL_SCAN_LIMIT = 20
+
+
+def _entry_url(data: object) -> str | None:
+    """从单条存储条目的 data 中提取页面 URL（无则 None）。
+
+    数据源契约（均为存储边界脱敏后的值）：
+    - network 记录：data.url 直存（save_network_record）；
+    - console 日志：SDK 侧页面地址通常在 data.extra.url；
+    - silent_failure：其关联 network 记录与本条同 key 存储，已被前者覆盖。
+    """
+    if not isinstance(data, dict):
+        return None
+    url = data.get("url")
+    if isinstance(url, str) and url.strip():
+        return url
+    extra = data.get("extra")
+    if isinstance(extra, dict):
+        extra_url = extra.get("url")
+        if isinstance(extra_url, str) and extra_url.strip():
+            return extra_url
+    return None
+
+
+def _latest_page_url(session_id: str | None = None) -> str | None:
+    """冷启动闭环：从已存储的上报记录里提取最近出现过的页面 URL。
+
+    场景：宿主首次调用本工具时 errors 缓冲与 trace 摘要都为空，但存储里
+    可能已有 SDK 上报的 console / network 记录（不带 URL 就无法给出可执行的
+    auto_test 指引）。只读存储层既有查询接口（list_request_ids + get_logs），
+    不新增存储后端能力；指定 session_id 时沿用 trace_repo 的会话过滤语义
+    （缺失/畸形归属对该查询不可见）。失败 fail-open 返回 None，绝不阻断
+    诊断主链路。
+    """
+    try:
+        from app.runtime.core.logs import get_logs, list_request_ids
+
+        best_ts = -1.0
+        best_url: str | None = None
+        for rid in list_request_ids(limit=_LATEST_URL_SCAN_LIMIT):
+            for entry in get_logs(rid):
+                data = entry.get("data")
+                if session_id is not None and not (
+                    isinstance(data, dict) and data.get("session_id") == session_id
+                ):
+                    continue
+                url = _entry_url(data)
+                if not url:
+                    continue
+                ts = entry.get("timestamp") or 0
+                if ts >= best_ts:
+                    best_ts = ts
+                    best_url = url
+        return best_url
+    except Exception:
+        logger.warning("冷启动 URL 提取失败，保持原无数据引导", exc_info=True)
+        return None
+
+
+def _cold_start_next_step(session_id: str | None = None) -> str:
+    """完全无错误现场时的下一步指引（v0.9.8 冷启动闭环）。
+
+    - 存储里有历史 URL：给宿主可直接执行的 auto_test 精确调用（含真实 URL），
+      避免「暂无数据 → 宿主放弃」的冷启动死路；
+    - 连 URL 都没有：保留 SDK 接入指引，并补「用户描述了具体页面时可直接
+      auto_test 打开该页面 URL 采集」的降级路径。
+    """
+    url = _latest_page_url(session_id)
+    if url:
+        return _auto_test_collect_step(url)
+    return (
+        "若调试浏览器问题：确认页面已接入 Browser SDK 并以 HTTP 模式运行"
+        "本服务（stdio 模式不接收浏览器上报），复现问题后重新调用本工具。"
+        "若用户描述了具体页面，也可直接调用 auto_test 打开该页面 URL 采集。"
+    )
+
+
+def _auto_test_collect_step(url: str) -> str:
+    """由历史页面 URL 构造可直接执行的 auto_test 采集指引。"""
+    return (
+        "当前没有已捕获的错误现场。立即调用 auto_test 采集："
+        f'{{"url": "{url}", "max_actions": 10}}，'
+        "采集完成后重新调用本工具获取诊断。"
+    )
+
+
 def _build_context(trace_id: str, session_id: str | None = None) -> dict | None:
     """构建调试上下文，失败降级为 None（不阻断摘要返回）。
 
@@ -250,9 +338,16 @@ def _finish(trace_id: str, err: dict | None, source: str, session_id: str | None
         err = errors.get_by_id(trace_id, session_id=session_id)
     ctx = _build_context(trace_id, session_id=session_id)
     if err is None and not ctx:
+        # v0.9.8 冷启动闭环：摘要存在但构不成现场时（errors 未命中且 builder
+        # 存储兜底也失败），若存储里有历史页面 URL，同样给出可执行的 auto_test
+        # 精确指引；没有 URL 时保持原有 trace 工具提示，不改变既有契约。
+        collect_url = _latest_page_url(session_id)
         return _not_found(
             f"记录 {trace_id} 存在摘要但无法构建调试上下文",
-            next_step="可尝试调用 trace 工具查看该 ID 的原始追踪日志。",
+            next_step=(
+                _auto_test_collect_step(collect_url) if collect_url
+                else "可尝试调用 trace 工具查看该 ID 的原始追踪日志。"
+            ),
         )
     # M1-B: 返回相关历史经验（只读，失败静默降级为空列表）
     related_experiences = _lookup_related_experience(ctx)
@@ -347,8 +442,10 @@ def handler(arguments: dict) -> dict:
 
     return _not_found(
         "当前服务没有捕获到任何错误或追踪记录（可能是刚启动或尚无数据上报）",
-        next_step="若调试浏览器问题：确认页面已接入 Browser SDK 并以 HTTP 模式运行"
-                  "本服务（stdio 模式不接收浏览器上报），复现问题后重新调用本工具。",
+        # v0.9.8 冷启动闭环：存储里有历史页面 URL 时给出可执行的 auto_test
+        # 精确指引（取自已存储的 console/network 上报），否则保留 SDK 接入
+        # 指引并补「按用户描述的页面直接采集」的降级路径。
+        next_step=_cold_start_next_step(session_id),
     )
 
 

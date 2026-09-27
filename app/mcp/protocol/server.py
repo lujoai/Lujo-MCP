@@ -58,6 +58,19 @@ SERVER_INFO = {
     "version": __version__,
 }
 
+# v0.9.8: MCP 规范标准字段 —— initialize result 中的服务器出厂说明。
+# 宿主（Claude/Codex/Trae 等）握手后将其注入系统上下文，信任级别高于
+# 项目内规则文件；用于解决 dogfooding 实证问题：宿主不知道先调
+# diagnose_issue，冷启动拿到「暂无数据」后即放弃本服务器。
+# 单一构造点：stdio（transports/stdio.dispatch）与 HTTP（api/mcp_routes
+# 的 dispatch_raw）共用 _handle_initialize，一处修改两条传输同时生效。
+SERVER_INSTRUCTIONS = (
+    "Lujo 是运行时调试现场服务器。当用户报告页面异常、接口失败、控制台报错、"
+    "点击无反应等运行时问题时：先调用 diagnose_issue（无需参数）获取真实现场；"
+    "若返回无数据，按返回体 next_step 指引调用 auto_test 采集（传入页面 URL）；"
+    "修复后用 verify/verify_ui 回归。与运行时调试无关的任务不要调用本服务器工具。"
+)
+
 # 工具注册表
 _tool_registry: dict[str, dict] = {}
 
@@ -353,6 +366,8 @@ def _handle_initialize(req: JSONRPCRequest) -> dict:
         "protocolVersion": negotiated,
         "capabilities": CAPABILITIES,
         "serverInfo": SERVER_INFO,
+        # MCP 规范标准字段：服务器出厂说明，宿主握手后注入系统上下文
+        "instructions": SERVER_INSTRUCTIONS,
     })
 
 
