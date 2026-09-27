@@ -72,6 +72,8 @@ import os
 os.environ["API_KEY"] = ""
 # SEC-03：默认 host=0.0.0.0 + 空 api_key 会拒绝启动；测试用本地回环避开。
 # ⚠️ 与 API_KEY 哨兵同样存在时序失效（见上方 FIX 说明），真正兜底在下方单例重置。
+# P1-C：env 通道定名 HTTP_HOST（旧键 HOST 仍兼容），两个键都设哨兵。
+os.environ.setdefault("HTTP_HOST", "127.0.0.1")
 os.environ.setdefault("HOST", "127.0.0.1")
 
 import pydantic_settings
@@ -95,8 +97,9 @@ settings.api_keys = ""
 # FIX: e2e 误杀——HOST env 哨兵因导入链抢跑失效，此处直接重置单例 host
 # 为回环地址（与 e2e/conftest.py 的 uvicorn bind 一致），SEC-03 守卫放行。
 # W10 后源码默认值本身就是 127.0.0.1，本行不再是「纠正默认值」，而是隔离
-# 开发者本机 .env 里可能存在的 HOST（例如 0.0.0.0）——保留，勿删。
-settings.host = "127.0.0.1"
+# 开发者本机 .env 里可能存在的 HOST/HTTP_HOST（例如 0.0.0.0）——保留，勿删。
+# P1-C：字段已更名 http_host（env 通道 HTTP_HOST，旧键 HOST 兼容）。
+settings.http_host = "127.0.0.1"
 
 # ── FIX: pytest-current 损坏 junction 防崩补丁（Windows 11 24H2+）──
 # 替换 pytest 内部的死链清理函数为异常安全版本。conftest 加载早于 tmpdir factory

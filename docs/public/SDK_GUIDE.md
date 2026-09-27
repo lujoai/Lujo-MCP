@@ -46,7 +46,7 @@ CommonJS：
 const { createClient } = require("@lujoai/lujo-mcp-node-sdk");
 
 const lujo = createClient({
-  endpoint: "http://127.0.0.1:8000",
+  endpoint: "http://127.0.0.1:8710",
   apiKey: process.env.LUJO_MCP_API_KEY,
   release: "orders-service@1.4.0",
 });
@@ -75,7 +75,7 @@ ESM：
 import { createClient } from "@lujoai/lujo-mcp-node-sdk";
 
 const lujo = createClient({
-  endpoint: "http://127.0.0.1:8000",
+  endpoint: "http://127.0.0.1:8710",
   apiKey: process.env.LUJO_MCP_API_KEY,
 });
 
@@ -94,7 +94,7 @@ await lujo.close();
 
 | API | 语义 |
 |-----|------|
-| `createClient({ endpoint?, apiKey?, release?, ... })` | 创建一个进程内客户端；`endpoint` 是 Lujo-MCP 服务根地址，省略时使用 `http://127.0.0.1:8000`。`apiKey` 通过请求头发送，`release` 随错误现场透传。 |
+| `createClient({ endpoint?, apiKey?, release?, ... })` | 创建一个进程内客户端；`endpoint` 是 Lujo-MCP 服务根地址，省略时使用 `http://127.0.0.1:8710`。`apiKey` 通过请求头发送，`release` 随错误现场透传。 |
 | `reportError(error, extra?)` | 将 `Error` 或可序列化错误加入错误队列；`extra` 用于补充业务上下文。调用本身不保证已经完成网络发送。 |
 | `reportNetworkError(record)` | 将一次网络失败记录加入网络事件队列；建议传 `method`、`url`、`status_code` 和 `duration_ms`。`url` / `request_body` / `response_body` 会在**脱敏之后**分别按 2000 / 10176 / 10176 字符截断，被截时追加 `...（客户端已截断）`。 |
 | `flush()` | 等待当前队列发送和有限重试完成，并返回 `sent`、`failed`、`batches`、`attempts` 计数；单批不超过服务端允许的 100 条事件，调用方应检查 `failed`。若某批被服务端以非 2xx 拒绝，结果里还会出现 `lastErrorStatus`（该批的 HTTP 状态码，如 401 密钥错、413 体积/条数超限、5xx），用来区分「服务端明确拒了」与「根本没连上」——后者不带这个键。 |
@@ -117,11 +117,11 @@ Node SDK 不会自动拦截 `fetch`、`http`、`undici` 或 `axios`。需要透�
 <!-- 同源引入或指定绝对地址 -->
 <script src="/ai-debug.js"></script>
 <script>
-  AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
+  AiDebug.init({ endpoint: "http://127.0.0.1:8710" });
 </script>
 ```
 
-> 服务端内置挂载路径为 `/ai-debug.js`（见 `app/main.py`），直接相对引入或跨端口从 `http://127.0.0.1:8000/ai-debug.js` 引入即可。
+> 服务端内置挂载路径为 `/ai-debug.js`（见 `app/main.py`），直接相对引入或跨端口从 `http://127.0.0.1:8710/ai-debug.js` 引入即可。
 >
 > ⚠️ **跨域 CORS 与 API Key 安全须知**：
 > - **CORS 配置**：若前端页面运行在不同源端口（如 `http://localhost:3000`），浏览器发送上报前会先发 OPTIONS 预检请求。必须在 Lujo-MCP 服务端环境配置 `CORS_ORIGINS=http://localhost:3000`（多域名逗号分隔），否则预检 405/403 导致上报全阻断。
@@ -132,11 +132,11 @@ Node SDK 不会自动拦截 `fetch`、`http`、`undici` 或 `axios`。需要透�
 ```js
 // ai-debug.js 运行在浏览器上下文，并把 AiDebug 暴露到 globalThis
 import "./ai-debug.js";
-globalThis.AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
+globalThis.AiDebug.init({ endpoint: "http://127.0.0.1:8710" });
 
 // CommonJS 仅适合浏览器打包/测试环境；不要在纯 Node 进程中调用 init()
 const AiDebug = require("./ai-debug.js");
-AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
+AiDebug.init({ endpoint: "http://127.0.0.1:8710" });
 ```
 
 初始化后 Browser SDK 自动安装浏览器采集钩子（错误 / 网络 / XHR / UI / 静默失败 / 控制台 / 页面卸载），无需手动调用。Node 服务端请使用上面的 Node SDK 显式上报。
@@ -151,7 +151,7 @@ AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `endpoint` | `""` | **必填**。服务端地址，如 `http://127.0.0.1:8000`（不含 `/ingest` 前缀）。必须是 `http://` / `https://` 开头的**绝对地址**：缺省或格式非法（如漏 scheme 的 `localhost:8000`）时 `init()` 拒绝初始化、只留一条 `console.warn`（不抛异常，避免打断宿主页面脚本），全部现场都不上报 |
+| `endpoint` | `""` | **必填**。服务端地址，如 `http://127.0.0.1:8710`（不含 `/ingest` 前缀）。必须是 `http://` / `https://` 开头的**绝对地址**：缺省或格式非法（如漏 scheme 的 `localhost:8710`）时 `init()` 拒绝初始化、只留一条 `console.warn`（不抛异常，避免打断宿主页面脚本），全部现场都不上报 |
 | `apiKey` | `""` | API Key（优先走请求头；`sendBeacon` 场景自动换 beacon 短时令牌）。⚠️ **警告**：写在浏览器代码中会泄露给页面访问者，严禁填入高权限服务端密钥，本地开发推荐留空免 key |
 | `captureErrors` | `true` | 全局异常捕获 |
 | `captureNetwork` | `true` | 网络请求捕获 |

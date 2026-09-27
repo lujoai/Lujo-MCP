@@ -461,7 +461,7 @@ class TestMetricsAuthExemption:
         from starlette.responses import JSONResponse
 
         monkeypatch.setattr(settings, "metrics_auth_enabled", False)
-        monkeypatch.setattr(settings, "host", host)
+        monkeypatch.setattr(settings, "http_host", host)
         mw = AuthMiddleware.__new__(AuthMiddleware)
         mw.enabled = True  # 鉴权开启：只考 /metrics 的豁免分支
 

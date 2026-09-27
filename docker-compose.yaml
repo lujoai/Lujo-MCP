@@ -18,7 +18,7 @@ services:
       # 本地定位）。容器内必须显式绑 0.0.0.0，否则服务只监听容器回环、
       # 下方 ports 发布会完全打不通（healthcheck 在容器内跑，仍会显示健康 →
       # 故障极难发现）。对外暴露面由 ports 的 127.0.0.1 发布地址控制。
-      HOST: 0.0.0.0
+      HTTP_HOST: 0.0.0.0
       # WP6（Step 3）：PostgreSQL 服务已移除，运行时后端固定 memory
       # （KB 经验由本地 SQLite 笔记本持久化，KB_PERSIST_ENABLED 默认开启）
       STORAGE_BACKEND: memory
@@ -39,9 +39,9 @@ services:
     ports:
       # FIX(v0.7.1-b6-8): 仅绑定回环 127.0.0.1（对齐 prod compose），不再向
       # 局域网/公网暴露 app 端口——开发环境也避免 API Key 明文 HTTP 意外外泄。
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8710:8710"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8710/health')\""]
       interval: 15s
       timeout: 5s
       retries: 5

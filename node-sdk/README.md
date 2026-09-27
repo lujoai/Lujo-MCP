@@ -9,7 +9,7 @@ interceptors.
 const { createClient } = require("@lujoai/lujo-mcp-node-sdk");
 
 const client = createClient({
-  endpoint: "http://127.0.0.1:8000",
+  endpoint: "http://127.0.0.1:8710",
   apiKey: process.env.LUJO_MCP_API_KEY,
   release: "orders-service@1.4.0",
 });

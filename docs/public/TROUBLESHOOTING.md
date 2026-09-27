@@ -52,7 +52,7 @@ RuntimeError: Refusing to start: host contains 0.0.0.0 but API_KEY is empty.
 Set API_KEY before exposing the service.
 ```
 
-**原因 / Cause**: `HOST=0.0.0.0` 且 `API_KEY` 为空，服务出于安全保护拒绝启动。
+**原因 / Cause**: `HTTP_HOST=0.0.0.0`（旧键 `HOST` 等效）且 `API_KEY` 为空，服务出于安全保护拒绝启动。
 
 **解决方案 / Solution**:
 - 方案 A（推荐）: 设置 `API_KEY`
@@ -60,7 +60,7 @@ Set API_KEY before exposing the service.
   # .env
   API_KEY=your_secret_token_here
   ```
-- 方案 B: 仅本地开发时，改用 `HOST=127.0.0.1`
+- 方案 B: 仅本地开发时，改用 `HTTP_HOST=127.0.0.1`（旧键 `HOST` 等效）
 
 **验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.6`（本地源码与 npm 发布版均为 0.9.6）
 
@@ -75,17 +75,17 @@ OSError: [Errno 98] Address already in use
 error: [WinError 10048] 通常每个套接字地址(协议/网络地址/端口)只允许使用一次
 ```
 
-**原因 / Cause**: Lujo HTTP 采集端口（默认 8000 或显式指定的端口）已被其他进程占用。
+**原因 / Cause**: Lujo HTTP 采集端口（默认 8710 或显式指定的端口）已被其他进程占用。
 
 **解决方案 / Solution**:
 
-- npm 统一模式使用默认端口且 8000 被占用时，MCP stdio 会继续启动，但 HTTP 服务不会启动，因此 Browser SDK 无法向该实例上报。需要浏览器采集时，在 MCP `args` 中添加 `--http-port 8001` 等空闲端口，并把 SDK `endpoint` 改为对应地址。
+- npm 统一模式使用默认端口且 8710 被占用时，MCP stdio 会继续启动，但 HTTP 服务不会启动，因此 Browser SDK 无法向该实例上报。需要浏览器采集时，在 MCP 配置 `env` 中设 `"HTTP_PORT": "<空闲端口>"`（Trae 等会丢弃 `args` 的宿主用 env；详见 [HOST_COMPATIBILITY.md](./HOST_COMPATIBILITY.md)），或在 `args` 中添加 `--http-port 8001` 等空闲端口，并把 SDK `endpoint` 改为对应地址。
 - 若显式指定的端口冲突，先确认占用者；不要盲目终止其他进程。可以改用另一空闲端口，或仅在确认该进程可停止后再释放原端口。
 - 仅使用 MCP 工具、不需要浏览器采集时，可显式传入 `--no-http`。
 
 **验证 / Verify**: 服务启动成功，`curl http://localhost:<PORT>/health` 返回 200
 
-> **多项目同机调试提示 / Multi-project note**: 若占用 8000 端口的是另一个 Lujo-MCP 实例（同时调试多个项目），不要终止它——按「端口即隔离」为本项目改用独立端口（MCP 配置追加 `--http-port`，页面 SDK `endpoint` 指向同端口），详见 README「🛠️ 进阶开发与私有化部署」的「多项目同机调试」小节。
+> **多项目同机调试提示 / Multi-project note**: 若占用 8710 端口的是另一个 Lujo-MCP 实例（同时调试多个项目），不要终止它——按「端口即隔离」为本项目改用独立端口（MCP 配置 `env` 设 `HTTP_PORT` 或追加 `--http-port`，页面 SDK `endpoint` 指向同端口），详见 README「🛠️ 进阶开发与私有化部署」的「多项目同机调试」小节。
 
 ---
 
@@ -508,7 +508,7 @@ TOOL_TIMEOUT_SECONDS=300    # verify_ui / auto_test 可能需要更长时间
 查看已注册工具列表:
 ```bash
 # 发送 tools/list 请求
-curl -X POST http://localhost:8000/mcp \
+curl -X POST http://localhost:8710/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
@@ -573,13 +573,13 @@ curl -X POST http://localhost:8000/mcp \
 **解决方案 / Solution**:
 ```bash
 # 方式 1: Bearer Token
-curl -H "Authorization: Bearer <API_KEY>" http://localhost:8000/health
+curl -H "Authorization: Bearer <API_KEY>" http://localhost:8710/health
 
 # 方式 2: X-API-Key Header
-curl -H "X-API-Key: <API_KEY>" http://localhost:8000/health
+curl -H "X-API-Key: <API_KEY>" http://localhost:8710/health
 
 # 方式 3: Query Parameter
-curl "http://localhost:8000/health?api_key=<API_KEY>"
+curl "http://localhost:8710/health?api_key=<API_KEY>"
 ```
 
 **注意**: `/` 和 `/health` 端点不需要鉴权。
@@ -787,7 +787,7 @@ UI_URL_ALLOWLIST=localhost,127.0.0.1,192.168.1.100
 
 **解决方案 / Solution**:
 ```bash
-curl -H "X-API-Key: <API_KEY>" http://localhost:8000/metrics
+curl -H "X-API-Key: <API_KEY>" http://localhost:8710/metrics
 ```
 
 **验证 / Verify**: 携带 API_KEY 后返回指标数据
@@ -989,7 +989,7 @@ pytest tests/ --timeout=120
 - **现象**：宿主 IDE 的 MCP 面板里 Lujo 显示「已连接 / 工具可用」，但让 AI 查页面报错时返回 `found=false` 或空结果。
 - **原因**：Lujo 有两条独立链路——①宿主智能体 → MCP → Lujo（工具调用）；②被调试网页 → Browser SDK → Lujo HTTP `/ingest` → memory runtime（现场采集）。MCP 连接只证明第①条链路可用；**没有第②条链路时，Lujo 不会自动知道页面里发生了什么**。
 - **解决方案**：
-  1. 确认 Lujo HTTP 采集端点在监听（npm 统一模式默认 `http://127.0.0.1:8000`；若默认端口冲突，stdio 仍可用但 HTTP 采集不会启动；纯 stdio `--no-http` 模式也不接收浏览器上报）。
+  1. 确认 Lujo HTTP 采集端点在监听（npm 统一模式默认 `http://127.0.0.1:8710`；若默认端口冲突，stdio 仍可用但 HTTP 采集不会启动；纯 stdio `--no-http` 模式也不接收浏览器上报）。
   2. 确认页面已加载 Browser SDK 且 `AiDebug.init({ endpoint: ... })` 的 endpoint 指向**当前项目对应的 Lujo 实例和端口**（多项目并行时各用不同 `--http-port`，见 README「端口即隔离」）。
   3. 按 C-4/F-4 排查内存与 CORS 后，在页面里复现问题，再回宿主会话查询。
 - **验证方法**：浏览器 DevTools Network 面板能看到发往 endpoint 的 `/ingest/batch` 请求且返回 200；随后 `diagnose_issue({})` 能返回现场。
@@ -1023,7 +1023,7 @@ pytest tests/ --timeout=120
    └── LOG_FORMAT=text → 搜索 ERROR / Exception / Traceback
 
 2. 检查健康状态
-   └── curl http://localhost:8000/health
+   └── curl http://localhost:8710/health
        ├── status=ok → 服务正常，问题在特定功能
        ├── status=degraded → 部分组件异常，用 /internal/health 查看 storage/llm_configured
        └── status=unhealthy → 核心组件异常
@@ -1041,7 +1041,7 @@ pytest tests/ --timeout=120
    └── pytest tests/unit/ -q → 代码层面验证
 
 6. 查看指标
-   └── curl http://localhost:8000/metrics → 请求统计/延迟/错误率
+   └── curl http://localhost:8710/metrics → 请求统计/延迟/错误率
 ```
 
 ### 日志级别调整

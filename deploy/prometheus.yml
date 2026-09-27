@@ -12,7 +12,7 @@ scrape_configs:
       type: Bearer
       credentials: ${LUJO_API_KEY}
     static_configs:
-      - targets: ["app:8000"]
+      - targets: ["app:8710"]
         labels:
           app: "lujo-mcp"
           env: "production"

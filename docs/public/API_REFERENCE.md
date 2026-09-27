@@ -35,7 +35,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 > ⚠️ **前端安全性与 CORS 规范**：
 > - **安全警告**：若在前端页面引入 Browser SDK 时填入 `apiKey`，该密钥会直接暴露给所有页面访问者与客户端代码，**严禁将高权限/共享服务端密钥直接写入公开前端代码**。需要注意：所有 `/ingest/*` 数据接入端点硬性要求 `admin` 或 `developer` 角色（`viewer` 角色会被 403 拒绝），系统**不存在**可用于浏览器上报的“只读 Key”或“仅上报 Key”。本地回环（`127.0.0.1`）开发推荐免 key 运行；若必须在远程/容器网络开启鉴权，应当由服务端应用代理（如 BFF 或反向代理）保管密钥并限制转发上报路由，避免直接把高权限/共享服务端密钥写进公开前端。
-> - **跨域 CORS**：当被调试页面与 Lujo-MCP 服务端不在同一端口（例如页面在 `http://localhost:3000`、服务在 `http://127.0.0.1:8000`）时，浏览器在发送上报前会发起 OPTIONS 预检。服务端必须配置 `CORS_ORIGINS` 包含前端源，否则预检失败导致上报被拦截。
+> - **跨域 CORS**：当被调试页面与 Lujo-MCP 服务端不在同一端口（例如页面在 `http://localhost:3000`、服务在 `http://127.0.0.1:8710`）时，浏览器在发送上报前会发起 OPTIONS 预检。服务端必须配置 `CORS_ORIGINS` 包含前端源，否则预检失败导致上报被拦截。
 
 三角色分级（`RBAC_ENABLED=true` 时生效）：
 
@@ -356,7 +356,7 @@ npm install @lujoai/lujo-mcp-node-sdk
 import { createClient } from "@lujoai/lujo-mcp-node-sdk";
 
 const client = createClient({
-  endpoint: "http://127.0.0.1:8000",
+  endpoint: "http://127.0.0.1:8710",
   apiKey: process.env.LUJO_MCP_API_KEY,
   release: "orders-service@1.4.0",
 });
@@ -376,7 +376,7 @@ try {
 
 | API | 语义 |
 |-----|------|
-| `createClient({ endpoint?, apiKey?, release?, ... })` | 创建进程内客户端。`endpoint` 使用 Lujo-MCP 服务根地址，省略时默认为 `http://127.0.0.1:8000`；`apiKey` 通过 `X-API-Key` 或等价鉴权请求头发送。 |
+| `createClient({ endpoint?, apiKey?, release?, ... })` | 创建进程内客户端。`endpoint` 使用 Lujo-MCP 服务根地址，省略时默认为 `http://127.0.0.1:8710`；`apiKey` 通过 `X-API-Key` 或等价鉴权请求头发送。 |
 | `reportError(error, extra?)` | 显式上报错误；事件先进入内存批量队列，调用返回不代表已经发送完成。 |
 | `reportNetworkError(record)` | 显式上报网络失败记录；可包含 `method`、`url`、`status_code`、`duration_ms` 等字段。 |
 | `flush()` | 发送当前队列并等待结果，返回 `sent`、`failed`、`batches`、`attempts` 计数；单批不超过 100 条，429/5xx 按有限退避策略重试，永久 4xx 不无限重试。 |

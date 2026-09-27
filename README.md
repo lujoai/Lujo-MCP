@@ -17,7 +17,7 @@
 初次使用 Lujo-MCP 时，请牢记核心原则（避免误解）：**服务端可零配置免环境启动（Trae 一次配好），业务运行现场仍需项目接入 SDK（页面引入脚本并初始化）**。
 
 1. **Lujo 服务端（真正零配置）**：通过 Trae / Cursor 配置 `npx` 即可直跑，**无需安装 Python、无需 Docker、无需配置数据库或大模型 Key**，本地自带 SQLite 笔记本与开箱即用的轻量 HTTP 采集服务。
-2. **业务项目（一次性轻量接入）**：Lujo 不是系统底层驱动或注入插件，它**无法凭空透视任意本地页面的内部异常**。被调试的项目页面需要**引入 Browser SDK 脚本并在代码中调用 `AiDebug.init({ endpoint })`**（见下方第 1 步）。如果页面与服务不同源（如页面在 `localhost:3000`、Lujo 在 `8000`），需在服务端配置 `CORS_ORIGINS`；若服务端启用了 `API_KEY`，SDK 初始化时也需同步传入 `apiKey`。
+2. **业务项目（一次性轻量接入）**：Lujo 不是系统底层驱动或注入插件，它**无法凭空透视任意本地页面的内部异常**。被调试的项目页面需要**引入 Browser SDK 脚本并在代码中调用 `AiDebug.init({ endpoint })`**（见下方第 1 步）。如果页面与服务不同源（如页面在 `localhost:3000`、Lujo 在 `8710`），需在服务端配置 `CORS_ORIGINS`；若服务端启用了 `API_KEY`，SDK 初始化时也需同步传入 `apiKey`。
 3. **日常调试交互（自然语言对话，无需记忆特殊指令）**：配置好后，你在 Trae 里**正常与 AI 对话即可**（例如说：“刚才页面报错了，帮我看下控制台和网络现场”）。Trae 的智能体会根据你的问题**自主决策发起 Tool Calling** 调用 Lujo 工具，你**不需要**手动输入 `@lujo`。
    > 📌 **注**：是否调用工具由宿主大模型自主判断，不保证 100% 每次都选用。若 AI 未调用工具而仅凭静态代码猜测，你只需在对话中简单补充一句：“*请调用 Lujo 工具（diagnose_issue）检查真实的控制台和网络报错记录*”即可。
 
@@ -46,7 +46,7 @@
 >
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
-> 📌 npm 入口默认启动**统一本地模式**：同一个进程同时提供 MCP stdio 和 `http://127.0.0.1:8000` HTTP。AI 可以直接使用 MCP 工具，浏览器 SDK 也能把控制台、网络失败和点击链路写入同一份内存上下文；不需要再手动启动第二个服务。
+> 📌 npm 入口默认启动**统一本地模式**：同一个进程同时提供 MCP stdio 和 `http://127.0.0.1:8710` HTTP。AI 可以直接使用 MCP 工具，浏览器 SDK 也能把控制台、网络失败和点击链路写入同一份内存上下文；不需要再手动启动第二个服务。
 >
 > 📄 可直接复制的机器可读版本在仓库根目录：[`mcp_config_example.json`](./mcp_config_example.json) —— 里面 `lujo`（npx 免安装）与 `lujo-from-source`（跑本地源码，已带 `--http`）是两条等价配置，**二选一**即可；用源码那条时把 `cwd` 换成你的仓库绝对路径，Windows 下建议把 `command` 指向项目的 `.venv/Scripts/python.exe`。
 
@@ -82,7 +82,7 @@ npm install -g @lujoai/lujo-mcp@0.9.6
 
 > 需要纯 stdio（例如只做协议冒烟或兼容严格的旧客户端）时，把 `args` 改为 `["--no-http"]`。源码入口 `python -m app.mcp_server` 默认也是纯 stdio，传入 `--http` 才开启同样的统一本地模式。
 >
-> 页面若运行在 `localhost:3000` 等其他端口，请在 MCP 配置的 `env` 中加入 `"CORS_ORIGINS": "http://localhost:3000"`（多个来源用逗号分隔）；打开内置 `http://127.0.0.1:8000/demo` 则无需配置跨域。
+> 页面若运行在 `localhost:3000` 等其他端口，请在 MCP 配置的 `env` 中加入 `"CORS_ORIGINS": "http://localhost:3000"`（多个来源用逗号分隔）；打开内置 `http://127.0.0.1:8710/demo` 则无需配置跨域。
 
 ---
 
@@ -126,7 +126,7 @@ npm install -g @lujoai/lujo-mcp@0.9.6
 ### 最短可执行流程（以 Trae 为例）
 
 1. **配好 MCP**：在 Trae 里添加 Lujo MCP（填入上述 npx 配置）。
-2. **接入业务项目**：在前端项目（HTML / React / Vue / Vite）里引入 Browser SDK 脚本并调用 `AiDebug.init({ endpoint: "http://127.0.0.1:8000" })`（页面跨端口需配 CORS，见下文）。
+2. **接入业务项目**：在前端项目（HTML / React / Vue / Vite）里引入 Browser SDK 脚本并调用 `AiDebug.init({ endpoint: "http://127.0.0.1:8710" })`（页面跨端口需配 CORS，见下文）。
 3. **复现问题**：在浏览器里点击或触发该 Bug。
 4. **自然对话**：直接在 Trae 聊天框输入：“*刚才页面出现报错了，帮我看下控制台和网络现场并修复*”。
 5. **宿主自主排查**：宿主模型可按需调用 `diagnose_issue` 获取结构化现场；是否选用工具由模型自主决定，不保证每次都调用。在有真实报错现场时，可辅助分析排障；若模型未选用工具，可明确提示“请调用 diagnose_issue 检查运行时现场”。
@@ -143,7 +143,7 @@ npm install -g @lujoai/lujo-mcp@0.9.6
 
 ### 第 0 步：启动 Lujo-MCP HTTP 服务（本地源码，零外部依赖）
 
-如果已经按上面的 npm 方式接入，这一步已经由 `lujo-mcp-server` 自动完成，可直接访问 `http://127.0.0.1:8000/demo`。下面的源码方式适合开发 Lujo-MCP 本身，或需要自定义 Python 依赖的场景。
+如果已经按上面的 npm 方式接入，这一步已经由 `lujo-mcp-server` 自动完成，可直接访问 `http://127.0.0.1:8710/demo`。下面的源码方式适合开发 Lujo-MCP 本身，或需要自定义 Python 依赖的场景。
 
 ```bash
 git clone https://github.com/lujoai/Lujo-MCP.git
@@ -169,7 +169,7 @@ CORS_ORIGINS=http://localhost:3000
 
 ```bash
 python -m app.main
-# 或：uvicorn app.main:app --host 127.0.0.1 --port 8000
+# 或：uvicorn app.main:app --host 127.0.0.1 --port 8710
 ```
 
 也可以让源码入口同时提供 stdio + HTTP（推荐给本地 MCP 客户端）：
@@ -184,7 +184,7 @@ MCP 客户端以 HTTP 模式接入（与 SDK 上报同一个服务进程）：
 {
   "mcpServers": {
     "lujo": {
-      "url": "http://127.0.0.1:8000/mcp"
+      "url": "http://127.0.0.1:8710/mcp"
     }
   }
 }
@@ -212,7 +212,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
    ```html
    <script src="/ai-debug.js"></script>
    <script>
-     window.AiDebug.init({ endpoint: "http://127.0.0.1:8000", apiKey: "change-me-api-key" });
+     window.AiDebug.init({ endpoint: "http://127.0.0.1:8710", apiKey: "change-me-api-key" });
    </script>
    ```
 
@@ -224,14 +224,14 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
    {
      "mcpServers": {
        "lujo": {
-         "url": "http://127.0.0.1:8000/mcp",
+         "url": "http://127.0.0.1:8710/mcp",
          "headers": { "Authorization": "Bearer change-me-api-key" }
        }
      }
    }
    ```
 
-3. **CORS**：`CORS_ORIGINS` 必须包含被调试前端页面的完整源（协议+域名+端口，如 `http://localhost:3000`）；服务端口（默认 8000）与页面端口不同源时，浏览器会先发起 OPTIONS 预检请求；服务端未配置对应的 `CORS_ORIGINS` 白名单时，预检失败会导致 SDK 上报全部被阻断。
+3. **CORS**：`CORS_ORIGINS` 必须包含被调试前端页面的完整源（协议+域名+端口，如 `http://localhost:3000`）；服务端口（默认 8710）与页面端口不同源时，浏览器会先发起 OPTIONS 预检请求；服务端未配置对应的 `CORS_ORIGINS` 白名单时，预检失败会导致 SDK 上报全部被阻断。
 
 ### 第 1 步：页面接入采集 SDK（两行代码）
 
@@ -240,16 +240,16 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 ```html
 <script src="/ai-debug.js"></script>
 <script>
-  window.AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
+  window.AiDebug.init({ endpoint: "http://127.0.0.1:8710" });
 </script>
 ```
 
 > **参数说明**：
-> - `endpoint`：必填，指向上一步启动的 Lujo-MCP HTTP 服务地址（如 `http://127.0.0.1:8000`）。
+> - `endpoint`：必填，指向上一步启动的 Lujo-MCP HTTP 服务地址（如 `http://127.0.0.1:8710`）。
 > - **跨域 CORS**：若页面运行在 `http://localhost:3000`，请确保 Lujo-MCP 服务端配置了 `CORS_ORIGINS=http://localhost:3000`。
 > - **API Key 安全**：本地回环开发（`HOST=127.0.0.1`）建议免 key 运行，无需传入 `apiKey`。切勿将服务端高权限密钥明文写在前端代码中。
 >
-> 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8000/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
+> 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8710/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
 ### Node 服务接入：使用 Node SDK（v0.9.6 已发布）
 
@@ -263,7 +263,7 @@ npm install @lujoai/lujo-mcp-node-sdk
 const { createClient } = require("@lujoai/lujo-mcp-node-sdk");
 
 const lujo = createClient({
-  endpoint: "http://127.0.0.1:8000",
+  endpoint: "http://127.0.0.1:8710",
   apiKey: process.env.LUJO_MCP_API_KEY,
   release: "orders-service@1.4.0",
 });
@@ -401,12 +401,12 @@ Lujo-MCP 设计遵循**渐进式增强**原则：
 ### Q3: 为什么 AI 提示没有找到错误追踪（Trace）？
 - **排查**：
   1. 确认 Lujo-MCP HTTP 服务已启动（SDK 上报依赖 `/ingest` 端点）；
-  2. 确认页面已加载 SDK 并调用了 `AiDebug.init({ endpoint: "http://localhost:8000" })`——**未配置 `endpoint` 时 SDK 会静默不上报**；
+  2. 确认页面已加载 SDK 并调用了 `AiDebug.init({ endpoint: "http://localhost:8710" })`——**未配置 `endpoint` 时 SDK 会静默不上报**；
   3. 打开浏览器 DevTools Network 面板，确认页面有发往 `endpoint` 的 `/ingest/batch` 请求；
   4. 可让 AI 调用 `diagnose_issue`（免 ID 自动定位最近错误）或 `list_recent_traces` 检索最近的运行日志。
 
 ### Q4: 同一台机器调试多个项目，AI 查到了别的项目的现场？
-- **原因**：多个项目的 Lujo 实例争用同一个默认采集口 `127.0.0.1:8000`，浏览器 SDK 上报只会进占住该端口的那个实例。
+- **原因**：多个项目的 Lujo 实例争用同一个默认采集口 `127.0.0.1:8710`，浏览器 SDK 上报只会进占住该端口的那个实例。
 - **解决方案**：按「端口即隔离」给每个项目分配独立 `--http-port`，并将各页面 SDK 的 `endpoint` 指向各自端口。详见「🛠️ 进阶开发与私有化部署」中的**多项目同机调试**小节。
 
 ---
@@ -422,7 +422,7 @@ cd Lujo-MCP
 cp .env.example .env
 docker compose up -d
 ```
-服务将运行于 `http://localhost:8000`，支持 Web Dashboard（`http://localhost:8000/dashboard`）与 Streamable HTTP MCP 端点（`http://localhost:8000/mcp`）。
+服务将运行于 `http://localhost:8710`，支持 Web Dashboard（`http://localhost:8710/dashboard`）与 Streamable HTTP MCP 端点（`http://localhost:8710/mcp`）。
 
 </details>
 
@@ -447,16 +447,17 @@ python -m app.main
 
 ### 多项目同机调试：「端口即隔离」
 
-Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用，一人装一套，数据留在本机（运行现场 memory + KB 经验本地 SQLite 笔记本），**没有服务端、不承诺多人共用一台中央数据库的隔离**。在这一前提下，同一台机器上同时调试多个项目时，若都使用默认采集口 `127.0.0.1:8000`，两个项目的浏览器 SDK 上报只会进入「占住 8000 的那个实例」——另一个项目的 AI 查到的是别的项目的现场。**既定方案是「端口即隔离」**：每个项目用独立端口，互不串台。
+Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用，一人装一套，数据留在本机（运行现场 memory + KB 经验本地 SQLite 笔记本），**没有服务端、不承诺多人共用一台中央数据库的隔离**。在这一前提下，同一台机器上同时调试多个项目时，若都使用默认采集口 `127.0.0.1:8710`，两个项目的浏览器 SDK 上报只会进入「占住 8710 的那个实例」——另一个项目的 AI 查到的是别的项目的现场。**既定方案是「端口即隔离」**：每个项目用独立端口，互不串台。
 
-**1. 每个项目分配独立的 `--http-port`**（在各自宿主的 MCP 配置中，其余参数由 npm 启动器原样转发给服务）：
+**1. 每个项目分配独立的采集端口**：推荐在各自宿主的 MCP 配置 `env` 中设 `HTTP_PORT`（Trae 等宿主会丢弃 `args` 里的附加 CLI 参数，env 是更可靠的通道）；`--http-port` 参数在标准宿主上同样有效：
 
 ```json
 {
   "mcpServers": {
     "lujo-project-a": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@0.9.6", "--http-port", "8101"]
+      "args": ["-y", "@lujoai/lujo-mcp@0.9.6"],
+      "env": { "HTTP_PORT": "8101" }
     },
     "lujo-project-b": {
       "command": "npx",
@@ -483,7 +484,7 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 
 **已知限制（如实说明）**：
 
-- 默认采集口是 `127.0.0.1:8000`。npm 统一模式下默认端口冲突时，MCP stdio 会继续运行，但 HTTP/Browser SDK 采集不会启动，并会向 stderr 记录警告；需要浏览器采集时，请为该实例配置空闲的 `--http-port`，并让 SDK endpoint 使用同一端口。显式指定的端口若被占用则启动失败。Lujo 不会自动选择随机端口，因为页面 SDK 也必须知道上报目标端口。
+- 默认采集口是 `127.0.0.1:8710`。npm 统一模式下默认端口冲突时，MCP stdio 会继续运行，但 HTTP/Browser SDK 采集不会启动，并会向 stderr 记录警告；需要浏览器采集时，请为该实例配置空闲端口（env `HTTP_PORT` 或 `--http-port`），并让 SDK endpoint 使用同一端口。显式指定的端口若被占用则启动失败。Lujo 不会自动选择随机端口，因为页面 SDK 也必须知道上报目标端口。
 - `diagnose_issue` 缺省取本服务跨页面/标签的最近一条错误（同类错误重复出现时返回最新一次现场）；用户明确在说某个页面/会话时，可给工具传 `session_id` 过滤（缺省 = 不过滤）。
 
 ---
@@ -499,6 +500,7 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 | | 📋 [PRD.md](./docs/public/PRD.md) | 产品功能需求规格与设计边界承诺 |
 | **部署与排障** | 🚦 [PREFLIGHT_CHECKLIST.md](./docs/public/PREFLIGHT_CHECKLIST.md) | 环境依赖、功能启用（Redis/Playwright/OTel）与 Docker 部署前预检综合手册（整合原 ENABLEMENT_GUIDE） |
 | | 🛠️ [TROUBLESHOOTING.md](./docs/public/TROUBLESHOOTING.md) | 启动异常、配置错误、网络与 MCP 协议异常排查指南 |
+| | 🧩 [HOST_COMPATIBILITY.md](./docs/public/HOST_COMPATIBILITY.md) | MCP 宿主兼容性：Trae 类宿主丢弃 CLI 参数的实测行为与 env 传参推荐做法 |
 | **发版与演进** | 📜 [CHANGELOG.md](./docs/public/CHANGELOG.md) | 完整版本变更历史、各版本发行说明（Release Notes）与未发布维护批次修复记录 |
 
 ---

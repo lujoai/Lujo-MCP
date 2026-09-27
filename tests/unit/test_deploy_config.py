@@ -42,7 +42,7 @@ class TestDeployConfig:
         content = prom_path.read_text(encoding="utf-8")
         assert "scrape_configs:" in content
         assert "job_name: \"lujo-mcp\"" in content
-        assert "targets: [\"app:8000\"]" in content
+        assert "targets: [\"app:8710\"]" in content
 
     def test_docker_compose_prod_valid(self):
         compose_path = Path("deploy/docker-compose.prod.yml")
@@ -224,17 +224,41 @@ class TestDeployConfig:
     def test_host_default_is_loopback_and_surfaces_agree(self):
         """源码默认必须是回环，且 .env.example 与之一致。"""
         src = (_REPO_ROOT / "app" / "config.py").read_text(encoding="utf-8")
-        m = re.search(r"^\s*host:\s*str\s*=\s*\"([^\"]+)\"", src, re.M)
-        assert m is not None, "app/config.py 找不到 host 字面默认值"
+        m = re.search(
+            r"^\s*http_host:\s*str\s*=\s*Field\(\s*default=\"([^\"]+)\"", src, re.M
+        )
+        assert m is not None, "app/config.py 找不到 http_host 字面默认值"
         assert m.group(1) == "127.0.0.1", (
             f"默认监听地址应为回环（单用户本地定位），实际={m.group(1)!r}（P2-SEC-1）"
         )
 
         env = (_REPO_ROOT / ".env.example").read_text(encoding="utf-8")
-        env_m = re.search(r"^HOST=([^\s#]+)", env, re.M)
-        assert env_m is not None, ".env.example 缺少 HOST 声明（复制即生效的示例必须写清）"
+        env_m = re.search(r"^HTTP_HOST=([^\s#]+)", env, re.M)
+        assert env_m is not None, (
+            ".env.example 缺少 HTTP_HOST 声明（复制即生效的示例必须写清）"
+        )
         assert env_m.group(1) == m.group(1), (
-            f".env.example HOST={env_m.group(1)!r} 与权威默认 {m.group(1)!r} 不一致"
+            f".env.example HTTP_HOST={env_m.group(1)!r} 与权威默认 {m.group(1)!r} 不一致"
+        )
+
+    def test_port_default_is_8710_and_surfaces_agree(self):
+        """P1-C：源码默认端口必须是 8710，且 .env.example 与一致。
+
+        默认端口 8000 与开发圈最常用端口高频冲突（真实事故两次）；迁移后
+        用断言钉住「改默认必须同步改示例」的跨表面一致性，防止单向漂移。
+        """
+        src = (_REPO_ROOT / "app" / "config.py").read_text(encoding="utf-8")
+        m = re.search(r"^\s*http_port:\s*int\s*=\s*Field\(\s*default=(\d+)", src, re.M)
+        assert m is not None, "app/config.py 找不到 http_port 字面默认值"
+        assert m.group(1) == "8710", (
+            f"默认端口应为 8710（P1-C 端口迁移），实际={m.group(1)!r}"
+        )
+
+        env = (_REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+        env_m = re.search(r"^HTTP_PORT=([^\s#]+)", env, re.M)
+        assert env_m is not None, ".env.example 缺少 HTTP_PORT 声明"
+        assert env_m.group(1) == m.group(1), (
+            f".env.example HTTP_PORT={env_m.group(1)!r} 与权威默认 {m.group(1)!r} 不一致"
         )
 
     def test_container_surfaces_pin_wildcard_host(self):
@@ -245,13 +269,13 @@ class TestDeployConfig:
         显示健康 —— 这是最难发现的一类故障，故用断言钉住。
         """
         dockerfile = (_REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
-        assert re.search(r"^ENV HOST=0\.0\.0\.0$", dockerfile, re.M), (
-            "Dockerfile 缺少 ENV HOST=0.0.0.0（docker run 直接跑会不可达）"
+        assert re.search(r"^ENV HTTP_HOST=0\.0\.0\.0$", dockerfile, re.M), (
+            "Dockerfile 缺少 ENV HTTP_HOST=0.0.0.0（docker run 直接跑会不可达）"
         )
         for compose_relpath in ("docker-compose.yaml", "deploy/docker-compose.prod.yml"):
             content = (_REPO_ROOT / compose_relpath).read_text(encoding="utf-8")
-            assert re.search(r"^\s*HOST:\s*0\.0\.0\.0\s*$", content, re.M), (
-                f"{compose_relpath} 的 app 服务缺少 HOST: 0.0.0.0"
+            assert re.search(r"^\s*HTTP_HOST:\s*0\.0\.0\.0\s*$", content, re.M), (
+                f"{compose_relpath} 的 app 服务缺少 HTTP_HOST: 0.0.0.0"
             )
             assert "127.0.0.1:" in content, (
                 f"{compose_relpath} 的端口发布必须仍限回环（P2-F1 不得回退）"
@@ -280,6 +304,6 @@ class TestDeployConfig:
         content = (_REPO_ROOT / "deploy" / "env.production.example").read_text(
             encoding="utf-8"
         )
-        assert re.search(r"^HOST=", content, re.M), (
-            "env.production.example 缺少 HOST 声明"
+        assert re.search(r"^HTTP_HOST=", content, re.M), (
+            "env.production.example 缺少 HTTP_HOST 声明"
         )

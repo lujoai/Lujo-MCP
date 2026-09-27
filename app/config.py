@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from pydantic import ConfigDict, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings
 
 # 项目根目录（app/ 的上一级）
@@ -405,12 +405,24 @@ class Settings(BaseSettings):
     # 产品却默认装机即全网监听，只要设了任意 API_KEY（含弱 key）就在网络上
     # 开放且无任何告警；统一 stdio 模式（app/mcp_server.py 的 --http-host）
     # 早就是 127.0.0.1，HTTP 独立入口未对齐属遗漏。这是收紧而非放宽，符合
-    # 「安全默认值不得静默放宽」。需要对外服务时显式设 HOST（并按 SEC-03
+    # 「安全默认值不得静默放宽」。需要对外服务时显式设 HTTP_HOST（并按 SEC-03
     # 配 API_KEY；通配地址 + 无 Key 仍会被启动校验硬拒绝）。
-    # ⚠️ 容器内必须显式 HOST=0.0.0.0（Dockerfile 与两份 compose 已设），
+    # ⚠️ 容器内必须显式 HTTP_HOST=0.0.0.0（Dockerfile 与两份 compose 已设），
     # 否则服务只监听容器回环，端口发布打不通而 healthcheck 仍显示健康。
-    host: str = "127.0.0.1"
-    port: int = 8000
+    # P1-C（端口与宿主兼容）：env 通道定名 HTTP_HOST / HTTP_PORT —— Trae 类宿主
+    # 实测会丢弃 MCP args 里的附加 CLI 参数，环境变量是宿主界公认更可靠的配置
+    # 通道；CLI 显式参数（--http-host/--http-port）仍优先于 env（见 mcp_server
+    # 的回落逻辑）。旧键 HOST / PORT 经 AliasChoices 继续生效（既有 .env 与
+    # 容器部署不破坏），同名冲突时新键优先。默认端口 8000 → 8710：8000 与开发圈
+    # 最常用端口（uvicorn/npm/Django 等）高频冲突，真实事故两次。
+    http_host: str = Field(
+        default="127.0.0.1",
+        validation_alias=AliasChoices("HTTP_HOST", "HOST"),
+    )
+    http_port: int = Field(
+        default=8710,
+        validation_alias=AliasChoices("HTTP_PORT", "PORT"),
+    )
     debug: bool = False
     service_name: str = "lujo-mcp"
 

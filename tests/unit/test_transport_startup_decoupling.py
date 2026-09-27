@@ -1,7 +1,7 @@
 """单元与集成测试：传输启动解耦（HTTP 端口占用时 stdio 正常启动降级）。
 
 背景：
-在统一模式（--http，也是 npm 启动器默认行为）下，如果 HTTP 端口（默认 8000 或 settings.port）
+在统一模式（--http，也是 npm 启动器默认行为）下，如果 HTTP 端口（默认 8710 或 settings.http_port）
 被占用，旧行为会抛出 SystemExit 杀死整个进程，导致 MCP 客户端崩溃。
 解耦后新行为：
 - 默认端口冲突：绝不杀死进程，在 stderr/logger 输出引导警告，降级为单 transport（stdio）模式；
@@ -75,10 +75,10 @@ async def test_run_unified_transport_degrades_to_stdio_on_default_port_conflict(
 async def test_run_unified_transport_infers_default_port_from_settings(
     monkeypatch, caplog
 ):
-    """当未显式传 is_default_port 时，如果 port == settings.port，自动判定为默认端口并降级。"""
+    """当未显式传 is_default_port 时，如果 port == settings.http_port，自动判定为默认端口并降级。"""
     occupied_sock, port = _get_occupied_port()
     try:
-        monkeypatch.setattr(mcp_server.settings, "port", port)
+        monkeypatch.setattr(mcp_server.settings, "http_port", port)
         stdio_called = []
 
         async def _fake_stdio():
@@ -87,7 +87,7 @@ async def test_run_unified_transport_infers_default_port_from_settings(
         monkeypatch.setattr(mcp_server, "_run_stdio_transport", _fake_stdio)
 
         with caplog.at_level(logging.WARNING, logger="lujo-mcp"):
-            # 不传 is_default_port，让其内部由 port == settings.port 推导
+            # 不传 is_default_port，让其内部由 port == settings.http_port 推导
             await mcp_server._run_unified_transport("127.0.0.1", port)
 
         assert len(stdio_called) == 1
@@ -127,7 +127,7 @@ async def test_main_unified_mode_degrades_to_stdio_on_default_port_conflict(
     """通过 main(['--http']) 启动时，若默认端口占用，不抛 SystemExit 且正常运行 stdio。"""
     occupied_sock, port = _get_occupied_port()
     try:
-        monkeypatch.setattr(mcp_server.settings, "port", port)
+        monkeypatch.setattr(mcp_server.settings, "http_port", port)
         monkeypatch.setattr(mcp_server.settings, "storage_backend", "memory")
 
         stdio_called = []

@@ -49,7 +49,7 @@ def is_unspecified_bind(bind_host: object) -> bool:
 
 
 def resolve_bind_host(real_host: Optional[str] = None) -> str:
-    """配置口径下生效的监听地址归一（与 settings.host 同语义）。
+    """配置口径下生效的监听地址归一（与 settings.http_host 同语义）。
 
     注意：ASGI ``scope["server"]`` 是**已建立连接**的本地 socket 地址
     （uvicorn ``transport.get_extra_info("sockname")``），绑 0.0.0.0 时经
@@ -57,7 +57,7 @@ def resolve_bind_host(real_host: Optional[str] = None) -> str:
     当"真实 bind"用，只能作为**暴露证据**（见 :func:`_routable_exposure`）。
 
     S2 注（刻意取舍，勿改成保守拒绝）：``real_host`` 不可解析时回落
-    ``settings.host`` 是**有意**的——唯一受支持宿主 uvicorn 的
+    ``settings.http_host`` 是**有意**的——唯一受支持宿主 uvicorn 的
     ``scope["server"]`` 来自 ``socket.getsockname()``，对 TCP 恒为数值 IP
     （不可能是主机名），而测试栈（Starlette TestClient）填的是主机名
     ``testserver``；整套件大量 TestClient 用例依赖该回落在无鉴权状态下放行。
@@ -69,7 +69,7 @@ def resolve_bind_host(real_host: Optional[str] = None) -> str:
             pass
         else:
             return str(real_host)
-    return str(settings.host)
+    return str(settings.http_host)
 
 
 def _host_claims_local_only(bind_host: object) -> bool:
@@ -88,14 +88,14 @@ def bind_is_local_only(bind_host: object = None) -> bool:
     """**配置口径**下服务是否只监听回环（W10 / P2-SEC-2 的判据来源）。
 
     与 :func:`unauthenticated_public_bind` 共用 :func:`_host_claims_local_only`，
-    保证"什么算本地绑定"全仓只有一个定义。默认读 ``settings.host``。
+    保证"什么算本地绑定"全仓只有一个定义。默认读 ``settings.http_host``。
 
     为什么按**配置绑定地址**判、而不是按 ``request.client.host``：反代部署下
     对端恒为代理（常常就是回环），按对端判等于对所有经代理的请求 fail-open
     —— 与 ``internal_health`` 遇转发头即 fail-closed 是同一教训（P3-13）。
     """
     return _host_claims_local_only(
-        settings.host if bind_host is None else bind_host
+        settings.http_host if bind_host is None else bind_host
     )
 
 
@@ -105,7 +105,7 @@ def _routable_exposure(real_host: Optional[str]) -> bool:
     这是服务器提供的权威事实（Accepted 连接的本地端点），不是从客户端头猜测。
     显式声明 LAN 绑定（HOST=10.x）的情况不在这里收紧（保持既有 WARNING-only 契约）。
     """
-    if real_host is None or _host_claims_local_only(settings.host) is False:
+    if real_host is None or _host_claims_local_only(settings.http_host) is False:
         return False
     try:
         ip = ipaddress.ip_address(str(real_host))
@@ -136,7 +136,7 @@ def unauthenticated_public_bind(real_host: Optional[str] = None) -> bool:
     """无凭据时哪些情况必须 fail-closed（三条独立证据，均不猜测）。
 
     S2-F1/F2 修复：证据路径 1（配置口径为通配）必须**直接查询
-    ``settings.host``**，不得先经 ``resolve_bind_host`` 归一——后者让连接
+    ``settings.http_host``**，不得先经 ``resolve_bind_host`` 归一——后者让连接
     端点 ``real_host`` 优先于配置，恰使显式 ``0.0.0.0`` / ``::`` 被具体
     NIC 地址顶掉、两条证据同时沉默（守卫在"掌握正向暴露证据"时反而
     放行，方向是反的）。
@@ -155,7 +155,7 @@ def unauthenticated_public_bind(real_host: Optional[str] = None) -> bool:
     """
     if auth_enabled():
         return False
-    if is_unspecified_bind(settings.host):
+    if is_unspecified_bind(settings.http_host):
         return not _endpoint_is_loopback(real_host)
     if is_unspecified_bind(resolve_bind_host(real_host)):
         return True

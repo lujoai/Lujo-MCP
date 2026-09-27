@@ -178,7 +178,7 @@
       var sampleRate = parseFloat(document.getElementById('sampleRate').value);
       var throttleMs = parseInt(document.getElementById('throttleMs').value);
       AiDebug.init({
-        endpoint: 'http://localhost:8000',
+        endpoint: 'http://localhost:8710',
         captureNetwork: true,
         networkSampleRate: sampleRate,
         networkThrottleMs: throttleMs
@@ -192,7 +192,7 @@
 
     function testXhrGet() {
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', 'http://localhost:8000/api/debug/health');
+      xhr.open('GET', 'http://localhost:8710/api/debug/health');
       xhr.onload = function() {
         var result = document.getElementById('getResult');
         result.className = 'result ' + (xhr.status === 200 ? 'success' : 'error');
@@ -203,7 +203,7 @@
 
     function testXhrPost() {
       var xhr = new XMLHttpRequest();
-      xhr.open('POST', 'http://localhost:8000/api/debug/echo');
+      xhr.open('POST', 'http://localhost:8710/api/debug/echo');
       xhr.setRequestHeader('Content-Type', 'application/json');
       var body = JSON.stringify({ username: 'admin', password: '123456' });
       xhr.onload = function() {
@@ -216,7 +216,7 @@
 
     function testXhrResponse() {
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', 'http://localhost:8000/api/debug/token');
+      xhr.open('GET', 'http://localhost:8710/api/debug/token');
       xhr.onload = function() {
         var result = document.getElementById('responseResult');
         result.className = 'result ' + (xhr.status === 200 ? 'success' : 'error');
@@ -246,7 +246,7 @@
       AiDebug._setConfig('networkSampleRate', 0);
       for (var i = 0; i < 5; i++) {
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', 'http://localhost:8000/api/debug/health?test=zero-' + i);
+        xhr.open('GET', 'http://localhost:8710/api/debug/health?test=zero-' + i);
         xhr.send();
       }
       setTimeout(function() {
@@ -267,7 +267,7 @@
       var beforeCount = captureCount;
       AiDebug._setConfig('networkSampleRate', 1);
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', 'http://localhost:8000/api/debug/health?test=one');
+      xhr.open('GET', 'http://localhost:8710/api/debug/health?test=one');
       xhr.onload = function() {
         setTimeout(function() {
           var result = document.getElementById('sampleRateResult');
@@ -291,7 +291,7 @@
       var count = 0;
       var interval = setInterval(function() {
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', 'http://localhost:8000/api/debug/health?test=throttle');
+        xhr.open('GET', 'http://localhost:8710/api/debug/health?test=throttle');
         xhr.send();
         count++;
         document.getElementById('throttleCounter').textContent = count;
@@ -315,7 +315,7 @@
 
     function testOnLoad() {
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', 'http://localhost:8000/api/debug/health?test=onload');
+      xhr.open('GET', 'http://localhost:8710/api/debug/health?test=onload');
       xhr.onload = function() {
         var result = document.getElementById('compatResult');
         result.className = 'result success';
@@ -326,7 +326,7 @@
 
     function testOnReadyStateChange() {
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', 'http://localhost:8000/api/debug/health?test=readystate');
+      xhr.open('GET', 'http://localhost:8710/api/debug/health?test=readystate');
       xhr.onreadystatechange = function() {
         if (xhr.readyState === 4) {
           var result = document.getElementById('compatResult');
@@ -374,7 +374,7 @@
     }
 
     AiDebug.init({
-      endpoint: 'http://localhost:8000',
+      endpoint: 'http://localhost:8710',
       captureNetwork: true,
       networkSampleRate: 1.0,
       networkThrottleMs: 0,

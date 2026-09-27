@@ -15,12 +15,12 @@
  * 用法：
  *   <script src="ai-debug.js"></script>
  *   <script>
- *     AiDebug.init({ endpoint: "http://localhost:8000" });
+ *     AiDebug.init({ endpoint: "http://localhost:8710" });
  *   </script>
  *
  * 或 ES module：
  *   import { init, reportSilentFailure } from "./ai-debug.js";
- *   init({ endpoint: "http://localhost:8000" });
+ *   init({ endpoint: "http://localhost:8710" });
  *
  * ── 路线图 ──
  * V3：网络错误自动标记静默失败

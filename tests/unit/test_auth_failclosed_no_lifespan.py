@@ -47,7 +47,7 @@ DENY_MARKER = "auth_not_configured"
 
 def _configure(monkeypatch, *, host, api_key=None, api_keys=""):
     """把 settings 单例置成指定组合；Key 留空即「未配置鉴权」。"""
-    monkeypatch.setattr(settings, "host", host)
+    monkeypatch.setattr(settings, "http_host", host)
     monkeypatch.setattr(settings, "api_key", api_key)
     monkeypatch.setattr(settings, "api_keys", api_keys)
     monkeypatch.setattr(settings, "rbac_enabled", False)
@@ -311,7 +311,7 @@ class TestRealBindAddressPreferred:
 
         resp = client.get("/api/dashboard/traces")
         assert _error_code(resp) == DENY_MARKER, (
-            f"连接本地端点 {real_host} 但 HOST={settings.host} 时未 fail-closed"
+            f"连接本地端点 {real_host} 但 HOST={settings.http_host} 时未 fail-closed"
             f"（{resp.status_code}）—— guard 只信 settings 的缺口未修复"
         )
         assert resp.status_code == 403
@@ -353,7 +353,7 @@ class TestRealBindAddressPreferred:
 
         修复前缺陷：resolve_bind_host 让 real_host 顶掉通配配置（F-1/F-2）；
         空串 host 则让两条证据同时沉默（F-3 请求层）—— 全部 200 放行。
-        证据路径 1 必须始终查询配置口径的 settings.host，不得被连接端点顶掉。
+        证据路径 1 必须始终查询配置口径的 settings.http_host，不得被连接端点顶掉。
         """
         _configure(monkeypatch, host=host_setting)
         resp = _client_with_real_bind(real_host).get("/api/dashboard/traces")
@@ -386,7 +386,7 @@ class TestRealBindAddressPreferred:
 
     @pytest.mark.parametrize("scope_host", ["testserver", "not-an-ip"])
     def test_unparseable_scope_falls_back_to_settings(self, monkeypatch, scope_host):
-        """ASGI 服务器给了不可解析值（测试栈/定制宿主）→ 回落 settings.host，不猜测。"""
+        """ASGI 服务器给了不可解析值（测试栈/定制宿主）→ 回落 settings.http_host，不猜测。"""
         _configure(monkeypatch, host="0.0.0.0")
         resp = _client_with_real_bind(scope_host).get("/api/dashboard/traces")
         assert _error_code(resp) == DENY_MARKER and resp.status_code == 403

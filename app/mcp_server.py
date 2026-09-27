@@ -22,8 +22,10 @@ get_runtime_snapshot / search_logs / list_recent_traces），
 仅在宿主客户端本身不具备推理能力时才需要用它。
 
 传入 ``--http`` 时，当前进程还会在回环地址启动 FastAPI HTTP（默认
-``127.0.0.1:8000``），让 Browser SDK 的 ``/ingest`` 上报与 stdio MCP
-共享同一套存储；``--no-http`` 明确退回纯 stdio。
+``127.0.0.1:8710``），让 Browser SDK 的 ``/ingest`` 上报与 stdio MCP
+共享同一套存储；``--no-http`` 明确退回纯 stdio。端口/地址的优先级是
+**CLI 显式参数 > 环境变量（HTTP_PORT / HTTP_HOST）> 内置默认值**——Trae 类
+宿主会丢弃 args 里的附加 CLI 参数，env 是这类宿主唯一可靠的传参通道。
 """
 import asyncio
 import argparse
@@ -277,13 +279,13 @@ def _parse_runtime_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--http-host",
         default=None,
-        help="HTTP 绑定地址（统一模式默认 127.0.0.1）",
+        help="HTTP 绑定地址（默认沿用 HTTP_HOST，未设置时为 127.0.0.1）",
     )
     parser.add_argument(
         "--http-port",
         type=int,
         default=None,
-        help="HTTP 端口（默认沿用 PORT，通常为 8000）",
+        help="HTTP 端口（默认沿用 HTTP_PORT，未设置时为 8710）",
     )
     # parse_known_args 是刻意的：某些 MCP 启动器会把额外参数传给命令，
     # 不应因为一个无关参数让已能工作的 stdio 服务无法启动。
@@ -291,6 +293,22 @@ def _parse_runtime_args(argv: list[str] | None = None) -> argparse.Namespace:
     if options.http_port is not None and not 1 <= options.http_port <= 65535:
         parser.error("--http-port 必须在 1 到 65535 之间")
     return options
+
+
+def _resolve_http_bind(options: argparse.Namespace) -> tuple[str, int, bool]:
+    """解析统一模式最终生效的 HTTP 绑定地址与端口。
+
+    优先级：**CLI 显式参数（--http-host/--http-port）> settings 环境变量
+    （HTTP_HOST / HTTP_PORT，旧键 HOST / PORT 兼容）> 内置默认值**。返回
+    ``(host, port, is_default_port)``：``is_default_port`` 只看 CLI 是否
+    显式传了 ``--http-port``——环境变量指定的端口冲突时沿用默认端口的
+    「降级不退出」语义（宿主只会丢 CLI 参数，不会丢 env；env 配置的实例
+    若因端口冲突整体退出，宿主会表现为 MCP 直接不可用，比丢失浏览器采集
+    更糟）。
+    """
+    host = options.http_host or settings.http_host
+    port = options.http_port if options.http_port is not None else settings.http_port
+    return host, port, options.http_port is None
 
 
 async def _run_stdio_transport() -> None:
@@ -357,13 +375,14 @@ async def _run_unified_transport(
     """
     conflict = _http_port_conflict(host, port)
     if conflict:
-        is_default = (port == settings.port) if is_default_port is None else is_default_port
+        is_default = (port == settings.http_port) if is_default_port is None else is_default_port
         if is_default:
             _register_signal_handlers()
             warning_msg = (
                 f"[lujo-mcp] HTTP 端口被占用: {conflict}\n"
                 "HTTP 采集服务未启动（Browser SDK 无法上报到此端口），但 stdio MCP 服务已正常启动。\n"
-                "若需使用浏览器现场采集，可在 MCP 配置中添加 '--http-port <port>' 指定独立端口；"
+                "若需使用浏览器现场采集，可在 MCP 配置的 env 中设置 HTTP_PORT=<空闲端口>"
+                "（Trae 类宿主会丢弃 args，env 更可靠），或在 args 中添加 '--http-port <port>'；"
                 "若不需要 HTTP 采集服务，可传入 '--no-http'。"
             )
             logger.warning("%s", warning_msg)
@@ -378,8 +397,9 @@ async def _run_unified_transport(
             f"[lujo-mcp] HTTP 端口被占用: {conflict}\n"
             "该端口上已有另一个 Lujo 实例在提供采集服务，浏览器 SDK 的上报会全部"
             "进入它的存储，本实例查不到任何运行现场。\n"
-            "处置：关闭另一个 Lujo 实例；或用 --http-port <n> 换一个端口"
-            "（同时把 SDK 的 endpoint 指过去）；只需 stdio 工具时加 --no-http。"
+            "处置：关闭另一个 Lujo 实例；或用 --http-port <n>（Trae 类宿主用 env "
+            "HTTP_PORT=<n>）换一个端口（同时把 SDK 的 endpoint 指过去）；"
+            "只需 stdio 工具时加 --no-http。"
         )
 
     # 延迟导入 HTTP app，保证默认纯 stdio 启动不引入 FastAPI 生命周期或
@@ -699,13 +719,13 @@ async def main(argv: list[str] | None = None):
             logger.warning("知识库启动初始化失败，跳过（不影响启动）", exc_info=True)
 
         if unified:
-            # app.main 的安全校验读取同一个 settings 对象。统一模式默认只绑
-            # 回环地址，即使用户的 .env 没写 HOST，也不会触发 0.0.0.0 无鉴权拒绝。
-            http_host = options.http_host or "127.0.0.1"
-            is_default_port = options.http_port is None
-            http_port = options.http_port if options.http_port is not None else settings.port
-            old_host, old_port = settings.host, settings.port
-            settings.host, settings.port = http_host, http_port
+            # app.main 的安全校验读取同一个 settings 对象。统一模式默认绑回环
+            # （HTTP_HOST 未设置时 settings 默认即 127.0.0.1），不会触发 0.0.0.0
+            # 无鉴权拒绝；显式设 HTTP_HOST=0.0.0.0 则与独立 HTTP 入口同口径，
+            # 由既有启动校验/请求层守卫 fail-closed。
+            http_host, http_port, is_default_port = _resolve_http_bind(options)
+            old_host, old_port = settings.http_host, settings.http_port
+            settings.http_host, settings.http_port = http_host, http_port
             old_stdio_log_mode = os.environ.get("LUJO_MCP_STDIO_MODE")
             os.environ["LUJO_MCP_STDIO_MODE"] = "1"
             try:
@@ -717,7 +737,7 @@ async def main(argv: list[str] | None = None):
                     os.environ.pop("LUJO_MCP_STDIO_MODE", None)
                 else:
                     os.environ["LUJO_MCP_STDIO_MODE"] = old_stdio_log_mode
-                settings.host, settings.port = old_host, old_port
+                settings.http_host, settings.http_port = old_host, old_port
         else:
             await _run_stdio_transport()
     finally:

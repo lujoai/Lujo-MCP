@@ -61,13 +61,13 @@ python --version
 
 ### 1.3 端口可用性
 
-- [ ] **[需要浏览器采集时]** Lujo HTTP 端口可用；默认 8000 冲突时，为 Lujo 配置独立的 `--http-port` 并将 Browser SDK endpoint 指向该端口。只使用 MCP stdio 工具时可跳过此项。
+- [ ] **[需要浏览器采集时]** Lujo HTTP 端口可用；默认 8710 冲突时，为 Lujo 配置独立的 `--http-port` 并将 Browser SDK endpoint 指向该端口。只使用 MCP stdio 工具时可跳过此项。
 
 ```bash
 # Linux/macOS
-ss -tlnp | grep 8000
+ss -tlnp | grep 8710
 # Windows PowerShell
-netstat -ano | findstr :8000
+netstat -ano | findstr :8710
 
 # 判定标准 / Pass Criteria: 无输出表示端口可用；有输出时确认占用者并为 Lujo 指定空闲端口
 # npm 统一模式默认端口冲突时会降级到 stdio-only，MCP 工具仍可用但浏览器采集不可用
@@ -217,7 +217,7 @@ cp .env.example .env
 # 判定标准 / Pass Criteria:
 #   - 开发环境: 可为空（服务会以免鉴权模式启动，输出警告日志）
 #   - 生产环境: 必须设置非空值
-#   - 当 HOST=0.0.0.0 且 API_KEY 为空时，服务拒绝启动（安全保护）
+#   - 当 HTTP_HOST=0.0.0.0 且 API_KEY 为空时，服务拒绝启动（安全保护）
 # 异常处理 / Contingency:
 #   - 生成随机 API Key: python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
@@ -360,11 +360,11 @@ python -m pytest tests/integration/test_redis_cache_integration.py -q
 
 ```bash
 # 验证方式: 启动服务后发送带鉴权的请求
-curl -H "Authorization: Bearer <API_KEY>" http://localhost:8000/health
+curl -H "Authorization: Bearer <API_KEY>" http://localhost:8710/health
 
 # 判定标准 / Pass Criteria: 返回 HTTP 200
 # 不带 API_KEY 的请求应返回 HTTP 401/403
-curl http://localhost:8000/health
+curl http://localhost:8710/health
 # 判定标准 / Pass Criteria: 返回 HTTP 401 或 403
 ```
 
@@ -374,16 +374,16 @@ curl http://localhost:8000/health
 
 ```bash
 # 安全规则:
-#   HOST 默认 127.0.0.1（源码权威默认，单用户本地定位）
-#   HOST=0.0.0.0 → 必须设置 API_KEY（否则服务拒绝启动）
-#   HOST=127.0.0.1 → API_KEY 可选（仅本地访问）
+#   HTTP_HOST 默认 127.0.0.1（源码权威默认，单用户本地定位；旧键 HOST 仍兼容）
+#   HTTP_HOST=0.0.0.0 → 必须设置 API_KEY（否则服务拒绝启动）
+#   HTTP_HOST=127.0.0.1 → API_KEY 可选（仅本地访问）
 #   绑非回环地址后 /metrics 不再免鉴权，抓取方必须带 API Key
 
 # 判定标准 / Pass Criteria: 符合上述安全规则
 # 异常处理 / Contingency:
-#   - 生产环境: 建议 HOST=0.0.0.0 + API_KEY 必须设置
-#   - 开发环境: HOST=127.0.0.1 即可（默认值，可不写）
-#   - 容器部署: 容器内必须 HOST=0.0.0.0（Dockerfile 与两份 compose 已设），
+#   - 生产环境: 建议 HTTP_HOST=0.0.0.0 + API_KEY 必须设置
+#   - 开发环境: HTTP_HOST=127.0.0.1 即可（默认值，可不写）
+#   - 容器部署: 容器内必须 HTTP_HOST=0.0.0.0（Dockerfile 与两份 compose 已设），
 #     对外暴露面由 ports 的 127.0.0.1 发布地址控制
 ```
 
@@ -526,7 +526,7 @@ Test-NetConnection -ComputerName <otel_host> -Port 4317
 
 ```bash
 # 启动服务后访问
-curl http://localhost:8000/metrics
+curl http://localhost:8710/metrics
 
 # 判定标准 / Pass Criteria: 返回 Prometheus 文本格式指标数据
 # 注意: 如 METRICS_AUTH_ENABLED=true，需携带 API_KEY
@@ -581,7 +581,7 @@ python -m app.main
 - [ ] **[必选]** `/health` 端点返回正常
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8710/health
 # 判定标准 / Pass Criteria:
 #   {"status": "ok"}    ← 公开 /health 只返回状态字段（不暴露内部配置）
 # 状态说明:
@@ -595,7 +595,7 @@ curl http://localhost:8000/health
 ```bash
 # 完整字段（service / version / storage / llm_configured）在 /internal/health：
 # 仅内网/回环可直接访问（本机 curl 免鉴权），外网需携带 API Key
-curl http://localhost:8000/internal/health
+curl http://localhost:8710/internal/health
 
 # 判定标准 / Pass Criteria:
 #   {
@@ -613,7 +613,7 @@ curl http://localhost:8000/internal/health
 
 ```bash
 # HTTP Streamable 模式
-curl -X POST http://localhost:8000/mcp \
+curl -X POST http://localhost:8710/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 
@@ -628,7 +628,7 @@ curl -X POST http://localhost:8000/mcp \
 - [ ] **[可选]** Web 控制台可访问
 
 ```bash
-# 浏览器访问 http://localhost:8000/dashboard
+# 浏览器访问 http://localhost:8710/dashboard
 # 判定标准 / Pass Criteria: 页面正常加载，无 404 错误
 ```
 
@@ -637,7 +637,7 @@ curl -X POST http://localhost:8000/mcp \
 - [ ] **[可选]** Dashboard SSE 端点可访问
 
 ```bash
-curl -N -H "Authorization: Bearer <API_KEY>" "http://localhost:8000/api/dashboard/stream?api_key=<API_KEY>"
+curl -N -H "Authorization: Bearer <API_KEY>" "http://localhost:8710/api/dashboard/stream?api_key=<API_KEY>"
 # 判定标准 / Pass Criteria: 返回 SSE 事件流（event: ping 或 event: refresh）
 # 注意：需启用 dashboard_sse_enabled=true
 ```
@@ -647,7 +647,7 @@ curl -N -H "Authorization: Bearer <API_KEY>" "http://localhost:8000/api/dashboar
 - [ ] **[可选]** MCP 工具列表包含 repair_async 和 repair_result
 
 ```bash
-curl -X POST http://localhost:8000/mcp \
+curl -X POST http://localhost:8710/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 # 判定标准 / Pass Criteria: 返回的 tools 数组包含 repair_async 和 repair_result
@@ -729,9 +729,9 @@ echo -n ".env file: "
 echo -n "Dependencies: "
 pip check 2>&1 | tail -1
 
-# 端口 8000
-echo -n "Port 8000: "
-ss -tlnp 2>/dev/null | grep -q :8000 && echo "IN USE" || echo "AVAILABLE"
+# 端口 8710
+echo -n "Port 8710: "
+ss -tlnp 2>/dev/null | grep -q :8710 && echo "IN USE" || echo "AVAILABLE"
 
 # Playwright (可选)
 echo -n "Playwright: "
@@ -755,9 +755,9 @@ else { Write-Host ".env file: MISSING - run: Copy-Item .env.example .env" }
 # 核心依赖
 Write-Host "Dependencies: $(pip check 2>&1 | Select-Object -Last 1)"
 
-# 端口 8000
-$port = netstat -ano 2>$null | Select-String ":8000 "
-if ($port) { Write-Host "Port 8000: IN USE" } else { Write-Host "Port 8000: AVAILABLE" }
+# 端口 8710
+$port = netstat -ano 2>$null | Select-String ":8710 "
+if ($port) { Write-Host "Port 8710: IN USE" } else { Write-Host "Port 8710: AVAILABLE" }
 
 # Playwright (可选)
 try { python -c "import playwright" 2>$null; Write-Host "Playwright: INSTALLED" }
@@ -774,7 +774,7 @@ Write-Host "=== Check Complete ==="
 
 | 错误现象 / Symptom | 可能原因 / Cause | 处理方案 / Resolution |
 |---|---|---|
-| `Refusing to start: host contains 0.0.0.0 but API_KEY is empty` | 外网监听无鉴权 | 设置 `API_KEY` 或改用 `HOST=127.0.0.1` |
+| `Refusing to start: host contains 0.0.0.0 but API_KEY is empty` | 外网监听无鉴权 | 设置 `API_KEY` 或改用 `HTTP_HOST=127.0.0.1` |
 | `Invalid STORAGE_BACKEND` | 配置拼写错误 | 检查 `STORAGE_BACKEND` 值，仅允许 `memory`（唯一合法值；`postgresql` 已移除，会以 `StorageBackendRemovedError` 拒绝） |
 | `Address already in use` | 端口被占用 | 更换端口或终止占用进程 |
 | `ModuleNotFoundError` | 依赖未安装 | `pip install -r requirements.txt` |

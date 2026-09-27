@@ -55,7 +55,7 @@ MCP 客户端配置（Claude Desktop / Cursor / Trae 等）：
 
 > **交互说明**：配置完成后，用户在 Trae / Cursor / Claude 对话框中使用正常自然语言描述问题即可，无需手动调用 MCP 工具或记忆特定指令。宿主模型自主决定是否选用工具，不保证每次都调用；若模型未选用，可明确提示它：“**请调用 diagnose_issue 检查运行时现场**”。Trae 等客户端的具体菜单和配置路径可能随版本变化，请以当前 UI 为准。
 
-启动器默认启用统一本地模式（HTTP 绑定 `127.0.0.1:8000`）。需要纯 stdio 时使用
+启动器默认启用统一本地模式（HTTP 绑定 `127.0.0.1:8710`）。需要纯 stdio 时使用
 `"args": ["--no-http"]`；也可传 `--http-port` 或 `--http-host` 覆盖 HTTP 监听参数。
 浏览器页面若在其他端口运行（例如 `http://localhost:3000`），请通过 MCP 配置的 `env` 设置 `CORS_ORIGINS`，例如
 `"CORS_ORIGINS": "http://localhost:3000"`。前端引入 Browser SDK 若传入 `apiKey`，该密钥会直接暴露在客户端代码中，严禁将高权限或共享服务端密钥写进公开前端；所有 `/ingest/*` 上报端点要求 `admin`/`developer` 角色（`viewer` 会被 403 拒绝），系统不存在只读上报 Key。本地开发优先使用本机回环（`HOST=127.0.0.1`）免 Key 运行；若必须在远程/容器网络开启鉴权，应当由服务端应用代理（如 BFF/反向代理）保管密钥并限制转发上报路由。
@@ -70,7 +70,7 @@ npm install @lujoai/lujo-mcp-node-sdk
 import { createClient } from "@lujoai/lujo-mcp-node-sdk";
 
 const lujo = createClient({
-  endpoint: "http://127.0.0.1:8000",
+  endpoint: "http://127.0.0.1:8710",
   apiKey: process.env.LUJO_MCP_API_KEY,
 });
 

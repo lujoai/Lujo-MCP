@@ -95,9 +95,9 @@ AI 不再需要你手动翻日志、拼提示词，就能给出基于**真实运
 ## 你可以这样复现
 
 1. 启动 Lujo-MCP 服务：`python -m app.main` 或 `docker compose up -d`
-2. 打开网络捕获 Demo：`http://localhost:8000/demo`
+2. 打开网络捕获 Demo：`http://localhost:8710/demo`
 3. 点击页面测试按钮，制造一次网络错误 / 静默失败
-4. 打开 Dashboard：`http://localhost:8000/dashboard` 查看追踪记录与 AI 分析
+4. 打开 Dashboard：`http://localhost:8710/dashboard` 查看追踪记录与 AI 分析
 5. 在 MCP 客户端（Claude / Cursor / Trae）中调用 `context`，体验 AI 拿到真实运行现场
 
 > 详细操作见 [Demo 演示流程](../../README.md) 与 下方「演示指南」。
@@ -177,7 +177,7 @@ python -m app.main
 #### 验证服务启动
 
 ```bash
-curl http://localhost:8000/
+curl http://localhost:8710/
 # 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.8.0"}
 ```
 
@@ -185,7 +185,7 @@ curl http://localhost:8000/
 
 #### 1. 访问 Demo 页面
 
-打开浏览器访问：`http://localhost:8000/demo`
+打开浏览器访问：`http://localhost:8710/demo`
 
 页面包含以下测试区域：
 
@@ -278,7 +278,7 @@ SDK 自动脱敏以下字段：
 
 ```javascript
 AiDebug.init({
-  endpoint: "http://localhost:8000",
+  endpoint: "http://localhost:8710",
   // captureNetwork 默认开启（V2 新特性）
   // networkSampleRate 默认 1.0（全部采样）
   // networkThrottleMs 默认 0（无节流）
@@ -291,17 +291,17 @@ AiDebug.init({
 
 ```bash
 # 查询网络请求记录
-curl http://localhost:8000/api/dashboard/traces
+curl http://localhost:8710/api/dashboard/traces
 
 # 查询单个 trace 的网络记录
-curl http://localhost:8000/ingest/network/{trace_id}
+curl http://localhost:8710/ingest/network/{trace_id}
 ```
 
 ### 四、展示 AI Debug 场景
 
 #### 1. Dashboard 控制台
 
-访问：`http://localhost:8000/dashboard`
+访问：`http://localhost:8710/dashboard`
 
 查看：
 - 最近请求追踪列表
@@ -326,7 +326,7 @@ curl http://localhost:8000/ingest/network/{trace_id}
 使用 verify 功能检测"返回正常但不符合规范"的情况：
 
 ```bash
-curl -X POST http://localhost:8000/api/debug/verify \
+curl -X POST http://localhost:8710/api/debug/verify \
   -H "Content-Type: application/json" \
   -d '{
     "actual": {
@@ -360,7 +360,7 @@ curl -X POST http://localhost:8000/api/debug/verify \
 
 确保服务已启动：
 ```bash
-curl http://localhost:8000/
+curl http://localhost:8710/
 ```
 
 #### Q2: 网络请求捕获失败？

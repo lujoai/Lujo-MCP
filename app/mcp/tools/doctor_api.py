@@ -95,7 +95,7 @@ def _check_http_listen() -> tuple[bool, str]:
     """④ HTTP 监听地址端口（settings 配置回显，不做真实 bind）。"""
     from app.config import settings
 
-    host, port = settings.host, settings.port
+    host, port = settings.http_host, settings.http_port
     detail = f"HTTP 监听 {host}:{port}"
     if host in ("", "0.0.0.0", "::"):
         detail += "（通配地址：对外网可达，请确认已按 SEC-03 配置 API_KEY）"

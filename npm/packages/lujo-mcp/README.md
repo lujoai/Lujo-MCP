@@ -34,17 +34,19 @@ console 日志、网络失败、UI 交互轨迹与会话上下文。Lujo 只负�
 
 > **客户端配置说明**：Trae / Cursor 等客户端的具体添加入口或菜单路径可能随版本变化，请以当前客户端 UI 为准。
 
-默认是**统一模式**：同一个进程既提供 stdio MCP，又在 `127.0.0.1:8000` 开一个
+默认是**统一模式**：同一个进程既提供 stdio MCP，又在 `127.0.0.1:8710` 开一个
 本地 HTTP 采集口供 Browser SDK 上报。只需要纯 stdio 时把 `args` 改成
-`["--no-http"]`；需要换采集端口用 `--http-port <port>`（同一台机器调试多个项目时，
-**端口即隔离**：每个项目用不同端口，页面 SDK 的 `endpoint` 指向各自端口）。
+`["--no-http"]`；需要换采集端口时，在 MCP 配置的 `env` 中设 `"HTTP_PORT": "<port>"`
+（推荐——Trae 等宿主会丢弃 `args` 里的附加参数），或在 `args` 中加
+`--http-port <port>`（同一台机器调试多个项目时，**端口即隔离**：每个项目用
+不同端口，页面 SDK 的 `endpoint` 指向各自端口）。
 
 页面里引入 Browser SDK：
 
 ```html
-<script src="http://127.0.0.1:8000/ai-debug.js"></script>
+<script src="http://127.0.0.1:8710/ai-debug.js"></script>
 <script>
-  AiDebug.init({ endpoint: "http://127.0.0.1:8000" });
+  AiDebug.init({ endpoint: "http://127.0.0.1:8710" });
 </script>
 ```
 
@@ -52,12 +54,12 @@ console 日志、网络失败、UI 交互轨迹与会话上下文。Lujo 只负�
 > - 若前端运行在不同源端口（如 `http://localhost:3000`），需在服务端配置 `CORS_ORIGINS: "http://localhost:3000"`。
 > - 若在浏览器前端代码中配置 `apiKey`，该密钥会直接暴露给所有页面访问者与客户端代码，**严禁将高权限或共享的服务端密钥写进公开前端**。所有 `/ingest/*` 上报端点硬性要求 `admin`/`developer` 角色（`viewer` 会被 403 拒绝），系统不存在只读上报 Key。本地回环开发优先免 Key 运行；若必须在远程/容器网络开启鉴权，应当由服务端应用代理（如 BFF/反向代理）保管密钥并限制转发上报路由。
 
-内置演示页：`http://127.0.0.1:8000/demo`（无需配置跨域）；Web 控制台：
-`http://127.0.0.1:8000/dashboard`。
+内置演示页：`http://127.0.0.1:8710/demo`（无需配置跨域）；Web 控制台：
+`http://127.0.0.1:8710/dashboard`。
 
 ## 安全默认值
 
-- 只监听回环 `127.0.0.1`（要对外服务需显式设 `HOST`，且此时必须配 `API_KEY`：
+- 只监听回环 `127.0.0.1`（要对外服务需显式设 `HTTP_HOST`，且此时必须配 `API_KEY`：
   通配地址 + 无任何 Key 会被启动校验直接拒绝）
 - 未设 `API_KEY` 时以免鉴权模式运行，仅限本机回环
 - 敏感内容在**存储边界之前**脱敏；日志 formatter 另有一道遮蔽

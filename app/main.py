@@ -40,7 +40,7 @@ logger = logging.getLogger("lujo-mcp")
 
 def validate_startup_configuration(host: str | None = None, api_key: str | None = None) -> None:
     """拒绝外网监听 + 无鉴权的危险启动方式。"""
-    bind_host = host if host is not None else settings.host
+    bind_host = host if host is not None else settings.http_host
     # FIX: P1-5 与中间件 auth_enabled() 语义统一：
     # 显式传入的 api_key 参数优先（兼容旧调用），否则按 API_KEYS 解析出的有效 key 列表判定，
     # 避免"只配 API_KEYS 多 key、未配 API_KEY"的合法部署被误拒。
@@ -630,8 +630,8 @@ if __name__ == "__main__":
     # 其前先发布退出意图与首次触发时间；uvicorn.run 黑盒无法接线）
     config = uvicorn.Config(
         "app.main:app",
-        host=settings.host,
-        port=settings.port,
+        host=settings.http_host,
+        port=settings.http_port,
         reload=settings.debug,
     )
     http_server = uvicorn.Server(config)
