@@ -13,13 +13,13 @@ vector/embedding 等运行条件（verify_ui / auto_test 返回 CAPABILITY_MISSI
 
 import importlib.util
 import sys
-from pathlib import Path
 
 DOCTOR_DEF = {
     "name": "doctor",
     "description": (
         "自检当前 Lujo 进程的运行能力与配置，返回逐项 ok/detail 与汇总："
-        "Playwright 浏览器采集库、chromium 二进制、heavy worker 入口、"
+        "Playwright 浏览器采集库、浏览器通道（chromium/系统 Chrome/系统 Edge，"
+        "v0.9.8 起任一可用即判定浏览器能力就绪）、heavy worker 入口、"
         "HTTP 监听地址端口、UI URL 访问策略（allowlist/allow_private/回环默认放行）、"
         "git 授权项目根（GIT_PATH_WHITELIST 回显）、KB 持久化路径与开关、"
         "vector/embedding 能力。"
@@ -49,25 +49,39 @@ def _check_playwright_library() -> tuple[bool, str]:
     return True, "playwright 库可导入（sync + async）"
 
 
-def _check_chromium_binary() -> tuple[bool, str]:
-    """② chromium 二进制可解析（executable_path，不启动浏览器）。"""
+def _check_browser_channel() -> tuple[bool, str]:
+    """② 浏览器通道检查（v0.9.8，原 chromium_binary）。
+
+    经 browser_launcher 回退链轻量探测（纯路径存在性，不 spawn driver）：
+    依次报告 playwright 管理的 chromium / 系统 Chrome / 系统 Edge 哪个可用，
+    任一可用即 ok:true 并说明将使用的通道。
+    """
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return False, "playwright 库未安装，无法解析 chromium 可执行文件路径"
-    try:
-        with sync_playwright() as pw:
-            executable = str(pw.chromium.executable_path)
-    except Exception as e:
+        import playwright.sync_api  # noqa: F401
+        import playwright.async_api  # noqa: F401
+    except ImportError as e:
         return False, (
-            f"chromium 可执行文件解析失败（{type(e).__name__}: {e}）。"
-            "请执行: playwright install chromium"
+            f"playwright 库不可导入（{type(e).__name__}: {e}），"
+            "无法启动任何浏览器通道。源码版安装: "
+            "pip install playwright && playwright install chromium"
         )
-    if executable and Path(executable).exists():
-        return True, f"chromium 可执行文件存在: {executable}"
-    return False, (
-        f"chromium 可执行文件缺失: {executable or '未知'}。"
-        "请执行: playwright install chromium"
+    from app.runtime.verifier.browser_launcher import resolve_launch_kwargs
+
+    kwargs = resolve_launch_kwargs()
+    if kwargs is None:
+        return False, (
+            "未找到任何可用浏览器：playwright 管理的 chromium 未安装，"
+            "系统 Chrome/Edge 也未找到。请执行 playwright install chromium，"
+            "或安装系统 Chrome/Edge"
+        )
+    channel = kwargs.get("channel")
+    if channel:
+        return True, (
+            f"浏览器通道可用: channel={channel}（系统浏览器，"
+            "verify_ui/auto_test 将经该通道启动）"
+        )
+    return True, (
+        f"浏览器通道可用: playwright 管理的 chromium（{kwargs.get('executable_path')}）"
     )
 
 
@@ -175,7 +189,7 @@ def _check_vector_embedding() -> tuple[bool, str]:
 # 自检项注册表：name 即载荷中的稳定标识，供宿主按名定位缺失能力
 _CHECKS = (
     ("playwright_library", _check_playwright_library),
-    ("chromium_binary", _check_chromium_binary),
+    ("browser_channel", _check_browser_channel),
     ("heavy_worker_entry", _check_heavy_worker_entry),
     ("http_listen", _check_http_listen),
     ("ui_url_policy", _check_ui_url_policy),

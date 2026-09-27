@@ -11,6 +11,8 @@
 import os
 import sys
 
+from PyInstaller.utils.hooks import collect_data_files
+
 # PyInstaller 通过 exec() 加载 spec，命名空间不含 __file__；
 # SPECPATH 是 PyInstaller 专门注入的变量——当前 spec 文件的所在目录。
 _spec_dir = os.path.abspath(SPECPATH)
@@ -28,6 +30,15 @@ a = Analysis(
         # PostgreSQL migrations 已随 Step 3 WP6 归档，不再打包）
         (os.path.join(ROOT, "app", "web"), os.path.join("app", "web")),
         (os.path.join(ROOT, "browser-sdk"), "browser-sdk"),
+        # v0.9.8 浏览器能力进冻结包：playwright 的 node driver（node.exe +
+        # package/ 整棵树，含 browsers.json）必须完整收集——playwright 运行时
+        # 经 inspect.getfile(playwright) 相对定位 driver（冻结后解析到
+        # _MEIPASS/playwright/driver），缺任一文件浏览器通道即失效。
+        # 注意：只收集库与 driver，不收集 chromium 浏览器二进制（150MB+ 且
+        # 冻结内无法 playwright install）——浏览器由 browser_launcher 回退链
+        # （chromium → 系统 Chrome → 系统 Edge）在运行时解析，无需设
+        # PLAYWRIGHT_BROWSERS_PATH / PLAYWRIGHT_NODEJS_PATH。
+        *collect_data_files("playwright"),
     ],
     hiddenimports=[
         # 动态/间接导入的库，PyInstaller 静态分析可能遗漏
@@ -80,6 +91,13 @@ a = Analysis(
         "opentelemetry.exporter.otlp.proto.grpc",
         "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
         "opentelemetry.proto",
+        # v0.9.8 浏览器能力：playwright 双 API + greenlet（C 扩展依赖）。
+        # sync_api/async_api 经延迟导入加载，静态分析容易整包遗漏。
+        "playwright",
+        "playwright.sync_api",
+        "playwright.async_api",
+        "playwright._impl",
+        "greenlet",
     ],
     hookspath=[],
     hooksconfig={},
@@ -90,7 +108,6 @@ a = Analysis(
         "pandas",
         "numpy",
         "PIL",
-        "playwright",
         "pytest",
         "ruff",
     ],
@@ -111,7 +128,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=sys.platform == "win32",
-    upx_exclude=[],
+    # 已知坑：UPX 压缩 playwright node driver 的 node.exe 会产生损坏二进制
+    # （启动即崩），必须排除。
+    upx_exclude=["node.exe"],
     runtime_tmpdir=None,
     console=True,   # stdio MCP Server 需要控制台/标准流
     disable_windowed_traceback=False,

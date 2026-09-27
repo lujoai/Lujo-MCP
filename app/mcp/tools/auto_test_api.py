@@ -50,6 +50,15 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
     """内部 async 函数：用 Playwright 异步 API 执行遍历"""
     from playwright.async_api import async_playwright
 
+    # v0.9.8 浏览器回退链：playwright chromium → 系统 Chrome → 系统 Edge；
+    # 冻结发行版不随包分发 chromium，靠系统浏览器通道兜底。
+    # 探测是纯路径存在性检查（不 spawn driver），在事件循环内同步调用安全。
+    from app.runtime.verifier.browser_launcher import resolve_launch_kwargs
+    launch_kwargs = resolve_launch_kwargs()
+    if launch_kwargs is None:
+        from app.runtime.verifier.ui_runner import capability_missing_payload
+        return capability_missing_payload()
+
     # FIX(v0.7.1-b9-3): 遍历期间 console/network 错误列表无界增长——此前只在返回前
     # 截断 [:20]，遍历中页面刷大量错误/4xx 会无界累积内存；现采集即限长（保前 N 条）。
     _MAX_CAPTURED_ERRORS = 100
@@ -59,7 +68,7 @@ async def _run(url: str, max_actions: int, capture_console: bool, capture_networ
     skipped = []
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.chromium.launch(headless=True, **launch_kwargs)
         try:
             page = await browser.new_page()
 

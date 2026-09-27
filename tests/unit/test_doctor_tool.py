@@ -3,10 +3,12 @@
 覆盖：
 1. doctor 返回结构：checks[]（name/ok/detail）+ summary（ok_count/fail_count）
 2. 八项自检齐全，工具本身永不抛异常
-3. 无 playwright 环境下 playwright 库/chromium 二进制两项为 ok:false
+3. 无 playwright 环境下 playwright 库/浏览器通道两项为 ok:false
    （monkeypatch sys.modules 模拟，与本机是否真实安装 playwright 无关）
 4. doctor 注册面：常驻可见（无 availability 过滤）、category=diagnostic、角色映射齐全
 5. verify_ui/auto_test 无能力分支返回统一 CAPABILITY_MISSING 载荷（dict，不 raise）
+6. browser_channel（v0.9.8，原 chromium_binary）：报告 chromium/系统 Chrome/系统 Edge
+   哪个通道可用，任一可用即 ok:true
 """
 import asyncio
 import json
@@ -30,7 +32,7 @@ from app.mcp.tools.doctor_api import DOCTOR_DEF, doctor_handler
 
 EXPECTED_CHECK_NAMES = {
     "playwright_library",
-    "chromium_binary",
+    "browser_channel",
     "heavy_worker_entry",
     "http_listen",
     "ui_url_policy",
@@ -101,16 +103,54 @@ class TestDoctorHandler:
         assert result["summary"]["ok_count"] + result["summary"]["fail_count"] == 8
 
     def test_no_playwright_checks_fail_but_tool_does_not_raise(self, no_playwright):
-        """无 playwright 环境：库/二进制两项 ok:false，工具整体不抛异常。"""
+        """无 playwright 环境：库/浏览器通道两项 ok:false，工具整体不抛异常。"""
         result = doctor_handler({})
         by_name = {c["name"]: c for c in result["checks"]}
         assert by_name["playwright_library"]["ok"] is False
         assert "playwright" in by_name["playwright_library"]["detail"]
-        assert by_name["chromium_binary"]["ok"] is False
+        assert by_name["browser_channel"]["ok"] is False
+        assert "playwright" in by_name["browser_channel"]["detail"]
 
     def test_doctor_payload_is_not_tool_failure(self, no_playwright):
         """doctor 载荷无 error 键：按全局契约是成功结果（isError=false）。"""
         assert not is_tool_failure_result(doctor_handler({}))
+
+
+# ── 6. browser_channel 浏览器通道自检（v0.9.8，原 chromium_binary）──
+
+
+class TestBrowserChannelCheck:
+    def test_ok_when_channel_found(self, monkeypatch):
+        """探测命中系统 Edge：ok:true，detail 说明将使用的通道。"""
+        from app.mcp.tools import doctor_api
+        from app.runtime.verifier import browser_launcher as bl
+
+        monkeypatch.setattr(bl, "resolve_launch_kwargs", lambda: {"channel": "msedge"})
+        ok, detail = doctor_api._check_browser_channel()
+        assert ok is True
+        assert "msedge" in detail
+
+    def test_ok_when_managed_chromium_found(self, monkeypatch):
+        """探测命中 playwright 管理的 chromium：ok:true，detail 含 executable_path。"""
+        from app.mcp.tools import doctor_api
+        from app.runtime.verifier import browser_launcher as bl
+
+        monkeypatch.setattr(
+            bl, "resolve_launch_kwargs", lambda: {"executable_path": r"C:\pw\chrome.exe"}
+        )
+        ok, detail = doctor_api._check_browser_channel()
+        assert ok is True
+        assert r"C:\pw\chrome.exe" in detail
+
+    def test_fail_when_no_browser_found(self, monkeypatch):
+        """playwright 库可用但三种浏览器全缺：ok:false，指引安装 Chrome/Edge/chromium。"""
+        from app.mcp.tools import doctor_api
+        from app.runtime.verifier import browser_launcher as bl
+
+        monkeypatch.setattr(bl, "resolve_launch_kwargs", lambda: None)
+        ok, detail = doctor_api._check_browser_channel()
+        assert ok is False
+        assert "Chrome" in detail and "Edge" in detail
 
 
 # ── 4. doctor 注册面 ──

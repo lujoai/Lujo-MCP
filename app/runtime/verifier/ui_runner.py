@@ -30,6 +30,7 @@ import socket
 from urllib.parse import urlparse
 
 from app.config import settings
+from app.runtime.verifier.browser_launcher import resolve_launch_kwargs
 
 logger = logging.getLogger("lujo-mcp.ui_runner")
 
@@ -216,13 +217,19 @@ def capability_missing_payload() -> dict:
       「含 error 即失败」全局契约，传输层据此置 isError=true。
     - 返回 dict 而非 raise：verify_ui / auto_test 在 heavy 子进程执行，
       返回值经 IPC 传输，dict 载荷才能完整跨进程。
+
+    v0.9.8：冻结二进制已内置 playwright 库，能力缺失的实际含义扩展为
+    「未找到 Chrome/Edge/chromium 任一浏览器」（见 browser_launcher 回退链）。
     """
     return {
-        "error": "playwright 未安装，浏览器采集能力不可用",
+        "error": "playwright 未安装或未找到 Chrome/Edge/chromium，浏览器采集能力不可用",
         "error_code": "CAPABILITY_MISSING",
         "install": {
             "source": "pip install playwright && playwright install chromium",
-            "npm_frozen": "冻结二进制内无法安装 Python 依赖，请改用源码方式运行（见 README）",
+            "npm_frozen": (
+                "冻结二进制已内置 Playwright；若仍提示能力缺失，"
+                "请安装系统 Chrome 或 Edge 后重试"
+            ),
         },
         "retryable": False,
     }
@@ -277,6 +284,13 @@ def run_ui_verification(spec: dict, timeout_ms: int = 30000) -> dict:
         # 传输层按全局契约判 isError=true；dict 经 IPC 回传，不 raise）
         return capability_missing_payload()
 
+    # v0.9.8 浏览器回退链：playwright chromium → 系统 Chrome → 系统 Edge；
+    # 冻结发行版不随包分发 chromium，靠系统浏览器通道兜底。
+    # 探测是纯路径存在性检查（不 spawn driver），同步上下文安全。
+    launch_kwargs = resolve_launch_kwargs()
+    if launch_kwargs is None:
+        return capability_missing_payload()
+
     interactions = (spec.get("expect") or {}).get("interactions") or []
     global_expect = spec.get("expect") or {}
 
@@ -286,7 +300,7 @@ def run_ui_verification(spec: dict, timeout_ms: int = 30000) -> dict:
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(headless=True, **launch_kwargs)
             # FIX: P0-3 创建 context 并挂载逐跳 SSRF 守卫（拦截重定向/子资源请求）
             # FIX: P2 browser.close() 移入 finally，保证异常/超时路径也关闭浏览器
             try:
