@@ -61,10 +61,13 @@ git 归因工具（get_recent_diff / get_blame_for_frame）只查询「授权项
 - 只授权你信任的项目根：授权根内的 diff/blame 内容会进入宿主模型上下文。
 - 配置是否生效可用 `doctor` 工具的 `git_roots` 自检项回显核对。
 
-## 其他宿主（不受影响）
+## 其他宿主（按标准配置记录，本轮未验证）
 
-Claude Desktop、Cursor 等宿主按 MCP 标准透传 `args`，`"args": ["--http-port",
-"8101"]` 与文档示例照常工作；这类宿主同样支持 `env`，两种通道可任选。
+Claude Desktop、Cursor 等宿主按 MCP 标准透传 `args` 与 `env`（`"args":
+["--http-port", "8101"]` 的行为来自历史版本实测记录）。本轮（v1.0.0 发布
+准备期）未在这些宿主上实测，本节不构成当前版本在上述宿主上的实测保证或
+开箱承诺；如遇问题请以 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) 与
+doctor 自检为准。
 
 > 排查入口：HTTP 采集未启动时先看 Lujo 的 stderr 警告（Trae CN 下宿主会把它记入
 > 上文第 6 条的日志文件，用户 UI 不直接展示），再用

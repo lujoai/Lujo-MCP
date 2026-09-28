@@ -6,10 +6,10 @@
 console 日志、网络失败、UI 交互轨迹与会话上下文。Lujo 只负责采集、关联与查询，
 推理与改代码由宿主智能体完成。
 
-> **本包 v1.0.0（稳定公共契约起点）**：不引入新功能——把 v0.9.9 已实测行为（`diagnose_issue` 多现场消歧、`request_id` 确定性回查、诚实空态语义、证据注入边界）定为起始稳定契约，公共工具面与响应结构自此遵守向后兼容原则。从 0.9.x 升级无需改配置。完整发行说明见仓库 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
+> **本包 v1.0.0（稳定公共契约起点）**：不引入新功能——把 v0.9.9 已实测行为（`diagnose_issue` 多现场消歧、`request_id` 确定性回查、诚实空态语义、证据注入边界）定为起始稳定契约，公共工具面与响应结构自此遵守向后兼容原则。升级说明：Lujo 服务端参数与 MCP Schema 无需修改；尚未配置规则的 Trae CN 1.0.33+ 用户需按 [host-rules/trae.md](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/host-rules/trae.md) 添加一次全局规则。完整发行说明见仓库 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
 
 - 单机、本地自用、服务端零配置：`npx` 一条命令即可接入，无需数据库、Docker 或配置大模型 Key
-- 宿主自然交互：在 Trae / Cursor / Claude 中正常用自然语言描述问题即可，无需手动调用 MCP 工具或记忆特定指令；宿主模型自主决定是否选用工具（不保证每次都调用；未调用时可提示：“请调用 diagnose_issue 检查运行时现场”）
+- 宿主自然交互：宿主模型自主决定是否选用工具（不保证每次都调用；未调用时可提示：“请调用 diagnose_issue 检查运行时现场”）。**Trae CN 1.0.33+ 将第三方 MCP 工具收敛到泛化 `run_mcp`**——若要让宿主按自然语言问题主动触达 Lujo，需按 [host-rules/trae.md](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/host-rules/trae.md) 把适配版规则配置到 Trae 全局规则（一次配置全项目生效），并非开箱即自主调用；Cursor / Claude 等宿主按标准配置记录，本轮未实测。
 - 业务端轻量接入：前端页面通过 `<script>` 引入 Browser SDK 并执行 `AiDebug.init({ endpoint })` 建立现场采集（跨端口需配 CORS，本地回环推荐免 key 避免前端密钥泄露）
 - 运行现场默认留在本机内存；调试经验（KB）写穿到本地单文件 SQLite「笔记本」
 - 采集侧提供 Browser SDK（本包已随附，可被 CDN 直接引用）与 Node SDK

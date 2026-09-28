@@ -8,7 +8,7 @@
 > - **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 > - **核心原则**：**服务端可零配置免环境启动（Trae 一次配好），业务运行现场仍需项目接入 SDK（页面引入脚本并初始化）**。Lujo 无法凭空透视未接入 SDK 的任意项目。
 
-> **当前版本：v1.0.0（稳定公共契约起点）**：本版不引入新功能——它把 v0.9.9 已实测的行为（`diagnose_issue` 多现场消歧、`request_id` 确定性回查、空存储与扫描不完整的诚实语义、跨现场证据边界）定为**起始稳定契约**，公共工具面与响应结构自此遵守向后兼容原则（破坏性变更将升主版本并明确标出）。五项真实宿主实测（Trae CN 1.0.33）全部通过。详见 [CHANGELOG](./docs/public/CHANGELOG.md)。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
+> **当前版本：v1.0.0（稳定公共契约起点，本次准备版本）**：本版不引入新功能——它把 v0.9.9 已实测的行为（`diagnose_issue` 多现场消歧、`request_id` 确定性回查、空存储与扫描不完整的诚实语义、跨现场证据边界）定为**起始稳定契约**，公共工具面与响应结构自此遵守向后兼容原则（破坏性变更将升主版本并明确标出）。真实宿主实测（Trae CN 1.0.33）：4 项预注册行为 smoke + 1 项补充真实浏览器异常链路验证，全部通过（探索性小样本）。详见 [CHANGELOG](./docs/public/CHANGELOG.md)。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
 
 ---
 
@@ -42,7 +42,7 @@
 }
 ```
 
-> **版本说明**：省略版本后缀时 npx 会默认拉取 npm 上的稳定最新版 `latest`（当前发布版为 1.0.0）。
+> **版本说明**：省略版本后缀时 npx 会默认拉取 npm 上的稳定最新版 `latest`（当前已发布版本为 0.9.9；1.0.0 为本仓库已完成的发布准备版本，发布流程完成后生效）。
 >
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
