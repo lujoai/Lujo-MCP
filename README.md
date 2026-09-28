@@ -18,7 +18,7 @@
 
 1. **Lujo 服务端（真正零配置）**：通过 Trae / Cursor 配置 `npx` 即可直跑，**无需安装 Python、无需 Docker、无需配置数据库或大模型 Key**，本地自带 SQLite 笔记本与开箱即用的轻量 HTTP 采集服务。
 2. **业务项目（一次性轻量接入）**：Lujo 不是系统底层驱动或注入插件，它**无法凭空透视任意本地页面的内部异常**。被调试的项目页面需要**引入 Browser SDK 脚本并在代码中调用 `AiDebug.init({ endpoint })`**（见下方第 1 步）。如果页面与服务不同源（如页面在 `localhost:3000`、Lujo 在 `8710`），需在服务端配置 `CORS_ORIGINS`；若服务端启用了 `API_KEY`，SDK 初始化时也需同步传入 `apiKey`。
-3. **日常调试交互（自然语言对话，无需记忆特殊指令）**：配置好后，你在 Trae 里**正常与 AI 对话即可**（例如说：“刚才页面报错了，帮我看下控制台和网络现场”）。Trae 的智能体会根据你的问题**自主决策发起 Tool Calling** 调用 Lujo 工具，你**不需要**手动输入 `@lujo`。
+3. **日常调试交互（自然语言对话，无需记忆特殊指令）**：配置好后，你在 Trae 里**正常与 AI 对话即可**（例如说：“刚才页面报错了，帮我看下控制台和网络现场”）。Trae 的智能体会根据你的问题**自主决策发起 Tool Calling** 调用 Lujo 工具，你**不需要**手动输入 `@lujo`（Trae CN 1.0.33+ 需先按 [host-rules/trae.md](./docs/public/host-rules/trae.md) 配置一次全局规则，未配置时宿主不会自发调用，见下文宿主配置表）。
    > 📌 **注**：是否调用工具由宿主大模型自主判断，不保证 100% 每次都选用。若 AI 未调用工具而仅凭静态代码猜测，你只需在对话中简单补充一句：“*请调用 Lujo 工具（diagnose_issue）检查真实的控制台和网络报错记录*”即可。
 
 ---
@@ -102,7 +102,7 @@ npm install -g @lujoai/lujo-mcp@1.0.0
 
 | 客户端 | 界面操作与配置文件位置 |
 |---|---|
-| **Trae** | **界面操作**（菜单入口与配置路径可能随 Trae 版本更新而变化，请以当前 UI 为准）：<br>点击聊天框上方的 `MCP Servers` 图标（或 `Settings` → `Features` → `MCP`）→ 点击 `Add (添加)`，填入：<br>• **Name**: `lujo`<br>• **Command**: `npx`<br>• **Args**: `-y @lujoai/lujo-mcp@1.0.0`<br>**配置文件编辑**：若支持直接编辑配置文件，常见位置为 `.trae/mcp.json`（工作区）或 `~/.trae/mcp.json`（全局），该路径随版本演进可能不同，未验证的配置路径不保证永久有效，建议以 Trae 当前设置界面或官方最新文档为准 |
+| **Trae** | **已验证的配置方式（Trae CN 1.0.33 实测）**：`MCP` 面板 → 添加/手动配置 → 在**原始配置（JSON）粘贴框**中贴入下方标准 mcpServers JSON → 确认 → 新开会话生效：<br>```{"mcpServers":{"lujo":{"command":"npx","args":["-y","@lujoai/lujo-mcp@1.0.0"]}}}```<br>⚠️ **Trae 已知行为**（详见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md)）：① `args` 里的**附加 CLI 参数会被丢弃**（如 `--http-port`，需要端口请改用 `"env": {"HTTP_PORT": "..."}`）；② 直接编辑磁盘上的 `.trae/mcp.json` **不可靠**——它只是 Trae 内部存储的镜像导出，请一律用 UI 配置；③ **经 `args` 固定 npm 版本号是否可靠生效未验证**（实测当时 `latest` 与指定版本相同，无法区分两者），默认 npx 会解析 `latest`；需核对实际运行版本时，可查看 Trae 日志 `mcp-servers-host.log` 中 Lujo 的 stderr 启动横幅（含版本号）。**自然语言自主调用**：Trae CN 1.0.33+ 需按 [host-rules/trae.md](./docs/public/host-rules/trae.md) 配置全局规则，未配置时宿主不会发现/调用 Lujo 工具 |
 | **Cursor** | 项目根目录 `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json` |
 | **Claude Desktop** | `Settings` → `Developer` → `Edit Config`（编辑 `claude_desktop_config.json`） |
 | **其他 MCP 客户端** | 任何支持 MCP 标准 stdio 协议的工具均可直接接入 |
@@ -113,7 +113,7 @@ npm install -g @lujoai/lujo-mcp@1.0.0
 
 用大白话说清分工，可以避开 90% 的上手误区：
 
-- **宿主智能体（Trae / Cursor / Claude…）负责大模型推理与工具调用**。你平时在 Trae 里提问“刚才报错了帮我修”，Trae 自身携带的大模型会**自主判断是否调用 Lujo 工具**，你完全不需要在对话时手动敲指令或手动传参数。
+- **宿主智能体（Trae / Cursor / Claude…）负责大模型推理与工具调用**。你平时在 Trae 里提问“刚才报错了帮我修”，Trae 自身携带的大模型会**自主判断是否调用 Lujo 工具**，你完全不需要在对话时手动敲指令或手动传参数（前提：Trae CN 1.0.33+ 已按 [host-rules/trae.md](./docs/public/host-rules/trae.md) 配置全局规则——该版本 Trae 把第三方 MCP 工具收敛到 `run_mcp`，未配置规则时宿主模型看不到 Lujo 工具）。
 - **Lujo 只负责一件事：采集、关联、查询真实运行现场**。它把控制台异常、网络失败、UI 事件链、静默失败和调用堆栈组装成结构化现场，喂给宿主 AI 判断。Lujo 不是另一个聊天 Agent，也不替代宿主。
 - **正常通过 MCP 使用 Lujo，不需要给 Lujo 配置任何大模型 API Key。** 推理由宿主完成；Lujo 的内置 LLM 分析是可选项（见下方「如何开启 LLM 分析」），与能不能用 MCP 工具无关。
 - 仓库中的 `BENCHMARK_LLM_BASE_URL` / `BENCHMARK_LLM_API_KEY` / `BENCHMARK_LLM_MODEL` 环境变量**只服务于独立的真实 LLM Benchmark runner（基准评测实验工具）**，与日常 MCP 调试无关，正常使用完全不需要配置。
@@ -138,13 +138,13 @@ npm install -g @lujoai/lujo-mcp@1.0.0
 
 ### 最短可执行流程（以 Trae 为例）
 
-1. **配好 MCP**：在 Trae 里添加 Lujo MCP（填入上述 npx 配置）。
+1. **配好 MCP**：在 Trae 的 MCP 面板用「手动配置/原始配置(JSON)」贴入上方 mcpServers JSON（Trae CN 1.0.33+ **另需**按 [host-rules/trae.md](./docs/public/host-rules/trae.md) 把适配版规则贴进全局规则，否则宿主模型不会自发调用 Lujo 工具）。
 2. **接入业务项目**：在前端项目（HTML / React / Vue / Vite）里引入 Browser SDK 脚本并调用 `AiDebug.init({ endpoint: "http://127.0.0.1:8710" })`（页面跨端口需配 CORS，见下文）。
 3. **复现问题**：在浏览器里点击或触发该 Bug。
 4. **自然对话**：直接在 Trae 聊天框输入：“*刚才页面出现报错了，帮我看下控制台和网络现场并修复*”。
 5. **宿主自主排查**：宿主模型可按需调用 `diagnose_issue` 获取结构化现场；是否选用工具由模型自主决定，不保证每次都调用。在有真实报错现场时，可辅助分析排障；若模型未选用工具，可明确提示“请调用 diagnose_issue 检查运行时现场”。
 
-> 全程不需要记忆任何特殊指令，不需要给 Lujo 额外配置任何 LLM API Key。
+> 全程不需要记忆任何特殊指令，不需要给 Lujo 额外配置任何 LLM API Key（Trae CN 1.0.33+ 的一次性全局规则除外，见第 1 步）。
 
 ---
 
@@ -318,7 +318,7 @@ fetch('/api/user/profile').then(res => {
 
 宿主大模型会自主判断并尝试选用统一诊断入口 `diagnose_issue`（无需任何 request_id，直查最近一次真实错误现场，获取控制台报错、网络请求 Payload/Status、源码行号与调用栈辅助定位）。
 
-> 📌 **重要说明**：Trae / 宿主模型自主决定是否选用工具，不保证每次都自动调用。若大模型未调用工具而仅凭静态代码猜测，你可明确提示它：“**请调用 diagnose_issue 检查运行时现场**”。
+> 📌 **重要说明**：Trae / 宿主模型自主决定是否选用工具，不保证每次都自动调用。若大模型未调用工具而仅凭静态代码猜测，你可明确提示它：“**请调用 diagnose_issue 检查运行时现场**”。另注意：**Trae CN 1.0.33+ 把第三方 MCP 工具收敛到泛化 `run_mcp`，未按 [host-rules/trae.md](./docs/public/host-rules/trae.md) 配置全局规则时，宿主模型不会发现/调用 Lujo 工具**——自然语言自主调用依赖该一次性配置；Cursor / Claude 等宿主按标准配置记录，本轮未实测。
 
 ```text
 AI Agent 调用工具现场结构示例（diagnose_issue）：
