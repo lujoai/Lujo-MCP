@@ -164,7 +164,9 @@ jobs:
           import sys
 
           release_ver = os.environ["RELEASE_VERSION"]
-          if not re.fullmatch(r"0\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", release_ver):
+          # 接受任意主版本的 semver（0.x 与 1.0+ 均可），保留预发布/构建元数据后缀；
+          # v1.0.0 恢复修复：旧正则 0\.\d+\.\d+ 只认 0.x，曾在 run 36389375805 拒绝 1.0.0
+          if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", release_ver):
               print(f"::error::Invalid release version: {release_ver!r}")
               sys.exit(1)
 
