@@ -1,6 +1,6 @@
 # Lujo-MCP API 参考手册
 
-> 当前版本：v0.9.7（2026-09-27）。本版可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见。REST 契约与 schema 不变（新增 doctor 工具与既有工具的新增返回字段）；详细变更见 [CHANGELOG](./CHANGELOG.md)。上一版 v0.9.6 为零改造本地调试（回环默认放行）。
+> 当前版本：v1.0.0（2026-09-28，稳定公共契约起点——行为与 v0.9.9 一致；diagnose_issue 多现场消歧与 request_id 确定性回查为该契约一部分）。工具面：23 注册 / 19 可见。 详细变更见 [CHANGELOG](./CHANGELOG.md)。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -21,7 +21,7 @@
   - [3.1 查询 / 分析类工具（agent）](#31-查询--分析类工具agent)
   - [3.2 数据采集类工具（sdk）](#32-数据采集类工具sdk)
   - [3.3 实验工具（experimental）](#33-实验工具experimental)
-- [4. Node SDK（npm 稳定版 v0.9.7）](#4-node-sdk)
+- [4. Node SDK（npm 稳定版 v1.0.0）](#4-node-sdk)
 - [5. 常用字段速查](#5-常用字段速查)
 
 ---
@@ -355,7 +355,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ---
 
-## 4. Node SDK（npm 稳定版 v0.9.7）
+## 4. Node SDK（npm 稳定版 v1.0.0）
 
 包名固定为 `@lujoai/lujo-mcp-node-sdk`。该包独立发布；当前可安装版本以 [npm registry](https://www.npmjs.com/package/@lujoai/lujo-mcp-node-sdk) 为准。SDK 支持 Node 18、20、22，提供 CommonJS 和 ESM 根入口，`engines.node` 为 `>=18`。
 

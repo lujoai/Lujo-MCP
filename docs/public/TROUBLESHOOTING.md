@@ -1,9 +1,9 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v0.9.7
-**最后更新 / Last Updated**: 2026-09-26
+**适用版本 / Applicable Version**: v1.0.0
+**最后更新 / Last Updated**: 2026-09-28
 
-> **发布状态**：当前 npm 线上最新已发布版本为 `v0.9.7`。本版可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见；默认 `STORAGE_BACKEND=memory`（唯一合法值；PostgreSQL 后端已正式移除，精确值 `postgresql` 会被直接拒绝，见 L 节）。
+> **发布状态**：当前 npm 线上最新已发布版本为 `v1.0.0`（2026-09-28，稳定公共契约起点；行为与 v0.9.9 一致，无破坏性变更）。诊断侧契约要点：`diagnose_issue` 多故障返回候选列表（`ambiguity_detected`，不静默代选）、`request_id` 支持 error_id / SDK caller trace ID / 网络记录 ID 的确定性回查（含可逆 `b64.` 候选引用）、空存储与扫描不完整时如实报告。沿用不变：默认 `STORAGE_BACKEND=memory`（唯一合法值，`postgresql` 显式拒绝，见 L 节）；默认监听 `127.0.0.1`；默认端口 8710；`/metrics` 免鉴权豁免仅回环生效；关闭期错误码 `TOOL_BUSY`；RBAC 拒绝码 `AUTH_ERROR -32003`；`POST /debug` 已 410，统一 `POST /api/debug/run`。
 
 ---
 
@@ -62,7 +62,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HTTP_HOST=127.0.0.1`（旧键 `HOST` 等效）
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v0.9.7`（本地源码与 npm 发布版均为 0.9.7）
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v1.0.0`（本地源码与 npm 发布版均为 1.0.0）
 
 ---
 
@@ -513,7 +513,7 @@ curl -X POST http://localhost:8710/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}'
 ```
 
-`tools/list` 公开 19 个 Agent-facing 工具（v0.9.7 工具面，含新增 doctor；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 23）:
+`tools/list` 公开 19 个 Agent-facing 工具（现行工具面，自 v0.9.7 起含 doctor；SDK 上报类 `ingest_*` 不进清单但可按名调用，注册总数 23）:
 `debug`, `context`, `trace`, `stacktrace`, `diagnose_issue`, `list_recent_traces`, `search_logs`, `ingest_specs`, `get_network_trace`, `get_blame_for_frame`, `get_recent_diff`, `get_related_specs`, `verify`, `verify_ui`, `auto_test`, `repair_async`, `repair_result`, `resolve_stack`
 
 **验证 / Verify**: `tools/list` 返回完整工具列表
@@ -1008,8 +1008,8 @@ pytest tests/ --timeout=120
 ### M-3. 宿主 AI 没有自动调用工具，而是直接猜测代码
 
 - **现象**：在 Trae / Cursor / Claude 对话框中向 AI 描述页面报错，但 AI 没有调用 MCP 工具，仅凭静态代码猜测原因。
-- **原因**：宿主智能体的大模型自主决策是否选用工具，不保证 100% 每次都自动触发 Tool Calling。
-- **解决方案**：无需记忆指令或手动执行 MCP 方法，只需在日常自然语言对话中明确提示 AI 一句：“**请调用 diagnose_issue 检查运行时现场**”即可引导大模型调用工具获取完整控制台与网络记录。
+- **原因**：① **Trae CN 1.0.33+ 已把第三方 MCP 工具收敛到泛化 `run_mcp`**——未按 [host-rules/trae.md](./host-rules/trae.md) 配置全局规则时，宿主模型的工具清单里看不到 Lujo 工具，自然语言描述不会自主调用（结构性原因，详见 [HOST_COMPATIBILITY.md](./HOST_COMPATIBILITY.md) 第 7 条）；② 即便工具可见，宿主大模型自主决策是否选用工具，也不保证 100% 每次都自动触发。
+- **解决方案**：Trae CN 1.0.33+ 先按 [host-rules/trae.md](./host-rules/trae.md) 把适配版规则贴进「设置 → 规则与记忆 → 全局规则」（一次配置全项目生效），再在日常自然语言对话中明确提示 AI 一句：“**请调用 diagnose_issue 检查运行时现场**”即可引导大模型调用工具获取完整控制台与网络记录。
 
 ---
 
