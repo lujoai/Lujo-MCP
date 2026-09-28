@@ -199,14 +199,13 @@ psycopg2、asyncpg、PG store、PG executor
 
 memory / SQLite 测试隔离必须保持。
 
-### executor 生命周期（非 PG 专属，仍需验证）
+### executor 生命周期（非 PG 专属；原待验证项已于 2026-09-28 核实关闭）
 
-stdio 生命周期关闭 `_LIGHT_TOOL_EXECUTOR` 后，
-HTTP 路径的 executor 生命周期 / 自愈需要真实验证。
+stdio 生命周期关闭 `_LIGHT_TOOL_EXECUTOR` 后，HTTP 路径的 executor 生命周期 / 自愈
+——已真实验证关闭（**2026-09-28 核实关闭**：W12 对 P1-HEAVY-2 采纳的「删死契约 + 改正语义」在当前代码已实现——closing 后 heavy 全链 `HeavyServiceClosing → TOOL_BUSY`，test_heavy_tool_observability.py 双传输锁定；「stdio 关闭 _LIGHT_TOOL_EXECUTOR 后 HTTP 路径自愈」经端到端 dispatch 验证通过：轻量 getter 重建线程池、共享池 closing 不拖垮轻量路径、stdio 私有池隔离成立（tests/unit/test_executor_http_light_selfheal.py 3 用例，当前实现直接全绿，无缺陷可复现）；统一模式下 stdio EOF 先停 HTTP（既有测试锁定），不存在「stdio 关闭后 HTTP 长期服务」稳态；closing 单向不可逆属 W12 裁定设计，非缺陷。）
 
-此问题与 PostgreSQL 无关，
-属于 heavy tool executor 生命周期范畴，
-必须保留。
+此问题与 PostgreSQL 无关，属于 heavy tool executor 生命周期范畴；结论记录保留，
+后续仍适用 §7 的高风险改动纪律（改 executor/heavy 生命周期须带针对性测试）。
 
 不要在无关功能开发中顺手重构整个 storage layer。
 
@@ -308,3 +307,20 @@ curl -s ... -o "$TEMP/lujo-probe.json"
 `.gitignore` 只守护已知测试产物
 （`.pytest_tmp/`、`.pytest-tmp/`、`test-results.xml` 等）；
 一次性会话探针靠本约定自律，不靠 ignore 兜底。
+
+## 14. AI 修改纪律与输出契约（2026-09-28 自 docs/internal/AI_RULES.md 并入）
+
+开发流程遵循规范驱动：需求规范 → 技术设计 → 任务拆解 → 代码实现 → 测试验证 → 文档更新；Markdown 文档与代码同为项目规范。
+
+修改原则：
+
+- **禁止重复开发**：修改前检查是否已存在同类 类/API/Storage/Collector/Tool，存在则复用。
+- **最小修改**：一次只解决一个问题，只改必要文件，不引入无关改动。
+- **禁止无数据优化**：优化须有基准/监控支撑，优先可读性与稳定性。
+- **禁止大规模重构**：除非明确要求；默认小步修改。
+- 提交格式 `type(scope): description`；禁止提交调试语句与敏感信息。
+
+输出契约：
+
+- **改前必输出**：问题分析（是什么/为什么/在哪）→ 修改方案（改哪些文件/为何/是否影响既有功能）→ 风险分析（影响面/如何测试）。输出后：**已在用户授权范围内且不越出任务边界的工作直接继续执行，不逐次等待确认**；仅当 ① 越出当次授权/任务范围、② 架构归属或 Layer 边界不清、③ 高风险操作（数据迁移、公共契约变更、安全边界、不可逆动作）且未获授权时，停下请求确认（工作包纪律见 §6）。
+- **改后必输出**：修改记录（文件/内容/原因）+ 测试结果（以 AI_HANDOFF「本地验证纪律」口径为准，计数只认 JUnit XML）。
