@@ -8,7 +8,7 @@
 > - **定位**：Lujo-MCP 是 AI coding assistant 的「眼睛」与 **Debug Context Infrastructure（调试上下文基础设施）** —— **不是另一个复杂 Agent**，不替代宿主 AI 的推理，而是把控制台异常、网络失败、交互轨迹与调用堆栈组装为结构化现场，喂给宿主 AI 完成精准修复。
 > - **核心原则**：**服务端可零配置免环境启动（Trae 一次配好），业务运行现场仍需项目接入 SDK（页面引入脚本并初始化）**。Lujo 无法凭空透视未接入 SDK 的任意项目。
 
-> **当前版本：v1.0.0（稳定公共契约起点，本次准备版本）**：本版不引入新功能——它把 v0.9.9 已实测的行为（`diagnose_issue` 多现场消歧、`request_id` 确定性回查、空存储与扫描不完整的诚实语义、跨现场证据边界）定为**起始稳定契约**，公共工具面与响应结构自此遵守向后兼容原则（破坏性变更将升主版本并明确标出）。真实宿主实测（Trae CN 1.0.33）：4 项预注册行为 smoke + 1 项补充真实浏览器异常链路验证，全部通过（探索性小样本）。详见 [CHANGELOG](./docs/public/CHANGELOG.md)。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
+> **当前版本：v1.0.1（修复版，本仓库准备中的候选版本——npm 与 GitHub Release 当前已发布版本为 1.0.0，1.0.1 发布流程完成后生效）**：本版为 patch 修复，不新增功能、不改公共契约——修复 `auto_test` 自动采集链路（页面早期事件采集与排水、采集/回传诚实状态与字节限额、gzip 批上报、自定义 CLI 端口下 heavy worker 的 endpoint 指向、stdio 路径事件入库），`diagnose_issue` 查询契约与 1.0.0 一致。修复经真实浏览器验收矩阵（独立实例 + 独立 marker，含鉴权补验）与冻结产物 stdio 冒烟验证；宿主侧暴露方式不变。升级无需修改服务端参数与 MCP Schema（新增字段均为可选）。详见 [CHANGELOG](./docs/public/CHANGELOG.md)。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
 
 ---
 
@@ -36,13 +36,13 @@
   "mcpServers": {
     "lujo": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@1.0.0"]
+      "args": ["-y", "@lujoai/lujo-mcp@1.0.1"]
     }
   }
 }
 ```
 
-> **版本说明**：省略版本后缀时 npx 会默认拉取 npm 上的稳定最新版 `latest`（当前已发布版本为 0.9.9；1.0.0 为本仓库已完成的发布准备版本，发布流程完成后生效）。
+> **版本说明**：省略版本后缀时 npx 会默认拉取 npm 上的稳定最新版 `latest`（当前已发布版本为 1.0.0；1.0.1 为本仓库准备中的候选版本，尚未发布，发布流程完成后生效）。
 >
 > **为什么推荐 npx**：跨平台（Windows / macOS / Linux）自动按需拉取对应平台的预编译二进制，彻底避免桌面 GUI 客户端（如 Claude Desktop）因未加载系统 Shell PATH 而找不到命令的问题。
 >
@@ -76,7 +76,7 @@
 ### 替代方式：全局安装
 
 ```bash
-npm install -g @lujoai/lujo-mcp@1.0.0
+npm install -g @lujoai/lujo-mcp@1.0.1
 ```
 
 客户端配置：
@@ -102,7 +102,7 @@ npm install -g @lujoai/lujo-mcp@1.0.0
 
 | 客户端 | 界面操作与配置文件位置 |
 |---|---|
-| **Trae** | **已验证的配置方式（Trae CN 1.0.33 实测）**：`MCP` 面板 → 添加/手动配置 → 在**原始配置（JSON）粘贴框**中贴入下方标准 mcpServers JSON → 确认 → 新开会话生效：<br>```{"mcpServers":{"lujo":{"command":"npx","args":["-y","@lujoai/lujo-mcp@1.0.0"]}}}```<br>⚠️ **Trae 已知行为**（详见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md)）：① `args` 里的**附加 CLI 参数会被丢弃**（如 `--http-port`，需要端口请改用 `"env": {"HTTP_PORT": "..."}`）；② 直接编辑磁盘上的 `.trae/mcp.json` **不可靠**——它只是 Trae 内部存储的镜像导出，请一律用 UI 配置；③ **经 `args` 固定 npm 版本号是否可靠生效未验证**（实测当时 `latest` 与指定版本相同，无法区分两者），默认 npx 会解析 `latest`；需核对实际运行版本时，可查看 Trae 日志 `mcp-servers-host.log` 中 Lujo 的 stderr 启动横幅（含版本号）。**自然语言自主调用**：Trae CN 1.0.33+ 需按 [host-rules/trae.md](./docs/public/host-rules/trae.md) 配置全局规则，未配置时宿主不会发现/调用 Lujo 工具 |
+| **Trae** | **已验证的配置方式（Trae CN 1.0.33 实测）**：`MCP` 面板 → 添加/手动配置 → 在**原始配置（JSON）粘贴框**中贴入下方标准 mcpServers JSON → 确认 → 新开会话生效：<br>```{"mcpServers":{"lujo":{"command":"npx","args":["-y","@lujoai/lujo-mcp@1.0.1"]}}}```<br>⚠️ **Trae 已知行为**（详见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md)）：① `args` 里的**附加 CLI 参数会被丢弃**（如 `--http-port`，需要端口请改用 `"env": {"HTTP_PORT": "..."}`）；② 直接编辑磁盘上的 `.trae/mcp.json` **不可靠**——它只是 Trae 内部存储的镜像导出，请一律用 UI 配置；③ **经 `args` 固定 npm 版本号是否可靠生效未验证**（实测当时 `latest` 与指定版本相同，无法区分两者），默认 npx 会解析 `latest`；需核对实际运行版本时，可查看 Trae 日志 `mcp-servers-host.log` 中 Lujo 的 stderr 启动横幅（含版本号）。**自然语言自主调用**：Trae CN 1.0.33+ 需按 [host-rules/trae.md](./docs/public/host-rules/trae.md) 配置全局规则，未配置时宿主不会发现/调用 Lujo 工具 |
 | **Cursor** | 项目根目录 `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json` |
 | **Claude Desktop** | `Settings` → `Developer` → `Edit Config`（编辑 `claude_desktop_config.json`） |
 | **其他 MCP 客户端** | 任何支持 MCP 标准 stdio 协议的工具均可直接接入 |
@@ -264,7 +264,7 @@ CORS_ORIGINS=http://localhost:3000        # 开发页面源，同上
 >
 > 💡 最快的同源验证路径：服务自带演示页 `http://127.0.0.1:8710/demo`（与服务同源，不涉及 CORS），打开后即可触发网络错误现场。
 
-### Node 服务接入：使用 Node SDK（v1.0.0 已发布）
+### Node 服务接入：使用 Node SDK（当前已发布 v1.0.0；v1.0.1 准备中）
 
 服务端 Node.js 使用独立包 `@lujoai/lujo-mcp-node-sdk`，支持 Node 18/20/22 和 CJS/ESM。它只做显式错误与网络上报，不安装浏览器的 DOM、XHR/fetch、console 或 `localStorage` 钩子；浏览器页面继续使用上面的 Browser SDK。
 
@@ -473,12 +473,12 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
   "mcpServers": {
     "lujo-project-a": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@1.0.0"],
+      "args": ["-y", "@lujoai/lujo-mcp@1.0.1"],
       "env": { "HTTP_PORT": "8101" }
     },
     "lujo-project-b": {
       "command": "npx",
-      "args": ["-y", "@lujoai/lujo-mcp@1.0.0", "--http-port", "8102"]
+      "args": ["-y", "@lujoai/lujo-mcp@1.0.1", "--http-port", "8102"]
     }
   }
 }
@@ -497,7 +497,7 @@ Lujo-MCP 的定位是**单用户、本地自用**：npm 一条命令装完即用
 </script>
 ```
 
-**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp@1.0.0", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
+**3. 只做协议冒烟、不需要浏览器现场时用 `--no-http`**：`args: ["-y", "@lujoai/lujo-mcp@1.0.1", "--no-http"]`。此时每个宿主窗口各自一个 Lujo 进程，默认 memory 后端下数据天然按进程隔离，无需端口规划。
 
 **已知限制（如实说明）**：
 

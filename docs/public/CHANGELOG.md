@@ -5,6 +5,29 @@
 
 ---
 
+## [1.0.1] - 2026-10-04
+
+> 主题「auto_test 自动采集链路修复」。1.0.0 的 `auto_test` 自动埋点在真实浏览器下存在多处断点：注入脚本在页面 DOM 空洞期静默失效、默认 CORS 收紧下 SDK 跨源上报无法送达、heavy 子进程采集的现场进不了 MCP 主进程存储、遍历结束即关浏览器导致窗口内延迟故障丢失——「diagnose_issue 无现场 → auto_test 采集 → diagnose_issue 回查」的闭环实际不通。本版为 **patch 修复**：不新增功能、不改公共工具面与既有响应契约（仅新增可选字段与可选入参 `observe_ms`）。**发布状态**：截至本段撰写，npm 与 GitHub Release 的已发布版本仍为 **1.0.0**；1.0.1 为本仓库准备中的候选版本，尚未打 tag、尚未发布。
+
+### Fixed
+
+- **注入与页面早期事件采集**：init script 不再依赖 `document.head` / `documentElement` 此时已存在——早期异常钩子（console.error / error / unhandledrejection）先建缓冲，DOM 就绪后再挂载 SDK；SDK 加载完成前的早期事件经 `__LUJO_SDK_DRAIN__` **单次排水入队**（不向目标页面重放，页面既有监听器、错误处理与日志行为不被二次触发），只保留实际可得的类型/消息/文件/行列/堆栈，缺失不伪造。注入幂等，阶段经 `window.__LUJO_SDK_STATE__` 可观测。
+- **回传与主实例入库**：SDK 上报不再依赖浏览器跨源 HTTP（默认 `cors_origins=""` 时预检必然失败）——`auto_test` 在自己的浏览器会话内拦截 Lujo endpoint 的上报（路径/方法白名单，未知路径不伪装成功，其余请求交回 SSRF 逐跳守卫），事件经 heavy IPC 内部保留键回主进程，由与 `/ingest/*` 端点完全同一套校验/脱敏/关联/入库落地；服务器 CORS 与鉴权默认值不变，页面不接触任何密钥。**stdio 调用路径补齐同一排水步骤**（此前 stdio 下采集现场永不入库，且内部键随响应文本泄漏）。
+- **采集/回传诚实状态与限额**：返回新增可选 `sdk_capture` 状态（`enabled` / `init` / `events_captured` / `events_truncated` / `delivery` / `events_ingested` / `ingest_failures` / `events_ingest_truncated`）。`delivery: complete` 仅表示 SDK→本工具捕获队列的回传完成（冲刷返回值真实读取，异常或缺 SDK 一律不报 complete），**不等于入库成功**——入库结果由 `events_ingested` 等字段表达，两者不混为一谈。字节限额：原始上报体 1 MiB、gzip 解压后 10 MiB、累计捕获 8 MiB，按 UTF-8 字节计量，超限明确拒绝（413/415/400）不部分入队并如实计数。**gzip 批上报修复**：改用 `post_data_buffer` 读取（旧实现遇 gzip 二进制体抛解码错误，>4KB 的 SDK 批次必丢）并支持有界解压（防 zip bomb）。
+- **heavy worker 自定义端口**：统一模式下 CLI `--http-host` / `--http-port` 的解析结果此前只写父进程 settings，heavy 子进程继承不到——`auto_test` 注入的 SDK endpoint 退回 env/默认端口 8710，在「端口即隔离」的多实例口径下会指错实例。修复为 per-spawn env 传递有效绑定（CLI > env > 默认的既有优先级不变），不修改父进程环境、不携带凭据。
+- **async SSRF 守卫**：新增 `install_ssrf_guard_async`——sync 版守卫在 async Playwright context 上注册从未生效（协程未 await，仅留 RuntimeWarning），async 路径的 `auto_test` 由此长期没有逐跳 SSRF 防护；判定逻辑与 sync 版同一套。
+
+### 采集边界（如实声明，不夸大）
+
+- 注入式采集只覆盖 **auto_test 会话内打开的页面**；用户日常浏览的页面不会被自动采集，持续被动采集仍需页面接入 Browser SDK（两条链路的区分不变）。
+- 观察窗口为**固定有界**（`observe_ms` 默认 2000ms，可选 0–10000）：窗口内延迟故障会被采集，窗口外更晚发生的异常不保证捕获；SDK 安装前已发出的在途网络请求不可观察（页面早期错误经缓冲排水覆盖，网络钩子自安装时刻起生效）。
+- 本版修复经**真实浏览器验收矩阵**（独立 Lujo 实例 + 独立 marker：健康页 / 早期异常 / 延迟异常 / 网络失败 / 双故障候选回查 / 失败与回收 / 鉴权补验，7/7 通过）、本机 PyInstaller 冻结产物 stdio 冒烟与 CI（七 job 绿）验证；宿主侧暴露方式不变，Trae CN 1.0.33+ 的规则配置要求保持，其余宿主按标准配置记录、本轮未实测。
+
+### 升级须知（无破坏性变更）
+
+- 从 1.0.0 升级：把版本号换成 `@1.0.1`（或依赖 `latest`）即可；Lujo 服务端参数与 MCP Schema 均无需修改（`sdk_capture` 为新增可选响应字段，`observe_ms` 为新增可选入参）。
+- **Trae CN 1.0.33+ 宿主**：全局规则的一次性配置要求不变（见 [host-rules/trae.md](./host-rules/trae.md)）。
+
 ## [1.0.0] - 2026-09-28
 
 > 主题「稳定公共契约起点」。1.0.0 不引入新功能：它把 v0.9.9 已实测的行为定为**起始稳定契约**，并从本版起遵守清晰的兼容性原则——公共工具面与响应结构的变化将保持向后兼容，如确需破坏性变更将按语义化版本规则升主版本并在发行说明中明确标出。链路证据：v0.9.9 的 CI / 发布流水线 / 三平台产物全绿；v0.9.9 发布后在真实宿主（Trae CN 1.0.33 + step-5-preview）完成 **4 项预注册行为 smoke**（① 空存储诚实汇报、② 单故障证据采信、③ 双故障候选回查零串场、④ 负向任务零误调），另做 **1 项补充验证：真实浏览器异常链路**（受控页面真实网络错误 → Browser SDK 自动采集 → 宿主经自然语言查询 → 诊断与服务端记录逐项一致）。均为探索性小样本，不构成统计结论。
