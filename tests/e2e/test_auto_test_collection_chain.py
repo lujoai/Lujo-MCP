@@ -7,7 +7,8 @@
 随后 diagnose 候选枚举必须能回查到本次 marker。
 
 覆盖断点组合（验收矩阵 B/C/D 的自动化守护）：
-- 早期 console.error（SDK 加载前，验证 init script 缓冲回放）；
+- 早期 console.error（SDK 加载前，验证早期缓冲经 __LUJO_SDK_DRAIN__ 单次排水入库，
+  不回放广播、不二次触发页面监听器）；
 - 观察窗口内延迟 console.error（验证观察窗口与回传完成确认）；
 - fetch 到无监听端口的真实连接失败（status_code=0 语义保持）。
 

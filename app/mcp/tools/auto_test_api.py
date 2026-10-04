@@ -7,22 +7,36 @@ MCP 工具：auto_test —— 自动遍历页面所有可交互元素并捕获�
 v1.0.x 修复（自动采集链路）：
 1. init script 不再在 ``document.head`` / ``document.documentElement`` 均为空时
    静默死亡：早期异常钩子（console.error / error / unhandledrejection）立即
-   建立、先缓冲，DOM 就绪后再挂载 SDK，ready 后回放缓冲，单次采集；
-   ``window.__LUJO_SDK_STATE__`` 暴露可观测阶段。
+   建立并**只进缓冲**，DOM 就绪后再挂载 SDK；缓冲不再"回放"（回放会二次触发
+   页面既有 error 监听器、二次输出页面 console），改由 ``__LUJO_SDK_DRAIN__``
+   单次排水取回原始项，由 heavy 侧 ``finish`` 映射入队。
+   ``window.__LUJO_SDK_STATE__`` 暴露可观测阶段与 drained 计数。
 2. 回传不再依赖浏览器跨源 HTTP 上报（默认 ``cors_origins=""`` 时预检必然失败）：
    本工具在自己的 browser context 上拦截 Lujo endpoint 的 SDK 上报，事件进入
    heavy 子进程内存，经结果内部键 ``_lujo_ingest`` 随 heavy IPC 回主进程，
    由 ``ingest_dispatch.drain_result_ingest_events`` 以与 /ingest/* 端点同一套
    校验/脱敏/入库落地。服务器 CORS/鉴权默认值不变，页面不接触任何密钥。
-3. 遍历后进入有上限的观察窗口（事件驱动 settle + 强制冲刷 + 回传安静确认），
-   延迟故障在窗口内仍可采集；``sdk_capture`` 状态字段如实区分
-   关闭/初始化成败/已观察事件数/回传完成度。
+   拦截层按**原始字节体**（req.post_data_buffer）处理：如实支持 SDK 的 gzip
+   上报（browser-sdk 对 >4KB 载荷自动置 Content-Encoding: gzip），有界解压
+   （防 zip bomb）后走同一套闸门；br/deflate 等未知编码明确拒绝（415），
+   绝不静默当明文解析。注意 req.post_data 是字节体的 UTF-8 解码结果，对
+   gzip 体会直接抛 UnicodeDecodeError，不得再对生产路径使用。
+3. 遍历后进入**固定有界**观察窗口（分片 dwell，事件安静也不提前结束）+
+   强制冲刷（读取 JS 包装返回值）+ 回传安静确认，延迟故障在窗口内仍可采集。
+   ``sdk_capture`` 状态字段如实区分 关闭/初始化成败/已观察事件数/回传完成度：
+   ``delivery`` 只表示 **SDK→本工具捕获队列** 的回传完成度，**不代表主进程
+   入库成功**；入库由 drain 写入的 events_ingested / ingest_failures /
+   events_ingest_truncated 表达，两者不得混为一谈。请求体/累计字节超限一律
+   明确拒绝并如实计数（UTF-8 字节），不做静默截断或部分入队。
 """
+import gzip
+import io
 import json
 import logging
 import time
 from urllib.parse import urlparse
 
+from app.mcp.tools.ingest_dispatch import DISPATCH_INGEST_PATHS
 from app.mcp.tools.ingest_dispatch import RESULT_INGEST_KEY as _RESULT_INGEST_KEY
 
 AUTO_TEST_DEF = {
@@ -58,9 +72,10 @@ AUTO_TEST_DEF = {
                 "type": "integer",
                 "default": 2000,
                 "description": (
-                    "遍历结束后的观察窗口毫秒数（0-10000）：窗口内延迟发生的"
-                    "console.error / 网络失败仍会被采集；事件安静后可提前结束。"
-                    "不保证捕获任意晚发生的异常。"
+                    "遍历结束后的固定观察窗口毫秒数（0-10000，默认 2000）："
+                    "窗口内延迟发生的 console.error / 网络失败仍会被采集；"
+                    "窗口为固定有界 dwell，事件安静也不会提前结束，"
+                    "不保证捕获窗口之外更晚发生的异常。"
                 ),
             },
         },
@@ -77,6 +92,89 @@ _MAX_CAPTURED_INGEST_EVENTS = 200
 # 回传安静确认的时间参数（毫秒）
 _FLUSH_WAIT_MAX_MS = 2500
 _FLUSH_QUIET_MS = 300
+
+# finish() 的冲刷包装（单一事实源）：页面即将关闭前把 SDK 批队列排空到本工具的
+# 拦截路由。tests/unit/test_auto_inject_script_js.py 会用真实 Node 执行本表达式
+# 锁定其返回值语义（缺 SDK / 内部异常必须 false，不得让 finish() 误报 complete）。
+_FLUSH_SDK_JS = (
+    "(function () { try {"
+    # F1（reviewer task-2）：SDK 从未初始化（window.AiDebug 缺失或非对象）时
+    # 冲刷不可能发生 → 必须 return false，否则 finish() 会误报 delivery=complete
+    " if (!window.AiDebug || typeof window.AiDebug !== 'object')"
+    " { return false; }"
+    " if (window.AiDebug && window.AiDebug._flushBatch)"
+    " { window.AiDebug._flushBatch(false); }"
+    " if (window.AiDebug && window.AiDebug.destroy)"
+    " { window.AiDebug.destroy({ flush: true }); }"
+    " return true;"
+    "} catch (e) { return false; } })()"
+)
+
+# 采集请求体字节上限（UTF-8 编码后计量）＝**原始体**闸门：复用既有约定——
+# app/middleware.py 以 settings.max_body_size（默认 1 MiB）限制 HTTP 请求体，
+# 这里对 SDK 上报做同一口径的原始体闸门，避免畸形/超大 JSON 进入 heavy 内存。
+_MAX_CAPTURE_BODY_BYTES = 1_048_576
+# gzip **解压后**字节上限：复用 app/api/ingest.py::_MAX_DECOMPRESSED_SIZE
+# （10 MiB）的既有约定，与真实 /ingest/batch 端点同一口径（否则 1-10 MiB 的
+# 正常大批次在 beacon/sync 路径会被本通道误丢）。tools 层不得反向 import
+# api 层，故本地常量 + 注释锚定；改动此处必须同步核对 app/api/ingest.py:27。
+_MAX_CAPTURE_DECOMPRESSED_BYTES = 10 * 1024 * 1024
+# 会话累计采集字节上限（UTF-8）：heavy IPC 帧硬上限为
+# heavy_spawn._MAX_FRAME_BYTES = 64 MiB（app/mcp/protocol/heavy_spawn.py），
+# 取其 1/8（8 MiB）留足余量，保证结果帧本身不会顶到协议的无效长度防线。
+_MAX_CAPTURE_TOTAL_BYTES = 8 * 1024 * 1024
+# 本工具真正需要截获的路径：ingest 分发路径（单一事实源）之外只多一个批处理端点。
+# 其余请求（含其它 OPTIONS/POST）一律 route.fallback()，交回 SSRF 守卫与正常请求处理。
+_CAPTURE_INGEST_PATHS = DISPATCH_INGEST_PATHS | {"/ingest/batch"}
+
+# gzip 上报体支持（R5）：browser-sdk/ai-debug.js 在 payload > 4KB 时自动 gzip
+# 并置 Content-Encoding: gzip（:79 compressionThreshold=4096、:656
+# setRequestHeader("Content-Encoding", "gzip")；sendBeacon 场景不压缩）。
+# 采集通道必须与真实 /ingest/batch 端点同一契约，否则正常大批次必丢。
+_GZIP_READ_CHUNK = 8192
+_IDENTITY_ENCODINGS = frozenset({"", "identity"})
+# 采集拒绝的 HTTP 状态映射：仅这些 reason 走非 2xx（正常批次保持 200）。
+# 400/415 会让 SDK 的压缩发送回退明文重发一次（ai-debug.js:663），413 走
+# 批次拆分（:669），与真实端点的语义一致。
+_CAPTURE_REJECT_STATUS = {
+    "body_too_large": 413,
+    "total_bytes_exceeded": 413,
+    "unsupported_encoding": 415,
+    "undecodable": 400,
+}
+
+
+class _CaptureBodyTooLarge(Exception):
+    """采集体超限（原始字节或 gzip 解压后）。
+
+    必须独立于 ValueError：json.JSONDecodeError / UnicodeDecodeError 都是
+    ValueError 子类，共用 except ValueError 会把"非法 JSON / 非法 UTF-8"
+    误判为"体积超限"而错误返回 413。语义对齐
+    app/api/ingest.py::_DecompressedSizeExceeded（tools 层不得反向 import
+    api 层）。
+    """
+
+
+def _bounded_gzip_decompress(data: bytes, max_size: int) -> bytes:
+    """有界 gzip 解压（防 zip bomb）：流式读取，累计输出超 max_size 即抛。
+
+    与 app/api/ingest.py::_bounded_gzip_decompress 同语义（8 KiB 分片、累计
+    超限即抛 _CaptureBodyTooLarge）。解压失败（非 gzip / 截断）由 gzip/zlib
+    抛 OSError/EOFError，调用方转为如实拒绝（undecodable），不得外泄到
+    route_handler 的兜底异常分支（那会把正常请求算成拦截异常并 fallback）。
+    """
+    chunks: list[bytes] = []
+    total = 0
+    with gzip.GzipFile(fileobj=io.BytesIO(data)) as f:
+        while True:
+            chunk = f.read(_GZIP_READ_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_size:
+                raise _CaptureBodyTooLarge(f"decompressed size exceeds {max_size}")
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def is_available() -> bool:
@@ -136,11 +234,13 @@ def _build_sdk_init_script() -> str | None:
     - **DOM 相关操作可延迟**：``documentElement`` 就绪后再挂载
       ``<script src="{endpoint}/ai-debug.js">``（不再在 head 与
       documentElement 均为空时 ``appendChild`` 抛异常被吞）；
-    - **ready 后回放**：缓冲事件经 SDK 通道单次采集（console 类重放
-      console.error，pageerror 类重放 ErrorEvent）；
+    - **不回放**：早期缓冲只保存页面真实可得的原始信息（缺失字段一律不写、
+      不伪造堆栈），不 new ErrorEvent / 不 dispatchEvent / 不调 console.error——
+      采集不得改变目标页面既有监听器、错误处理与日志行为；
+    - **单次排水**：``__LUJO_SDK_DRAIN__`` 返回并清空缓冲，state.drained 累加；
+      heavy 侧 ``finish`` 负责把原始项映射入队（每个原始事件只排空一次）；
     - **幂等**：``__LUJO_SDK_INJECTED__`` 守卫防重复注入；
-    - **可观测**：``window.__LUJO_SDK_STATE__`` 暴露 phase/buffered/replayed，
-      ``__LUJO_SDK_DRAIN__`` 供父进程在 SDK 初始化失败时取回缓冲。
+    - **可观测**：``window.__LUJO_SDK_STATE__`` 暴露 phase/buffered/drained。
 
     - endpoint 使用 settings.http_host / http_port 实时值（默认 127.0.0.1:8710）；
     - 返回 None 表示注入被关闭（settings.auto_inject_sdk=False），调用方
@@ -164,7 +264,7 @@ def _build_sdk_init_script() -> str | None:
         "  window.__LUJO_SDK_INJECTED__ = true;\n"
         "  var state = window.__LUJO_SDK_STATE__ = {\n"
         "    phase: 'buffering', injectedAt: Date.now(),\n"
-        "    buffered: 0, replayed: 0, error: ''\n"
+        "    buffered: 0, drained: 0, error: ''\n"
         "  };\n"
         f"  var ENDPOINT = {endpoint_js};\n"
         "  var SDK_URL = ENDPOINT + '/ai-debug.js';\n"
@@ -181,17 +281,22 @@ def _build_sdk_init_script() -> str | None:
         "    }\n"
         "    return out.join(' ');\n"
         "  }\n"
-        "  function push(kind, message) {\n"
+        "  function push(item) {\n"
         "    if (buffer.length >= MAX_BUFFER) { return; }\n"
-        "    buffer.push({ kind: kind, message: String(message).slice(0, 2000) });\n"
+        "    buffer.push(item);\n"
         "    state.buffered = buffer.length;\n"
+        "  }\n"
+        "  function clip(value, limit) {\n"
+        "    if (value === undefined || value === null) { return null; }\n"
+        "    var s = String(value);\n"
+        "    return s ? s.slice(0, limit) : null;\n"
         "  }\n"
         # 早期钩子：SDK ready 前缓冲，ready 后放行（SDK 自身钩子负责采集）
         "  var origError = console.error;\n"
         "  if (typeof origError === 'function') {\n"
         "    console.error = function () {\n"
         "      if (!window.__LUJO_SDK_READY__) {\n"
-        "        try { push('console', fmt(arguments)); } catch (e) {}\n"
+        "        try { push({ kind: 'console', message: fmt(arguments).slice(0, 2000) }); } catch (e) {}\n"
         "      }\n"
         "      return origError.apply(console, arguments);\n"
         "    };\n"
@@ -199,38 +304,42 @@ def _build_sdk_init_script() -> str | None:
         "  window.addEventListener('error', function (ev) {\n"
         "    if (window.__LUJO_SDK_READY__) { return; }\n"
         "    try {\n"
-        "      var msg = (ev && ev.message) ? ev.message : 'error';\n"
+        "      var msg = (ev && ev.message) ? String(ev.message) : 'error';\n"
         "      var where = (ev && ev.filename)"
         " ? (' @' + ev.filename + ':' + (ev.lineno || 0)) : '';\n"
-        "      push('pageerror', msg + where);\n"
+        "      var item = { kind: 'pageerror', message: (msg + where).slice(0, 2000) };\n"
+        "      var err = ev && ev.error;\n"
+        "      var excType = clip(err && err.name, 200);\n"
+        "      if (excType) { item.exc_type = excType; }\n"
+        "      var file = clip(ev && ev.filename, 1000);\n"
+        "      if (file) { item.file = file; }\n"
+        "      if (ev && typeof ev.lineno === 'number' && ev.lineno > 0)"
+        " { item.line = ev.lineno; }\n"
+        "      if (ev && typeof ev.colno === 'number' && ev.colno > 0)"
+        " { item.column = ev.colno; }\n"
+        "      var stack = clip(err && err.stack, 4000);\n"
+        "      if (stack) { item.stack = stack; }\n"
+        "      push(item);\n"
         "    } catch (e) {}\n"
         "  });\n"
         "  window.addEventListener('unhandledrejection', function (ev) {\n"
         "    if (window.__LUJO_SDK_READY__) { return; }\n"
         "    try {\n"
-        "      push('pageerror', 'Unhandled rejection: '"
-        " + ((ev && ev.reason) ? String(ev.reason) : 'unknown'));\n"
+        "      var reason = ev && ev.reason;\n"
+        "      var item = { kind: 'pageerror', message: ('Unhandled rejection: '"
+        " + String(reason)).slice(0, 2000) };\n"
+        "      var excType = clip(reason && reason.name, 200);\n"
+        "      if (excType) { item.exc_type = excType; }\n"
+        "      var stack = clip(reason && reason.stack, 4000);\n"
+        "      if (stack) { item.stack = stack; }\n"
+        "      push(item);\n"
         "    } catch (e) {}\n"
         "  });\n"
         "  window.__LUJO_SDK_DRAIN__ = function () {\n"
         "    var items = buffer; buffer = []; state.buffered = 0;\n"
+        "    state.drained += items.length;\n"
         "    return items;\n"
         "  };\n"
-        "  function replay() {\n"
-        "    var items = buffer; buffer = []; state.buffered = 0;\n"
-        "    for (var i = 0; i < items.length; i++) {\n"
-        "      try {\n"
-        "        if (items[i].kind === 'pageerror' && typeof ErrorEvent === 'function') {\n"
-        "          window.dispatchEvent(new ErrorEvent('error', {\n"
-        "            message: items[i].message, error: new Error(items[i].message)\n"
-        "          }));\n"
-        "        } else {\n"
-        "          console.error('[lujo-early] ' + items[i].message);\n"
-        "        }\n"
-        "        state.replayed += 1;\n"
-        "      } catch (e) {}\n"
-        "    }\n"
-        "  }\n"
         "  function initSdk() {\n"
         "    try {\n"
         "      if (window.AiDebug && typeof window.AiDebug.init === 'function') {\n"
@@ -238,7 +347,6 @@ def _build_sdk_init_script() -> str | None:
         "        if (window.AiDebug._inited) {\n"
         "          window.__LUJO_SDK_READY__ = true;\n"
         "          state.phase = 'ready';\n"
-        "          replay();\n"
         "          return true;\n"
         "        }\n"
         "      }\n"
@@ -293,47 +401,169 @@ class _SdkCapture:
 
     拦截范围仅限 Lujo 自身 endpoint（由 ``_build_sdk_init_script`` 注入的
     ENDPOINT），其余请求 ``fallback()`` 交回 SSRF 逐跳守卫；不构成任意地址
-    代理。截获的事件经结果内部键 ``_lujo_ingest`` 回主进程排水入库。
+    代理。截获的事件经结果内部键 ``_lujo_ingest`` 回主进程排水入库；
+    请求体一律按字节体读取（req.post_data_buffer），支持 gzip 与有界解压。
     """
 
-    def __init__(self, endpoint: str):
+    def __init__(
+        self,
+        endpoint: str,
+        max_body_bytes: int | None = None,
+        max_total_bytes: int | None = None,
+        max_decompressed_bytes: int | None = None,
+    ):
         self.endpoint = endpoint
         self.pattern = f"{endpoint}/**"
+        # 限额默认取模块常量；测试可传小阈值验证拒绝语义
+        self.max_body_bytes = (
+            _MAX_CAPTURE_BODY_BYTES if max_body_bytes is None else max_body_bytes
+        )
+        self.max_total_bytes = (
+            _MAX_CAPTURE_TOTAL_BYTES if max_total_bytes is None else max_total_bytes
+        )
+        # 解压后上限（仅 gzip 分支使用）：默认复用 _MAX_DECOMPRESSED_SIZE 的 10 MiB
+        self.max_decompressed_bytes = (
+            _MAX_CAPTURE_DECOMPRESSED_BYTES
+            if max_decompressed_bytes is None
+            else max_decompressed_bytes
+        )
         self.events: list[dict] = []
         self.truncated = False
         self.ingest_requests = 0
         self.last_event_monotonic = 0.0
         self.fulfill_failures = 0
+        # 字节/丢弃如实计数（delivery 判定与状态汇总都读这些字段）
+        self.capture_bytes = 0
+        self.oversized_requests = 0
+        self.over_total_requests = 0
+        self.unknown_path_events = 0
+        # R5：编码/解码类丢弃（delivery 判定与状态汇总同样读这些字段）
+        self.body_encoding_rejected = 0
+        self.undecodable_bodies = 0
 
-    def _append_event(self, path: str, payload: dict) -> None:
+    def _append_event(self, path: str, payload: dict) -> bool:
+        """入队一条事件；超出条数上限则标记 truncated 并返回 False（丢弃如实暴露）。"""
         if len(self.events) >= _MAX_CAPTURED_INGEST_EVENTS:
             self.truncated = True
-            return
+            return False
         self.events.append({"path": path, "payload": payload})
+        return True
 
-    def _capture_body(self, path: str, post_data: str | None) -> int:
+    def _capture_body(
+        self, path: str, body: bytes | None, content_encoding: str | None = None
+    ) -> dict:
+        """截获一次上报请求：编码闸门 → 三层体积闸门 → 解析入队。
+
+        入参 body 是原始字节体（Playwright 的 req.post_data_buffer）；生产
+        路径不得改用 req.post_data——后者是字节体的 UTF-8 解码结果，遇到
+        gzip 二进制体会直接抛 UnicodeDecodeError。
+
+        三层体积闸门（一律 UTF-8 编码字节数）：
+        1. 原始体闸门 max_body_bytes（默认 1 MiB，全部请求）：复用
+           settings.max_body_size 约定（app/config.py:128 / app/middleware.py）；
+        2. 解压后闸门 max_decompressed_bytes（默认 10 MiB，**仅 gzip**）：
+           复用 app/api/ingest.py::_MAX_DECOMPRESSED_SIZE 约定；identity/
+           明文体没有解压层，仍只由第 1 层约束（与真实端点一致）；
+        3. 累计闸门 max_total_bytes（默认 8 MiB，全部请求）：按**实际接收并
+           尝试解析的载荷字节数**（gzip 场景即解压后长度）累加——**包含无法
+           解析为 JSON 的体**（非法 UTF-8 / 非法 JSON 同样占额度，防洪语义：
+           连续坏体不得绕过累计上限）；在累计之前就被拒绝的请求（原始体超限、
+           gzip 解压失败或解压超限、不支持的编码）不计入。中文等多字节载荷下
+           字符数会低估真实体积，必须用字节数才不误放行。
+
+        返回 {"accepted", "rejected", "received_bytes", "reason", "limit"?}：
+        - reason 为 None 表示如实 2xx；
+        - body_too_large：超过第 1 层或第 2 层闸门（limit 指出是哪一层）；
+        - total_bytes_exceeded：超过第 3 层闸门；
+        - unsupported_encoding：content-encoding 既非 identity 也非 gzip；
+        - undecodable：gzip 解压失败 / 非 UTF-8 / JSON 解析失败。
+        以上任一非 None 原因都整个请求拒绝：不入队、不部分入队。
+        """
+        raw = body or b""
+        received = len(raw)
+        outcome = {
+            "accepted": 0, "rejected": 0,
+            "received_bytes": received, "reason": None,
+        }
+        encoding = (content_encoding or "").strip().lower()
+        # 第 1 层·原始体闸门：解析/解压之前先量，禁止静默截断造成畸形数据
+        if received > self.max_body_bytes:
+            self.oversized_requests += 1
+            outcome["reason"] = "body_too_large"
+            outcome["limit"] = self.max_body_bytes
+            return outcome
+        if encoding == "gzip":
+            try:
+                payload_bytes = _bounded_gzip_decompress(
+                    raw, self.max_decompressed_bytes
+                )
+            except _CaptureBodyTooLarge:
+                # 第 2 层·解压后闸门（解压器已按同一上限截断，防 zip bomb）
+                self.oversized_requests += 1
+                outcome["reason"] = "body_too_large"
+                outcome["limit"] = self.max_decompressed_bytes
+                return outcome
+            except Exception:
+                # 损坏 gzip / 截断：如实拒绝，不得抛到 route_handler 之外
+                self.undecodable_bodies += 1
+                outcome["reason"] = "undecodable"
+                return outcome
+            # 第 2 层复核（冗余保险，防未来改动漂移）：解压后仍按同一上限判定
+            if len(payload_bytes) > self.max_decompressed_bytes:
+                self.oversized_requests += 1
+                outcome["reason"] = "body_too_large"
+                outcome["limit"] = self.max_decompressed_bytes
+                return outcome
+        elif encoding in _IDENTITY_ENCODINGS:
+            # identity/明文体无解压层：仍只由第 1 层 max_body_bytes 约束
+            payload_bytes = raw
+        else:
+            # br/deflate 等：不得静默当明文解析
+            self.body_encoding_rejected += 1
+            outcome["reason"] = "unsupported_encoding"
+            outcome["content_encoding"] = encoding
+            return outcome
+        # 第 3 层·累计闸门：整个请求拒绝（不得部分入队）；按实际接收并尝试解析的
+        # 载荷字节数累加（含随后解析失败的体——防洪语义，见 docstring）
+        if self.capture_bytes + len(payload_bytes) > self.max_total_bytes:
+            self.over_total_requests += 1
+            outcome["reason"] = "total_bytes_exceeded"
+            outcome["limit"] = self.max_total_bytes
+            return outcome
+        self.capture_bytes += len(payload_bytes)
         try:
-            payload = json.loads(post_data or "{}")
+            payload = json.loads(payload_bytes or b"{}")
         except ValueError:
+            # 非法 UTF-8（UnicodeDecodeError）/ 非法 JSON 同为 ValueError 子类
             logger.warning("auto_test 截获到无法解析的上报体 path=%s", path)
-            return 0
-        count = 0
+            self.undecodable_bodies += 1
+            outcome["reason"] = "undecodable"
+            return outcome
+        accepted = 0
+        rejected = 0
         if path == "/ingest/batch":
             events = payload.get("events") if isinstance(payload, dict) else None
             if isinstance(events, list):
                 for ev in events:
-                    if isinstance(ev, dict):
-                        self._append_event(
-                            str(ev.get("path") or ""), ev.get("payload") or {}
-                        )
-                        count += 1
-        else:
-            if isinstance(payload, dict):
-                self._append_event(path, payload)
-                count = 1
-        if count:
+                    if not isinstance(ev, dict):
+                        rejected += 1
+                        continue
+                    ev_path = str(ev.get("path") or "")
+                    # 未知事件路径不得入队，也不得伪装为有效采集成功
+                    if ev_path not in DISPATCH_INGEST_PATHS:
+                        rejected += 1
+                        self.unknown_path_events += 1
+                        continue
+                    if self._append_event(ev_path, ev.get("payload") or {}):
+                        accepted += 1
+        elif isinstance(payload, dict):
+            if self._append_event(path, payload):
+                accepted = 1
+        outcome["accepted"] = accepted
+        outcome["rejected"] = rejected
+        if accepted:
             self.last_event_monotonic = time.monotonic()
-        return count
+        return outcome
 
     async def route_handler(self, route) -> None:
         """context.route 处理器：SDK 上报截获 + 本地 CORS 头 fulfill。
@@ -349,14 +579,19 @@ class _SdkCapture:
         cors = {"Access-Control-Allow-Origin": origin}
         try:
             if req.method == "OPTIONS":
-                await route.fulfill(
-                    status=204,
-                    headers={
-                        **cors,
-                        "Access-Control-Allow-Methods": "POST, OPTIONS",
-                        "Access-Control-Allow-Headers": "content-type, x-api-key",
-                    },
-                )
+                # 只为本采集通道真正需要的路径处理预检；其余 OPTIONS 交回
+                # 正常请求处理（不得吞掉其它端点的预检，也不得扩大全局 CORS）
+                if path in _CAPTURE_INGEST_PATHS:
+                    await route.fulfill(
+                        status=204,
+                        headers={
+                            **cors,
+                            "Access-Control-Allow-Methods": "POST, OPTIONS",
+                            "Access-Control-Allow-Headers": "content-type, x-api-key",
+                        },
+                    )
+                else:
+                    await route.fallback()
                 return
             if path == "/ai-debug.js" and req.method == "GET":
                 source = _load_sdk_script_source()
@@ -372,14 +607,45 @@ class _SdkCapture:
                     # 仍可经真实 HTTP /ai-debug.js 加载）
                     await route.fallback()
                 return
-            if path.startswith("/ingest/") and req.method == "POST":
-                count = self._capture_body(path, req.post_data)
+            if req.method == "POST" and path in _CAPTURE_INGEST_PATHS:
+                # 必须读字节体：req.post_data 是 post_data_buffer 的 UTF-8
+                # 解码结果，gzip 二进制体会直接抛 UnicodeDecodeError
+                outcome = self._capture_body(
+                    path,
+                    req.post_data_buffer,
+                    req.headers.get("content-encoding"),
+                )
                 self.ingest_requests += 1
+                reject_status = _CAPTURE_REJECT_STATUS.get(outcome["reason"])
+                if reject_status is not None:
+                    # 明确拒绝：不得把丢弃/截断报告成全链路成功
+                    reject = {
+                        "error": "capture payload rejected",
+                        "reason": outcome["reason"],
+                        "received_bytes": outcome["received_bytes"],
+                    }
+                    # limit 由 _capture_body 按实际触发的闸门给出（原始体/解压后/累计）
+                    if outcome.get("limit") is not None:
+                        reject["limit"] = outcome["limit"]
+                    if outcome.get("content_encoding"):
+                        reject["content_encoding"] = outcome["content_encoding"]
+                    await route.fulfill(
+                        status=reject_status,
+                        content_type="application/json",
+                        headers=cors,
+                        body=json.dumps(reject),
+                    )
+                    return
+                # 如实返回本批的捕获结果：count=入队数，rejected=被拒事件数
                 await route.fulfill(
                     status=200,
                     content_type="application/json",
                     headers=cors,
-                    body=json.dumps({"count": count, "captured": True}),
+                    body=json.dumps({
+                        "count": outcome["accepted"],
+                        "rejected": outcome["rejected"],
+                        "captured": outcome["accepted"] > 0,
+                    }),
                 )
                 return
             await route.fallback()
@@ -394,13 +660,17 @@ class _SdkCapture:
                 logger.debug("fallback 亦失败（连接可能已断）", exc_info=True)
 
     async def finish(self, page, observe_ms: int, inflight: set) -> dict:
-        """遍历后收尾：观察窗口 → 强制冲刷 → 回传安静确认 → 状态汇总。
+        """遍历后收尾：观察窗口 → 冲刷（读返回值）→ 状态+早期排水 → 安静确认/汇总。
 
         观察窗口为固定有界 dwell（分片等待）：页面在窗口内调度的定时器/
         请求（含慢速连接失败，如回环 connection-refused 的秒级延迟）都能
         自然推进；不做"安静即提前收"——静默早退会在已调度未触发的页面
         动作之前关掉浏览器。回传完成只依据真实观察（事件计数停增 + 静默
         期 + 在途请求清空）产生，不做无依据的"完成"宣称。
+
+        delivery 语义：只表示 SDK→本捕获队列的回传完成度，与主进程入库
+        结果（drain 的 events_ingested / ingest_failures）无对应关系；
+        有丢弃（截断/单体重/累计超限/未知路径）时最高只能是 partial。
         """
         # ① 观察窗口：固定有界 dwell，分片等待（上限 observe_ms）
         remaining = observe_ms
@@ -417,21 +687,86 @@ class _SdkCapture:
         # 无副作用（SDK destroy 即为此场景设计）。
         flush_ok = True
         try:
-            await page.evaluate(
-                "(function () { try {"
-                " if (window.AiDebug && window.AiDebug._flushBatch)"
-                " { window.AiDebug._flushBatch(false); }"
-                " if (window.AiDebug && window.AiDebug.destroy)"
-                " { window.AiDebug.destroy({ flush: true }); }"
-                " return true;"
-                "} catch (e) { return false; } })()"
-            )
+            flushed = await page.evaluate(_FLUSH_SDK_JS)
+            # 包装内部异常会 return false：必须读真实返回值，不能把
+            # "evaluate 未抛异常"当成冲刷成功
+            flush_ok = flushed is True
         except Exception:
             flush_ok = False
             logger.debug("auto_test 冲刷 SDK 批队列失败（页面可能已离开）", exc_info=True)
 
-        # ③ 回传安静确认：冲刷后事件计数停增 + 静默期达标 + 在途清空即完成
-        delivery = "timeout"
+        # ③ 读页面注入状态 + 一律排空早期缓冲（不再只在 SDK 未 ready 时）：
+        # 早期项只保存在页面缓冲里（不再回放），必须取回并单次入队。
+        state = None
+        try:
+            state = await page.evaluate(
+                "(function () { try { return window.__LUJO_SDK_STATE__"
+                " ? JSON.parse(JSON.stringify(window.__LUJO_SDK_STATE__)) : null; }"
+                " catch (e) { return null; } })()"
+            )
+        except Exception:
+            logger.debug("auto_test 读取注入状态失败", exc_info=True)
+        phase = (state or {}).get("phase")
+        drained: list = []
+        try:
+            drained = await page.evaluate(
+                "(function () { try { return typeof window.__LUJO_SDK_DRAIN__"
+                " === 'function' ? window.__LUJO_SDK_DRAIN__() : []; }"
+                " catch (e) { return []; } })()"
+            ) or []
+        except Exception:
+            logger.debug("auto_test 排水早期缓冲失败", exc_info=True)
+        for item in drained:
+            if not isinstance(item, dict):
+                continue
+            message = str(item.get("message") or "")
+            if item.get("kind") == "pageerror":
+                payload = {
+                    "exc_type": str(item.get("exc_type") or "EarlyPageError"),
+                    "message": message,
+                    "source": "lujo-auto-test",
+                }
+                # frames 仅在 file+line 真实存在时构造，不伪造 function/行号
+                file = item.get("file")
+                line = item.get("line")
+                column = item.get("column")
+                frames = []
+                if file and isinstance(line, int):
+                    frame = {"file": str(file), "line": line}
+                    if isinstance(column, int):
+                        frame["column"] = column
+                    frames.append(frame)
+                payload["frames"] = frames
+                extra = {}
+                if item.get("stack"):
+                    extra["stack"] = str(item["stack"])
+                if file:
+                    extra["file"] = str(file)
+                if isinstance(line, int):
+                    extra["line"] = line
+                if isinstance(column, int):
+                    extra["column"] = column
+                if extra:
+                    payload["extra"] = extra
+                self._append_event("/ingest/error", payload)
+            else:
+                self._append_event("/ingest/console", {
+                    "level": "error",
+                    "message": message,
+                    "source": "lujo-auto-test",
+                })
+            self.last_event_monotonic = time.monotonic()
+
+        # ④ 安静确认/状态汇总：有丢弃就绝不宣称 complete
+        dropped = bool(
+            self.truncated
+            or self.unknown_path_events
+            or self.oversized_requests
+            or self.over_total_requests
+            or self.body_encoding_rejected
+            or self.undecodable_bodies
+        )
+        quiet = False
         if flush_ok:
             flush_deadline = time.monotonic() + _FLUSH_WAIT_MAX_MS / 1000
             prev = -1
@@ -446,56 +781,30 @@ class _SdkCapture:
                     and quiet_for >= _FLUSH_QUIET_MS / 1000
                     and not inflight
                 ):
-                    delivery = "complete"
+                    quiet = True
                     break
                 prev = n
+        if not flush_ok:
+            delivery = "flush_failed"
+        elif quiet and not dropped:
+            delivery = "complete"
+        elif quiet:
+            delivery = "partial"
         else:
-            delivery = "no_sdk"
-
-        # ④ 读页面注入状态；SDK 未 ready 时排水早期缓冲作为替补采集通道
-        state = None
-        try:
-            state = await page.evaluate(
-                "(function () { try { return window.__LUJO_SDK_STATE__"
-                " ? JSON.parse(JSON.stringify(window.__LUJO_SDK_STATE__)) : null; }"
-                " catch (e) { return null; } })()"
-            )
-        except Exception:
-            logger.debug("auto_test 读取注入状态失败", exc_info=True)
-        phase = (state or {}).get("phase")
-        if phase not in (None, "ready"):
-            drained: list = []
-            try:
-                drained = await page.evaluate(
-                    "(function () { try { return typeof window.__LUJO_SDK_DRAIN__"
-                    " === 'function' ? window.__LUJO_SDK_DRAIN__() : []; }"
-                    " catch (e) { return []; } })()"
-                ) or []
-            except Exception:
-                logger.debug("auto_test 排水早期缓冲失败", exc_info=True)
-            for item in drained:
-                if not isinstance(item, dict):
-                    continue
-                message = str(item.get("message") or "")
-                if item.get("kind") == "pageerror":
-                    self._append_event("/ingest/error", {
-                        "exc_type": "EarlyPageError",
-                        "message": message,
-                        "frames": [],
-                        "source": "lujo-auto-test",
-                    })
-                else:
-                    self._append_event("/ingest/console", {
-                        "level": "error",
-                        "message": message,
-                        "source": "lujo-auto-test",
-                    })
+            delivery = "timeout"
 
         status = {
             "enabled": True,
             "init": {"ready": "ready"}.get(phase, "failed" if phase else "unknown"),
             "events_captured": len(self.events),
             "events_truncated": self.truncated,
+            # 字节/丢弃如实计数（delivery 使用同一批字段判定）
+            "capture_bytes": self.capture_bytes,
+            "oversized_requests": self.oversized_requests,
+            "over_total_requests": self.over_total_requests,
+            "unknown_path_events": self.unknown_path_events,
+            "body_encoding_rejected": self.body_encoding_rejected,
+            "undecodable_bodies": self.undecodable_bodies,
             "delivery": delivery,
         }
         if state:
@@ -596,7 +905,11 @@ async def _run(
                     "enabled": sdk_init_script is not None,
                     "init": "unknown",
                     "events_captured": len(capture.events),
-                    "delivery": "no_sdk",
+                    # goto 失败时无法完成冲刷/安静确认：开启注入记为 flush_failed；
+                    # no_sdk 只表示注入开关关闭（禁用分支）
+                    "delivery": (
+                        "flush_failed" if sdk_init_script is not None else "no_sdk"
+                    ),
                 }
                 result = {
                     "error": "Tool execution failed",
@@ -644,7 +957,8 @@ async def _run(
             if sdk_init_script is not None:
                 sdk_status = await capture.finish(page, observe_ms, inflight)
             else:
-                sdk_status = {"enabled": False, "init": "off"}
+                # 注入开关关闭：no_sdk 专表此意，不得与冲刷失败（flush_failed）混淆
+                sdk_status = {"enabled": False, "init": "off", "delivery": "no_sdk"}
 
             result = {
                 "url": url,

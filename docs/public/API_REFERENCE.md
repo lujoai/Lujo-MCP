@@ -284,7 +284,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 | 工具名 | 角色 | 说明 | 前置条件 |
 |--------|------|------|----------|
-| `auto_test` | developer | 自动遍历页面可交互元素并捕获控制台错误 + 网络 4xx/5xx；采集的 SDK 现场进入本实例存储（diagnose_issue 可查），返回中的 `sdk_capture` 如实反映采集状态 | Playwright |
+| `auto_test` | developer | 自动遍历页面可交互元素并捕获控制台错误 + 网络 4xx/5xx；返回中的 `sdk_capture` 如实反映采集状态（`delivery` 只表示回传完成度，不等于入库成功；入库结果看 `events_ingested` / `ingest_failures`，入库后可 `diagnose_issue` 查询） | Playwright |
 | `repair_async` | developer | 异步生成修复方案（AI Debug Agent） | 有效 Agent 模式非 `off`（显式 `AGENT_MODE` 优先；未显式时按旧布尔开关兼容派生） |
 | `repair_result` | viewer | 查询 repair_async 任务状态/结果 | 有效 Agent 模式非 `off`（显式 `AGENT_MODE` 优先；未显式时按旧布尔开关兼容派生） |
 | `resolve_stack` | viewer | 用 Source Map 还原 minified 堆栈 | `SOURCEMAP_ENABLED=true` + 已上传 .map |
@@ -293,7 +293,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 | 工具 | 入参（必填标 *） |
 |------|-----------------|
-| `auto_test` | `url`*(string), `max_actions`(int=20), `capture_console`(bool=true), `capture_network`(bool=true), `observe_ms`(int=2000，遍历后观察窗口 0–10000，窗口内延迟故障仍被采集；不保证捕获任意晚发生的异常) |
+| `auto_test` | `url`*(string), `max_actions`(int=20), `capture_console`(bool=true), `capture_network`(bool=true), `observe_ms`(int=2000，遍历后**固定**观察窗口 0–10000，窗口内延迟故障仍被采集；事件安静也不提前结束，不保证捕获窗口外更晚发生的异常) |
 | `repair_async` | `request_id`*(string) 或 `trace_id`(二选一) |
 | `repair_result` | `job_id`*(string) |
 | `resolve_stack` | `frames`*(array, 帧含 file/line/column/function), `artifact`(string) |

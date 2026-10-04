@@ -86,6 +86,10 @@ class FakePage:
         return None
 
     async def evaluate(self, expression, arg=None):
+        # R1 起 _SdkCapture.finish 读取冲刷包装的返回值：成功路径必须回 True，
+        # 其余（状态读取/早期缓冲排水）保持 None。
+        if "_flushBatch" in expression:
+            return True
         return None
 
 

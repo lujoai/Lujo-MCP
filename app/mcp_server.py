@@ -653,6 +653,26 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             ensure_ascii=False,
         ))
 
+    # v1.0.x 自动采集链路（R6）：stdio 与 HTTP 共用同一排水实现。heavy 结果里的
+    # 内部保留键 _lujo_ingest（auto_test 截获的 SDK 上报）在此弹出并逐条入库——
+    # 与 app/mcp/protocol/server.py::_handle_tools_call 调用的是**同一个**
+    # ingest_dispatch.drain_result_ingest_events，双传输契约一致；无该键为 no-op。
+    # 此前 stdio 缺这一步：npm 默认传输下 auto_test 现场永不入库（diagnose 查不到），
+    # 且内部键会随结果 json.dumps 进 MCP 文本响应。位置与 HTTP 侧一致：在
+    # tool_failure_predicate 之前排水，失败结果携带的事件同样入库。
+    from app.mcp.tools.ingest_dispatch import (
+        RESULT_INGEST_KEY,
+        drain_result_ingest_events,
+    )
+
+    if isinstance(result, dict) and RESULT_INGEST_KEY in result:
+        try:
+            drain_result_ingest_events(result)
+        except Exception:
+            # 排水失败不吞掉工具本身的成功结果：内部键已弹出 + 计数缺失会在
+            # sdk_capture 里如实可见（与 HTTP 侧 server.py:736-744 同一失败语义）
+            logger.exception("heavy 结果采集事件排水失败 tool=%s", name)
+
     # FIX(B24)：先求值**同一个**工具失败谓词，按同一布尔值只记录一次
     # ok/error 指标，再决定是否抛 ToolExecutionError——业务失败结果不再
     # 先记 ok 再被谓词纠正（报告 #22），指标与 isError 由同一判定派生。

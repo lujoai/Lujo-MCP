@@ -15,6 +15,7 @@ tools 层本模块，``app/api/ingest.py`` 改为从这里导入，行为不变�
   ``result["sdk_capture"]``；
 - 内部键弹出后不会泄漏进 MCP 响应；无键的结果为 no-op。
 """
+import json
 import logging
 
 logger = logging.getLogger("lujo-mcp.ingest_dispatch")
@@ -26,6 +27,12 @@ RESULT_INGEST_KEY = "_lujo_ingest"
 # 排水单次入库条数上限：与 SDK 批量上报的客户端分片上限同量级，防止
 # 异常页面洪水把主进程入库与 MCP 响应撑爆。截断时以真实计数如实上报。
 _MAX_DRAIN_EVENTS = 200
+
+# 排水单次入库字节上限（UTF-8 编码后的 JSON 表示逐条计量）：条数上限之外
+# 再加一道字节闸门——单条事件可携带长堆栈，200 条可能远超 heavy IPC 帧与
+# 主进程内存的合理水位。取值与子进程侧 _MAX_CAPTURE_TOTAL_BYTES 同值
+# （8 MiB），超限即停止入库并以 sdk_capture.events_ingest_truncated 如实标记。
+_MAX_DRAIN_BYTES = 8 * 1024 * 1024
 
 
 def extract_session_id(payload: dict) -> str | None:
@@ -47,6 +54,18 @@ def extract_session_id(payload: dict) -> str | None:
         if sid:
             return str(sid)
     return None
+
+
+# ingest 分发路径的单一事实源：dispatch_single 的支持集必须与此集合一致
+# （tests/unit/test_auto_test_ingest_chain.py 一致性锁定）。auto_test 采集
+# 拦截白名单从这里派生，避免两处白名单长期漂移。
+DISPATCH_INGEST_PATHS = frozenset({
+    "/ingest/error",
+    "/ingest/network",
+    "/ingest/ui-event",
+    "/ingest/console",
+    "/ingest/silent-failure",
+})
 
 
 def dispatch_single(path: str, payload: dict) -> dict:
@@ -125,7 +144,11 @@ def drain_result_ingest_events(result: dict) -> None:
     - 逐条容错：单条失败（未知 path / 载荷非法）不中断其余事件，
       以 ``ingest_failures`` 计数如实暴露；
     - 成功计数写入 ``result["sdk_capture"]["events_ingested"]``
-      （无 sdk_capture 字段的结果仅计数入日志，不凭空造字段）。
+      （无 sdk_capture 字段的结果仅计数入日志，不凭空造字段）；
+    - 条数（``_MAX_DRAIN_EVENTS``）与 UTF-8 字节（``_MAX_DRAIN_BYTES``）
+      双上限：任一超限即停止入库，并在 sdk_capture 写真实标记
+      ``events_ingest_truncated=True``（被丢弃的事件确实没有入库，
+      不得把丢弃报告成 complete）。
     """
     if not isinstance(result, dict):
         return
@@ -138,10 +161,25 @@ def drain_result_ingest_events(result: dict) -> None:
 
     ok = 0
     failed = 0
+    used_bytes = 0
+    byte_limited = False
     for event in events[:_MAX_DRAIN_EVENTS]:
         if not isinstance(event, dict):
             failed += 1
             continue
+        # UTF-8 字节计量：与子进程侧采集限额同一口径，逐条诚实累加
+        try:
+            size = len(json.dumps(event, ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError):
+            size = 0
+        if used_bytes + size > _MAX_DRAIN_BYTES:
+            byte_limited = True
+            logger.warning(
+                "heavy 结果事件累计字节 %d 超过排水上限 %d，停止入库",
+                used_bytes + size, _MAX_DRAIN_BYTES,
+            )
+            break
+        used_bytes += size
         try:
             dispatch_single(str(event.get("path") or ""), event.get("payload") or {})
             ok += 1
@@ -150,6 +188,7 @@ def drain_result_ingest_events(result: dict) -> None:
             logger.exception(
                 "heavy 采集事件入库失败 path=%s", str(event.get("path") or "")[:64]
             )
+    truncated = byte_limited or len(events) > _MAX_DRAIN_EVENTS
     if len(events) > _MAX_DRAIN_EVENTS:
         logger.warning(
             "heavy 结果事件数 %d 超过排水上限 %d，已截断入库",
@@ -159,6 +198,9 @@ def drain_result_ingest_events(result: dict) -> None:
     status = result.get("sdk_capture")
     if isinstance(status, dict):
         status["events_ingested"] = ok
+        if truncated:
+            # 如实标记：被丢弃的事件没有入库，不得把丢弃报告成 complete
+            status["events_ingest_truncated"] = True
         if failed:
             status["ingest_failures"] = failed
     else:
