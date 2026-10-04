@@ -243,6 +243,10 @@ def _build_sdk_init_script() -> str | None:
     - **可观测**：``window.__LUJO_SDK_STATE__`` 暴露 phase/buffered/drained。
 
     - endpoint 使用 settings.http_host / http_port 实时值（默认 127.0.0.1:8710）；
+      统一模式下父进程会把 CLI（--http-host/--http-port）解析出的**有效绑定**
+      随 spawn 注入 heavy 子进程环境（app/mcp/protocol/heavy_process.py::
+      _child_env_with_effective_http），因此本处读到的是真实监听地址，而不是
+      子进程自己继承到的 env/默认值；
     - 返回 None 表示注入被关闭（settings.auto_inject_sdk=False），调用方
       必须完全跳过注入。
     """

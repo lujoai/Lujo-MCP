@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 import pickle
 import sys
 import threading
@@ -37,6 +38,33 @@ from app.mcp.protocol.termination.probe import (
 )
 
 logger = logging.getLogger("lujo-mcp.mcp.heavy")
+
+# heavy worker 子进程需要与父进程一致的「有效 HTTP 绑定」：auto_test 在子进程内用
+# settings.http_host/http_port 构造注入 SDK 的 endpoint（app/mcp/tools/
+# auto_test_api.py::_build_sdk_init_script），而统一模式下父进程这两项是被
+# CLI --http-host/--http-port 覆盖后的有效值（app/mcp_server.py::_resolve_http_bind
+# 解析后写入 settings）。子进程默认只继承 os.environ，看不到 CLI 解析结果，
+# endpoint 于是退回 env/默认端口——按「端口即隔离」的多实例口径，那可能是**另一个
+# 实例**的端口。
+# 传递方式：per-spawn env（不修改父进程 os.environ），沿用既有 HTTP_HOST/HTTP_PORT
+# 配置键与优先级（CLI 解析结果 > env > 默认）：父进程有效值写入子进程 env，
+# 子进程 settings 按既有优先级读取，因此 CLI 解析结果胜出。
+_ENV_HTTP_HOST = "HTTP_HOST"
+_ENV_HTTP_PORT = "HTTP_PORT"
+
+
+def _child_env_with_effective_http() -> dict:
+    """构造 heavy worker 子进程环境：随 spawn 传入父进程的有效 HTTP 绑定。
+
+    只覆盖 HTTP_HOST/HTTP_PORT 两个配置键，不携带凭据或内部状态；不中转到
+    面向用户的输出。
+    """
+    from app.config import settings
+
+    env = dict(os.environ)
+    env[_ENV_HTTP_HOST] = str(settings.http_host)
+    env[_ENV_HTTP_PORT] = str(settings.http_port)
+    return env
 
 
 class HeavyServiceClosing(RuntimeError):
@@ -209,7 +237,7 @@ def run_heavy_tool_blocking(
             f"heavy tool {handler_name} rejected: service is closing"
         )
     attempt, backend_decision = termination_backend.spawn_with_backend(
-        0, command, gate=_accepting,
+        0, command, env=_child_env_with_effective_http(), gate=_accepting,
     )
     # spawn 成功即进入 try/finally —— 登记与派发日志本身抛异常时，子进程仍必须
     # 被终止回收（这两句曾在 try 之外，异常会让子进程既不在注册表也无人收割）。

@@ -37,6 +37,26 @@ def unserializable_result(arguments: dict) -> dict:
     return {"ok": True, "fn": lambda: 1}
 
 
+def report_http_config(arguments: dict) -> dict:
+    """回显子进程看到的**有效 HTTP 绑定**（工单：自定义端口传递）。
+
+    只读 os.environ 与 settings，不回传任何凭据字段。用于验证父进程解析后的
+    有效绑定（统一模式下 CLI --http-host/--http-port 的解析结果）是否随
+    spawn 传给 heavy worker。
+    """
+    import os
+
+    from app.config import settings
+
+    return {
+        "ok": True,
+        "http_host": settings.http_host,
+        "http_port": settings.http_port,
+        "env_http_host": os.environ.get("HTTP_HOST"),
+        "env_http_port": os.environ.get("HTTP_PORT"),
+    }
+
+
 async def async_ok(arguments: dict) -> dict:
     """async heavy 目标（B08）：验证 async heavy 经子进程往返。
 

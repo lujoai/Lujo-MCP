@@ -134,6 +134,59 @@ class TestHeavyLargeResultNoDeadlock:
             run_heavy_tool_blocking(_SELFTEST, "unserializable_result", {}, timeout=15)
 
 
+
+
+class TestHeavyWorkerEffectiveHttpConfig:
+    """工单（自定义端口传递）：heavy worker 必须看到父进程解析后的有效 HTTP 绑定。
+
+    真实链路：统一模式下 mcp_server.main 先用 CLI（--http-host / --http-port）
+    解析出有效绑定并写入父进程 settings（app/mcp_server.py），而 heavy worker 由
+    run_heavy_tool_blocking 在**另一个进程**中执行——父进程单独改配置对象不会
+    自动进入子进程。本类起真实子进程（_heavy_selftest.report_http_config）断言
+    子进程读到的 host/port 与父进程有效值一致；浏览器端到端另有集成用例。
+    """
+
+    @staticmethod
+    def _free_port() -> int:
+        import socket
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return int(s.getsockname()[1])
+
+    def test_child_sees_parent_effective_http_port(self, monkeypatch):
+        from app.config import settings
+
+        port = self._free_port()
+        assert port != 8710, "构造前提：必须是非默认端口"
+        # 模拟 --http-port 解析后的父进程状态（有效绑定已写入 settings）
+        monkeypatch.setattr(settings, "http_host", "127.0.0.1")
+        monkeypatch.setattr(settings, "http_port", port)
+
+        result = run_heavy_tool_blocking(_SELFTEST, "report_http_config", {}, timeout=60)
+
+        assert result["ok"] is True
+        assert result["http_host"] == "127.0.0.1"
+        assert result["http_port"] == port, (
+            "heavy worker 未获得父进程有效端口：子进程 http_port="
+            f"{result['http_port']}（父进程有效值={port}）"
+        )
+
+    def test_parent_effective_port_wins_over_stale_env(self, monkeypatch):
+        """反证：继承 env 里的旧 HTTP_PORT 不得压过父进程解析出的有效端口。"""
+        from app.config import settings
+
+        port = self._free_port()
+        monkeypatch.setenv("HTTP_PORT", "8710")  # 子进程会继承到的旧 env
+        monkeypatch.setattr(settings, "http_port", port)
+
+        result = run_heavy_tool_blocking(_SELFTEST, "report_http_config", {}, timeout=60)
+
+        assert result["http_port"] == port, (
+            "子进程沿用了过期 env：http_port="
+            f"{result['http_port']}（应为父进程有效值 {port}）"
+        )
+
 @pytest.mark.asyncio
 async def test_run_heavy_tool_blocking_usable_from_event_loop():
     """模拟派发路径：事件循环里经 run_in_executor 调用，不阻塞且可拿到结果。"""
