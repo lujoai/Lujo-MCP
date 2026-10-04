@@ -5,16 +5,17 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 文档版本 | v8.1（v1.0.0 发布同步） |
+| 文档版本 | v8.2（v1.0.1 发布同步） |
 | 产品名称 | Lujo-MCP |
-| 当前产品版本 | v1.0.0（已发布，2026-09-28 稳定公共契约起点；行为与 v0.9.9 一致） |
+| 当前产品版本 | v1.0.1（已发布，2026-10-04 patch 修复：auto_test 自动采集链路修复，无破坏性契约变更） |
 | 文档状态 | 发布后同步（Published / Current） |
 | 创建日期 | 2026-07-07 |
-| 最后更新 | 2026-09-28 |
+| 最后更新 | 2026-10-04 |
 | 负责人 | AI 调试平台团队 |
 | 审阅视角 | 高级工程师 / 高级架构师（代码核实） |
 
-> **v1.0.0 状态（2026-09-28，当前稳定版）**：稳定公共契约起点——无新功能，v0.9.9 已实测行为（diagnose_issue 多现场消歧、request_id 确定性回查、诚实空态语义、证据边界）定为起始稳定契约；npm 五包 `latest=1.0.0`，GitHub Release 含三平台资产；0.9.8/0.9.9 明细见 CHANGELOG。以下为历史状态注记：
+> **v1.0.1 状态（2026-10-04，当前稳定版）**：patch 修复：auto_test 自动采集链路修复（注入/页面早期事件采集与单次排水、拦截回传与主实例入库、诚实 capture/delivery 状态与字节限额、gzip 批上报、自定义端口 heavy worker 传递、async SSRF 守卫）。无破坏性契约变更，npm 五包 `latest=1.0.1`，GitHub Release 含三平台资产；明细见 CHANGELOG。以下为历史状态注记：
+> **v1.0.0 状态（2026-09-28，历史）**：稳定公共契约起点——无新功能，v0.9.9 已实测行为（diagnose_issue 多现场消歧、request_id 确定性回查、诚实空态语义、证据边界）定为起始稳定契约；npm 五包 `latest=1.0.0`，GitHub Release 含三平台资产；0.9.8/0.9.9 明细见 CHANGELOG。
 > **v0.9.7 状态（2026-09-27，历史）**：可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见。npm 五包 `latest=0.9.7`；GitHub Release 含三平台资产。详见 [CHANGELOG](./CHANGELOG.md) 与 [GitHub Release](https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.7)。上一版 v0.9.6：零改造本地调试（回环默认放行）。
 > **v0.9.4 状态（2026-09-23，npm 最新已发布稳定版）**：运行时上下文断层修复（异步修复任务补位 trace_data 异常）、MCP stacktrace 工具指定 request_id 查询真实栈帧还原、追踪摘要提取识别 trace_data、Dashboard 事件总线线程安全加固；便捷调试入口 POST /debug 废弃收敛到 POST /api/debug/run（返回 410）。发布证据：npm registry `latest=0.9.4`；GitHub Release：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.4。
 > **v0.9.3 状态（2026-09-23，已发布）**：Qdrant 语义召回修复——适配 qdrant-client 1.16 移除 `QdrantClient.search()` 的变更，切换 `query_points()`（依赖下限 `>=1.10.0`）；CI 与发布产物共用锁定依赖集；无破坏性行为变更。上一版 v0.9.2（2026-09-21）为安全加固与经验闭环——默认监听收紧为 `127.0.0.1`、`/metrics` 免鉴权豁免仅回环生效、错误码规范化（关闭期 `TOOL_BUSY`；RBAC 鉴权拒绝 `AUTH_ERROR -32003`）、KB 存储边界拒绝未脱敏写入、认证 fail-closed 补强、Agent 外发脱敏；新增 KB 诊断经验关联（`related_experiences`）与 `/demo` 接入状态面板。产品定位为单用户本地自用，不承诺中央多人共享数据库。发布证据：npm registry `latest=0.9.3`；GitHub Release：https://github.com/lujoai/Lujo-MCP/releases/tag/v0.9.3。
@@ -50,6 +51,7 @@
 | v7.1 | 2026-09-10 | 架构委员会 | **v0.7.9 发布完成同步**：asyncpg errors 读写链路通过隔离 PostgreSQL 真库验证，连接池跨事件循环生命周期加固；Node.js 服务端 SDK 首发，支持 Node 18/20/22、CJS/ESM、显式错误与网络上报；验证 stdio executor 自愈和项目解释器隔离。默认 memory 后端、公开工具面、schema 不变；全应用 async PG 生命周期统一仍是独立工作项。测试基线 unit 1615/6、integration 79/41、e2e 10/1、PG async 5、Node SDK 11。产品版本 v0.7.8 → v0.7.9。 |
 | v6.5 | 2026-08-25 | 架构委员会 | **v0.6.3 ~ v0.6.7 发布 + 全量代码审查三档 Major 清零交付**：(1) v0.6.3 稳定性维护补丁（2 Critical + 10 Major）；(2) v0.6.4 安全补丁（embedding 未脱敏外发、verify_loop 安全门失效、限流键绕过）；(3) v0.6.6 可用性补丁（stdio 坏输入、槽位竞态、事件循环阻塞、async 双池绕过）；(4) v0.6.7 正确性补丁（SDK 传输三件套、LLM 缓存指纹碰撞、流式绕熔断、smoke_test 死锁、sourcemap 版本键）。测试基线 1198 → 1231 passed / 6 skipped / 0 failed。产品版本 v0.6.2 → v0.6.7。 |
 | v7.3 | 2026-09-14 | 架构委员会 | **v0.9.1 同步**：PostgreSQL 运行时后端正式移除——`STORAGE_BACKEND=memory` 为唯一合法值，精确值 `postgresql` 启动即被 `StorageBackendRemovedError` 拒绝（不静默回退），KB 经验持久化由本地 SQLite「笔记本」承担；Windows release smoke 的 HTTP readiness 超时修复（独立 `--http-timeout`）。v0.9.1 已发布（npm `latest=0.9.1`，GitHub Release 含三平台资产）。公开工具面 18/22、Node SDK 接口、schema 不变。产品版本 v0.8.0 → v0.9.1。 |
+| v8.2 | 2026-10-04 | 架构委员会 | **v1.0.1 发布同步**：patch 修复：auto_test 自动采集链路修复（注入/页面早期事件采集与单次排水、拦截回传与主实例入库、诚实 capture/delivery 状态与字节限额、gzip 批上报、自定义端口 heavy worker 传递、async SSRF 守卫）。无破坏性契约变更（observe_ms 可选入参，sdk_capture 附加可选响应信息）。npm 五包 `latest=1.0.1`，GitHub Release 含三平台资产。产品版本 v1.0.0 → v1.0.1。 |
 | v8.1 | 2026-09-28 | 架构委员会 | **v1.0.0 发布同步**：稳定公共契约起点——无新功能；v0.9.9 已实测行为（diagnose_issue 多现场消歧 `ambiguity_detected` 候选列表、`request_id` 对 error_id/SDK caller trace ID/网络记录 ID 的确定性回查（含可逆 `b64.` 候选引用）、空存储与扫描不完整的诚实语义、跨现场证据注入边界）定为起始稳定契约；公共工具面（23 注册/19 可见）与响应结构自此遵守向后兼容原则（破坏性变更须升主版本）。发布留痕：首轮 tag 流水线因 release-npm.yml 版本守卫正则只认 0.x 在 publish 前置校验失败（零部分发布），修复（正则放宽至任意主版本 + 守卫回归测试）后 tag 重置重发一次通过。npm 五包 `latest=1.0.0`，GitHub Release 含三平台资产。 |
 | v8.0 | 2026-09-27 | 架构委员会 | **v0.9.7 发布同步**：可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见。npm 五包 `latest=0.9.7`，GitHub Release 已发布并含三平台资产。 |
 | v7.9 | 2026-09-26 | 架构委员会 | **v0.9.6 发布同步**：零改造本地调试：`auto_test`/`verify_ui` 对纯回环目标（本机开发服务器）默认放行（SSRF 防线不变），`auto_test` 新增宿主行动指引，README 提供宿主自定义指令片段。npm 五包 `latest=0.9.6`，GitHub Release 已发布并含三平台资产。 |

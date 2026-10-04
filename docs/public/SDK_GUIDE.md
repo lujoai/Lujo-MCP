@@ -1,6 +1,6 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v1.0.0（2026-09-28，稳定公共契约起点——行为与 v0.9.9 一致）；Node SDK npm 稳定版为 `@lujoai/lujo-mcp-node-sdk@1.0.0`。详细变更见 [CHANGELOG](./CHANGELOG.md)。
+> 当前版本：v1.0.1（2026-10-04，patch 修复：auto_test 自动采集链路修复，无破坏性契约变更）；Node SDK npm 稳定版为 `@lujoai/lujo-mcp-node-sdk@1.0.1`。详细变更见 [CHANGELOG](./CHANGELOG.md)。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
 
@@ -37,7 +37,7 @@ Node SDK 面向 Node.js 服务端的主动上报，随 v0.7.9 首次发布，支
 安装独立包（推荐指定已发布版本）：
 
 ```bash
-npm install @lujoai/lujo-mcp-node-sdk@1.0.0
+npm install @lujoai/lujo-mcp-node-sdk@1.0.1
 ```
 
 CommonJS：

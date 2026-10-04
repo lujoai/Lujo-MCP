@@ -7,7 +7,7 @@
 
 ## [1.0.1] - 2026-10-04
 
-> 主题「auto_test 自动采集链路修复」。1.0.0 的 `auto_test` 自动埋点在真实浏览器下存在多处断点：注入脚本在页面 DOM 空洞期静默失效、默认 CORS 收紧下 SDK 跨源上报无法送达、heavy 子进程采集的现场进不了 MCP 主进程存储、遍历结束即关浏览器导致窗口内延迟故障丢失——「diagnose_issue 无现场 → auto_test 采集 → diagnose_issue 回查」的闭环实际不通。本版为 **patch 修复**：没有破坏性契约变更——公共工具面不变，`observe_ms` 是 `auto_test` 的新增可选输入，`sdk_capture` 是附加的可选响应信息，旧字段含义与现有调用继续兼容。**发布状态**：截至本段撰写，npm 与 GitHub Release 的已发布版本仍为 **1.0.0**；1.0.1 为本仓库准备中的候选版本，尚未打 tag、尚未发布。
+> 主题「auto_test 自动采集链路修复」。1.0.0 的 `auto_test` 自动埋点在真实浏览器下存在多处断点：注入脚本在页面 DOM 空洞期静默失效、默认 CORS 收紧下 SDK 跨源上报无法送达、heavy 子进程采集的现场进不了 MCP 主进程存储、遍历结束即关浏览器导致窗口内延迟故障丢失——「diagnose_issue 无现场 → auto_test 采集 → diagnose_issue 回查」的闭环实际不通。本版为 **patch 修复**：没有破坏性契约变更——公共工具面不变，`observe_ms` 是 `auto_test` 的新增可选输入，`sdk_capture` 是附加的可选响应信息，旧字段含义与现有调用继续兼容。**发布状态**：已正式发布（GitHub Release 实际发布时间 2026-10-04T06:41:24Z；npm 五包 `latest` 均为 1.0.1）。
 
 ### Fixed
 

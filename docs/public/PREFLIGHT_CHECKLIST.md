@@ -1,10 +1,10 @@
 # 启动前检查与功能启用综合手册 / Pre-flight Checklist & Enablement Guide
 
-**适用版本 / Applicable Version**: v1.0.0
+**适用版本 / Applicable Version**: v1.0.1
 **最后更新 / Last Updated**: 2026-09-28
 
 > **说明**：本文档已整合原独立文件 `ENABLEMENT_GUIDE.md`（功能启用指南）全部内容，为 Lujo-MCP 的环境部署、配置检查与可选功能启用（Redis、Playwright、熔断器、OTel）提供一站式操作与验证手册。
-> **发布状态**：当前 npm 线上最新已发布版本为 `v1.0.0`（2026-09-28，稳定公共契约起点——行为与 v0.9.9 一致，无破坏性变更；诊断侧多现场消歧与 request_id 确定性回查为该契约的一部分）。历史升级要点（v0.9.0–v0.9.7 陆续引入：端口迁移为 v0.9.7，存储/监听/错误码/端点收敛为 v0.9.0–v0.9.4；端口 8000→8710、`STORAGE_BACKEND=memory` 唯一合法值、仅监听 127.0.0.1、`/metrics` 回环豁免、关闭期 `TOOL_BUSY`、RBAC 拒绝码 `AUTH_ERROR -32003`、`POST /debug` 已 410）仍然适用，保留如下：v0.9.7 曾引入——浏览器采集工具全变体常驻可见（CAPABILITY_MISSING 契约）、doctor 自检、HTTP_PORT/HTTP_HOST 环境变量。
+> **发布状态**：当前 npm 线上最新已发布版本为 `v1.0.1`（2026-10-04，patch 修复：auto_test 自动采集链路修复，无破坏性契约变更；diagnose_issue 诊断契约与 1.0.0 一致）。历史升级要点（v0.9.0–v0.9.7 陆续引入：端口迁移为 v0.9.7，存储/监听/错误码/端点收敛为 v0.9.0–v0.9.4；端口 8000→8710、`STORAGE_BACKEND=memory` 唯一合法值、仅监听 127.0.0.1、`/metrics` 回环豁免、关闭期 `TOOL_BUSY`、RBAC 拒绝码 `AUTH_ERROR -32003`、`POST /debug` 已 410）仍然适用，保留如下：v0.9.7 曾引入——浏览器采集工具全变体常驻可见（CAPABILITY_MISSING 契约）、doctor 自检、HTTP_PORT/HTTP_HOST 环境变量。
 
 ---
 
@@ -567,7 +567,7 @@ pytest tests/unit/ -q --tb=short
 python -m app.main
 
 # 判定标准 / Pass Criteria:
-#   - 日志输出 "服务启动 | lujo-mcp v1.0.0 | ..."（本地源码与 npm 发布版均为 1.0.0）
+#   - 日志输出 "服务启动 | lujo-mcp v1.0.1 | ..."（本地源码与 npm 发布版均为 1.0.1）
 #   - 无 ERROR 级别日志
 #   - 进程未退出
 # 异常处理 / Contingency:
@@ -601,7 +601,7 @@ curl http://localhost:8710/internal/health
 #   {
 #     "status": "ok",
 #     "service": "lujo-mcp",
-#     "version": "1.0.0",          ← 当前本地源码与 npm 发布版版本
+#     "version": "1.0.1",          ← 当前本地源码与 npm 发布版版本
 #     "storage": "memory",         ← 唯一合法值（PostgreSQL 后端已移除）
 #     "llm_configured": true       ← false 表示 LLM 未配置
 #   }

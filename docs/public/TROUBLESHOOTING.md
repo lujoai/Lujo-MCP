@@ -1,9 +1,9 @@
 # 异常排查指南 / Troubleshooting Guide
 
-**适用版本 / Applicable Version**: v1.0.0
+**适用版本 / Applicable Version**: v1.0.1
 **最后更新 / Last Updated**: 2026-09-28
 
-> **发布状态**：当前 npm 线上最新已发布版本为 `v1.0.0`（2026-09-28，稳定公共契约起点；行为与 v0.9.9 一致，无破坏性变更）。诊断侧契约要点：`diagnose_issue` 多故障返回候选列表（`ambiguity_detected`，不静默代选）、`request_id` 支持 error_id / SDK caller trace ID / 网络记录 ID 的确定性回查（含可逆 `b64.` 候选引用）、空存储与扫描不完整时如实报告。沿用不变：默认 `STORAGE_BACKEND=memory`（唯一合法值，`postgresql` 显式拒绝，见 L 节）；默认监听 `127.0.0.1`；默认端口 8710；`/metrics` 免鉴权豁免仅回环生效；关闭期错误码 `TOOL_BUSY`；RBAC 拒绝码 `AUTH_ERROR -32003`；`POST /debug` 已 410，统一 `POST /api/debug/run`。
+> **发布状态**：当前 npm 线上最新已发布版本为 `v1.0.1`（2026-10-04，patch 修复：auto_test 自动采集链路修复，无破坏性契约变更；diagnose_issue 诊断契约与 1.0.0 一致）。诊断侧契约要点：`diagnose_issue` 多故障返回候选列表（`ambiguity_detected`，不静默代选）、`request_id` 支持 error_id / SDK caller trace ID / 网络记录 ID 的确定性回查（含可逆 `b64.` 候选引用）、空存储与扫描不完整时如实报告。沿用不变：默认 `STORAGE_BACKEND=memory`（唯一合法值，`postgresql` 显式拒绝，见 L 节）；默认监听 `127.0.0.1`；默认端口 8710；`/metrics` 免鉴权豁免仅回环生效；关闭期错误码 `TOOL_BUSY`；RBAC 拒绝码 `AUTH_ERROR -32003`；`POST /debug` 已 410，统一 `POST /api/debug/run`。
 
 ---
 
@@ -62,7 +62,7 @@ Set API_KEY before exposing the service.
   ```
 - 方案 B: 仅本地开发时，改用 `HTTP_HOST=127.0.0.1`（旧键 `HOST` 等效）
 
-**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v1.0.0`（本地源码与 npm 发布版均为 1.0.0）
+**验证 / Verify**: 服务正常启动，日志输出 `服务启动 | lujo-mcp v1.0.1`（本地源码与 npm 发布版均为 1.0.1）
 
 ---
 
