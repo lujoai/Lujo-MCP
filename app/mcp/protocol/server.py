@@ -729,6 +729,20 @@ async def _handle_tools_call(req: JSONRPCRequest) -> dict:
                 "error_code": ERROR_TOOL_INTERNAL,
             })
 
+    # v1.0.x 自动采集链路：heavy 子进程结果中的内部保留键 _lujo_ingest
+    # （auto_test 截获的 SDK 上报事件）在主进程排水入库——与 /ingest/* 端点
+    # 同一套校验/脱敏/入库（ingest_dispatch）。stdio/HTTP 共用本路径；
+    # 无该键的结果为 no-op，对其他工具零影响。
+    if isinstance(result, dict) and "_lujo_ingest" in result:
+        from app.mcp.tools.ingest_dispatch import drain_result_ingest_events
+
+        try:
+            drain_result_ingest_events(result)
+        except Exception:
+            # 排水失败不吞掉工具本身的成功结果：弹出键 + 计数缺失会在
+            # sdk_capture 里如实可见（ingest_failures 由 drain 内部逐条维护）
+            logger.exception("heavy 结果采集事件排水失败 tool=%s", tool_name)
+
     _elapsed = time.monotonic() - _tool_start
     try:
         _size = len(json.dumps(result, ensure_ascii=False, default=str))

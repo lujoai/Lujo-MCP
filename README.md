@@ -71,7 +71,7 @@
 
 > 📌 **Trae CN 1.0.33+ 用户请改用 [host-rules/trae.md](./docs/public/host-rules/trae.md) 的 run_mcp 适配版**：该版本 Trae 把 MCP 工具收敛到 `run_mcp` 之后，上面的通用写法不会被自发触发，需按适配版把规则贴进 Trae 的「设置 → 规则与记忆 → 全局规则」（详见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 第 7 条）。
 
-> 📌 **`auto_test` 的采集边界**：它只对本次 auto_test 会话内打开的页面自动注入采集（Playwright）；用户日常浏览的页面不会被自动采集，持续被动采集仍需页面接入 Browser SDK（见下文「两条链路」）。
+> 📌 **`auto_test` 的采集边界**：它只对本次 auto_test 会话内打开的页面自动注入采集（Playwright）；用户日常浏览的页面不会被自动采集，持续被动采集仍需页面接入 Browser SDK（见下文「两条链路」）。采集是否成功以返回中的 `sdk_capture` 状态为准（`init=ready` + `delivery=complete` 表示现场已进入本实例存储，随后即可用 `diagnose_issue` 查询）；页面早期异常与观察窗口内（默认 2s，可用 `observe_ms` 调整）的延迟故障也会被采集。
 
 ### 替代方式：全局安装
 

@@ -196,6 +196,37 @@ def _install_ssrf_guard(context) -> None:
     context.route("**/*", handler)
 
 
+async def install_ssrf_guard_async(context) -> None:
+    """``_install_ssrf_guard`` 的 async API 版（v1.0.x auto_test 修复）。
+
+    背景：sync 版在 async Playwright context 上调用 ``context.route(...)``/
+    ``route.continue_()`` 返回协程而未 await——注册从未生效（仅留
+    RuntimeWarning），async 路径的 auto_test 因此长期没有逐跳 SSRF 守卫。
+    判定逻辑与 sync 版完全一致（同一套 inspect_url_security / 内部 scheme
+    放行 / fail-closed abort），仅把注册与拦截动作改为 await。
+    """
+    _BROWSER_INTERNAL_SCHEMES = ("data:", "blob:", "about:")
+
+    async def handler(route):
+        request_url = route.request.url
+        if request_url.lower().startswith(_BROWSER_INTERNAL_SCHEMES):
+            await route.continue_()
+            return
+        assessment = inspect_url_security(request_url)
+        if not assessment["allowed"]:
+            logger.warning(
+                "SSRF guard: 拒绝请求 %s（rule=%s, reason=%s）",
+                request_url,
+                assessment["rule"],
+                assessment["reason"],
+            )
+            await route.abort()
+            return
+        await route.continue_()
+
+    await context.route("**/*", handler)
+
+
 _PLAYWRIGHT_AVAILABLE = False
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout  # noqa: F401

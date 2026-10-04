@@ -13,6 +13,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth.rbac import require_role
+from app.mcp.tools.ingest_dispatch import dispatch_single as _dispatch_single
+from app.mcp.tools.ingest_dispatch import extract_session_id as _extract_session_id
 from app.mcp.tools.network_api import tool_ingest_network, tool_get_network_trace
 from app.mcp.tools.silent_failure_api import tool_ingest_silent_failure
 from app.mcp.tools.ingest_api import tool_ingest_error
@@ -31,27 +33,6 @@ _MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
 # 属 ingest 加固的独立事项，不在 SDK 清理批里顺手改。
 # FIX: P3-6 /ingest/batch events 数组单次最多 100 条，防止滥用撑爆内存/CPU
 _MAX_BATCH_EVENTS = 100
-
-
-def _extract_session_id(payload: dict) -> str | None:
-    """FIX: R2 —— 统一上报 envelope 的 session_id 提取。
-
-    规范位置是顶层 ``session_id``；兼容旧版浏览器 SDK 把会话放在
-    ``extra.session_id`` 的上报格式。两者同时存在时顶层优先（显式入参
-    可信度更高）。普通 SDK 数据此前因此进入 _global 桶，会话查询无结果、
-    相同错误跨页面被错误合并。
-    """
-    if not isinstance(payload, dict):
-        return None
-    sid = payload.get("session_id")
-    if sid:
-        return str(sid)
-    extra = payload.get("extra")
-    if isinstance(extra, dict):
-        sid = extra.get("session_id")
-        if sid:
-            return str(sid)
-    return None
 
 
 class _DecompressedSizeExceeded(Exception):
@@ -177,65 +158,6 @@ def ingest_ui_event(req: dict):
     except Exception as e:
         logger.error(str(e), exc_info=True)
         raise HTTPException(status_code=400, detail="Internal server error")
-
-
-def _dispatch_single(path: str, payload: dict) -> dict:
-    """将单条批量事件分发到对应的 ingest 处理器。
-
-    path 为 SDK 原始上报路径（如 /ingest/error），payload 为该路径对应的完整请求体。
-    各路径的参数提取逻辑与独立 ingest 端点保持一致。
-    """
-    if path == "/ingest/error":
-        return tool_ingest_error(
-            exc_type=payload.get("exc_type", "UnknownError"),
-            message=payload.get("message", ""),
-            frames=payload.get("frames", []),
-            source=payload.get("source", "http_ingest"),
-            extra=payload.get("extra"),
-            trace_id=payload.get("trace_id"),
-            session_id=_extract_session_id(payload),
-        )
-    if path == "/ingest/network":
-        return tool_ingest_network(
-            record=payload.get("record", {}),
-            trace_id=payload.get("trace_id"),
-            request_id=payload.get("request_id"),
-            session_id=_extract_session_id(payload),
-        )
-    if path == "/ingest/ui-event":
-        trace_id = payload.get("trace_id")
-        event_id = save_ui_event(
-            event=payload.get("event", {}) or {},
-            trace_id=trace_id,
-            extra=payload.get("extra"),
-            session_id=_extract_session_id(payload),
-        )
-        return {"event_id": event_id, "trace_id": trace_id, "saved": True}
-    if path == "/ingest/console":
-        return tool_ingest_console(
-            level=payload.get("level", "info"),
-            message=payload.get("message", ""),
-            source=payload.get("source", "browser_sdk"),
-            extra=payload.get("extra"),
-            trace_id=payload.get("trace_id"),
-            request_id=payload.get("request_id"),
-            session_id=_extract_session_id(payload),
-        )
-    if path == "/ingest/silent-failure":
-        return tool_ingest_silent_failure(
-            message=payload.get("message", ""),
-            frames=payload.get("frames"),
-            ui_events=payload.get("ui_events"),
-            network_records=payload.get("network_records"),
-            expectation=payload.get("expectation"),
-            observed=payload.get("observed"),
-            observed_events=payload.get("observed_events"),
-            source=payload.get("source", "browser_sdk"),
-            extra=payload.get("extra"),
-            trace_id=payload.get("trace_id"),
-            session_id=_extract_session_id(payload),
-        )
-    raise ValueError(f"Unknown ingest path: {path}")
 
 
 @router.post("/batch", dependencies=[Depends(require_role("admin", "developer"))])

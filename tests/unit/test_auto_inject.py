@@ -62,7 +62,13 @@ class FakePage:
         self.init_scripts = []
         self.events = []
         self.context = SimpleNamespace()
+        # v1.0.x：auto_test 需在 context 上注册回传拦截路由
+        self.context.route_calls = []
+        self.context.route = self._record_route
         self.url = "http://127.0.0.1:8765/page"
+
+    async def _record_route(self, pattern, handler):
+        self.context.route_calls.append((pattern, handler))
 
     async def add_init_script(self, script=None, path=None):
         self.init_scripts.append(script)
@@ -77,6 +83,9 @@ class FakePage:
         return []
 
     async def wait_for_timeout(self, ms):
+        return None
+
+    async def evaluate(self, expression, arg=None):
         return None
 
 
@@ -130,6 +139,10 @@ def _install_fake_playwright(monkeypatch, page):
     return browser
 
 
+async def _noop_async_guard(ctx):
+    return None
+
+
 @pytest.fixture()
 def _stub_auto_test_env(monkeypatch):
     """屏蔽 _run 的浏览器启动解析与 SSRF 守卫（纯逻辑测试不触真实实现）。"""
@@ -137,7 +150,7 @@ def _stub_auto_test_env(monkeypatch):
     import app.runtime.verifier.ui_runner as ui_runner_mod
 
     monkeypatch.setattr(launcher_mod, "resolve_launch_kwargs", dict)
-    monkeypatch.setattr(ui_runner_mod, "_install_ssrf_guard", lambda ctx: None)
+    monkeypatch.setattr(ui_runner_mod, "install_ssrf_guard_async", _noop_async_guard)
 
 
 @pytest.mark.asyncio
