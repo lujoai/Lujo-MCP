@@ -239,7 +239,7 @@ SDK 通过 monkey-patch 拦截浏览器网络请求，**两者同源捕获**（V
 
 - **XMLHttpRequest**：拦截 `open` / `send`，记录 method / url / request body / response body / status / duration。
 - **fetch**：包装全局 `fetch`，同样捕获上述信息。
-- **自排除**：SDK 自身发往 endpoint 的上报请求会被识别并跳过，避免递归上报（`_isSelfRequest`）。
+- **自排除**：仅排除 SDK 自身真实生成的两类上报 URL——`{endpoint}/ingest/batch` 与 `{endpoint}/auth/beacon-token`（endpoint 带子路径时按其归一化后的 base path 精确拼接；`?token=` 等 query 不影响判定；路径匹配大小写敏感）。同源部署页面（如与 Lujo 同域反代）的业务请求**不会被**整域排除，照常采集（`_isSelfRequest`）。
 - **请求体序列化**：自动安全处理 `FormData` / `Blob` / `URLSearchParams` / 普通 JSON 等多种类型。
 - **响应/请求体脱敏**：在存储/上报前统一递归脱敏。
 

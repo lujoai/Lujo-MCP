@@ -250,12 +250,15 @@ test("REDACT 环引用保护：cyclic extra 不抛 RangeError 且输出可序列
   assert.ok(parsed, "环被截断后整体可 JSON 序列化");
 });
 
-test("_isSelfRequest 按 host 比较而非字符串前缀（相似域名不再误判 self）", () => {
+test("_isSelfRequest 按 host 比对 + 上报路径精确匹配（相似域名不误判，同源业务不再整域排除）", () => {
   const SDK = freshSDK();
   SDK._setConfig("endpoint", "http://localhost:8000");
   const f = SDK._isSelfRequest;
   assert.equal(f("http://localhost:8000/ingest/batch"), true);
-  assert.equal(f("http://localhost:8000"), true);
+  // FIX(工作单 A)：裸 origin 旧实现判 true（整域排除），收窄后同源业务流量正常
+  // 采集——此断言翻转是修复目标本身（demo/dashboard 场景），不是放宽断言；
+  // 完整的新契约判定表见 sdk-self-request-scope.test.js。
+  assert.equal(f("http://localhost:8000"), false);
   // 旧前缀匹配：http://localhost:8000.evil.com 命中前缀 → 误判 self → 丢数据
   assert.equal(f("http://localhost:8000.evil.com/x"), false);
   assert.equal(f("http://evil.com/localhost:8000"), false);

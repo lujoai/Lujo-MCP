@@ -90,6 +90,7 @@
       <div class="test-group">
         <button onclick="testXhrResponse()">发送 XHR 获取 Token</button>
         <div class="result info" id="responseResult">模拟返回 {token:"abc123"}，验证 token 被脱敏</div>
+        <div class="result info">ℹ️ 端点提示：/api/debug/echo 与 /api/debug/token 默认关闭（安全默认），点击会得到 404，需以 DEBUG_ENDPOINTS_ENABLED=true 启动服务后才可用；/api/debug/health 为演示占位路径。404 响应同样会被 SDK 完整采集，不影响捕获验证。</div>
       </div>
 
       <h2>4. SDK 自身请求排除（防递归）</h2>
@@ -140,15 +141,16 @@
     </div>
 
     <div id="verify" class="tab-content">
-      <h2>验证结果汇总</h2>
+      <h2>验证结果汇总（手动核对清单）</h2>
+      <p style="color:#8b949e">本页<strong>不自动判定</strong>以下各项——请按分组实际操作后，到「采集记录」Tab 人工核对记录数量与内容。初始态一律显示"待人工核对"，这不是失败。</p>
       <div class="test-group">
-        <div><span class="pending">✗</span> <span id="v1">1. XHR GET 捕获：未验证</span></div>
-        <div><span class="pending">✗</span> <span id="v2">2. XHR POST Body 脱敏：未验证</span></div>
-        <div><span class="pending">✗</span> <span id="v3">3. XHR Response Body 脱敏：未验证</span></div>
-        <div><span class="pending">✗</span> <span id="v4">4. SDK 自排除（防递归）：未验证</span></div>
-        <div><span class="pending">✗</span> <span id="v5">5. networkSampleRate 控制：未验证</span></div>
-        <div><span class="pending">✗</span> <span id="v6">6. networkThrottleMs 节流：未验证</span></div>
-        <div><span class="pending">✗</span> <span id="v7">7. 业务兼容性：未验证</span></div>
+        <div><span class="pending">☐</span> <span id="v1">1. XHR GET 捕获：待人工核对（点击「发送 XHR GET 请求」后，「采集记录」应新增一条）</span></div>
+        <div><span class="pending">☐</span> <span id="v2">2. XHR POST Body 脱敏：待人工核对（请求体中 password 应显示为 ***）</span></div>
+        <div><span class="pending">☐</span> <span id="v3">3. XHR Response Body 脱敏：待人工核对（响应体中 token 应显示为 ***）</span></div>
+        <div><span class="pending">☐</span> <span id="v4">4. SDK 自排除（防递归）：待人工核对（点击「测试 SDK 自排除」应提示通过；/ingest/batch、/auth/beacon-token 两类上报路径不出现在采集记录）</span></div>
+        <div><span class="pending">☐</span> <span id="v5">5. networkSampleRate 控制：待人工核对（设为 0 后业务请求不再产生新采集记录）</span></div>
+        <div><span class="pending">☐</span> <span id="v6">6. networkThrottleMs 节流：待人工核对（设为 1000ms 后连续请求的采集数量受窗口限制）</span></div>
+        <div><span class="pending">☐</span> <span id="v7">7. 业务兼容性：待人工核对（xhr.onload / onreadystatechange 回调正常执行）</span></div>
       </div>
     </div>
   </div>
@@ -199,16 +201,27 @@
     function resetSdk() {
       var sampleRate = parseFloat(document.getElementById('sampleRate').value);
       var throttleMs = parseInt(document.getElementById('throttleMs').value);
+      // FIX(工作单 B)：init 有 _inited 幂等守卫，直接再次 init 会被忽略（新配置
+      // 不生效）。按 SDK 契约先 destroy 再 init；destroy({flush:true}) 会冲刷待发
+      // 批次并清空回调槽（SDK 有意设计），因此 init 后必须重新绑定 demo 回调
+      // （两个绑定函数均为单槽赋值语义，重复调用覆盖不叠加）。
+      if (typeof AiDebug.destroy === 'function') {
+        AiDebug.destroy({ flush: true });
+      }
       AiDebug.init({
       endpoint: window.location.origin,
       captureNetwork: true,
       networkSampleRate: sampleRate,
       networkThrottleMs: throttleMs
     });
+      bindNetworkCapture();
+      if (window.__lujoDemo && typeof window.__lujoDemo.bindSilentFailureReport === 'function') {
+        window.__lujoDemo.bindSilentFailureReport();
+      }
       capturedTraces = [];
       captureCount = 0;
       updateCaptures();
-      alert('SDK 已重置，配置更新');
+      alert('SDK 已重置，配置已生效（旧采集记录已随 destroy 清空，回调已重新绑定）');
     }
 
     function testXhrGet() {
@@ -365,9 +378,14 @@
       networkThrottleMs: 0
     });
 
-    AiDebug.onNetworkCapture(function(record) {
-      logCapture(record);
-    });
+    // FIX(工作单 B)：绑定收敛为具名函数——destroy() 清空回调槽（SDK 有意设计），
+    // resetSdk 后需重新调用；onNetworkCapture 为单槽赋值语义，重复调用覆盖不叠加。
+    function bindNetworkCapture() {
+      AiDebug.onNetworkCapture(function(record) {
+        logCapture(record);
+      });
+    }
+    bindNetworkCapture();
 
     function testDefaultCapture() {
       var beforeCount = captureCount;
@@ -544,7 +562,10 @@
       }
 
       // ── "已发送"证据：SDK 实际回调（回调 = SDK 发送路径确认）──
-      if (typeof AiDebug !== 'undefined') {
+      // FIX(工作单 B)：destroy() 清空回调槽是有意设计（SDK 契约），resetSdk 后经
+      // window.__lujoDemo.bindSilentFailureReport() 重新绑定；单槽赋值不叠加。
+      function bindSilentFailureReport() {
+        if (typeof AiDebug === 'undefined') return;
         AiDebug.onSilentFailureReport(function (payload) {
           state.silentFailureCount++;
           var desc = (payload && (payload.description || payload.message)) || '';
@@ -557,6 +578,7 @@
           render();
         });
       }
+      bindSilentFailureReport();
 
       // ── 公开 MCP 查询客户端（同源 /mcp：initialize → initialized → tools/call）──
       function mcpRpc(method, params, sessionId, reqId) {
@@ -705,8 +727,11 @@
         var pageSession = (typeof AiDebug !== 'undefined' && AiDebug.getSessionId())
           ? AiDebug.getSessionId() : '';
 
-        // 受控网络错误：本地未监听端口 → 连接拒绝 → fetch reject →
-        // SDK 网络钩子错误路径自动上报（404 等正常响应不会触发静默失败）
+        // 受控网络错误探针（CSP 实测语义修正，工作单 B）：59999 无监听且为跨源，
+        // 全局 CSP connect-src 'self' 会在浏览器内核层直接拦截该 fetch——连接根本
+        // 不发起（不是 TCP 连接拒绝），fetch 以 TypeError reject；SDK 网络钩子捕获
+        // 的是这次客户端失败（status_code=0 + error 字段），并照常走自动静默失败
+        // 上报路径。如需演示真实 TCP 连接拒绝，需无 CSP 的隔离页面夹具。
         fetch('http://127.0.0.1:59999/' + marker).catch(function () {});
 
         queryServerForMarker(marker, sdkTraceId, pageSession, function () {});
@@ -716,7 +741,8 @@
       render();
       return {
         getStatus: getStatus,
-        probeNetworkError: probeNetworkError
+        probeNetworkError: probeNetworkError,
+        bindSilentFailureReport: bindSilentFailureReport
       };
     })();
     window.__lujoDemo = lujoDemo;

@@ -858,22 +858,33 @@
     return !!parsed.host;
   }
 
+  // 自请求排除：只排除 SDK 自身真实生成的上报 URL。SDK 实际发出的 HTTP 路径
+  // 只有两类（与各发送点的拼接口径逐字一致）：
+  //   - {endpoint去尾斜杠}/ingest/batch
+  //     （_flushBatch / _drainPendingBatches / localStorage 恢复 / sendBeacon?token=
+  //      全部汇入此路径；/ingest/error、/ingest/network 等也经批量队列从这里出去）
+  //   - {endpoint去尾斜杠}/auth/beacon-token（_refreshBeaconToken）
+  // FIX(工作单 A)：旧实现"同 host 即排除"（endpoint 带路径时按路径前缀排除）过宽——
+  // 与 endpoint 同源的业务请求（demo 页 /api/debug/*、/mcp、同源 SPA API）被静默
+  // 排除采集。现收窄为：scheme/host 匹配且 pathname 恰为上述两条上报路径（精确相等，
+  // 非前缀——/lujo/ingest2、/lujoevil/ingest/batch 不误判；pathname 匹配大小写敏感，
+  // 按 URL 规范 host 比较大小写不敏感；query/hash 不参与匹配——sendBeacon 的
+  // ?token= 不影响判定）。base path 归一（去全部尾斜杠）与上报 URL 拼接处
+  // `cfg.endpoint.replace(/\/+$/, "")` 同口径。
+  // 注意：这是防丢数据 + 防递归上报的正确性判定，不是安全边界（本判定只决定
+  // "是否跳过采集"）。SDK 自身 XHR 也经过自家已包装的 XHR 原型，两条上报路径
+  // 必须保持排除，否则批量上报会被再次采集形成递归。
   function _isSelfRequest(url) {
     if (!cfg.endpoint) return false;
     var raw = String(url || "");
     if (!raw) return false;
-    // FIX(v0.7.0 Minor): 前缀匹配可被相似域名绕过——http://localhost:8000.evil.com
-    // 命中 http://localhost:8000 前缀 → 误判为自请求 → 上报数据被静默丢弃。
-    // 改为 URL 解析后比较 scheme/host；endpoint 带路径时要求路径前缀一致。
-    // 注意：这是防丢数据的正确性修复，不是安全边界（本判定只决定"是否跳过采集"）。
     try {
       var parsed = new URL(raw, typeof location !== "undefined" ? location.href : undefined);
       var endpoint = new URL(cfg.endpoint);
       if (parsed.protocol !== endpoint.protocol || parsed.host !== endpoint.host) return false;
-      if (endpoint.pathname && endpoint.pathname !== "/") {
-        return parsed.pathname.indexOf(endpoint.pathname) === 0;
-      }
-      return true;
+      var base = endpoint.pathname.replace(/\/+$/, "");
+      return parsed.pathname === base + "/ingest/batch" ||
+             parsed.pathname === base + "/auth/beacon-token";
     } catch (e) {
       return false;
     }
