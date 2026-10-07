@@ -90,7 +90,7 @@
       <div class="test-group">
         <button onclick="testXhrResponse()">发送 XHR 获取 Token</button>
         <div class="result info" id="responseResult">模拟返回 {token:"abc123"}，验证 token 被脱敏</div>
-        <div class="result info">ℹ️ 端点提示：/api/debug/echo 与 /api/debug/token 默认关闭（安全默认），点击会得到 404，需以 DEBUG_ENDPOINTS_ENABLED=true 启动服务后才可用；/api/debug/health 为演示占位路径。404 响应同样会被 SDK 完整采集，不影响捕获验证。</div>
+        <div class="result info">ℹ️ 端点提示：/api/debug/health 是真实路由（app/api/debug.py，健康检查），需 admin/developer/viewer 角色权限——鉴权通过时返回 200，鉴权不通过时可能返回 401/403；/api/debug/echo 与 /api/debug/token 存在但受 DEBUG_ENDPOINTS_ENABLED 控制（安全默认关闭）——鉴权不通过时可能先返回 401/403，鉴权通过但端点关闭时才返回 404，需以 DEBUG_ENDPOINTS_ENABLED=true 启动服务后才可用。非 200 响应同样会被 SDK 完整采集，不影响捕获验证。</div>
       </div>
 
       <h2>4. SDK 自身请求排除（防递归）</h2>

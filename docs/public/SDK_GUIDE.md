@@ -239,9 +239,24 @@ SDK 通过 monkey-patch 拦截浏览器网络请求，**两者同源捕获**（V
 
 - **XMLHttpRequest**：拦截 `open` / `send`，记录 method / url / request body / response body / status / duration。
 - **fetch**：包装全局 `fetch`，同样捕获上述信息。
-- **自排除**：仅排除 SDK 自身真实生成的两类上报 URL——`{endpoint}/ingest/batch` 与 `{endpoint}/auth/beacon-token`（endpoint 带子路径时按其归一化后的 base path 精确拼接；`?token=` 等 query 不影响判定；路径匹配大小写敏感）。同源部署页面（如与 Lujo 同域反代）的业务请求**不会被**整域排除，照常采集（`_isSelfRequest`）。
+- **自排除**：仅排除 SDK 自身真实生成的两类上报 URL——`{endpoint}/ingest/batch` 与 `{endpoint}/auth/beacon-token`，且仅 **POST** 形态（SDK 自身全部上报固定 POST；业务方对同一路径的 GET 等请求不会被误排除）。endpoint 带子路径时按其归一化后的 base path 精确拼接；`?token=` 等 query 不影响判定；路径匹配大小写敏感。同源部署页面（如与 Lujo 同域反代）的业务请求**不会被**整域排除，照常采集（`_isSelfRequest`）。
 - **请求体序列化**：自动安全处理 `FormData` / `Blob` / `URLSearchParams` / 普通 JSON 等多种类型。
 - **响应/请求体脱敏**：在存储/上报前统一递归脱敏。
+
+### 同源页面的采集行为与流量控制
+
+> **重要**：`captureNetwork` 默认开启，而自排除只豁免 Lujo 自身两条上报路径。
+> 页面与 Lujo 服务**同源**（或同域反代）时，页面的**全部业务 fetch/XHR 都会被采集上报**——
+> 这是预期行为而非缺陷。对于此类页面，首次接入或从旧版本升级（历史上自排除曾按整域
+> 误排除同源请求）后，网络记录量可能明显增加，请按页面实际请求量评估采集与上报负载。
+
+可用控制项（可组合使用；具体取值取决于页面请求量与排障需求，请自行验证，以下仅为语义说明）：
+
+| 控制项 | 控制效果 |
+|--------|----------|
+| `captureNetwork` | 网络采集总开关：`false` 时不安装 fetch/XHR 钩子，页面零网络采集（错误/UI/console 采集不受影响） |
+| `networkSampleRate` | 网络自动捕获采样率（0–1）。注意网络事件入队后发送时还会再过一次 `sampleRate`，实际送达率约为两者乘积 |
+| `networkThrottleMs` | 按同一 `method:url` 的采集节流间隔（毫秒，`0` = 不节流）；对高频轮询/重复请求类页面可显著减少重复记录 |
 
 ---
 

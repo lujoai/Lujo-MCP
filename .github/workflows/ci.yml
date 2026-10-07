@@ -164,6 +164,8 @@ jobs:
       # sdk-minor-reuse.test.js，CI 与 npm test 文件清单保持一致。
       # W15 / P3-SDK-2: 补登记 sdk-endpoint-validation.test.js（endpoint 合法性
       # 校验），与 browser-sdk/package.json 的 test script 同清单。
+      # 工作单 C: 补登记 sdk-self-request-scope.test.js（_isSelfRequest 自排除
+      # 范围 + 方法匹配 + 真实 fetch/XHR hook 链路），两份清单保持一致。
       - name: Run SDK core contract tests
         run: >-
           node --test
@@ -176,6 +178,7 @@ jobs:
           browser-sdk/test/sdk-minor-reuse.test.js
           browser-sdk/test/sdk-rejection.test.js
           browser-sdk/test/sdk-endpoint-validation.test.js
+          browser-sdk/test/sdk-self-request-scope.test.js
 
       # npm 启动器（bin/cli.js）契约测试：参数拼装、平台二进制两种落盘布局解析、
       # 以及终止信号转发（本 job 为 Linux runner，SIGTERM 用例会真实执行；

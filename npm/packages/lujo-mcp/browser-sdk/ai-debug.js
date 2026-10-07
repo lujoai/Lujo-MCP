@@ -105,6 +105,15 @@
   // body 预览长度上限（约束 3 选项 A）
   var _NETWORK_BODY_PREVIEW = 512;
 
+  // ── SDK 自身上报路径常量（工作单 C）──
+  // 发送点（_refreshBeaconToken / _flushBatch / _drainPendingBatches）的 URL 拼接与
+  // _isSelfRequest 的排除集合共用同一来源，防止两处字符串漂移——此前 3+2 处字面量，
+  // 改一处漏一处即"排除失效→递归上报"或"漏排除→误杀业务采集"。
+  // SDK 自身全部上报固定 POST（_sendBatchXhr / _sendBatchXhrCompressed / _sendBatchSync
+  // / _refreshBeaconToken 均 open("POST",...)；sendBeacon 为 POST 语义且不经 fetch/XHR 钩子）。
+  var _INGEST_BATCH_PATH = "/ingest/batch";
+  var _AUTH_TOKEN_PATH = "/auth/beacon-token";
+
   // ── V2 批量上报状态 ──
   var _batchQueue = [];       // 批量事件队列：[{ path, payload }, ...]
   var _batchTimer = null;     // 定时 flush 定时器
@@ -330,7 +339,7 @@
   function _refreshBeaconToken() {
     if (!cfg.apiKey || !cfg.endpoint || _beaconTokenValid()) return;
     var xhr = new XMLHttpRequest();
-    var url = cfg.endpoint.replace(/\/+$/, "") + "/auth/beacon-token";
+    var url = cfg.endpoint.replace(/\/+$/, "") + _AUTH_TOKEN_PATH;
     xhr.open("POST", url, true);
     xhr.setRequestHeader("Content-Type", "application/json");
     xhr.setRequestHeader("X-API-Key", cfg.apiKey);
@@ -372,7 +381,7 @@
       _batchTimer = null;
     }
 
-    var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
+    var url = cfg.endpoint.replace(/\/+$/, "") + _INGEST_BATCH_PATH;
 
     // FIX: R7-G1 —— beacon（pagehide/unload）冲刷不看事件队列是否为空：
     // 节流暂存的 _pendingBatches 同样需要在卸载前同步冲刷，否则窗口满后
@@ -438,7 +447,7 @@
   function _drainPendingBatches() {
     _pendingTimer = null;
     if (_pendingBatches.length === 0) return;
-    var url = cfg.endpoint.replace(/\/+$/, "") + "/ingest/batch";
+    var url = cfg.endpoint.replace(/\/+$/, "") + _INGEST_BATCH_PATH;
     // FIX: R7-G1 —— 错发送也同步登记（此前由 _sendBatchDirect 内部登记）
     _batchTimestamps.push(Date.now());
     _sendBatchWithCompression(url, _pendingBatches.shift(), false);
@@ -858,22 +867,39 @@
     return !!parsed.host;
   }
 
-  function _isSelfRequest(url) {
+  // 自请求排除：只排除 SDK 自身真实生成的上报 URL。SDK 实际发出的 HTTP 路径
+  // 只有两类（与各发送点的拼接口径逐字一致，共用 _INGEST_BATCH_PATH / _AUTH_TOKEN_PATH）：
+  //   - {endpoint去尾斜杠}/ingest/batch
+  //     （_flushBatch / _drainPendingBatches / localStorage 恢复 / sendBeacon?token=
+  //      全部汇入此路径；/ingest/error、/ingest/network 等也经批量队列从这里出去）
+  //   - {endpoint去尾斜杠}/auth/beacon-token（_refreshBeaconToken）
+  // FIX(工作单 A)：旧实现"同 host 即排除"（endpoint 带路径时按路径前缀排除）过宽——
+  // 与 endpoint 同源的业务请求（demo 页 /api/debug/*、/mcp、同源 SPA API）被静默
+  // 排除采集。现收窄为：scheme/host 匹配且 pathname 恰为上述两条上报路径（精确相等，
+  // 非前缀——/lujo/ingest2、/lujoevil/ingest/batch 不误判；pathname 匹配大小写敏感，
+  // 按 URL 规范 host 比较大小写不敏感；query/hash 不参与匹配——sendBeacon 的
+  // ?token= 不影响判定）。base path 归一（去全部尾斜杠）与上报 URL 拼接处
+  // `cfg.endpoint.replace(/\/+$/, "")` 同口径。
+  // FIX(工作单 C)：SDK 自身两条上报路径固定 POST，判定增加可选 method 匹配——
+  // method 已知且非 POST 时（如业务方对 /ingest/batch 的 GET 健康检查/反代探活，
+  // 路径恰好撞车）不排除，fail-open 到采集侧。method 缺省（undefined/null/""）时
+  // 仅按路径判定，保持纯函数调用方（工作单 A 测试与宿主自检）兼容。
+  // 注意：这是防丢数据 + 防递归上报的正确性判定，不是安全边界（本判定只决定
+  // "是否跳过采集"）。SDK 自身 XHR 也经过自家已包装的 XHR 原型，两条上报路径
+  // 必须保持排除，否则批量上报会被再次采集形成递归。
+  function _isSelfRequest(url, method) {
     if (!cfg.endpoint) return false;
     var raw = String(url || "");
     if (!raw) return false;
-    // FIX(v0.7.0 Minor): 前缀匹配可被相似域名绕过——http://localhost:8000.evil.com
-    // 命中 http://localhost:8000 前缀 → 误判为自请求 → 上报数据被静默丢弃。
-    // 改为 URL 解析后比较 scheme/host；endpoint 带路径时要求路径前缀一致。
-    // 注意：这是防丢数据的正确性修复，不是安全边界（本判定只决定"是否跳过采集"）。
+    var m = (method === undefined || method === null) ? "" : String(method).trim().toUpperCase();
+    if (m && m !== "POST") return false;
     try {
       var parsed = new URL(raw, typeof location !== "undefined" ? location.href : undefined);
       var endpoint = new URL(cfg.endpoint);
       if (parsed.protocol !== endpoint.protocol || parsed.host !== endpoint.host) return false;
-      if (endpoint.pathname && endpoint.pathname !== "/") {
-        return parsed.pathname.indexOf(endpoint.pathname) === 0;
-      }
-      return true;
+      var base = endpoint.pathname.replace(/\/+$/, "");
+      return parsed.pathname === base + _INGEST_BATCH_PATH ||
+             parsed.pathname === base + _AUTH_TOKEN_PATH;
     } catch (e) {
       return false;
     }
@@ -1312,16 +1338,19 @@
           url = rawUrl.url || rawUrl.href || String(rawUrl);
         }
 
-        if (_isSelfRequest(url)) {
-          return _origFetch.apply(this, args);
-        }
-
         // FIX(v0.7.1-b7-1): fetch(new Request(url, {method:...})) 时 method 在
         // Request 对象（args[0]）内，第二个 init 参数 args[1] 为 undefined——此前
         // 只读 args[1].method 导致 method 恒误记 GET（POST 请求被记成 GET）。
+        // FIX(工作单 C): method 提取前移到自请求判定之前——SDK 两条上报路径固定
+        // POST，自排除按 (url, method) 判定：业务方对同路径的 GET 请求不得因
+        // 路径撞车被误排除（fetch 规范 method 缺省为 GET，与原提取逻辑口径一致）。
         var init = args[1] || {};
         var reqObj = (rawUrl && typeof rawUrl === "object") ? rawUrl : null;
         var method = (init.method || (reqObj && reqObj.method) || "GET");
+
+        if (_isSelfRequest(url, method)) {
+          return _origFetch.apply(this, args);
+        }
 
         if (!_shouldSampleNetwork()) {
           return _origFetch.apply(this, args);
@@ -1396,7 +1425,9 @@
       var args = arguments;
       this._aiDebugMethod = (args[0] || "GET").toUpperCase();
       this._aiDebugUrl = args[1] || "";
-      this._aiDebugSkip = _isSelfRequest(this._aiDebugUrl);
+      // FIX(工作单 C)：自排除带 method 判定（SDK 上报固定 POST；XHR open 的
+      // method 缺省 GET 与 fetch 同口径），路径撞车的非 POST 请求照常采集。
+      this._aiDebugSkip = _isSelfRequest(this._aiDebugUrl, this._aiDebugMethod);
       return _origXhrOpen.apply(this, args);
     };
 
