@@ -151,7 +151,7 @@ AiDebug.init({ endpoint: "http://127.0.0.1:8710" });
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `endpoint` | `""` | **必填**。服务端地址，如 `http://127.0.0.1:8710`（不含 `/ingest` 前缀）。必须是 `http://` / `https://` 开头的**绝对地址**：缺省或格式非法（如漏 scheme 的 `localhost:8710`）时 `init()` 拒绝初始化、只留一条 `console.warn`（不抛异常，避免打断宿主页面脚本），全部现场都不上报 |
+| `endpoint` | `""` | **必填**。Lujo HTTP 服务根地址，如 `http://127.0.0.1:8710`（不含 `/ingest` 前缀）。必须是 `http://` / `https://` 开头的**绝对地址**，**不得包含 query（`?`）或 fragment（`#`）**——endpoint 上的 `?`/`#` 会让固定上报路径拼到错误位置并导致自排除失效。反代子路径（`http://host:port/lujo`）、尾斜杠、路径中的编码字符（`%3F`/`%23`）均合法。缺省或格式非法（如漏 scheme 的 `localhost:8710`、带 `?api_key=…` 的 `http://host?x=1`）时 `init()` 拒绝初始化、只留一条 `console.warn`（不抛异常，避免打断宿主页面脚本），全部现场都不上报 |
 | `apiKey` | `""` | API Key（优先走请求头；`sendBeacon` 场景自动换 beacon 短时令牌）。⚠️ **警告**：写在浏览器代码中会泄露给页面访问者，严禁填入高权限服务端密钥，本地开发推荐留空免 key |
 | `captureErrors` | `true` | 全局异常捕获 |
 | `captureNetwork` | `true` | 网络请求捕获 |
@@ -240,6 +240,7 @@ SDK 通过 monkey-patch 拦截浏览器网络请求，**两者同源捕获**（V
 - **XMLHttpRequest**：拦截 `open` / `send`，记录 method / url / request body / response body / status / duration。
 - **fetch**：包装全局 `fetch`，同样捕获上述信息。
 - **自排除**：仅排除 SDK 自身真实生成的两类上报 URL——`{endpoint}/ingest/batch` 与 `{endpoint}/auth/beacon-token`，且仅 **POST** 形态（SDK 自身全部上报固定 POST；业务方对同一路径的 GET 等请求不会被误排除）。endpoint 带子路径时按其归一化后的 base path 精确拼接；`?token=` 等 query 不影响判定；路径匹配大小写敏感。同源部署页面（如与 Lujo 同域反代）的业务请求**不会被**整域排除，照常采集（`_isSelfRequest`）。
+  - **注意**：`/ingest/batch` 和 `/auth/beacon-token` 是 Lujo 保留的 POST 上报路径。当前自排除判定依据路径和方法，不能区分业务方对同一路径发出的 POST——因此使用与 endpoint 相同 origin/base path、且路径和 POST 方法都撞车的业务请求也会被跳过采集。如果业务 API 路径与此两条冲突，建议调整 endpoint 的 base path 或业务路由以避免。
 - **请求体序列化**：自动安全处理 `FormData` / `Blob` / `URLSearchParams` / 普通 JSON 等多种类型。
 - **响应/请求体脱敏**：在存储/上报前统一递归脱敏。
 

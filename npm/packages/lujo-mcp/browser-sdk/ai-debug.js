@@ -855,6 +855,15 @@
   // protocol="localhost:"（scheme 可为任意字母），所以必须校验协议而不只是"能否解析"。
   // Node SDK 对同一输入抛 TypeError；浏览器 SDK 注入宿主页面，抛异常会打断宿主
   // 脚本，因此这里只做判定，由 init 走"告警 + 拒绝初始化"的失败安全路径。
+  //
+  // query/fragment 收口：endpoint 是 Lujo HTTP 服务根地址，发送 URL 拼接方式为
+  // `cfg.endpoint.replace(/\/+$/, "") + _INGEST_BATCH_PATH`。如果 endpoint 自身带
+  // `?` 或 `#`，上报路径会拼到 query/fragment 位置而非 pathname——不仅投递地址错误，
+  // _isSelfRequest 的 pathname 精确匹配也会失败（SDK 自身 POST 被再次采集形成递归）。
+  // 关键：`new URL('http://h/p?')` 和 `new URL('http://h/p#')` 解析后 search/hash
+  // 均为空字符串——URL 构造器丢弃空的 ?/#。因此必须检查**原始字符串**中的 ?/#，
+  // 不能依赖 URL.search/URL.hash。编码字符 %3F/%23 在路径中合法——它们不是裸 ?/#，
+  // 不会被 indexOf 匹配。
   function _isEndpointUsable(value) {
     if (typeof value !== "string" || !value) return false;
     var parsed;
@@ -864,7 +873,11 @@
       return false;
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    return !!parsed.host;
+    if (!parsed.host) return false;
+    // 检查原始字符串是否含 ? 或 #（覆盖非空和空两种情况）。
+    // URL 构造器丢弃空的 ?/#，所以 parsed.search/parsed.hash 不可靠。
+    if (value.indexOf("?") !== -1 || value.indexOf("#") !== -1) return false;
+    return true;
   }
 
   // 自请求排除：只排除 SDK 自身真实生成的上报 URL。SDK 实际发出的 HTTP 路径
