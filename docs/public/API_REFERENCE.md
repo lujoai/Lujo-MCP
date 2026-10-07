@@ -249,7 +249,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 #### `diagnose_issue` 参数语义与推荐回退顺序
 
 - **`diagnose_issue({})`**：不传任何参数 = 枚举**时间窗内**（`since_minutes` 默认 30 分钟，`0` = 不限）的故障现场：单一故障直接返回完整调试上下文（同类错误重复出现时返回最新一次）；存在**多个不同故障**时返回歧义候选列表（`ambiguity_detected`，最多展示 3 条、按最近发生倒序），用候选中的 `request_id` 再次调用即可精确选中目标现场。成功请求（2xx/3xx）与健康遥测不会制造伪歧义。
-- **`diagnose_issue({"query": "..."})`**：按关键词过滤近期错误，匹配范围是错误的 **`type` / `message` 字段**。query 是关键词过滤，**不是**自然语言全字段检索，也不保证匹配 selector、trace 元数据（如 trace_kind、extra）或其他上下文字段。多命中时同样返回歧义候选。
+- **`diagnose_issue({"query": "..."})`**：按关键词过滤近期错误，匹配范围是错误的 **`type` / `message` 字段**；仅有 console error 信号（无异常实体）的现场额外按其合格 console error 条目的 `message` 文本匹配（大小写不敏感的包含匹配）。query 是关键词过滤，**不是**自然语言全字段检索，也不保证匹配 selector、trace 元数据（如 trace_kind、extra）或其他上下文字段。多命中时同样返回歧义候选。
 - **`diagnose_issue({"request_id": "..."})`**：支持 ID 归属自动解析——`error_id` 精确直查；浏览器 SDK 的 caller trace ID 唯一关联时自动解析回对应错误现场，一对多关联时返回候选；网络记录 `record_id` 定位到归属存储桶（响应以 `granularity: "bucket"` 明示整桶粒度，不代表精确定位桶内单条事件）。候选中含不可信内容的外部上报标识以 `b64.` 前缀的可逆引用呈现，**原样回传该引用即可确定性还原原现场**。
 - **query 未命中不等于 Lujo 没有现场**——可能只是关键词没出现在 type/message 里，或错误超出 `since_minutes`（默认 30 分钟）时间窗。
 

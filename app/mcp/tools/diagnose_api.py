@@ -465,7 +465,8 @@ def _scene_candidate(request_id: str, exc_type, frames, last_seen) -> dict:
 
 
 def _bucket_fault_signal(
-    entries: list, cutoff: float = 0.0, session_id: str | None = None
+    entries: list, cutoff: float = 0.0, session_id: str | None = None,
+    keyword: str = "",
 ) -> dict | None:
     """桶级故障信号（桶内无异常实体时）：network 失败 / console error。
 
@@ -474,8 +475,17 @@ def _bucket_fault_signal(
     取时间窗内最新一条合格信号；method/path/status 逐一做白名单形态
     校验，非法字段整字段丢弃。指定 session_id 时按记录自身归属过滤
     （缺失/畸形归属对该查询不可见，与其他会话过滤口径一致）。
+
+    keyword 非空时（query 模式）：console_error 信号额外对桶内合格条目
+    （与本函数故障判定同一循环、同一过滤口径）的 message 做小写包含
+    匹配（kw in message.lower()，与 error 实体匹配口径一致），命中任一
+    条即在返回信号上标注 message_match=True，供调用方在 summary/kind
+    均未命中时保留候选；network 信号不参与 message 匹配。message 已在
+    存储边界脱敏，匹配仅作布尔判定，不回显任何内容。
     """
+    kw = (keyword or "").strip().lower()
     best: dict | None = None
+    console_message_match = False
     for entry in entries:
         step, data = entry.get("step"), entry.get("data")
         if not isinstance(data, dict):
@@ -507,6 +517,8 @@ def _bucket_fault_signal(
                     ]) or "network_failure",
                 }
         elif step == "console" and data.get("level") == "error":
+            if kw and kw in str(data.get("message") or "").lower():
+                console_message_match = True
             signal = {
                 "kind": "console_error",
                 "summary": _short_summary(["console error"]),
@@ -514,6 +526,8 @@ def _bucket_fault_signal(
         if signal is not None and (best is None or ts > best["last_seen"]):
             signal["last_seen"] = ts
             best = signal
+    if best is not None and best["kind"] == "console_error" and console_message_match:
+        best["message_match"] = True
     return best
 
 
@@ -530,8 +544,9 @@ def _enumerate_fault_candidates(
       其他会话的桶既不进候选，其数量也不影响完整性；无会话查询可见全部桶；
     - 健康遥测（2xx/3xx、无错误标记、普通日志）不进入候选；
     - 完整性 = 全量桶枚举未达安全上限 且 无读取失败；keyword 只过滤
-      命中集（匹配字段与 search_logs 同口径：type / message），枚举本身
-      始终全量，因此过滤不改变完整性判断。
+      命中集（匹配字段与 search_logs 同口径：type / message；桶级
+      console 信号额外按合格条目的 message 文本匹配，见
+      _bucket_fault_signal），枚举本身始终全量，因此过滤不改变完整性判断。
 
     返回 (候选列表[按 last_seen 倒序、时间同按 ID 稳定排序], candidate_set_complete)。
     """
@@ -608,10 +623,11 @@ def _enumerate_fault_candidates(
                     if caller:
                         scene_alias_ids.add(caller)
         else:
-            signal = _bucket_fault_signal(entries, cutoff, session_id)
+            signal = _bucket_fault_signal(entries, cutoff, session_id, kw)
             if signal:
                 if kw and kw not in signal["summary"].lower() \
-                        and kw not in signal["kind"]:
+                        and kw not in signal["kind"] \
+                        and not signal.get("message_match"):
                     continue
                 deferred_signals[bucket_id] = {
                     "request_id": bucket_id,
