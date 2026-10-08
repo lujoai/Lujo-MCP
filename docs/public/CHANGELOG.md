@@ -9,8 +9,6 @@
 
 ## [1.0.2] - 2026-10-08
 
-> **候选版本，等待 CI 与正式发布。** 当前线上已发布版仍为 v1.0.1（npm `latest` 与 GitHub Release）；本段记录本地 1.0.2 候选，不代表已发布。
-
 ### Fixed
 
 - **`diagnose_issue` 桶级 console 关键词匹配**：无异常实体时，`query` 也会在既有时间窗与会话过滤范围内，对合格 console-error 条目的 `message` 做不区分大小写的包含匹配。匹配只参与桶候选筛选；若桶的最新合格故障信号是 network failure，较早 console 命中不会单独保留该桶。
