@@ -555,7 +555,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `IDE_SCHEME` | vscode | ✅ 已支持（可点击链接） |
 | | `WHITELIST_PATH_PREFIX` | 空（=收敛到 CWD） | ✅ 已修复（SEC-01）；空值时默认收敛到进程 CWD 防目录穿越 |
 | 提示词 | `PROMPT_TEMPLATE_PATH` | 内置 | ✅ FR12（自定义模板文件路径，支持 `$context` / `$request_id` 占位符；为空或缺失回退内置） |
-| 前端验证 | `PLAYWRIGHT_ENABLED` | false | ✅ FR14 ui_runner（可选依赖） |
+| 前端验证 | 无独立开关；可选依赖 `playwright`（安装即启用） | — | ✅ FR14 ui_runner（未安装或无浏览器时明确降级报错） |
 | 异步分析队列 | `LLM_ASYNC_ANALYSIS_ENABLED` | false | ✅ FR16 |
 | | `LLM_QUEUE_MAXSIZE` | 100 | ✅ FR16 |
 | | `LLM_QUEUE_WORKERS` | 4 | ✅ FR16 |
@@ -705,7 +705,7 @@ M2 贡献最大（+0.10），因为知识库命中同时提升完整度和可信
 | 规范质量 | 静默失败强依赖规范准确性 | 提供模板；支持 OpenAPI 自动生成规范草稿 |
 | 前端自动化 | Playwright 对 Canvas/SPA 兼容有限 | 先覆盖标准 DOM；支持外部 E2E 结果导入 |
 | 厂商锁定 | ~~仅 OpenAI~~ | 多 LLM provider 已支持（openai/zhipu/deepseek/custom）|
-| ~~待确认~~ | ~~是否默认开启前端自动化~~ | `PLAYWRIGHT_ENABLED` 可选依赖，未安装不影响 |
+| ~~待确认~~ | ~~是否默认开启前端自动化~~ | 可选依赖 `playwright`，未安装不影响（无独立开关） |
 
 ---
 
