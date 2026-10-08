@@ -313,7 +313,7 @@
   1. 多 Key 恒定时间比较：`verify_api_key` 遍历所有 key **不短路**，统一用 `hmac.compare_digest` 防时序侧信道。
   2. 角色分级：`admin > developer > viewer`；`rbac_enabled=False` 时全 admin（向后兼容）；未命中映射默认 viewer（fail-closed）。
   3. 零签名变更：`AuthMiddleware` 公共签名未变（仅 `__init__` / `dispatch` 体内调 key_rotation / rbac），`setup_middleware(app)` 签名未变，`ingest.py` 完全无鉴权改动。
-  4. FastAPI 依赖：`require_role(*allowed_roles)` 工厂，挂载**全部 33 条 REST 路由**（`debug.py` 14 + `ingest.py` 7 + `dashboard.py` 7 + `spec.py` 5）通过 `dependencies=[Depends(require_role(...))]` 加角色门控；MCP HTTP 传输层在 `tools/call` 分发前通过 `TOOL_ROLE_REQUIREMENTS` 字典做工具级角色门控。
+  4. FastAPI 依赖：`require_role(*allowed_roles)` 工厂，挂载**全部 39 条 REST 路由**（`debug.py` 16 + `ingest.py` 7 + `dashboard.py` 10 + `spec.py` 5 + `auth.py` 1）通过 `dependencies=[Depends(require_role(...))]` 加角色门控；MCP HTTP 传输层在 `tools/call` 分发前通过 `TOOL_ROLE_REQUIREMENTS` 字典做工具级角色门控。
 - **配置项**：`api_keys`（逗号分隔多 key）/ `api_key_rotation_enabled` / `rbac_enabled` / `rbac_role_mapping`（如 `key1:admin,key2:viewer`）。
 - **验收**：旧单 key 配置无需改动即可工作（向后兼容）；多 key 中任一失效 key 仍被恒定时间比较；未授权角色访问受限路由返回 403。
 
@@ -358,8 +358,8 @@
   1. `DashboardEventBus`（`app/api/dashboard_events.py`）：无 session 门槛的进程内广播总线，`subscribe()` 返回 `asyncio.Queue(maxsize=256)`；`publish()` 用 `loop.call_soon_threadsafe` 跨线程投递（兼容同步写入路径调用）；队列满时丢旧保最新（`get_nowait` + `put_nowait`）；`close_all()` 广播终止事件实现优雅停机。
   2. `GET /api/dashboard/stream` SSE 端点（`dashboard.py`）：订阅总线 → `StreamingResponse(media_type="text/event-stream")`；15s 心跳（`: ping\n\n`）保活代理连接；收到 close 事件终止迭代；`finally` 块 `unsubscribe` 防泄漏；`Cache-Control: no-cache` + `X-Accel-Buffering: no` 禁用缓冲。
   3. `invalidate_cache` 钩子（`dashboard.py`）：缓存失效时调用 `broadcast_dashboard_event({"type":"dashboard_changed","source":...,"ts":...})`；广播失败 `try/except` 静默降级（不阻断主写入链路，与 Redis L2 清除失败降级行为一致）。
-  4. 前端 EventSource（`dashboard.html`）：`new EventSource('/api/dashboard/stream?api_key=...')`；`onmessage` 触发去抖 refresh（500ms 合并多次事件）；`onerror` 关闭后 5s 自动重连；与现有 10s `setInterval(refresh, 10000)` 并存，轮询作兜底。
-  5. 鉴权：复用 `AuthMiddleware` 的 `?api_key=` query 参数降级（EventSource 无法设置自定义 header）；`require_role("admin","developer","viewer")` 依赖门控。
+  4. 前端 EventSource（`dashboard.html`）：先以 header 调用 `POST /auth/beacon-token` 换取短时令牌，再 `new EventSource('/api/dashboard/stream?token=...')`；`onmessage` 触发去抖 refresh（500ms 合并多次事件）；`onerror` 关闭后 5s 自动重连；与现有 10s `setInterval(refresh, 10000)` 并存，轮询作兜底。
+  5. 鉴权：EventSource 无法设置自定义 header，先用 header 换取短时 beacon 令牌，再以 `?token=` 携带（短 TTL + 作用域限定）；`require_role("admin","developer","viewer")` 依赖门控。
 - **配置项**：`dashboard_sse_enabled: bool = False`（默认关闭，关闭时 `dashboard_stream` 返回 503、`broadcast_dashboard_event` 为 no-op，零开销向后兼容）。
 - **降级矩阵**：
   - `dashboard_sse_enabled=False`：`/stream` 返回 503；`invalidate_cache` 广播钩子为 no-op；前端 EventSource 连接失败后回落到纯轮询。
@@ -555,9 +555,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `IDE_SCHEME` | vscode | ✅ 已支持（可点击链接） |
 | | `WHITELIST_PATH_PREFIX` | 空（=收敛到 CWD） | ✅ 已修复（SEC-01）；空值时默认收敛到进程 CWD 防目录穿越 |
 | 提示词 | `PROMPT_TEMPLATE_PATH` | 内置 | ✅ FR12（自定义模板文件路径，支持 `$context` / `$request_id` 占位符；为空或缺失回退内置） |
-| 规范 | `SPEC_BACKEND` | memory | ✅ FR15 spec_store |
 | 前端验证 | `PLAYWRIGHT_ENABLED` | false | ✅ FR14 ui_runner（可选依赖） |
-| 安全 | `WHITELIST_PATH_PREFIX` | 空 | ✅ FR11 增强 |
 | 异步分析队列 | `LLM_ASYNC_ANALYSIS_ENABLED` | false | ✅ FR16 |
 | | `LLM_QUEUE_MAXSIZE` | 100 | ✅ FR16 |
 | | `LLM_QUEUE_WORKERS` | 4 | ✅ FR16 |

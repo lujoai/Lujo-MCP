@@ -102,11 +102,24 @@ python3.12 -m venv .venv
 
 ### 环境预检查
 
-首次开发前，运行预检查脚本确认环境就绪：
+首次开发前，运行 MCP 接入冒烟脚本确认环境就绪（启动 → `initialize` 握手 → `tools/list` 枚举 → 调用一个无害工具 → 退出）：
 
 ```bash
-.venv\Scripts\python.exe scripts/preflight_check.py  # Windows
-.venv/bin/python scripts/preflight_check.py  # macOS / Linux
+# Windows
+.venv\Scripts\python.exe scripts/mcp_smoke_test.py
+
+# macOS / Linux
+.venv/bin/python scripts/mcp_smoke_test.py
+```
+
+也可运行文档链接检查，确认 Markdown 链接有效：
+
+```bash
+# Windows
+.venv\Scripts\python.exe scripts/check_doc_links.py
+
+# macOS / Linux
+.venv/bin/python scripts/check_doc_links.py
 ```
 
 ## Pull Request 流程

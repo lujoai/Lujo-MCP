@@ -202,7 +202,7 @@ flowchart TB
 | `get_blame_for_frame` / `get_recent_diff` | Git 代码追溯 | `git_api.py` |
 | `ingest_silent_failure` | 静默失败检测 | `silent_failure_api.py` |
 | `ingest_error` | 错误上报 | `ingest_api.py` |
-| `ingest_console` | 控制台日志采集 | `ingest_api.py` |
+| `ingest_console` | 控制台日志采集 | `console_api.py` |
 | `get_related_specs` | 相关规范查询 | `spec_api.py` |
 | `verify` | 规范断言验证 | `verify_api.py` |
 | `verify_ui` | 前端 UI 验证 | `verify_ui_api.py` |
@@ -523,13 +523,13 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 - `/metrics`：独立鉴权 toggle（SEC-08）。
 - 密钥：`.env` 不入库，提供 `.env.example` + `.gitignore`。
 - 路径安全：`file://`/`vscode://` 仅限 `WHITELIST_PATH_PREFIX`，白名单为空时默认收敛 CWD，防目录穿越。
-- RBAC 角色分级：三级 `admin > developer > viewer`；`require_role(*roles)` FastAPI 依赖工厂已挂载**全部 33 条 REST 路由**（`debug.py` 14 + `ingest.py` 7 + `dashboard.py` 7 + `spec.py` 5）及 MCP `tools/call` 分发；未命中映射默认 viewer（fail-closed）。
+- RBAC 角色分级：三级 `admin > developer > viewer`；`require_role(*roles)` FastAPI 依赖工厂已挂载**全部 39 条 REST 路由**（`debug.py` 16 + `ingest.py` 7 + `dashboard.py` 10 + `spec.py` 5 + `auth.py` 1）及 MCP `tools/call` 分发；未命中映射默认 viewer（fail-closed）。
 
 ### 9.1 RBAC 权限矩阵 ✅
 
-**覆盖范围**：以下矩阵覆盖全部已挂载 `require_role` 的 33 条 REST 路由 + 23 个 MCP 工具角色映射。
+**覆盖范围**：以下矩阵覆盖全部已挂载 `require_role` 的 39 条 REST 路由 + 23 个 MCP 工具角色映射。
 
-**REST API（`debug.py` 14 条路由，全部挂载 `require_role`）**：
+**REST API（`debug.py` 16 条路由，全部挂载 `require_role`）**：
 
 | 端点 | admin | developer | viewer | 实现 |
 | --- | --- | --- | --- | --- |
@@ -545,8 +545,10 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `POST /api/debug/verify` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 | `POST /api/debug/verify/ui` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 | `GET /api/debug/health` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `POST /api/debug/sourcemap` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 | `POST /api/debug/echo`（诊断，默认关闭） | ✅ | ❌ | ❌ | `require_role("admin")` |
 | `GET /api/debug/token`（诊断，默认关闭） | ✅ | ❌ | ❌ | `require_role("admin")` |
+| `GET /api/debug/prompt` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 
 **`ingest.py`（7 条路由，全部挂载 `require_role`）**：
 
@@ -560,14 +562,17 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `POST /ingest/ui-event` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 | `POST /ingest/batch` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 
-**`dashboard.py`（7 条路由，全部挂载 `require_role`）**：
+**`dashboard.py`（10 条路由，全部挂载 `require_role`）**：
 
 | 端点 | admin | developer | viewer | 实现 |
 | --- | --- | --- | --- | --- |
+| `GET /api/dashboard/kb-stats` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `GET /api/dashboard/stats` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `GET /api/dashboard/traces` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `GET /api/dashboard/trace/{trace_id}` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/trace/{trace_id}/quality` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `GET /api/dashboard/specs` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
+| `GET /api/dashboard/stream` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `GET /api/dashboard/errors/aggregated` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `GET /api/dashboard/errors/ranked` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `GET /api/dashboard/errors/history` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
@@ -581,6 +586,12 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `GET /api/spec/{spec_id}` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 | `PATCH /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 | `DELETE /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
+
+**`auth.py`（1 条路由，挂载 `require_role`）**：
+
+| 端点 | admin | developer | viewer | 实现 |
+| --- | --- | --- | --- | --- |
+| `POST /auth/beacon-token` | ✅ | ✅ | ✅ | `require_role("admin","developer","viewer")` |
 
 **MCP 工具（23 个，`TOOL_ROLE_REQUIREMENTS` 字典门控）**：
 
@@ -598,7 +609,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `verify` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `verify_ui` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `auto_test` | ✅ | ✅ | ❌ | `("admin","developer")` |
-| `repair_async` | ✅ | ✅ | ❌ | `("admin","developer")`；`agent_enabled=False` 时返回 501 |
+| `repair_async` | ✅ | ✅ | ❌ | `("admin","developer")`；`agent_enabled=False` 时 REST `POST /api/debug/repair/async` 返回 HTTP 501，MCP 工具调用返回 `{"error":"agent disabled"}` |
 | `context` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
 | `trace` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
 | `stacktrace` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
@@ -814,7 +825,7 @@ sequenceDiagram
 
 | 入口 | 起点 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| **HTTP** | `app/main.py:98` FastAPI app | 依 `AuthMiddleware`（默认关闭，见 SEC-03） | 中间件真实顺序：`Trace→SecurityHeaders→RateLimit→MaxBodySize→Auth→CORS→NetworkCapture→路由`（订正见 §3.2） |
+| **HTTP** | `app/main.py:98` FastAPI app | 依 `AuthMiddleware`（默认关闭，见 SEC-03） | 中间件真实顺序：`CORS→Trace→SecurityHeaders→RateLimit→MaxBodySize→Auth→NetworkCapture→路由`（订正见 §3.2） |
 | **stdio** | `app/mcp_server.py:172`（`python -m app.mcp_server`） | **无中间件、无鉴权** | 依赖“本地子进程 + 进程隔离”；每个 MCP 客户端各自拉起独立进程 |
 
 ### 13.2 核心数据流路径（节点级 I/O）
@@ -2135,7 +2146,7 @@ sequenceDiagram
 | 降低运维观测延迟 | trace/error 写入 → `invalidate_cache` → 广播 → 前端去抖刷新（~500ms），替代最长 10s 轮询等待 |
 | 零侵入主写入链路 | 广播钩子挂在 `invalidate_cache` 内，`try/except` 静默降级，广播失败不影响 trace/error 落库 |
 | 向后兼容 | `dashboard_sse_enabled=False` 默认关闭，关闭时端点返回 503、广播为 no-op，行为与旧版完全一致 |
-| 复用现有鉴权 | EventSource 无法设置自定义 header，复用 `AuthMiddleware` 的 `?api_key=` query 参数降级 |
+| 复用现有鉴权 | EventSource 无法设置自定义 header，先以 header 换取短时 beacon 令牌，再以 `?token=` 携带（短 TTL + 作用域限定） |
 
 ### 18.2 模块结构
 
@@ -2223,7 +2234,7 @@ async def dashboard_stream(request: Request):
 1. **15s 心跳**：`asyncio.wait_for(q.get(), timeout=15.0)` 超时后 yield `: ping\n\n`（SSE 注释行，客户端忽略但保活连接），防止代理/浏览器因空闲超时断连。
 2. **`finally` unsubscribe**：无论正常终止、客户端断开还是异常，都从总线注销队列，防泄漏。
 3. **响应头**：`Cache-Control: no-cache` + `X-Accel-Buffering: no` 确保 Nginx/浏览器不缓冲 SSE 流。
-4. **鉴权**：`require_role("admin","developer","viewer")` 依赖门控 + `?api_key=` query 降级（EventSource 无法设自定义 header）。
+4. **鉴权**：`require_role("admin","developer","viewer")` 依赖门控；EventSource 无法设自定义 header，先经 `POST /auth/beacon-token` 换取短时令牌再以 `?token=` 携带（短 TTL + 作用域限定）。
 
 ### 18.5 invalidate_cache 广播钩子
 
@@ -2251,10 +2262,26 @@ function scheduleRefresh() {                    // 去抖：500ms 内多次事�
 function initSSE() {
     try {
         const apiKey = new URLSearchParams(location.search).get('api_key') || '';
-        const url = '/api/dashboard/stream' + (apiKey ? ('?api_key=' + encodeURIComponent(apiKey)) : '');
-        const es = new EventSource(url);
-        es.onmessage = scheduleRefresh;
-        es.onerror = () => { try { es.close(); } catch (e) {} setTimeout(initSSE, 5000); };
+        const doConnect = (token) => {
+            const url = '/api/dashboard/stream' + (token ? ('?token=' + encodeURIComponent(token)) : '');
+            const es = new EventSource(url);
+            es.onmessage = scheduleRefresh;
+            es.onerror = () => { try { es.close(); } catch (e) {} setTimeout(initSSE, 5000); };
+        };
+        if (apiKey) {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/auth/beacon-token', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('X-API-Key', apiKey);
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState !== 4) return;
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try { doConnect(JSON.parse(xhr.responseText).token); } catch (e) { doConnect(''); }
+                } else { doConnect(''); }
+            };
+            xhr.onerror = () => doConnect('');
+            xhr.send('{}');
+        } else { doConnect(''); }
     } catch (e) { console.error('SSE init failed', e); }
 }
 refresh(); setInterval(refresh, 10000); initSSE();   // 轮询兜底 + SSE 叠加

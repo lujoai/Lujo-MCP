@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 项目文档 / Project Documentation
-    url: https://github.com/your-username/Lujo-MCP#readme
+    url: https://github.com/lujoai/Lujo-MCP#readme
     about: 在提交 Issue 前，请先查看项目文档
   - name: 讨论区 / Discussions
-    url: https://github.com/your-username/Lujo-MCP/discussions
+    url: https://github.com/lujoai/Lujo-MCP/discussions
     about: 如有疑问或建议，欢迎在讨论区交流

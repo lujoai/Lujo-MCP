@@ -574,16 +574,13 @@ curl -X POST http://localhost:8710/mcp \
 **解决方案 / Solution**:
 ```bash
 # 方式 1: Bearer Token
-curl -H "Authorization: Bearer <API_KEY>" http://localhost:8710/health
+curl -H "Authorization: Bearer <API_KEY>" http://localhost:8710/api/dashboard/traces
 
 # 方式 2: X-API-Key Header
-curl -H "X-API-Key: <API_KEY>" http://localhost:8710/health
-
-# 方式 3: Query Parameter
-curl "http://localhost:8710/health?api_key=<API_KEY>"
+curl -H "X-API-Key: <API_KEY>" http://localhost:8710/api/dashboard/traces
 ```
 
-**注意**: `/` 和 `/health` 端点不需要鉴权。
+**注意**: 鉴权仅通过 `Authorization: Bearer` 或 `X-API-Key` 请求头传递，**不支持** `?api_key=` 查询参数。`/` 和 `/health` 端点公开免鉴权，不能用于验证鉴权是否生效；`sendBeacon` / `EventSource` 等无法设置 header 的场景改用短时 `?token=` 令牌（先经 `POST /auth/beacon-token` 换取）。
 
 **验证 / Verify**: 携带正确 API_KEY 的请求返回 200
 

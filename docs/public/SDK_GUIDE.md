@@ -192,7 +192,7 @@ AiDebug.init({ endpoint: "http://127.0.0.1:8710" });
 | 方法 | 说明 |
 |------|------|
 | `init(options)` | 初始化（自动安装采集钩子） |
-| `destroy()` | 销毁实例：摘除全部监听器、还原被包装的全局 API（onerror/fetch/XHR/console）、停止全部定时器并清空队列/去重表（幂等，可重新 init）。页面卸载 / HMR 热更新场景建议显式调用。**已知限制**：destroy 只能还原到「SDK 安装前」的状态——若第三方脚本在 SDK 之后又包装了 fetch/XHR/console，SDK 无法感知与还原它们的包装（与业界 destroy 语义一致）；对包装顺序有要求的集成方请自行保存/恢复原始引用 |
+| `destroy(opts?)` | 销毁实例（可选参数 `opts.flush`，默认 `true`；置 `false` 时跳过销毁前最后一次 flush）：摘除全部监听器、还原被包装的全局 API（onerror/fetch/XHR/console）、停止全部定时器并清空队列/去重表（幂等，可重新 init）。页面卸载 / HMR 热更新场景建议显式调用。**已知限制**：destroy 只能还原到「SDK 安装前」的状态——若第三方脚本在 SDK 之后又包装了 fetch/XHR/console，SDK 无法感知与还原它们的包装（与业界 destroy 语义一致）；对包装顺序有要求的集成方请自行保存/恢复原始引用 |
 | `flush()` | 手动立即 flush 批量队列 |
 | `reportError(error, extra?)` | 手动上报异常（自动带堆栈解析） |
 | `reportNetworkError(error)` | 手动上报网络错误，自动附最近 UI/network 上下文 |

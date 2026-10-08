@@ -73,7 +73,7 @@ Browser SDK 捕获三类现场数据
 
 ### 第 5 步：AI Agent 分析原因
 
-宿主 AI（Claude / Cursor / Trae）调用 MCP 工具 `context`，拿到上面的真实运行现场后，直接定位：
+宿主 AI（Claude / Cursor / Trae）调用 MCP 工具 `diagnose_issue`（无需参数，自动定位最近一次错误的运行现场），拿到真实现场后直接定位：
 
 > **根因推断**：`POST /api/auth/login` 网络请求失败（status 0，连接中断），且登录处理函数在访问 `res.token` 时抛 `TypeError`——很可能是后端未返回或前端未处理 `token` 字段，导致点击后静默无响应。
 
@@ -99,7 +99,7 @@ AI 不再需要你手动翻日志、拼提示词，就能给出基于**真实运
 2. 打开网络捕获 Demo：`http://localhost:8710/demo`
 3. 点击页面测试按钮，制造一次网络错误 / 静默失败
 4. 打开 Dashboard：`http://localhost:8710/dashboard` 查看追踪记录与 AI 分析
-5. 在 MCP 客户端（Claude / Cursor / Trae）中调用 `context`，体验 AI 拿到真实运行现场
+5. 在 MCP 客户端（Claude / Cursor / Trae）中调用 `diagnose_issue`（无需参数），体验 AI 拿到真实运行现场
 
 > 详细操作见 [Demo 演示流程](../../README.md) 与 下方「演示指南」。
 
@@ -178,8 +178,8 @@ python -m app.main
 #### 验证服务启动
 
 ```bash
-curl http://localhost:8710/
-# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"1.0.1"}
+curl http://localhost:8710/health
+# 预期输出：{"status":"ok"}（LLM Key 与存储均正常；否则为 degraded/unhealthy，HTTP 仍 200）
 ```
 
 ### 二、验证 Browser SDK

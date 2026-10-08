@@ -8,21 +8,25 @@ interceptors.
 ```js
 const { createClient } = require("@lujoai/lujo-mcp-node-sdk");
 
-const client = createClient({
-  endpoint: "http://127.0.0.1:8710",
-  apiKey: process.env.LUJO_MCP_API_KEY,
-  release: "orders-service@1.4.0",
-});
+async function main() {
+  const client = createClient({
+    endpoint: "http://127.0.0.1:8710",
+    apiKey: process.env.LUJO_MCP_API_KEY,
+    release: "orders-service@1.4.0",
+  });
 
-client.reportError(new Error("database unavailable"), { operation: "read" });
-client.reportNetworkError({
-  method: "GET",
-  url: "https://example.test/orders",
-  status_code: 503,
-});
+  client.reportError(new Error("database unavailable"), { operation: "read" });
+  client.reportNetworkError({
+    method: "GET",
+    url: "https://example.test/orders",
+    status_code: 503,
+  });
 
-await client.flush();
-await client.close();
+  await client.flush();
+  await client.close();
+}
+
+main();
 ```
 
 The client sends `/ingest/batch` events with `source: "node-sdk"` by default.

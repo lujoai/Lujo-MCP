@@ -115,7 +115,7 @@ pip check
 |---|---|---|
 | fastapi | >= 0.115.0 | `pip show fastapi` |
 | uvicorn | >= 0.49.0 | `pip show uvicorn` |
-| mcp | >= 1.0.0 | `pip show mcp` |
+| mcp | >= 1.29.0,<2.0.0 | `pip show mcp` |
 | pydantic-settings | >= 2.0.0 | `pip show pydantic-settings` |
 | httpx | >= 0.27.0 | `pip show httpx` |
 
@@ -360,13 +360,14 @@ python -m pytest tests/integration/test_redis_cache_integration.py -q
 - [ ] **[必选]** 生产环境 API_KEY 已设置
 
 ```bash
-# 验证方式: 启动服务后发送带鉴权的请求
-curl -H "Authorization: Bearer <API_KEY>" http://localhost:8710/health
+# 验证方式: 启动服务后向一个受保护端点发送带鉴权的请求
+# 注意: /health 是公开免鉴权路径，不能用于验证鉴权是否生效
+curl -H "Authorization: Bearer <API_KEY>" http://localhost:8710/api/dashboard/traces
 
 # 判定标准 / Pass Criteria: 返回 HTTP 200
-# 不带 API_KEY 的请求应返回 HTTP 401/403
-curl http://localhost:8710/health
-# 判定标准 / Pass Criteria: 返回 HTTP 401 或 403
+# 不带 API_KEY 的请求应返回 HTTP 401
+curl http://localhost:8710/api/dashboard/traces
+# 判定标准 / Pass Criteria: 返回 HTTP 401
 ```
 
 ### 6.2 绑定地址安全
@@ -638,7 +639,7 @@ curl -X POST http://localhost:8710/mcp \
 - [ ] **[可选]** Dashboard SSE 端点可访问
 
 ```bash
-curl -N -H "Authorization: Bearer <API_KEY>" "http://localhost:8710/api/dashboard/stream?api_key=<API_KEY>"
+curl -N -H "Authorization: Bearer <API_KEY>" "http://localhost:8710/api/dashboard/stream"
 # 判定标准 / Pass Criteria: 返回 SSE 事件流（event: ping 或 event: refresh）
 # 注意：需启用 dashboard_sse_enabled=true
 ```

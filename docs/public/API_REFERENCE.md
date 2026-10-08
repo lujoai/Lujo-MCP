@@ -32,7 +32,7 @@
 Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 - 请求头：`Authorization: Bearer <key>` 或 `X-API-Key: <key>`（二者等价，`Authorization: Bearer` 优先）。
-- 仅当 `sendBeacon` / `EventSource` 等无法自定义 header 的场景，允许 `?token=<beacon短时令牌>` 或 `?api_key=` 查询参数降级（不推荐长期使用）。
+- 仅当 `sendBeacon` / `EventSource` 等无法自定义 header 的场景，允许携带 `?token=<beacon短时令牌>` 查询参数（短 TTL、作用域限定，先以 header 调用 `POST /auth/beacon-token` 换取）。系统**不支持** `?api_key=` 查询参数鉴权。
 - 未配置任何 `API_KEY` 时 = 不鉴权（仅限内网/回环使用；绑定非回环地址会启动校验拒绝或告警）。
 
 > ⚠️ **前端安全性与 CORS 规范**：
@@ -193,7 +193,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 ## 3. MCP 工具
 
-> 可选依赖：`auto_test` / `verify_ui` 依赖 Playwright。运行时缺少该依赖时，它们不会出现在 `tools/list`；如果客户端已经缓存了工具名而直接调用，服务端仍会返回结构化失败结果并标记 `isError=true`。
+> 可选依赖：`auto_test` / `verify_ui` 依赖 Playwright。两工具**常驻可见**于 `tools/list`（不因缺少依赖而消失）；运行时缺少该能力时，调用返回结构化失败结果（`error_code=CAPABILITY_MISSING` + 启用指引，可用 `doctor` 自检）并标记 `isError=true`。
 
 > 工具经 HTTP（`POST /mcp` → `tools/call`）或 stdio 传输调用。HTTP 传输下受 RBAC 工具级门控（见每项「角色」）。
 > 类别含义：`agent` = 供 AI Agent 调用的查询/分析/验证类；`sdk` = 供 Browser SDK 上报的数据采集类。
@@ -348,7 +348,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 
 | 错误标识 | 出现层级 | 触发条件 | 处理建议 |
 |---------|---------|---------|----------|
-| `TOOL_BUSY` | `result.error_code`（常量 `-32004`） | 同步工具执行槽位满且等待超时（或 timeout=0 立即拒绝）；**服务正在关闭时对重型工具的 fast-fail 也用本码**（关闭路径从未消耗超时预算，不记 `TOOL_TIMEOUT`） | 客户端稍后重试 / 指数退避，或调大 `TOOL_EXECUTOR_WORKERS` |
+| `TOOL_BUSY` | `result.error_code = "TOOL_BUSY"`（字符串；协议层另有 JSON-RPC 数字扩展码常量 `-32004` 备用） | 同步工具执行槽位满且等待超时（或 timeout=0 立即拒绝）；**服务正在关闭时对重型工具的 fast-fail 也用本码**（关闭路径从未消耗超时预算，不记 `TOOL_TIMEOUT`） | 客户端稍后重试 / 指数退避，或调大 `TOOL_EXECUTOR_WORKERS` |
 | `TOOL_TIMEOUT` | `result.error_code`（当前工具响应不使用顶层数字错误码） | 工具执行耗时超过 `tool_timeout_seconds`（默认 60s） | 检查操作耗时或调大超时阈值 |
 | `TOOL_INTERNAL` | `result.error_code` | 工具执行中抛出未捕获异常 | 检查服务端日志排查工具内部异常 |
 | `INVALID_PARAMS` | 顶层 `error.code = -32602` | 工具入参 Schema 校验失败（Pydantic 校验不通过） | 检查参数类型与必填字段 |
