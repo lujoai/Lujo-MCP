@@ -1,6 +1,7 @@
 # Lujo-MCP Demo：一个完整的 AI 调试场景
 
 > 目标：用一个真实可感的前端 Bug 场景，快速理解 **Lujo-MCP 给 AI coding agents 带来什么价值** —— 让 AI 看到真实运行现场，而不是只读代码。
+> **版本边界（2026-10-08）**：本文关于 Browser SDK 同源精确自排除的说明对应仓库 main，尚未进入 npm v1.0.1。
 
 ---
 
@@ -178,7 +179,7 @@ python -m app.main
 
 ```bash
 curl http://localhost:8710/
-# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"0.8.0"}
+# 预期输出：{"status":"ok","service":"Lujo-MCP","version":"1.0.1"}
 ```
 
 ### 二、验证 Browser SDK
@@ -368,7 +369,7 @@ curl http://localhost:8710/
 检查：
 1. SDK 是否已正确初始化（查看控制台日志）
 2. endpoint 是否配置正确
-3. 网络请求是否被 `_isSelfRequest` 排除（SDK 自身请求会被跳过）
+3. 网络请求是否被 `_isSelfRequest` 排除：只跳过 Lujo 两条精确上报路径的 POST；同源业务 fetch/XHR 不会因同源而被整域排除，但是否记录/送达仍受采集开关、采样率与节流控制。与 endpoint 同 origin/base path、且路径和方法都撞上保留上报路由的业务 POST 会被跳过，详见 [SDK_GUIDE.md §5](./SDK_GUIDE.md#5-拦截规则-xhr--fetch)
 4. 若在验证 V3 / V6，确认 `autoDetectNetworkErrors` / `autoDetectUISilentFailures` 未被关闭
 
 #### Q3: LLM 分析失败？
@@ -389,6 +390,6 @@ curl http://localhost:8710/
 - [ ] networkSampleRate=1 验证通过
 - [ ] FormData 请求序列化成功
 - [ ] Blob 请求序列化成功
-- [ ] SDK 自排除验证通过
+- [ ] SDK 自排除验证通过（Lujo 上报 POST 不回采；同源业务请求不因同源而整域排除，实际记录受采集控制项影响；保留路径 POST 冲突例外见 SDK_GUIDE）
 - [ ] Dashboard 可访问
 - [ ] AI 分析功能正常

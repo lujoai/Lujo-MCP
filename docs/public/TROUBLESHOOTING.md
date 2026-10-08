@@ -1,9 +1,10 @@
 # 异常排查指南 / Troubleshooting Guide
 
 **适用版本 / Applicable Version**: v1.0.1
-**最后更新 / Last Updated**: 2026-09-28
+**最后更新 / Last Updated**: 2026-10-08
 
-> **发布状态**：当前 npm 线上最新已发布版本为 `v1.0.1`（2026-10-04，patch 修复：auto_test 自动采集链路修复，无破坏性契约变更；diagnose_issue 诊断契约与 1.0.0 一致）。诊断侧契约要点：`diagnose_issue` 多故障返回候选列表（`ambiguity_detected`，不静默代选）、`request_id` 支持 error_id / SDK caller trace ID / 网络记录 ID 的确定性回查（含可逆 `b64.` 候选引用）、空存储与扫描不完整时如实报告。沿用不变：默认 `STORAGE_BACKEND=memory`（唯一合法值，`postgresql` 显式拒绝，见 L 节）；默认监听 `127.0.0.1`；默认端口 8710；`/metrics` 免鉴权豁免仅回环生效；关闭期错误码 `TOOL_BUSY`；RBAC 拒绝码 `AUTH_ERROR -32003`；`POST /debug` 已 410，统一 `POST /api/debug/run`。
+> **发布状态**：当前 npm 线上最新已发布版本为 `v1.0.1`（2026-10-04，patch 修复：auto_test 自动采集链路修复，无破坏性契约变更；v1.0.1 发布时的 `diagnose_issue` 查询契约与 1.0.0 一致）。诊断侧契约要点：`diagnose_issue` 多故障返回候选列表（`ambiguity_detected`，不静默代选）、`request_id` 支持 error_id / SDK caller trace ID / 网络记录 ID 的确定性回查（含可逆 `b64.` 候选引用）、空存储与扫描不完整时如实报告。沿用不变：默认 `STORAGE_BACKEND=memory`（唯一合法值，`postgresql` 显式拒绝，见 L 节）；默认监听 `127.0.0.1`；默认端口 8710；`/metrics` 免鉴权豁免仅回环生效；关闭期错误码 `TOOL_BUSY`；RBAC 拒绝码 `AUTH_ERROR -32003`；`POST /debug` 已 410，统一 `POST /api/debug/run`。
+> **版本边界（2026-10-08）**：M-2 中桶级 console-error message 的 query 匹配描述对应 main 上尚未发布的修复，npm v1.0.1 尚不包含此扩展。
 
 ---
 
@@ -998,12 +999,12 @@ pytest tests/ --timeout=120
 ### M-2. `diagnose_issue` 带 query 查不到，但不带 query 能查到
 
 - **现象**：`diagnose_issue({"query": "登录按钮"})` 返回 `found=false`，而 `diagnose_issue({})` 或 `list_recent_traces` 能看到错误记录。
-- **原因**：`query` 是对近期错误 **`type` / `message` 字段的关键词过滤**，不是自然语言全字段检索，不保证匹配 selector、trace 元数据或所有上下文字段；错误超出 `since_minutes`（默认 30 分钟）时间窗时也不会命中。**query 未命中不等于 Lujo 没有现场**。
+- **原因**：`query` 对近期错误的 `type` / `message` 做关键词过滤；无异常实体时，只有桶级最新合格故障信号为 console error，才会额外匹配该时间窗与会话过滤范围内合格 console-error 条目的 `message`（大小写不敏感的包含匹配）。若桶级最新信号为 network failure，较早 console message 的匹配不会单独保留该桶。它不是自然语言全字段检索，不保证匹配 selector、trace 元数据或其他上下文字段；错误超出 `since_minutes`（默认 30 分钟）时间窗时也不会命中。**query 未命中不等于 Lujo 没有现场**。
 - **解决方案**（推荐回退顺序）：
   1. `diagnose_issue({})` —— 枚举时间窗内故障现场（多个故障时返回候选列表，用候选 `request_id` 再次调用精确选中）；
   2. `list_recent_traces` —— 列出近期全部错误摘要；
   3. 按返回的 `trace_id` / `request_id` 调 `context` / `trace` / `stacktrace` / `get_network_trace` 深挖。
-- **验证方法**：按上述顺序第 1 步即能取回现场；若需要关键词检索，改用与错误 type/message 实际文案一致的关键词（如异常类型名、接口路径片段）。
+- **验证方法**：按上述顺序第 1 步即能取回现场；若需要关键词检索，使用异常 type/message 或桶级最新信号为 console error 时，合格 console-error message 中实际出现的词（如异常类型名、接口路径片段）。
 
 ### M-3. 宿主 AI 没有自动调用工具，而是直接猜测代码
 

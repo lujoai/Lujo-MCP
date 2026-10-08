@@ -9,11 +9,12 @@
 > **PostgreSQL 移除（Step 3，2026-09-14）**：PostgreSQL 运行时后端（pg_executor / pg_*_store / async_pg_store 等模块）、驱动依赖、Docker/compose 服务与 PG 配置族已全部移除；`STORAGE_BACKEND=memory` 为唯一合法值，KB 持久化由本地 SQLite 笔记本承担。本文以下历史版本注记中与 PG 相关的内容为**当时事实记录**，不再描述当前架构；现行语义以 §3.5 与 TROUBLESHOOTING.md L 节为准。
 
 > **v1.0.1（2026-10-04，当前稳定版）**：patch 修复：auto_test 自动采集链路修复（注入/页面早期事件采集与单次排水、拦截回传与主实例入库、诚实 capture/delivery 状态与字节限额、gzip 批上报、自定义端口 heavy worker 传递、async SSRF 守卫；stdio 路径补齐排水）。无破坏性契约变更（observe_ms 可选入参，sdk_capture 附加可选响应信息），npm 五包 `latest=1.0.1`。
+> **主线与发行版边界（2026-10-08）**：main 含尚未进入 npm v1.0.1 的 diagnose_issue 桶级 console-error 关键词匹配，以及 Browser SDK 同源 POST 自排除与 endpoint query/fragment 校验修复；详见 [CHANGELOG Unreleased](./CHANGELOG.md#unreleased)。
 > **v1.0.0（2026-09-28，历史稳定版）**：稳定公共契约起点——无新功能；v0.9.9 已实测行为（diagnose_issue 多现场消歧、request_id 确定性回查、诚实空态语义、证据边界）定为起始稳定契约，公共工具面（23 注册/19 可见）与响应结构自此遵守向后兼容原则。npm 五包 `latest=1.0.0`（v0.9.8/v0.9.9 明细见 [CHANGELOG](./CHANGELOG.md)）。
 > **v0.9.7（2026-09-27）**：可信交付与宿主兼容：浏览器采集工具全变体常驻可见（能力缺失返回 CAPABILITY_MISSING + 启用指引），新增 doctor 八项自检工具；HTTP_PORT/HTTP_HOST 环境变量（CLI>env>默认，旧 HOST/PORT 兼容），默认端口迁至 8710；git 工具支持跨项目授权根；返回宿主的现场数据带 provenance 标记与注入边界隔离；工具面统一 23 注册/19 可见。npm 五包 `latest=0.9.7`；GitHub Release 含三平台资产。
 > **v0.9.6（2026-09-26）**：零改造本地调试：`auto_test`/`verify_ui` 对纯回环目标（本机开发服务器）默认放行（SSRF 防线不变），`auto_test` 新增宿主行动指引，README 提供宿主自定义指令片段。
 > **v0.9.5（2026-09-26，已发布稳定版）**：虚拟/非本地堆栈帧在规范根查找前被过滤；KB SQLite 默认路径改为跨平台用户数据目录并安全迁移有效旧库；默认 HTTP 端口冲突时允许 MCP stdio-only 启动，显式端口冲突仍失败。
-> **v0.9.4（2026-09-23，npm 最新已发布稳定版）**：修复运行时上下文断层（异步修复任务 trace_data 补位）、MCP stacktrace 工具按 request_id 真实栈帧还原、追踪摘要提取支持 trace_data、Dashboard 事件总线线程安全加固，以及收敛废弃未文档化端点 POST /debug（返回 410）。
+> **v0.9.4（2026-09-23，已发布历史版本）**：修复运行时上下文断层（异步修复任务 trace_data 补位）、MCP stacktrace 工具按 request_id 真实栈帧还原、追踪摘要提取支持 trace_data、Dashboard 事件总线线程安全加固，以及收敛废弃未文档化端点 POST /debug（返回 410）。
 > **v0.9.3（2026-09-23，已发布）**：Qdrant 语义召回修复——适配 qdrant-client 1.16 移除 `QdrantClient.search()` 的变更，切换 `query_points()`（依赖下限 `>=1.10.0`）；CI 与发布产物共用锁定依赖集；无破坏性行为变更。
 > **v0.9.2（2026-09-21，已发布）**：安全加固与经验闭环——默认监听收紧为 `127.0.0.1`、`/metrics` 免鉴权豁免仅回环生效、错误码规范化（关闭期 `TOOL_BUSY`；RBAC 鉴权拒绝 `AUTH_ERROR -32003`）、KB 存储边界拒绝未脱敏写入、认证 fail-closed 补强、Agent 外发脱敏；新增 KB 诊断经验关联（`related_experiences`）与 `/demo` 接入状态面板；静默失败指纹隔离、stdio 错误语义补齐、Redis L2 陈旧回流阻断。
 >
@@ -184,11 +185,12 @@ flowchart TB
 - 注册方式：客户端配置 `{"command":"python","args":["-m","app.mcp_server"],"cwd":"<abs>"}`。
 - stdio 唯一启动命令：`python -m app.mcp_server`。
 
-**MCP 工具总览（注册 22 个 / `tools/list` 公开 18 个，业务实现共用）**：
+**MCP 工具总览（注册 23 个 / `tools/list` 公开 19 个，业务实现共用）**：
 
 | 工具（短名） | 说明 | 实现 |
 | --- | --- | --- |
 | `debug` | 调试入口（含 context 组装） | `debug_api.py` |
+| `doctor` | 运行能力与配置只读自检 | `doctor_api.py` |
 | `context` | trace+runtime+源码片段 | `context_api.py` |
 | `trace` | 按 request_id 取原始追踪日志 | `trace_api.py` |
 | `list_recent_traces` | 近期错误摘要列表（免 ID） | `trace_api.py`（v0.7.3） |
@@ -211,7 +213,7 @@ flowchart TB
 
 #### 3.1.3 双传输一致性
 
-HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **22 个工具**（v0.7.5）；stdio 传输（`mcp_server.py`）共用同一注册表。`tools/list` 公开 18 个 Agent-facing 工具：`debug, context, trace, stacktrace, diagnose_issue, list_recent_traces, search_logs, ingest_specs, get_network_trace, get_blame_for_frame, get_recent_diff, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`。
+HTTP 传输经 `register_all_tools()`（`app/mcp/tools/__init__.py`）注册 **23 个工具**；stdio 传输（`mcp_server.py`）共用同一注册表。`tools/list` 公开 19 个 Agent-facing 工具：`debug, context, trace, stacktrace, diagnose_issue, list_recent_traces, search_logs, ingest_specs, get_network_trace, get_blame_for_frame, get_recent_diff, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack, doctor`。
 
 ### 3.2 中间件层（`app/middleware.py`）✅
 
@@ -479,7 +481,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | 完整上下文 | [app/runtime/context/builder.py](../../app/runtime/context/builder.py)::build_debug_context | 注入 code/git/network/ui/runtime/related_specs |
 | 规范驱动采集 | `app/runtime/collectors/spec.py` + `tools/spec_api.py` | 扫描/标签匹配/缓存/脱敏 + get_related_specs |
 | 指纹去重聚合 | [app/runtime/core/errors.py](../../app/runtime/core/errors.py) | compute_fingerprint + occurrence_count，避免重复刷屏 |
-| 双传输注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) + [app/mcp_server.py](../../app/mcp_server.py) | HTTP / stdio 均为 18 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
+| 双传输注册 | [app/mcp/tools/__init__.py](../../app/mcp/tools/__init__.py) + [app/mcp_server.py](../../app/mcp_server.py) | HTTP / stdio 共用 23 个注册工具、各公开 19 个，统一注册表动态导出；**M5 版本协商（SUPPORTED_PROTOCOL_VERSIONS）** |
 | 代码定位 | [app/runtime/collectors/code_locator.py](../../app/runtime/collectors/code_locator.py) | 源码片段 + vscode:// 链接，路径白名单防穿越 |
 | 静默失败检测 | [app/runtime/verifier/assert_engine.py](../../app/runtime/verifier/assert_engine.py) | assert_behavior 纯函数，<1ms 判定 |
 | 前端自动化 | `app/verifier/ui_runner.py` + `tools/auto_test_api.py` | Playwright headless 遍历，可选依赖 |
@@ -525,7 +527,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 
 ### 9.1 RBAC 权限矩阵 ✅
 
-**覆盖范围**：以下矩阵覆盖全部已挂载 `require_role` 的 33 条 REST 路由 + 18 个 MCP 工具。
+**覆盖范围**：以下矩阵覆盖全部已挂载 `require_role` 的 33 条 REST 路由 + 23 个 MCP 工具角色映射。
 
 **REST API（`debug.py` 14 条路由，全部挂载 `require_role`）**：
 
@@ -580,15 +582,19 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `PATCH /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 | `DELETE /api/spec/{spec_id}` | ✅ | ✅ | ❌ | `require_role("admin","developer")` |
 
-**MCP 工具（18 个，`TOOL_ROLE_REQUIREMENTS` 字典门控）**：
+**MCP 工具（23 个，`TOOL_ROLE_REQUIREMENTS` 字典门控）**：
 
 | 工具 | admin | developer | viewer | required_roles |
 | --- | --- | --- | --- | --- |
 | `debug` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `diagnose_issue` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `list_recent_traces` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
+| `search_logs` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
 | `ingest_network` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `ingest_silent_failure` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `ingest_error` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `ingest_console` | ✅ | ✅ | ❌ | `("admin","developer")` |
+| `ingest_specs` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `verify` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `verify_ui` | ✅ | ✅ | ❌ | `("admin","developer")` |
 | `auto_test` | ✅ | ✅ | ❌ | `("admin","developer")` |
@@ -602,6 +608,7 @@ LLM 输出契约：`{root_cause:str, impact:str, fix:str, confidence:"high|mediu
 | `get_related_specs` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
 | `repair_result` | ✅ | ✅ | ✅ | `("admin","developer","viewer")` |
 | `resolve_stack` | ✅ | ✅ | ✅ | `("admin","developer","viewer")`（v0.5.1 只读还原） |
+| `doctor` | ✅ | ✅ | ✅ | `("admin","developer","viewer")`（只读自检） |
 | `analyze_with_llm`（未注册为工具） | — | — | — | 内部函数，通过 `debug` 工具间接调用 |
 
 ---
@@ -833,8 +840,8 @@ sequenceDiagram
 
 ### 13.5 工具注册与执行流程（订正工具清单）
 
-`register_all_tools()`（`tools/__init__.py`）**实际注册 22 个工具**（v0.7.5），`tools/list` 公开 18 个 Agent-facing 工具：
-`debug, context, trace, stacktrace, diagnose_issue, list_recent_traces, search_logs, ingest_specs, get_network_trace, get_blame_for_frame, get_recent_diff, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack`。
+`register_all_tools()`（`tools/__init__.py`）**实际注册 23 个工具**，`tools/list` 公开 19 个 Agent-facing 工具：
+`debug, context, trace, stacktrace, diagnose_issue, list_recent_traces, search_logs, ingest_specs, get_network_trace, get_blame_for_frame, get_recent_diff, get_related_specs, verify, verify_ui, auto_test, repair_async, repair_result, resolve_stack, doctor`。
 
 > 说明（v0.7.5 更新）：`get_debug_context / get_runtime_snapshot / analyze_with_llm` 是**内部处理函数**、不是注册的工具名；`list_recent_traces` 与 `search_logs` 已注册为 MCP 工具（此前仅为内部函数，存在文档名不副实的窗口期）。统一诊断入口 `diagnose_issue`（Agent-facing，无需 request_id 自动定位最近错误）与 `ingest_specs`（OpenAPI 一键生成断言规范）已注册。SDK 上报类工具（`ingest_network/ingest_error/ingest_console/ingest_silent_failure`）仍注册可 `tools/call`，但 `agent_visible=False`、默认不出现在 `tools/list`（HTTP/stdio 口径一致）。工具总数以 `tools/list` 实际返回为准。
 

@@ -24,8 +24,8 @@
 
 1. **Fork** 本仓库并创建您的特性分支：`git checkout -b feat/my-feature`
 2. 遵循代码规范（见下文）
-3. 运行测试确保全部通过：`python -m pytest tests/unit/ -q --tb=short`
-4. 运行 lint 检查：`ruff check app/ tests/`
+3. 运行测试（Windows：`.venv/Scripts/python.exe -m pytest tests/unit/ -q --tb=short`；macOS/Linux：`.venv/bin/python -m pytest tests/unit/ -q --tb=short`）
+4. 运行 lint（Windows：`.venv/Scripts/python.exe -m ruff check .`；macOS/Linux：`.venv/bin/python -m ruff check .`）
 5. 提交 PR 并关联相关 Issue
 
 ## 代码规范
@@ -72,7 +72,7 @@
 ```
 feat(agent): 新增 GitAgent 归因分析
 fix(auth): 修复 RBAC 空角色时跳过的安全漏洞
-docs(readme): 更新测试基线为 672 passed
+docs(readme): 更新文档导航
 ```
 
 ## 开发环境
@@ -83,15 +83,21 @@ git clone https://github.com/lujoai/Lujo-MCP.git
 cd Lujo-MCP
 
 # 安装依赖
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+
+# macOS / Linux（Python 3.12）
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
 
 # 复制环境变量模板
-cp .env.example .env
+# Windows PowerShell：Copy-Item .env.example .env
+# macOS / Linux：cp .env.example .env
 # 编辑 .env 填入必要配置
 
 # 运行测试
-python -m pytest tests/unit/ -q --tb=short
+# Windows: .venv\Scripts\python.exe -m pytest tests/unit/ -q --tb=short
+# macOS / Linux: .venv/bin/python -m pytest tests/unit/ -q --tb=short
 ```
 
 ### 环境预检查
@@ -99,7 +105,8 @@ python -m pytest tests/unit/ -q --tb=short
 首次开发前，运行预检查脚本确认环境就绪：
 
 ```bash
-python scripts/preflight_check.py
+.venv\Scripts\python.exe scripts/preflight_check.py  # Windows
+.venv/bin/python scripts/preflight_check.py  # macOS / Linux
 ```
 
 ## Pull Request 流程

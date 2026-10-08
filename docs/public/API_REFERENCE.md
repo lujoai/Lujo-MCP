@@ -1,6 +1,7 @@
 # Lujo-MCP API 参考手册
 
-> 当前版本：v1.0.1（2026-10-04，patch 修复：auto_test 自动采集链路修复；无破坏性契约变更，observe_ms 为 auto_test 新增可选入参、sdk_capture 为附加可选响应字段）。工具面：23 注册 / 19 可见。 详细变更见 [CHANGELOG](./CHANGELOG.md)。
+> 当前已发布版本：v1.0.1（2026-10-04，patch 修复 auto_test 自动采集链路；无破坏性契约变更，observe_ms 为新增可选入参，sdk_capture 为附加可选响应字段）。工具面与调用契约以当前代码为准。详见 [CHANGELOG](./CHANGELOG.md)。
+> **版本边界（2026-10-08）**：本手册包含 main 上尚未发布的 diagnose_issue 桶级 console-error 关键词匹配说明；该扩展未进入 npm v1.0.1。
 > 本文档覆盖 Lujo-MCP 对外暴露的 REST API、MCP 工具，以及 Node SDK 的客户端契约。
 > 接口清单以代码为准；启动后可用 `GET /mcp`（非 SSE）查看协议元信息，`GET /health` 查看运行状况。
 
@@ -213,6 +214,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | 工具名 | 角色 | 说明 |
 |--------|------|------|
 | `diagnose_issue` | viewer | **统一诊断入口（优先调用）**：无需 request_id 自动定位时间窗内的故障现场，多个不同故障时返回候选列表（用候选 `request_id` 精确选择）；支持 query 关键词 / request_id 精确查询（自动解析 caller trace ID 与网络记录 ID 归属） |
+| `doctor` | viewer | 只读检查当前进程的 Playwright/浏览器、heavy worker、HTTP 监听、访问策略、存储与运行现场能力；逐项返回 `ok/detail` 和汇总，不启动浏览器或子进程 |
 | `list_recent_traces` | viewer | 列出近期错误摘要（trace_id/类型/消息/时间/top_frame） |
 | `search_logs` | viewer | 按关键词搜索近期错误（类型/消息匹配，含发生次数） |
 | `debug` | developer | 执行完整调试流程，返回结构化调试上下文 |
@@ -232,6 +234,7 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 | 工具 | 入参（必填标 *） | 返回要点 |
 |------|-----------------|----------|
 | `diagnose_issue` | 无必填；`request_id`(string)/`query`(string)/`since_minutes`(int=30，`0`=不限时间)/`session_id`(string) 可选 | `found`, `trace_id`, `summary`, `debug_context`；多个不同故障时 `ambiguity_detected` + `candidates[]`（含 `candidate_set_complete`/`total_candidates`/`truncated`）；桶级结果带 `granularity: "bucket"`；无数据时 `found=false` + `setup_hint` + `next_step` |
+| `doctor` | 无必填参数 | `checks[]`（各项 `name/ok/detail`）与 `summary.ok_count/fail_count` |
 | `list_recent_traces` | `limit`(int=10), `session_id`(string) 可选 | `count`, `traces[]`（含 trace_id/type/message/top_frame） |
 | `search_logs` | `keyword`*(string), `since_minutes`(int=30), `session_id`(string) 可选 | `count`, `results[]` |
 | `debug` | `payload`*(object), `metadata`(object) | `request_id`, `result`, `trace`, `context` |
@@ -249,9 +252,9 @@ Lujo-MCP 采用 **fail-closed（默认拒绝）** 的 API Key 鉴权：
 #### `diagnose_issue` 参数语义与推荐回退顺序
 
 - **`diagnose_issue({})`**：不传任何参数 = 枚举**时间窗内**（`since_minutes` 默认 30 分钟，`0` = 不限）的故障现场：单一故障直接返回完整调试上下文（同类错误重复出现时返回最新一次）；存在**多个不同故障**时返回歧义候选列表（`ambiguity_detected`，最多展示 3 条、按最近发生倒序），用候选中的 `request_id` 再次调用即可精确选中目标现场。成功请求（2xx/3xx）与健康遥测不会制造伪歧义。
-- **`diagnose_issue({"query": "..."})`**：按关键词过滤近期错误，匹配范围是错误的 **`type` / `message` 字段**；仅有 console error 信号（无异常实体）的现场额外按其合格 console error 条目的 `message` 文本匹配（大小写不敏感的包含匹配）。query 是关键词过滤，**不是**自然语言全字段检索，也不保证匹配 selector、trace 元数据（如 trace_kind、extra）或其他上下文字段。多命中时同样返回歧义候选。
+- **`diagnose_issue({"query": "..."})`**：按关键词过滤近期错误，匹配范围是错误的 **`type` / `message` 字段**；无异常实体时，若桶级最新合格故障信号为 console error，才会额外按该时间窗与会话过滤范围内合格 console-error 条目的 `message` 做大小写不敏感的包含匹配。若该桶最新合格信号为 network failure，较早 console message 的命中不会单独保留该桶。query 是关键词过滤，**不是**自然语言全字段检索，也不保证匹配 selector、trace 元数据（如 trace_kind、extra）或其他上下文字段。多命中时同样返回歧义候选。
 - **`diagnose_issue({"request_id": "..."})`**：支持 ID 归属自动解析——`error_id` 精确直查；浏览器 SDK 的 caller trace ID 唯一关联时自动解析回对应错误现场，一对多关联时返回候选；网络记录 `record_id` 定位到归属存储桶（响应以 `granularity: "bucket"` 明示整桶粒度，不代表精确定位桶内单条事件）。候选中含不可信内容的外部上报标识以 `b64.` 前缀的可逆引用呈现，**原样回传该引用即可确定性还原原现场**。
-- **query 未命中不等于 Lujo 没有现场**——可能只是关键词没出现在 type/message 里，或错误超出 `since_minutes`（默认 30 分钟）时间窗。
+- **query 未命中不等于 Lujo 没有现场**——可能只是关键词没出现在 error entity 的 type/message 或当前可匹配的桶级 console-error message 里（桶级最新合格信号须为 console error），或错误超出 `since_minutes`（默认 30 分钟）时间窗；selector、trace 元数据等其他上下文字段不保证参与匹配。
 
 推荐查询回退顺序（从宽到深）：
 

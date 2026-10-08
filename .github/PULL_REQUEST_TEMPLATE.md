@@ -19,8 +19,8 @@
 
 ## 测试验证 / Test Verification
 
-- [ ] 单元测试通过：`python -m pytest tests/unit/ -q --tb=short`
-- [ ] Ruff 检查通过：`ruff check app/ tests/`
+- [ ] 单元测试通过（Windows：`.venv/Scripts/python.exe -m pytest tests/unit/ -q --tb=short`；macOS/Linux：`.venv/bin/python -m pytest tests/unit/ -q --tb=short`）
+- [ ] Ruff 检查通过（Windows：`.venv/Scripts/python.exe -m ruff check .`；macOS/Linux：`.venv/bin/python -m ruff check .`）
 - [ ] 新增测试覆盖了变更代码（如适用）
 
 ## 测试结果 / Test Results

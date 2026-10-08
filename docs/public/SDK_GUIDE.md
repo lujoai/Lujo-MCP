@@ -1,8 +1,9 @@
 # Lujo-MCP SDK 使用手册
 
-> 当前版本：v1.0.1（2026-10-04，patch 修复：auto_test 自动采集链路修复，无破坏性契约变更）；Node SDK npm 稳定版为 `@lujoai/lujo-mcp-node-sdk@1.0.1`。详细变更见 [CHANGELOG](./CHANGELOG.md)。
+> 当前已发布版本：v1.0.1（2026-10-04，patch 修复：auto_test 自动采集链路修复，无破坏性契约变更）；Node SDK npm 稳定版为 `@lujoai/lujo-mcp-node-sdk@1.0.1`。详细变更见 [CHANGELOG](./CHANGELOG.md)。
 > Browser SDK：`browser-sdk/ai-debug.js`，面向浏览器现场自动采集；Node SDK：`@lujoai/lujo-mcp-node-sdk`，面向 Node.js 服务端显式上报。
 > 概括：两种 SDK 都把运行现场上报到 Lujo-MCP 服务端，但运行时职责不同，不能互相替代。
+> **版本边界**：本节同源采集与 endpoint 校验说明对应仓库 `main`（2026-10-08），尚未进入 npm v1.0.1；已发布包请以该版本实际行为为准，后续发行说明会记录变更。
 
 ---
 
@@ -247,9 +248,10 @@ SDK 通过 monkey-patch 拦截浏览器网络请求，**两者同源捕获**（V
 ### 同源页面的采集行为与流量控制
 
 > **重要**：`captureNetwork` 默认开启，而自排除只豁免 Lujo 自身两条上报路径。
-> 页面与 Lujo 服务**同源**（或同域反代）时，页面的**全部业务 fetch/XHR 都会被采集上报**——
-> 这是预期行为而非缺陷。对于此类页面，首次接入或从旧版本升级（历史上自排除曾按整域
-> 误排除同源请求）后，网络记录量可能明显增加，请按页面实际请求量评估采集与上报负载。
+> 页面与 Lujo 服务**同源**（或同域反代）时，业务 fetch/XHR 不会因同源而被整域排除；在
+> `captureNetwork` 开启时会进入网络采集路径。实际记录量受 `networkSampleRate` 与
+> `networkThrottleMs` 控制，事件发送还受全局 `sampleRate` 等发送条件影响，因此不保证
+> 每个业务请求都形成或送达一条记录。旧版本曾按整域误排除同源请求，升级后采集量可能增加。
 
 可用控制项（可组合使用；具体取值取决于页面请求量与排障需求，请自行验证，以下仅为语义说明）：
 

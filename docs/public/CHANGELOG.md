@@ -5,6 +5,14 @@
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **诊断关键词匹配补充**：`diagnose_issue({"query": "..."})` 在没有异常实体且桶级最新合格故障信号为 console error 时，会对该时间窗与会话过滤范围内合格 console-error 条目的 message 做大小写不敏感的包含匹配；若最新信号为 network failure，较早 console message 的命中不会单独保留该桶。仍不是全字段或自然语言检索。
+- **Browser SDK 同源采集范围修正**：自排除限定为 Lujo 两条精确上报路径的 POST 请求；同源业务 fetch/XHR 不再被整域误排除。与 endpoint 同 origin/base path 且路径、方法都命中保留上报路由的业务 POST 仍会被跳过；同源采集量可能增加。
+- **endpoint 配置校验**：Browser SDK 拒绝带裸 query 或 fragment 的 endpoint，避免上报路径被拼接到 query/fragment 中。
+
 ## [1.0.1] - 2026-10-04
 
 > 主题「auto_test 自动采集链路修复」。1.0.0 的 `auto_test` 自动埋点在真实浏览器下存在多处断点：注入脚本在页面 DOM 空洞期静默失效、默认 CORS 收紧下 SDK 跨源上报无法送达、heavy 子进程采集的现场进不了 MCP 主进程存储、遍历结束即关浏览器导致窗口内延迟故障丢失——「diagnose_issue 无现场 → auto_test 采集 → diagnose_issue 回查」的闭环实际不通。本版为 **patch 修复**：没有破坏性契约变更——公共工具面不变，`observe_ms` 是 `auto_test` 的新增可选输入，`sdk_capture` 是附加的可选响应信息，旧字段含义与现有调用继续兼容。**发布状态**：已正式发布（GitHub Release 实际发布时间 2026-10-04T06:41:24Z；npm 五包 `latest` 均为 1.0.1）。

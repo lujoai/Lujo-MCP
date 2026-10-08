@@ -27,9 +27,9 @@ assignees: ''
 ## 环境信息 / Environment
 
 - 操作系统：<!-- e.g. Windows 11, Ubuntu 22.04 -->
-- Python 版本：<!-- e.g. 3.11 -->
-- 项目版本：<!-- e.g. v0.3.0 -->
-- 存储后端：<!-- memory / postgresql -->
+- Python 版本：<!-- e.g. 3.12.x -->
+- Lujo-MCP 版本：<!-- e.g. v1.0.1；请填写实际安装版本 -->
+- 运行现场存储：<!-- memory（当前唯一支持的运行时后端） / 其他（注明） -->
 - API Key 是否启用：<!-- 是 / 否 -->
 
 ## 日志 / Logs
