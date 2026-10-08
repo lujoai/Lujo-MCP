@@ -233,18 +233,23 @@ test("init：非空 query endpoint 拒绝初始化，不抛异常 / 不装钩子
     };
 
     // captureNetwork 保持默认 true：验证 hooks 未被安装
-    const origFetch = globalThis.fetch;
+    // SDK IIFE 捕获 window，hook 替换的是 globalThis.window.fetch 而非 globalThis.fetch。
+    // 断言必须在 destroy() 之前执行，且观察对象是 window.fetch。
+    const origWindowFetch = globalThis.window.fetch;
     let initError = null;
     let initedAfter = null;
+    let fetchStillOriginal = null;
     try {
       SDK.init({
         endpoint: "http://localhost:8710/lujo?api_key=endpoint-secret",
         apiKey: "header-secret",
       });
       initedAfter = SDK._inited;
+      fetchStillOriginal = (globalThis.window.fetch === origWindowFetch);
     } catch (e) {
       initError = e;
       initedAfter = SDK._inited;
+      fetchStillOriginal = (globalThis.window.fetch === origWindowFetch);
     } finally {
       try { SDK.destroy({ flush: false }); } catch (_) {}
       console.warn = origWarn;
@@ -259,8 +264,8 @@ test("init：非空 query endpoint 拒绝初始化，不抛异常 / 不装钩子
     assert.equal(warnings[0].includes("endpoint-secret"), false, "告警不得回显 query 内容");
     assert.equal(warnings[0].includes("header-secret"), false, "告警不得回显 apiKey");
     assert.deepEqual(requests, [], "拒绝初始化后不得发送任何 beacon-token 请求");
-    // captureNetwork 默认 true，但 hooks 不应被安装——fetch 应保持原始值
-    assert.equal(globalThis.fetch, origFetch, "非法 endpoint 不得替换 fetch");
+    // captureNetwork 默认 true，但 hooks 不应被安装——window.fetch 应保持原始函数
+    assert.equal(fetchStillOriginal, true, "非法 endpoint 不得替换 window.fetch");
   });
 });
 
@@ -364,11 +369,13 @@ test("init：非法 endpoint 下 captureNetwork 默认开启时 fetch/XHR 原始
     console.warn = function () {};
     console.log = function () {};
 
-    const origFetch = globalThis.fetch;
+    // SDK IIFE 捕获 window，hook 替换的是 globalThis.window.fetch 而非 globalThis.fetch。
+    // 断言必须在 destroy() 之前执行，且观察对象是 window.fetch。
+    const origWindowFetch = globalThis.window.fetch;
     const origXhrOpen = XMLHttpRequest.prototype.open;
     const origXhrSend = XMLHttpRequest.prototype.send;
 
-    // 在 init 前后都检查：非法 endpoint 不得安装 hooks，fetch/XHR 必须保持原始值
+    // 在 init 后（destroy 前）检查：非法 endpoint 不得安装 hooks，fetch/XHR 必须保持原始值
     // captureNetwork 默认 true——不通过 captureNetwork=false 代替验证
     let fetchReplacedDuringInit = false;
     let xhrOpenReplacedDuringInit = false;
@@ -376,7 +383,7 @@ test("init：非法 endpoint 下 captureNetwork 默认开启时 fetch/XHR 原始
       SDK.init({
         endpoint: "http://localhost:8710/lujo?token=leaked",
       });
-      fetchReplacedDuringInit = (globalThis.fetch !== origFetch);
+      fetchReplacedDuringInit = (globalThis.window.fetch !== origWindowFetch);
       xhrOpenReplacedDuringInit = (XMLHttpRequest.prototype.open !== origXhrOpen);
     } finally {
       try { SDK.destroy({ flush: false }); } catch (_) {}
@@ -384,10 +391,10 @@ test("init：非法 endpoint 下 captureNetwork 默认开启时 fetch/XHR 原始
       console.log = origLog;
     }
 
-    assert.equal(fetchReplacedDuringInit, false, "init 后 fetch 不得被替换");
+    assert.equal(fetchReplacedDuringInit, false, "init 后 window.fetch 不得被替换");
     assert.equal(xhrOpenReplacedDuringInit, false, "init 后 XHR.open 不得被替换");
     // destroy 后也必须保持原始值（不被替换也不被残留包装器污染）
-    assert.equal(globalThis.fetch, origFetch, "destroy 后 fetch 必须还原");
+    assert.equal(globalThis.window.fetch, origWindowFetch, "destroy 后 window.fetch 必须还原");
     assert.equal(XMLHttpRequest.prototype.open, origXhrOpen, "destroy 后 XHR.open 必须还原");
     assert.equal(XMLHttpRequest.prototype.send, origXhrSend, "destroy 后 XHR.send 必须还原");
   });
@@ -413,15 +420,20 @@ test("init：正常 endpoint（origin / 子路径 / 尾斜杠 / 编码路径）�
       console.warn = function () { warnings.push(Array.prototype.join.call(arguments, " ")); };
       console.log = function () {};
 
+      // 正向控制：合法 endpoint init 后 window.fetch 应被替换为包装版，destroy 后恢复原始
+      const origWinFetch = globalThis.window.fetch;
       try {
         SDK.init({ endpoint: ep, captureUI: false, captureConsole: false });
         assert.equal(SDK._inited, true, "合法 endpoint 应初始化成功: " + ep);
         assert.equal(warnings.length, 0, "合法 endpoint 不应有告警: " + ep);
+        assert.notEqual(globalThis.window.fetch, origWinFetch, "合法 init 应替换 window.fetch: " + ep);
       } finally {
         try { SDK.destroy({ flush: false }); } catch (_) {}
         console.warn = origWarn;
         console.log = origLog;
       }
+      // destroy 后 window.fetch 恢复原始函数
+      assert.equal(globalThis.window.fetch, origWinFetch, "destroy 后 window.fetch 应回复原始: " + ep);
     });
   }
 });
