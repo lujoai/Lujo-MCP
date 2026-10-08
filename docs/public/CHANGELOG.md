@@ -7,11 +7,23 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-08
+
+> **候选版本，等待 CI 与正式发布。** 当前线上已发布版仍为 v1.0.1（npm `latest` 与 GitHub Release）；本段记录本地 1.0.2 候选，不代表已发布。
+
 ### Fixed
 
-- **诊断关键词匹配补充**：`diagnose_issue({"query": "..."})` 在没有异常实体且桶级最新合格故障信号为 console error 时，会对该时间窗与会话过滤范围内合格 console-error 条目的 message 做大小写不敏感的包含匹配；若最新信号为 network failure，较早 console message 的命中不会单独保留该桶。仍不是全字段或自然语言检索。
-- **Browser SDK 同源采集范围修正**：自排除限定为 Lujo 两条精确上报路径的 POST 请求；同源业务 fetch/XHR 不再被整域误排除。与 endpoint 同 origin/base path 且路径、方法都命中保留上报路由的业务 POST 仍会被跳过；同源采集量可能增加。
-- **endpoint 配置校验**：Browser SDK 拒绝带裸 query 或 fragment 的 endpoint，避免上报路径被拼接到 query/fragment 中。
+- **`diagnose_issue` 桶级 console 关键词匹配**：无异常实体时，`query` 也会在既有时间窗与会话过滤范围内，对合格 console-error 条目的 `message` 做不区分大小写的包含匹配。匹配只参与桶候选筛选；若桶的最新合格故障信号是 network failure，较早 console 命中不会单独保留该桶。
+- **Browser SDK 同源请求自排除收窄**：只排除 Lujo endpoint 下精确 `/ingest/batch`、`/auth/beacon-token` 上报路径的 POST；同源业务 fetch/XHR 不再因共享 origin 被整域排除，采集到的请求量可能增加。SDK 自身上报 POST 仍会排除，避免递归采集。
+- **Browser SDK endpoint 校验**：拒绝包含裸 query 或 fragment 的 endpoint（包括结尾为空的 `?` 或 `#`），避免上报路径被拼入 query/fragment。
+
+### 适用边界
+
+- `diagnose_issue` 的 query 命中只影响桶级候选筛选，不保证返回 `found=true` 或完整诊断；例如指定 `session_id` 后若没有可构造的上下文，结果仍可能为 `found=false`。
+
+### 升级须知
+
+- 本候选没有新增必填工具参数或 MCP Schema 变更。Browser SDK endpoint 不应包含 query/fragment；如现有配置包含这些部分，需移除后再初始化。相较 v1.0.1，同源业务请求现在会进入采集，现场事件量可能增加；精确的 Lujo 上报 POST 仍会被自排除。
 
 ## [1.0.1] - 2026-10-04
 
