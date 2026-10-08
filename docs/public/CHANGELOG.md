@@ -21,7 +21,7 @@
 
 ### 升级须知
 
-- 本候选没有新增必填工具参数或 MCP Schema 变更。Browser SDK endpoint 不应包含 query/fragment；如现有配置包含这些部分，需移除后再初始化。相较 v1.0.1，同源业务请求现在会进入采集，现场事件量可能增加；精确的 Lujo 上报 POST 仍会被自排除。
+- 本版本没有新增必填工具参数或 MCP Schema 变更。Browser SDK endpoint 不应包含 query/fragment；如现有配置包含这些部分，需移除后再初始化。相较 v1.0.1，同源业务请求现在会进入采集，现场事件量可能增加；精确的 Lujo 上报 POST 仍会被自排除。
 
 ## [1.0.1] - 2026-10-04
 

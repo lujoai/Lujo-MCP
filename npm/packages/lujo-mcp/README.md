@@ -6,9 +6,9 @@
 console 日志、网络失败、UI 交互轨迹与会话上下文。Lujo 只负责采集、关联与查询，
 推理与改代码由宿主智能体完成。
 
-> **本包 v1.0.1（已发布，2026-10-04）**：patch 修复，没有破坏性契约变更——修复 `auto_test` 自动采集链路（页面早期事件采集与排水、采集/回传诚实状态与字节限额、gzip 批上报、自定义 CLI 端口下 heavy worker 的 endpoint 指向、stdio 路径事件入库）；`diagnose_issue` 查询契约与 1.0.0 一致。升级说明：既有宿主连接配置、服务端参数与调用方式无需修改（`observe_ms` 为新增可选入参、`sdk_capture` 为附加可选响应信息，旧字段含义与现有调用继续兼容）；尚未配置规则的 Trae CN 1.0.33+ 用户需按 [host-rules/trae.md](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/host-rules/trae.md) 添加一次全局规则（一次配置全项目生效）。完整发行说明见仓库 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
+> **此前版本 v1.0.1（2026-10-04）**：patch 修复，没有破坏性契约变更——修复 `auto_test` 自动采集链路（页面早期事件采集与排水、采集/回传诚实状态与字节限额、gzip 批上报、自定义 CLI 端口下 heavy worker 的 endpoint 指向、stdio 路径事件入库）；`diagnose_issue` 查询契约与 1.0.0 一致。升级说明：既有宿主连接配置、服务端参数与调用方式无需修改（`observe_ms` 为新增可选入参、`sdk_capture` 为附加可选响应信息，旧字段含义与现有调用继续兼容）；尚未配置规则的 Trae CN 1.0.33+ 用户需按 [host-rules/trae.md](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/host-rules/trae.md) 添加一次全局规则（一次配置全项目生效）。完整发行说明见仓库 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
 
-> **仓库 v1.0.2 候选（待 CI 与正式发布）**：截至 2026-10-08，npm `latest` 仍为已发布的 v1.0.1；本候选增加桶级 console-error message 关键词筛选，并修正 Browser SDK 同源采集范围和 endpoint 校验。query 命中不保证 `found=true`；详细边界见 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
+> **v1.0.2 已发布（2026-10-08）**：增加桶级 console-error message 关键词筛选，并修正 Browser SDK 同源采集范围和 endpoint 校验。没有破坏性契约变更；query 命中不保证 `found=true`，同源业务请求进入采集后现场记录量可能增加，endpoint 不应包含 query/fragment。详细说明见 [CHANGELOG](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/CHANGELOG.md)。
 
 - 单机、本地自用、服务端零配置：`npx` 一条命令即可接入，无需数据库、Docker 或配置大模型 Key
 - 宿主自然交互：宿主模型自主决定是否选用工具（不保证每次都调用；未调用时可提示：“请调用 diagnose_issue 检查运行时现场”）。**Trae CN 1.0.33+ 将第三方 MCP 工具收敛到泛化 `run_mcp`**——若要让宿主按自然语言问题主动触达 Lujo，需按 [host-rules/trae.md](https://github.com/lujoai/Lujo-MCP/blob/main/docs/public/host-rules/trae.md) 把适配版规则配置到 Trae 全局规则（一次配置全项目生效），并非开箱即自主调用；Cursor / Claude 等宿主按标准配置记录，本轮未实测。

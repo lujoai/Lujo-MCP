@@ -9,9 +9,9 @@
 > - **核心原则**：Lujo 可在不依赖外部服务的情况下本地启动；首次使用仍需配置宿主 MCP 连接，Trae CN 1.0.33+ 还需按规则文件配置工具调用规则。持续被动采集业务现场需页面接入 SDK（引入脚本并初始化），Lujo 不会凭空透视未接入 SDK 的任意项目。
 > - **采集方式的区分**：**持续被动采集**依赖业务页面接入 Browser SDK（引入脚本并初始化指向对应 Lujo 实例的 endpoint）；**`auto_test` 是另一种采集入口**——由工具自动打开页面，在**该次测试会话打开的页面中临时注入采集**，会话结束即止，不覆盖用户日常浏览的页面。两条路径不可混为一谈。
 
-> **当前已发布版本：v1.0.1（2026-10-04）**：本版为 patch 修复：**没有破坏性契约变更**——修复 `auto_test` 自动采集链路（页面早期事件采集与排水、采集/回传诚实状态与字节限额、gzip 批上报、自定义 CLI 端口下 heavy worker 的 endpoint 指向、stdio 路径事件入库）。npm v1.0.1 的 `diagnose_issue` 查询契约与 1.0.0 一致；`main` 上后续尚未发布的查询扩展见下方说明。修复经真实浏览器验收矩阵（独立实例 + 独立 marker，含鉴权补验）与冻结产物 stdio 冒烟验证；宿主侧暴露方式不变。既有宿主连接配置、服务端参数与调用方式无需修改：`observe_ms` 是 `auto_test` 的新增可选输入，`sdk_capture` 是附加的可选响应信息，旧字段含义与现有调用继续兼容。详见 [CHANGELOG](./docs/public/CHANGELOG.md)。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
+> **上一版本：v1.0.1（2026-10-04）**：本版为 patch 修复：**没有破坏性契约变更**——修复 `auto_test` 自动采集链路（页面早期事件采集与排水、采集/回传诚实状态与字节限额、gzip 批上报、自定义 CLI 端口下 heavy worker 的 endpoint 指向、stdio 路径事件入库）。npm v1.0.1 的 `diagnose_issue` 查询契约与 1.0.0 一致。修复经真实浏览器验收矩阵（独立实例 + 独立 marker，含鉴权补验）与冻结产物 stdio 冒烟验证；宿主侧暴露方式不变。既有宿主连接配置、服务端参数与调用方式无需修改：`observe_ms` 是 `auto_test` 的新增可选输入，`sdk_capture` 是附加的可选响应信息，旧字段含义与现有调用继续兼容。详见 [CHANGELOG](./docs/public/CHANGELOG.md)。宿主接入见 [HOST_COMPATIBILITY](./docs/public/HOST_COMPATIBILITY.md) 与[宿主规则文件](./docs/public/host-rules/trae.md)。
 
-> **v1.0.2 候选（2026-10-08，待 CI 与正式发布）**：包含桶级 console-error message 关键词匹配、Browser SDK 同源业务请求采集范围修正及 endpoint query/fragment 拒绝。候选尚未打 tag 或发布；当前线上版本仍为 v1.0.1，以下固定版本安装示例继续指向 v1.0.1。
+> **当前已发布版本：v1.0.2（2026-10-08）**：patch 修复包括桶级 console-error message 关键词匹配、Browser SDK 同源业务请求采集范围修正及 endpoint query/fragment 拒绝。没有破坏性契约变更；同源业务请求进入采集后，现场记录量可能增加，endpoint 不应包含 query 或 fragment。完整说明见 [CHANGELOG](./docs/public/CHANGELOG.md)。
 
 ---
 
