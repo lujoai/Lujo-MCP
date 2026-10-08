@@ -555,7 +555,7 @@ HTTP 传输侧（`register_all_tools()` 注册表）与 stdio 传输共用同一
 | | `IDE_SCHEME` | vscode | ✅ 已支持（可点击链接） |
 | | `WHITELIST_PATH_PREFIX` | 空（=收敛到 CWD） | ✅ 已修复（SEC-01）；空值时默认收敛到进程 CWD 防目录穿越 |
 | 提示词 | `PROMPT_TEMPLATE_PATH` | 内置 | ✅ FR12（自定义模板文件路径，支持 `$context` / `$request_id` 占位符；为空或缺失回退内置） |
-| 前端验证 | 无独立开关；可选依赖 `playwright`（安装即启用） | — | ✅ FR14 ui_runner（未安装或无浏览器时明确降级报错） |
+| 前端验证 | 无独立开关；由运行时能力探测决定，Playwright 或浏览器不可用时返回明确的能力缺失提示 | — | ✅ FR14 ui_runner（CAPABILITY_MISSING + 启用指引；冻结二进制已内置 Playwright，浏览器经 chromium→系统 Chrome→Edge 回退链解析） |
 | 异步分析队列 | `LLM_ASYNC_ANALYSIS_ENABLED` | false | ✅ FR16 |
 | | `LLM_QUEUE_MAXSIZE` | 100 | ✅ FR16 |
 | | `LLM_QUEUE_WORKERS` | 4 | ✅ FR16 |
