@@ -478,3 +478,60 @@ class TestHandshakeReaderCompletionRace:
         # 「线程已结束」与「结果已送达」共存——正是被误报为死亡的形态
         assert attempt.result.result_ready.is_set()
         assert attempt.result.reader_thread_dead() is True
+
+    def test_ready_alone_does_not_suppress_result_phase_silent_death(self):
+        """结果等待阶段：单独的 ready 不抑制无声死亡判定（reviewer 边界）。
+
+        受控构造四个边界条件（不依赖随机竞态）：ready 已设置、
+        result_ready 未设置、error 为空、读取线程已真实结束——真实链路里
+        这是「ready 已发布、结果事件发布前无声退出」的形态。修复前该状态
+        被 ready 复核抑制，等待方空转到 deadline 并报 HeavyHandshakeTimeout
+        （无声退出被错标为超时）；修复后必须立即报 HeavySpawnBroken。
+        """
+
+        class _NullFile:
+            """文件永不返回数据——读取线程已由下方注入为「已结束」终态，
+            本文件只是 ResultChannel 的占位载体，不会被读取。"""
+
+            def read(self, _n):
+                return b""
+
+            def close(self):
+                return None
+
+        channel = hs.ResultChannel(_NullFile())
+        channel.ready.set()  # 握手准备已完成——不代表结果阶段有终态事件
+        dead_reader = threading.Thread(target=lambda: None)
+        dead_reader.start()
+        dead_reader.join()  # 线程真实结束（is_alive()=False），未发布任何结果事件
+        channel._reader = dead_reader  # noqa: SLF001 —— 注入「已结束的读取线程」终态
+
+        class _FakeProc:
+            pid = 4242
+            returncode = None
+
+            def __init__(self):
+                self.stdin = io.BytesIO()
+
+            def poll(self):
+                return None  # worker 仍存活：隔离出「判死」这一检查项
+
+        attempt = hs.SpawnedAttempt(0, _FakeProc(), channel)
+        deadline = time.monotonic() + 10.0
+        t0 = time.monotonic()
+        with pytest.raises(hs.HeavySpawnBroken) as ei:
+            hs.handshake(
+                attempt,
+                b"request-frame",
+                deadline=deadline,
+                allow_commit=lambda: True,
+            )
+        assert "result reader thread died before result" in str(ei.value)
+        # 必须即时归类，不得空等到 deadline（10s 预算下 5s 上界留有 100× 余量）
+        assert time.monotonic() - t0 < 5.0
+        # 四个边界条件原样保留：ready 已设置 / result_ready 未设置 /
+        # error 为空 / 读取线程已结束
+        assert attempt.result.ready.is_set()
+        assert not attempt.result.result_ready.is_set()
+        assert attempt.result.error is None
+        assert attempt.result.reader_thread_dead() is True
