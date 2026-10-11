@@ -34,8 +34,19 @@ import gzip
 import io
 import json
 import logging
+import re
 import time
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import (
+    parse_qsl,
+    quote,
+    quote_plus,
+    unquote,
+    unquote_plus,
+    urlencode,
+    urlparse,
+    urlsplit,
+    urlunsplit,
+)
 
 from app.mcp.tools.ingest_dispatch import DISPATCH_INGEST_PATHS
 from app.mcp.tools.ingest_dispatch import RESULT_INGEST_KEY as _RESULT_INGEST_KEY
@@ -180,8 +191,75 @@ def _bounded_gzip_decompress(data: bytes, max_size: int) -> bytes:
     return b"".join(chunks)
 
 
+def _find_url_parameter_separator(value: str) -> tuple[int, int] | None:
+    """返回首个参数等号的位置与长度，兼容一次编码的 ``%3D``。"""
+    literal = value.find("=")
+    encoded = re.search(r"%3[dD]", value)
+    if encoded is not None and (literal < 0 or encoded.start() < literal):
+        return encoded.start(), encoded.end() - encoded.start()
+    if literal >= 0:
+        return literal, 1
+    return None
+
+
+def _sanitize_url_component(component: str, *, path_component: bool = False) -> str:
+    """脱敏单个 URL 路径段或 fragment 参数，并保留未变化的原始编码。"""
+    component = redact(component) or ""
+    separator = _find_url_parameter_separator(component)
+    if separator is None:
+        return component
+
+    index, separator_length = separator
+    raw_key = component[:index]
+    raw_value = component[index + separator_length :]
+    decoder = unquote if path_component else unquote_plus
+    encoder = quote if path_component else quote_plus
+    try:
+        key = decoder(raw_key, errors="replace")
+    except (LookupError, UnicodeError, ValueError):
+        return component
+
+    if is_sensitive_key(key):
+        return f"{raw_key}{component[index:index + separator_length]}***"
+
+    try:
+        decoded_value = decoder(raw_value, errors="replace")
+    except (LookupError, UnicodeError, ValueError):
+        return component
+    cleaned_value = redact(decoded_value) or ""
+    if cleaned_value != decoded_value:
+        raw_value = encoder(cleaned_value, safe="")
+        return f"{raw_key}{component[index:index + separator_length]}{raw_value}"
+    return component
+
+
+def _sanitize_url_path(path: str) -> str:
+    """逐段处理 path，绝不解码整条路径或改变 ``%2F`` 的路由语义。"""
+    path = redact(path) or ""
+    return "/".join(
+        _sanitize_url_component(segment, path_component=True)
+        for segment in path.split("/")
+    )
+
+
+def _sanitize_url_fragment(fragment: str) -> str:
+    """保留 hash 路由，仅结构化处理其中明确的参数部分。"""
+    route, query_separator, query = fragment.partition("?")
+    if query_separator:
+        route = _sanitize_url_path(route)
+        return f"{route}?" + "&".join(
+            _sanitize_url_component(part) for part in query.split("&")
+        )
+
+    if _find_url_parameter_separator(fragment) is not None:
+        return "&".join(
+            _sanitize_url_component(part) for part in fragment.split("&")
+        )
+    return _sanitize_url_path(fragment)
+
+
 def _sanitize_page_url(raw_url: str | None, max_length: int = 2048) -> str | None:
-    """脱敏并规范化页面 URL（处理 userinfo、敏感 query、fragment、path 及长度截断）。"""
+    """脱敏页面 URL，保留 hostport、hash 路由和编码 path 语义。"""
     if not raw_url or not isinstance(raw_url, str):
         return None
     url = raw_url.strip()
@@ -191,12 +269,7 @@ def _sanitize_page_url(raw_url: str | None, max_length: int = 2048) -> str | Non
         parsed = urlsplit(url)
         netloc = parsed.netloc
         if "@" in netloc:
-            userinfo, hostport = netloc.rsplit("@", 1)
-            if ":" in userinfo:
-                u, _ = userinfo.split(":", 1)
-                netloc = f"{redact(u)}:***@{hostport}"
-            else:
-                netloc = f"***@{hostport}"
+            _, netloc = netloc.rsplit("@", 1)
         qs = parsed.query
         if qs:
             pairs = parse_qsl(qs, keep_blank_values=True)
@@ -207,12 +280,13 @@ def _sanitize_page_url(raw_url: str | None, max_length: int = 2048) -> str | Non
                 else:
                     cleaned.append((k, redact(v) or ""))
             qs = urlencode(cleaned)
-        path = redact(parsed.path) or ""
-        frag = redact(parsed.fragment) or ""
+        path = _sanitize_url_path(parsed.path)
+        frag = _sanitize_url_fragment(parsed.fragment)
         parsed = parsed._replace(netloc=netloc, path=path, query=qs, fragment=frag)
         url = urlunsplit(parsed)
     except Exception:
-        url = redact(url) or ""
+        # Malformed URL shapes cannot be safely separated into host/path parts.
+        return None
     if len(url) > max_length:
         url = url[:max_length]
     return url

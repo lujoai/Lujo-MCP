@@ -36,23 +36,30 @@ def test_sanitize_page_url_normal():
 
 
 def test_sanitize_page_url_userinfo():
-    """URL 中的用户名密码必须脱敏，防止凭据泄露。"""
+    """URL userinfo 必须完整移除，同时保留原 hostport。"""
     url_with_pass = "http://admin:secret123@127.0.0.1:8080/api/orders"
     sanitized = _sanitize_page_url(url_with_pass)
     assert sanitized is not None
+    assert sanitized == "http://127.0.0.1:8080/api/orders"
+    assert "admin" not in sanitized
     assert "secret123" not in sanitized
-    assert "admin:***@127.0.0.1:8080" in sanitized
 
     url_user_only = "http://admin@127.0.0.1:8080/api/orders"
     sanitized_user = _sanitize_page_url(url_user_only)
-    assert "***@127.0.0.1:8080" in sanitized_user
+    assert sanitized_user == "http://127.0.0.1:8080/api/orders"
+    assert "admin" not in sanitized_user
 
     # 用户名含未转义 @（如邮箱型账号）应正确按最后一个 @ 划分 userinfo 与 host
     url_email_user = "http://user@example.com:secret123@127.0.0.1:8080/api/orders"
     sanitized_email_user = _sanitize_page_url(url_email_user)
     assert sanitized_email_user is not None
+    assert sanitized_email_user == "http://127.0.0.1:8080/api/orders"
+    assert "user@example.com" not in sanitized_email_user
     assert "secret123" not in sanitized_email_user
-    assert "***@127.0.0.1:8080" in sanitized_email_user
+
+    url_ipv6 = "https://admin:secret123@[2001:db8::1]:8443/api/orders"
+    sanitized_ipv6 = _sanitize_page_url(url_ipv6)
+    assert sanitized_ipv6 == "https://[2001:db8::1]:8443/api/orders"
 
 
 def test_sanitize_page_url_sensitive_query():
@@ -74,6 +81,42 @@ def test_sanitize_page_url_fragment_and_path():
     sanitized = _sanitize_page_url(url)
     assert sanitized is not None
     assert "secret_frag_token" not in sanitized
+
+
+def test_sanitize_page_url_encoded_fragment_sensitive_fields():
+    """编码后的 fragment 键名与等号也应识别并清除敏感值。"""
+    encoded_key = _sanitize_page_url(
+        "http://localhost:3000/orders#%74oken=DEMO_SECRET"
+    )
+    assert encoded_key is not None
+    assert "DEMO_SECRET" not in encoded_key
+
+    encoded_equals = _sanitize_page_url(
+        "http://localhost:3000/orders#token%3DDEMO_SECRET"
+    )
+    assert encoded_equals is not None
+    assert "DEMO_SECRET" not in encoded_equals
+
+
+def test_sanitize_page_url_hash_route_and_encoded_path_preserved():
+    """Hash 路由、普通参数和编码路径保留；只掩码路由 query 的敏感值。"""
+    url = (
+        "https://example.com/a%2Fb/%E4%B8%AD"
+        "#/orders%2Fdetail?%74oken=DEMO_SECRET&tab=active&page=2"
+    )
+    sanitized = _sanitize_page_url(url)
+    assert sanitized == (
+        "https://example.com/a%2Fb/%E4%B8%AD"
+        "#/orders%2Fdetail?%74oken=***&tab=active&page=2"
+    )
+    assert "DEMO_SECRET" not in sanitized
+
+    encoded_path = _sanitize_page_url(
+        "https://example.com/api/%74oken%3DDEMO_SECRET/a%2Fb"
+    )
+    assert encoded_path is not None
+    assert "DEMO_SECRET" not in encoded_path
+    assert "%2Fb" in encoded_path
 
 
 def test_sanitize_page_url_edge_cases():
@@ -160,6 +203,42 @@ async def test_extract_page_info_title_exception():
     info = await _extract_page_info(_Page())
     assert info["final_url"] == "http://127.0.0.1:3000/active"
     assert info["title"] is None
+
+
+@pytest.mark.asyncio
+async def test_extract_page_info_title_timeout_cancels_pending_coroutine(monkeypatch):
+    """真实挂起的 title 协程超时后应被取消，并保留 final_url。"""
+    title_started = asyncio.Event()
+    title_cancelled = asyncio.Event()
+    original_wait_for = asyncio.wait_for
+
+    async def _short_wait_for(awaitable, timeout):
+        assert timeout == 1.5
+        return await original_wait_for(awaitable, timeout=0.01)
+
+    monkeypatch.setattr(auto_test_api.asyncio, "wait_for", _short_wait_for)
+
+    class _Page:
+        url = "http://127.0.0.1:3000/pending-title"
+
+        def is_closed(self):
+            return False
+
+        async def title(self):
+            title_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                title_cancelled.set()
+                raise
+
+    info = await original_wait_for(_extract_page_info(_Page()), timeout=0.5)
+    assert title_started.is_set()
+    assert title_cancelled.is_set()
+    assert info == {
+        "final_url": "http://127.0.0.1:3000/pending-title",
+        "title": None,
+    }
 
 
 @pytest.mark.asyncio
