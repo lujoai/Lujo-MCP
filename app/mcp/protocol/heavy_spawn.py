@@ -243,6 +243,25 @@ class ResultChannel:
         self.reader_alive = False
         return True
 
+    def reader_died_silently(self) -> bool:
+        """读取器已真实结束且未发布任何事件（ready / result_ready / error 全无）。
+
+        FIX(2026-10-11, CI run 38150098272)：判定「死亡」必须在事件复核**之后**。
+        读取器正常完成时 ``result_ready.set()`` 与线程退出几乎同拍，等待方
+        「先等事件超时、再查线程存活」的检查间隙会把「完成」误报为「死亡」，
+        已送达的结果被丢弃并误标 TOOL_INTERNAL（该次 CI 失败即此形态：worker
+        仍存活、结果帧已发布、265ms 内失败）。线程结束后事件不再变化，因此
+        「死亡观测 → 事件复核」是无竞态的最终判据；只有线程已结束且三个事件
+        全无才判真·无声死亡（W12 的兜底发布语义保留，见 _read_loop）。
+        """
+        if not self.reader_thread_dead():
+            return False
+        return not (
+            self.ready.is_set()
+            or self.result_ready.is_set()
+            or self.error is not None
+        )
+
     def _fail(self, message: str) -> None:
         with self._lock:
             if self.error is None:
@@ -511,7 +530,8 @@ def handshake(
                 break
             attempt.result.close()
             raise WorkerExitedBeforeReady(attempt.proc.returncode)
-        if attempt.result.reader_thread_dead():
+        if attempt.result.reader_died_silently():
+            # 死亡观测后复核事件：EOF/_fail/成功已在途时不误报为死亡
             raise HeavySpawnBroken("result reader thread died before ready")
         if remaining() <= 0:
             raise HeavyHandshakeTimeout(
@@ -536,7 +556,9 @@ def handshake(
                 continue
             attempt.result.close()
             raise WorkerExitedWithoutResult(attempt.proc.returncode)
-        if attempt.result.reader_thread_dead():
+        if attempt.result.reader_died_silently():
+            # 正常完成（result_ready.set 与线程退出同拍）不误报为死亡；
+            # 已送达的结果交由循环后的既有归类收口（error / EOF / 返回体）
             raise HeavySpawnBroken("result reader thread died before result")
         if remaining() <= 0:
             raise HeavyHandshakeTimeout(

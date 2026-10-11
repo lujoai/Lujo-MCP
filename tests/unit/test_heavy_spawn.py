@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import pickle
 import struct
@@ -403,3 +404,77 @@ class TestResultReaderNeverDiesSilently:
         assert err_channel.result_ready.wait(5.0)
         assert err_channel.error is not None
         assert "handshake broken on result channel" in err_channel.error
+
+
+class TestHandshakeReaderCompletionRace:
+    """握手等待循环不得把「读取器正常完成」误报为「线程死亡」。
+
+    背景（2026-10-11 CI run 38150098272，失败提交 7fd210a）：
+    ``test_heavy_tool_observability.py::TestHeavyMetricDataSanitization::
+    test_sensitive_payload_not_leaked_into_metric_labels`` 间歇失败于
+    ``HeavySpawnBroken("result reader thread died before result")``——失败
+    瞬间 worker 仍存活（poll=None）、结果帧实际已送达（265ms 内失败）。
+
+    根因是结果等待循环的检查顺序 TOCTOU：读取器正常完成时
+    ``result_ready.set()`` 与线程退出几乎同拍；落在等待方「wait 已超时 →
+    存活检查」的间隙时，旧代码只看 ``is_alive()`` 就判死，把已送达的结果
+    丢弃并误标 TOOL_INTERNAL。Windows 本机 10 次串行 + 整文件均无法自然
+    复现（时序竞争），故以受控交叠确定性复刻：会合点选 ``proc.poll()``
+    ——它恰是竞态窗口内的检查项。
+    """
+
+    def test_result_arriving_during_check_window_is_not_misreported_as_death(self):
+        body = b"payload-frame"
+        frame = b"R" + struct.pack("<Q", len(body)) + body
+        gate = threading.Event()
+
+        class _GatedResultFile:
+            """首读立即交付 ready 字节；结果帧的读取阻塞至 gate 放行。"""
+
+            def __init__(self, data: bytes):
+                self._buf = bytearray(data)
+
+            def read(self, size=-1):
+                if size == 1 and self._buf[:1] == b"R":
+                    del self._buf[:1]
+                    return b"R"
+                if not gate.wait(10.0):
+                    raise AssertionError("测试自身超时：结果帧未被放行")
+                take = bytes(self._buf[:size])
+                del self._buf[: len(take)]
+                return take
+
+            def close(self):
+                return None
+
+        channel = hs.ResultChannel(_GatedResultFile(frame))
+        # 握手开始前 ready 即已发布（首读无门控）——确保竞态只发生在结果阶段
+        channel.start_reader()
+
+        class _FakeProc:
+            """poll() 即竞态会合点：放行结果帧 → 确认读取器已退出 → 仍报存活。"""
+
+            pid = 3025
+            returncode = None
+
+            def __init__(self):
+                self.stdin = io.BytesIO()
+
+            def poll(self):
+                gate.set()
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline and not channel.reader_thread_dead():
+                    time.sleep(0.01)
+                return None  # worker 仍存活——复刻 CI 失败现场
+
+        attempt = hs.SpawnedAttempt(0, _FakeProc(), channel)
+        payload = hs.handshake(
+            attempt,
+            b"request-frame",
+            deadline=time.monotonic() + 10.0,
+            allow_commit=lambda: True,
+        )
+        assert payload == body
+        # 「线程已结束」与「结果已送达」共存——正是被误报为死亡的形态
+        assert attempt.result.result_ready.is_set()
+        assert attempt.result.reader_thread_dead() is True
