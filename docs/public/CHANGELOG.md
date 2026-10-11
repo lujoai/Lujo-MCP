@@ -7,6 +7,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`auto_test` 页面最终落点证据与导航失败阶段**：
+  - 成功与重定向场景：返回新增可选 `page_info` 对象（包含脱敏与长度截断后的 `final_url` 与 `title` 观察证据），页面发生跳转时如实反映最终落点；原始请求 `url` 字段保持不变。
+  - 导航失败场景：`page.goto` 失败时，返回保留既有 `error: "Tool execution failed"` 与 `isError=true` 语义，并附带结构化 `failure_stage: "navigation"`、`error_type`（异常类型名，不暴露未经脱敏的原始信息）与已能尝试读取的 `page_info`。
+  - 边界说明：页面信息属于不可信外部观察证据，最终 URL 与请求 URL 相同或返回零错误不代表业务页面已被验证，工具执行成功不等于业务页面健康；导航失败信息与 SDK 回传状态分别独立解释。
+
 ## [1.0.2] - 2026-10-08
 
 ### Fixed

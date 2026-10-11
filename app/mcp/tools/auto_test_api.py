@@ -29,15 +29,17 @@ v1.0.x 修复（自动采集链路）：
    events_ingest_truncated 表达，两者不得混为一谈。请求体/累计字节超限一律
    明确拒绝并如实计数（UTF-8 字节），不做静默截断或部分入队。
 """
+import asyncio
 import gzip
 import io
 import json
 import logging
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from app.mcp.tools.ingest_dispatch import DISPATCH_INGEST_PATHS
 from app.mcp.tools.ingest_dispatch import RESULT_INGEST_KEY as _RESULT_INGEST_KEY
+from app.runtime.core.redaction import is_sensitive_key, redact
 
 AUTO_TEST_DEF = {
     "name": "auto_test",
@@ -55,7 +57,8 @@ AUTO_TEST_DEF = {
         "采集的现场进入本 Lujo 实例存储，随后可用 diagnose_issue 查询"
         "（多现场时按候选 request_id 精确回查）。"
         "返回中的 sdk_capture 字段如实反映采集状态"
-        "（enabled/init/events_captured/delivery）。"
+        "（enabled/init/events_captured/delivery）；"
+        "page_info 字段提供最终 URL 与页面标题证据。"
         "需要 url、不需要 request_id；不需要手动指定选择器，"
         "适合快速验收 AI 生成的前端页面、批量发现「点了没反应」的静默问题；"
         "已有上报现场时定位单个已知问题请先用 diagnose_issue。"
@@ -175,6 +178,92 @@ def _bounded_gzip_decompress(data: bytes, max_size: int) -> bytes:
                 raise _CaptureBodyTooLarge(f"decompressed size exceeds {max_size}")
             chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _sanitize_page_url(raw_url: str | None, max_length: int = 2048) -> str | None:
+    """脱敏并规范化页面 URL（处理 userinfo、敏感 query、fragment、path 及长度截断）。"""
+    if not raw_url or not isinstance(raw_url, str):
+        return None
+    url = raw_url.strip()
+    if not url:
+        return None
+    try:
+        parsed = urlsplit(url)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            userinfo, hostport = netloc.rsplit("@", 1)
+            if ":" in userinfo:
+                u, _ = userinfo.split(":", 1)
+                netloc = f"{redact(u)}:***@{hostport}"
+            else:
+                netloc = f"***@{hostport}"
+        qs = parsed.query
+        if qs:
+            pairs = parse_qsl(qs, keep_blank_values=True)
+            cleaned = []
+            for k, v in pairs:
+                if is_sensitive_key(k):
+                    cleaned.append((k, "***"))
+                else:
+                    cleaned.append((k, redact(v) or ""))
+            qs = urlencode(cleaned)
+        path = redact(parsed.path) or ""
+        frag = redact(parsed.fragment) or ""
+        parsed = parsed._replace(netloc=netloc, path=path, query=qs, fragment=frag)
+        url = urlunsplit(parsed)
+    except Exception:
+        url = redact(url) or ""
+    if len(url) > max_length:
+        url = url[:max_length]
+    return url
+
+
+async def _extract_page_info(page: object) -> dict[str, str | None]:
+    """提取页面最终落点与标题证据（有界读取 + 脱敏 + 长度限制）。
+
+    遵守有界与防御性原则：
+    - 页面已关闭或未就绪时使用 None，不伪造值；
+    - title 读取加设 1.5s 超时保护，避免导航失败后长时间等待；
+    - 标题脱敏后限制至 300 字符；
+    - 异常不外抛，不影响主工具结果。
+    """
+    info: dict[str, str | None] = {"final_url": None, "title": None}
+    if page is None:
+        return info
+    try:
+        is_closed_attr = getattr(page, "is_closed", False)
+        is_closed = is_closed_attr() if callable(is_closed_attr) else bool(is_closed_attr)
+        if not is_closed:
+            raw_url = getattr(page, "url", None)
+            if raw_url and isinstance(raw_url, str):
+                info["final_url"] = _sanitize_page_url(raw_url)
+    except Exception:
+        logger.debug("auto_test 读取 final_url 失败", exc_info=True)
+
+    try:
+        is_closed_attr = getattr(page, "is_closed", False)
+        is_closed = is_closed_attr() if callable(is_closed_attr) else bool(is_closed_attr)
+        if not is_closed and hasattr(page, "title"):
+            title_prop = getattr(page, "title")
+            if callable(title_prop):
+                title_call = title_prop()
+                if asyncio.iscoroutine(title_call):
+                    raw_title = await asyncio.wait_for(title_call, timeout=1.5)
+                else:
+                    raw_title = title_call
+            else:
+                raw_title = title_prop
+
+            if raw_title is not None and isinstance(raw_title, str):
+                cleaned_title = redact(raw_title.strip())
+                if cleaned_title:
+                    info["title"] = cleaned_title[:300]
+                else:
+                    info["title"] = ""
+    except Exception:
+        logger.debug("auto_test 读取 title 失败", exc_info=True)
+
+    return info
 
 
 def is_available() -> bool:
@@ -904,6 +993,7 @@ async def _run(
                 await page.goto(url, wait_until="networkidle", timeout=30000)
             except Exception as e:
                 logger.error(str(e), exc_info=True)
+                page_info = await _extract_page_info(page)
                 # goto 失败也如实带回采集状态（可能已截获早期事件）
                 status = {
                     "enabled": sdk_init_script is not None,
@@ -917,7 +1007,10 @@ async def _run(
                 }
                 result = {
                     "error": "Tool execution failed",
+                    "failure_stage": "navigation",
+                    "error_type": type(e).__name__,
                     "url": url,
+                    "page_info": page_info,
                     "sdk_capture": status,
                 }
                 if sdk_init_script is not None:
@@ -964,8 +1057,11 @@ async def _run(
                 # 注入开关关闭：no_sdk 专表此意，不得与冲刷失败（flush_failed）混淆
                 sdk_status = {"enabled": False, "init": "off", "delivery": "no_sdk"}
 
+            page_info = await _extract_page_info(page)
+
             result = {
                 "url": url,
+                "page_info": page_info,
                 "found_elements": found,
                 "executed_count": len(executed),
                 "skipped_count": len(skipped),
